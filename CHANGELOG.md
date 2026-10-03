@@ -27,6 +27,37 @@ Notable changes per milestone. Dates are completion dates.
 
 ### Delegates
 
+- **Codex and Oh My Pi show their work in Focus.** Both CLIs now run a
+  headless turn in their structured mode (`codex exec --json`, `omp --mode
+  json`) and are read into the same rows Claude Code and OpenCode already
+  get: each command, patch and MCP call as a tool row with its result, text
+  as it arrives, a sandbox refusal as a failed row that says "Declined".
+  Both also continue their own session across turns (`codex exec resume
+  <thread>`, `omp --resume=<id>`), so a turn sends only the newest message
+  instead of the whole transcript. Fixtures were captured from the real CLIs
+  (codex-cli 0.154, omp 15.13.3); Codex's item shapes follow its
+  `exec_events.rs`.
+- **A mode change reaches a resumed delegate session.** A continued session
+  gets only the newest message, so switching Chat → Goal (or toggling a skill,
+  editing the project rules) used to be announced to nobody. The runner now
+  remembers a fingerprint of the instructions each session has seen and, when
+  they changed, says them again ahead of the message. In the prompt rather
+  than on `--append-system-prompt`, because Claude Code records its system
+  prompt on a session's first request and ignores the flag on `--resume`. An
+  unchanged turn still sends just the message.
+- **Claude Code asks you, per call.** A headless Claude Code turn used to
+  refuse anything its own rules did not pre-approve — `gh pr list` came back
+  "requires approval" and the turn moved on without it. The turn now names
+  Klide's embedded MCP server as its `--permission-prompt-tool`: every prompt
+  the CLI would have shown in a terminal lands on the same card Klide shows for
+  its own shell commands, in the conversation that is running it, with the
+  same answers — once, for this run, for this project. "For this project"
+  writes the project allowlist the next headless turn carries, so a project
+  that only ever used Claude Code finally builds one. The full-auto policy
+  answers a command without a card and says so in the transcript; a command
+  rejected this run is declined without asking twice. Klide answers the
+  question only — the CLI still runs the call itself, and the call stays
+  observed. Works in both hosts, the app and the background `ptyd` run host.
 - **A CLI's home is honoured everywhere.** `CODEX_HOME`, `CLAUDE_CONFIG_DIR`
   and OpenCode's XDG directories now reach every place Klide touches a
   Delegate's files — the status-hook installer, the gateway's Codex

@@ -622,6 +622,12 @@ pub enum AgentEvent {
     /// together would let an observed `Bash` be counted as a command Klide
     /// verified (`summarize_validation` counts capabilities) and would tell the
     /// user a diff was reviewed when nothing reviewed it.
+    ///
+    /// A relayed permission prompt (`agent/permission_relay.rs`) does not
+    /// change that: the operator answered the CLI's *question*, and the CLI
+    /// still ran the call itself. The answer is on the record as a
+    /// `PermissionRequested` / `PermissionResolved` pair beside this event;
+    /// the call stays observed.
     ObservedToolCall {
         run_id: String,
         tool_call_id: String,

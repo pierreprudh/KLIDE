@@ -2,7 +2,9 @@ use super::runs::{
     cap_messages, clean_title, mtime_ms, project_name, tool_file_path, transcript_status,
     TranscriptState,
 };
-use super::{shell_quote, AgentRun, Delegate, Env, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
+use super::chat_stream::{result_text, StreamItem};
+use super::{shell_quote, AgentRun, ChatSpec, Delegate, Env, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -147,6 +149,80 @@ impl Delegate for Codex {
             "-".into(),
         ]);
         Ok(args)
+    }
+
+    /// `--json` puts one event per line on stdout: `thread.started` names the
+    /// session, every step is an `item.*` (an `agent_message`, a
+    /// `command_execution`, a `file_change`, an `mcp_tool_call`, …) and
+    /// `turn.completed` / `turn.failed` close it. A remembered session
+    /// continues through the `resume` subcommand, which takes neither `-s` nor
+    /// `-C`: the sandbox rides a `-c` override and the cwd is the child's own
+    /// working directory (set by `chat_invocation`). The prompt stays on stdin
+    /// (`-`) in both shapes.
+    fn chat_stream_args(&self, cwd: &str, spec: &ChatSpec) -> Option<Vec<String>> {
+        let mut args: Vec<String> = vec!["exec".into()];
+        match spec.resume.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(session) => {
+                args.extend(["resume".into(), session.into()]);
+                if !spec.model.is_empty() {
+                    args.extend(["-m".into(), spec.model.into()]);
+                }
+                args.extend(["-c".into(), "sandbox_mode=\"workspace-write\"".into()]);
+            }
+            None => {
+                if !spec.model.is_empty() {
+                    args.extend(["-m".into(), spec.model.into()]);
+                }
+                args.extend(["-s".into(), "workspace-write".into(), "-C".into(), cwd.into()]);
+            }
+        }
+        // Same override the PTY launch uses: Codex has no effort flag of its own.
+        if let Some(level) = spec.effort.map(str::trim).filter(|l| !l.is_empty()) {
+            args.extend(["-c".into(), format!("model_reasoning_effort={level}")]);
+        }
+        args.extend(["--skip-git-repo-check".into(), "--json".into(), "-".into()]);
+        Some(args)
+    }
+
+    /// `codex exec resume <thread_id> -` continues the named thread.
+    fn resumes_sessions(&self) -> bool {
+        true
+    }
+
+    /// Codex's dialect (`codex-rs/exec/src/exec_events.rs`): a `thread.started`
+    /// line with the id to resume, then `item.started` / `item.updated` /
+    /// `item.completed` wrapping one `item` whose `type` says what it is. A
+    /// command, a patch or an MCP call is one item that progresses, so the call
+    /// is re-emitted as it goes (the fold upserts by id) and its result exists
+    /// only at `item.completed`. Text has no deltas: an `agent_message` arrives
+    /// whole, reported as a part so the runner streams whatever is new.
+    fn parse_stream_line(&self, line: &str) -> Vec<StreamItem> {
+        let line = line.trim();
+        if line.is_empty() {
+            return Vec::new();
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return Vec::new();
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("thread.started") => value
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .map(|id| vec![StreamItem::Session(id.to_string())])
+                .unwrap_or_default(),
+            // Both lines arrive for one failure, with the same message; the
+            // emitter keeps the last, so nothing is said twice.
+            Some("error") => vec![StreamItem::Error(codex_message(&value))],
+            Some("turn.failed") => vec![StreamItem::Error(
+                value.get("error").map(codex_message).unwrap_or_else(|| "Codex turn failed".to_string()),
+            )],
+            Some("turn.completed") => vec![StreamItem::Finished { cost_usd: None, turns: None }],
+            Some(kind @ ("item.started" | "item.updated" | "item.completed")) => value
+                .get("item")
+                .map(|item| codex_item(item, kind == "item.completed"))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
     }
 
 
@@ -530,9 +606,223 @@ fn message_text(payload: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// `{"message": "…"}` — the shape of both a top-level `error` line and the
+/// `error` object inside `turn.failed`.
+fn codex_message(value: &Value) -> String {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or("Codex reported an error")
+        .to_string()
+}
+
+/// One `item` of a `codex exec --json` stream, as the call it is and — once
+/// `completed` is true — the result it got. Items the conversation has no row
+/// for (`reasoning`, `todo_list`, a non-fatal `error` item) yield nothing.
+fn codex_item(item: &Value, completed: bool) -> Vec<StreamItem> {
+    let id = item.get("id").and_then(Value::as_str).unwrap_or("item").to_string();
+    let text = |key: &str| item.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    let status = item.get("status").and_then(Value::as_str).unwrap_or("");
+    match item.get("type").and_then(Value::as_str) {
+        Some("agent_message") => {
+            let text = text("text");
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![StreamItem::TextPart { id, text }]
+            }
+        }
+        Some("command_execution") => {
+            let command = text("command");
+            let mut items = vec![StreamItem::ToolCall {
+                id: id.clone(),
+                name: "shell".to_string(),
+                input: serde_json::json!({ "command": command }),
+            }];
+            if completed {
+                let exit_code = item.get("exit_code").and_then(Value::as_i64);
+                let output = text("aggregated_output");
+                let (ok, content) = match status {
+                    // Codex's own sandbox said no and a headless turn had
+                    // nobody to ask. Said in words, so the row reads as a
+                    // refusal rather than an empty success.
+                    "declined" => (false, "Declined: this command needs an approval the headless turn could not ask for.".to_string()),
+                    "failed" => (false, output),
+                    _ => (exit_code.map_or(true, |code| code == 0), output),
+                };
+                items.push(StreamItem::ToolResult { id, ok, content });
+            }
+            items
+        }
+        Some("file_change") => {
+            let changes: Vec<(String, String)> = item
+                .get("changes")
+                .and_then(Value::as_array)
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .map(|c| {
+                            let kind = c.get("kind").and_then(Value::as_str).unwrap_or("update").to_string();
+                            let path = c.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+                            (kind, path)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // The row's subject: the one file, or the first with a count.
+            let subject = match changes.as_slice() {
+                [] => String::new(),
+                [(_, path)] => path.clone(),
+                [(_, path), rest @ ..] => format!("{path} (+{} more)", rest.len()),
+            };
+            let mut items = vec![StreamItem::ToolCall {
+                id: id.clone(),
+                name: "apply_patch".to_string(),
+                input: serde_json::json!({
+                    "path": subject,
+                    "changes": item.get("changes").cloned().unwrap_or(Value::Null),
+                }),
+            }];
+            if completed {
+                let content = changes.iter().map(|(kind, path)| format!("{kind} {path}")).collect::<Vec<_>>().join("\n");
+                items.push(StreamItem::ToolResult { id, ok: status != "failed", content });
+            }
+            items
+        }
+        Some("mcp_tool_call") => {
+            let server = text("server");
+            let tool = text("tool");
+            let mut items = vec![StreamItem::ToolCall {
+                id: id.clone(),
+                name: format!("mcp__{server}__{tool}"),
+                input: item.get("arguments").cloned().unwrap_or(Value::Null),
+            }];
+            if completed {
+                let error = item.get("error").and_then(|e| e.get("message").or(Some(e))).and_then(Value::as_str);
+                let content = match error {
+                    Some(message) => message.to_string(),
+                    None => result_text(item.get("result").and_then(|r| r.get("content").or(Some(r)))),
+                };
+                items.push(StreamItem::ToolResult { id, ok: status != "failed" && error.is_none(), content });
+            }
+            items
+        }
+        Some("web_search") => {
+            let mut items = vec![StreamItem::ToolCall {
+                id: id.clone(),
+                name: "web_search".to_string(),
+                input: serde_json::json!({ "query": text("query") }),
+            }];
+            if completed {
+                let content = item
+                    .get("results")
+                    .and_then(Value::as_array)
+                    .map(|results| {
+                        results
+                            .iter()
+                            .filter_map(|r| r.get("url").or_else(|| r.get("title")).and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                items.push(StreamItem::ToolResult { id, ok: true, content });
+            }
+            items
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `thread.started` and `turn.failed` were captured from a real
+    // `codex exec --json` run (codex-cli 0.154); the item lines follow the
+    // shapes in codex-rs/exec/src/exec_events.rs.
+    const THREAD: &str = r#"{"type":"thread.started","thread_id":"01a0fd2e-8711-7503-8166-aa3e358e0096"}"#;
+    const FAILED: &str = r#"{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}"#;
+    const CMD_STARTED: &str = r#"{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"bash -lc 'npm test'","aggregated_output":"","status":"in_progress"}}"#;
+    const CMD_DONE: &str = r#"{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"bash -lc 'npm test'","aggregated_output":"12 passing\n","exit_code":0,"status":"completed"}}"#;
+    const CMD_DECLINED: &str = r#"{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"gh pr list","aggregated_output":"","exit_code":null,"status":"declined"}}"#;
+    const MESSAGE: &str = r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}"#;
+    const PATCH: &str = r#"{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"src/a.rs","kind":"update"},{"path":"src/b.rs","kind":"add"}],"status":"completed"}}"#;
+    const MCP: &str = r#"{"type":"item.completed","item":{"id":"item_4","type":"mcp_tool_call","server":"klide","tool":"agent_list","arguments":{},"result":{"content":[{"type":"text","text":"[]"}]},"error":null,"status":"completed"}}"#;
+    const DONE: &str = r#"{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":2}}"#;
+
+    #[test]
+    fn stream_args_ask_for_json_and_keep_the_prompt_on_stdin() {
+        let spec = ChatSpec { model: "gpt-5", effort: Some("high"), resume: None, mcp: None, allowed_commands: &[] };
+        let args = Codex.chat_stream_args("/ws", &spec).unwrap();
+        assert_eq!(args[..3], ["exec", "-m", "gpt-5"]);
+        assert!(args.windows(2).any(|w| w == ["-s", "workspace-write"]));
+        assert!(args.windows(2).any(|w| w == ["-C", "/ws"]));
+        assert!(args.windows(2).any(|w| w == ["-c", "model_reasoning_effort=high"]));
+        assert!(args.contains(&"--json".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        assert!(!args.contains(&"--color".to_string()));
+    }
+
+    #[test]
+    fn a_remembered_thread_resumes_without_the_flags_resume_lacks() {
+        let spec = ChatSpec { model: "", effort: None, resume: Some("01a0-thread"), mcp: None, allowed_commands: &[] };
+        let args = Codex.chat_stream_args("/ws", &spec).unwrap();
+        assert_eq!(args[..3], ["exec", "resume", "01a0-thread"]);
+        // `exec resume` has no `-s` / `-C`: the sandbox is a config override and
+        // the cwd is the child's working directory.
+        assert!(!args.contains(&"-s".to_string()));
+        assert!(!args.contains(&"-C".to_string()));
+        assert!(args.windows(2).any(|w| w == ["-c", "sandbox_mode=\"workspace-write\""]));
+        assert!(args.contains(&"--json".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        assert!(Codex.resumes_sessions());
+    }
+
+    #[test]
+    fn thread_started_names_the_session_and_a_failed_turn_is_an_error() {
+        assert_eq!(Codex.parse_stream_line(THREAD), vec![StreamItem::Session("01a0fd2e-8711-7503-8166-aa3e358e0096".into())]);
+        assert_eq!(Codex.parse_stream_line(FAILED), vec![StreamItem::Error("You've hit your usage limit.".into())]);
+        assert_eq!(Codex.parse_stream_line(DONE), vec![StreamItem::Finished { cost_usd: None, turns: None }]);
+    }
+
+    #[test]
+    fn a_command_is_a_call_while_it_runs_and_gains_its_result_when_done() {
+        assert_eq!(
+            Codex.parse_stream_line(CMD_STARTED),
+            vec![StreamItem::ToolCall { id: "item_0".into(), name: "shell".into(), input: serde_json::json!({"command": "bash -lc 'npm test'"}) }]
+        );
+        let done = Codex.parse_stream_line(CMD_DONE);
+        assert_eq!(done.len(), 2);
+        assert_eq!(done[1], StreamItem::ToolResult { id: "item_0".into(), ok: true, content: "12 passing\n".into() });
+        // The sandbox's refusal is a failed result that says so.
+        let declined = Codex.parse_stream_line(CMD_DECLINED);
+        assert!(matches!(&declined[1], StreamItem::ToolResult { ok: false, content, .. } if content.starts_with("Declined")));
+    }
+
+    #[test]
+    fn text_patches_and_mcp_calls_each_become_rows() {
+        assert_eq!(Codex.parse_stream_line(MESSAGE), vec![StreamItem::TextPart { id: "item_1".into(), text: "done".into() }]);
+        let patch = Codex.parse_stream_line(PATCH);
+        assert!(matches!(&patch[0], StreamItem::ToolCall { name, input, .. } if name == "apply_patch" && input["path"] == "src/a.rs (+1 more)"));
+        assert_eq!(patch[1], StreamItem::ToolResult { id: "item_2".into(), ok: true, content: "update src/a.rs\nadd src/b.rs".into() });
+        let mcp = Codex.parse_stream_line(MCP);
+        assert!(matches!(&mcp[0], StreamItem::ToolCall { name, .. } if name == "mcp__klide__agent_list"));
+        assert_eq!(mcp[1], StreamItem::ToolResult { id: "item_4".into(), ok: true, content: "[]".into() });
+    }
+
+    #[test]
+    fn lines_codex_owns_but_klide_has_no_row_for_yield_nothing() {
+        for line in [
+            r#"{"type":"turn.started"}"#,
+            r#"{"type":"item.completed","item":{"id":"r","type":"reasoning","text":"thinking"}}"#,
+            r#"{"type":"item.completed","item":{"id":"t","type":"todo_list","items":[]}}"#,
+            "not json",
+            "",
+        ] {
+            assert!(Codex.parse_stream_line(line).is_empty(), "{line}");
+        }
+    }
 
     fn temp_home(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("klide-delegate-test-codex-{name}"));

@@ -188,6 +188,7 @@ impl RunHost {
                     pending_permission: Mutex::new(None),
                     trust: permission::TrustMemory::default(),
                     subject: permission::GateSubject::from_request(&request),
+                    out_of_band: Mutex::new(None),
                 },
             );
         }
@@ -234,6 +235,7 @@ impl RunHost {
     fn ensure_bridge(self: &Arc<Self>) {
         let live = Arc::downgrade(self);
         let operations = live.clone();
+        let permissions = live.clone();
         let endpoint = self.data_dir.join("chat-coordination-endpoint.json");
         if let Err(e) = self.bridge.ensure_server(
             &endpoint,
@@ -248,6 +250,10 @@ impl RunHost {
                     )
                     .blocking_recv()
                     .map_err(|_| "Mission request was cancelled".to_string())?
+                })),
+                permission: Some(Box::new(move |session, ask| {
+                    let host = permissions.upgrade().ok_or("Background host stopped")?;
+                    super::permission_relay::answer(&*host, &session.run_id, &session.workspace_root, ask)
                 })),
                 on_change: Box::new(|_, _| {}),
                 is_live: Box::new(move |id| live.upgrade().is_some_and(|h| h.is_live(id))),

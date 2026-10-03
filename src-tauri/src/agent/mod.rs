@@ -19,6 +19,7 @@ pub mod evidence;
 pub mod failure_budget;
 mod network_allowlist;
 mod permission;
+pub(crate) mod permission_relay;
 mod retained;
 pub mod routing;
 mod run_core;
@@ -119,6 +120,11 @@ pub struct AgentRunHandle {
     /// What every gate reads about this Run — Mode, disabled Tools, lineage,
     /// the full-auto request. Fixed at start.
     pub subject: permission::GateSubject,
+    /// While a Delegate turn is in flight: the way a gate raised from outside
+    /// the loop (a CLI's permission prompt, relayed over the bridge) writes to
+    /// this Run as the loop would. `None` between turns and for every
+    /// provider whose tools Klide dispatches itself.
+    pub out_of_band: std::sync::Mutex<Option<permission_relay::OutOfBandPort>>,
 }
 
 pub struct AgentSupervisorState {
@@ -257,7 +263,7 @@ impl AgentProviderCaller for RealProviderCaller {
 /// into `AgentSupervisorState`. `TauriSupervisor` implements it over the live
 /// state in production; `FakeSupervisor` (tests) implements it over a plain map
 /// — so the whole run loop can be driven headlessly, off the Tauri app.
-trait RunSupervisor: Send + Sync {
+pub(crate) trait RunSupervisor: Send + Sync {
     /// Best-effort: set a run's status. No-op if the lock/run is unavailable.
     fn set_status(&self, run_id: &str, status: AgentRunStatus);
     /// Run `f` against a run's handle under the supervisor lock. Returns false
@@ -392,6 +398,19 @@ impl TauriSupervisor {
     fn new(app: tauri::AppHandle) -> Self {
         Self { app }
     }
+}
+
+/// The app host's door for a Delegate's relayed permission prompt (see
+/// `permission_relay`): answer it as the Run the bridge bound. Blocks the
+/// calling bridge thread until the operator answers.
+pub(crate) fn relay_delegate_permission(
+    app: &tauri::AppHandle,
+    run_id: &str,
+    workspace_root: &str,
+    ask: permission_relay::DelegatePermissionAsk,
+) -> Result<serde_json::Value, String> {
+    let sup = TauriSupervisor::new(app.clone());
+    permission_relay::answer(&sup, run_id, workspace_root, ask)
 }
 
 /// Journal calls are file IO behind a cross-process lock, reached from the
@@ -1787,6 +1806,7 @@ async fn start_run(
                 pending_permission: std::sync::Mutex::new(None),
                 trust: permission::TrustMemory::default(),
                 subject: permission::GateSubject::from_request(&request),
+                out_of_band: std::sync::Mutex::new(None),
             },
         );
     }
@@ -2394,6 +2414,19 @@ async fn run_agent_loop(
         );
         if mcp.is_some() {
             lease.hold_delegate_session(&request.provider);
+            // The CLI's permission prompts come back through the bridge while
+            // this call is in flight; give that path the loop's own writer.
+            let port = permission_relay::OutOfBandPort {
+                sequence: sequence.clone(),
+                on_event: on_event.clone(),
+                runs_dir: runs_dir.clone(),
+            };
+            let mut port = Some(port);
+            sup.with_handle(&id, &mut |h| {
+                if let (Ok(mut slot), Some(port)) = (h.out_of_band.lock(), port.take()) {
+                    *slot = Some(port);
+                }
+            });
         }
 
         // Race the provider stream against user cancellation so abort takes
@@ -2421,6 +2454,12 @@ async fn run_agent_loop(
             }) => result,
         };
         flush_stream(&stream_failure);
+        // The turn is over; a prompt arriving now has nothing to answer for.
+        sup.with_handle(&id, &mut |h| {
+            if let Ok(mut slot) = h.out_of_band.lock() {
+                *slot = None;
+            }
+        });
         let provider_result = match stream_failure.lock().unwrap().take() {
             Some(error) => Err(format!("Could not save streamed output: {error}")),
             None => provider_result,
@@ -4649,15 +4688,15 @@ mod provider_caller_tests {
 /// loop-level tests), and the "frontend" halves of the pause ceremonies
 /// (`answer_permission` / `answer_question`).
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use super::*;
     use std::collections::{HashMap, VecDeque};
 
     /// A supervisor backed by a plain map — no Tauri app. This is the second
     /// adapter that makes the seam real: the loop's run-scoped helpers can be
     /// exercised headlessly against it.
-    pub(super) struct FakeSupervisor {
-        pub(super) runs: Mutex<HashMap<String, AgentRunHandle>>,
+    pub(crate) struct FakeSupervisor {
+        pub(crate) runs: Mutex<HashMap<String, AgentRunHandle>>,
         coordination: CoordinationStoreState,
         /// Every child this supervisor was asked to start, in order. The fake
         /// answers each with a canned report, so a handler test can assert on
@@ -4681,7 +4720,7 @@ mod test_support {
             sup
         }
 
-        pub(super) fn with_run(id: &str) -> Self {
+        pub(crate) fn with_run(id: &str) -> Self {
             let mut runs = HashMap::new();
             runs.insert(id.to_string(), make_handle());
             Self {
@@ -4778,6 +4817,7 @@ mod test_support {
             pending_permission: Mutex::new(None),
             trust: permission::TrustMemory::default(),
             subject: permission::GateSubject::for_mode(AgentMode::Goal),
+            out_of_band: Mutex::new(None),
         }
     }
 

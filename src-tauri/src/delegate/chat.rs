@@ -38,8 +38,79 @@ pub(super) const CHAT_TURN_CEILING: Duration = Duration::from_secs(30 * 60);
 /// a session the CLI may already have collected.
 static SESSIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
+/// What Klide's instructions looked like the last time a conversation's
+/// delegate session saw them — a fingerprint of the system messages, keyed
+/// like [`SESSIONS`]. A resumed turn sends only the newest user message, so a
+/// system message that changed in between (Chat → Goal, a skill toggled, the
+/// project rules edited) would otherwise never reach the session; comparing
+/// the fingerprint is how a turn knows it has to deliver them again.
+static INSTRUCTIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
 fn sessions() -> &'static Mutex<HashMap<String, String>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn instructions() -> &'static Mutex<HashMap<String, u64>> {
+    INSTRUCTIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remembered_instructions(key: &str) -> Option<u64> {
+    instructions().lock().ok()?.get(key).copied()
+}
+
+fn remember_instructions(key: &str, fingerprint: u64) {
+    if let Ok(mut map) = instructions().lock() {
+        map.insert(key.to_string(), fingerprint);
+    }
+}
+
+/// The system messages as one block — what a cold start folds into its prompt
+/// and what a resumed session must be told again when it changes.
+fn system_text(messages: &[serde_json::Value]) -> String {
+    messages
+        .iter()
+        .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
+        .map(text_from_message)
+        .filter(|t| !t.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn instructions_fingerprint(system: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    system.trim().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The instructions a *resumed* turn has to carry again: the current system
+/// block when the session last saw a different one (or none Klide recorded).
+/// `None` on a cold start — that path folds the whole conversation in — and
+/// when nothing changed, which is the common turn.
+fn stale_instructions(resumed: bool, key: Option<&str>, messages: &[serde_json::Value]) -> Option<String> {
+    if !resumed {
+        return None;
+    }
+    let system = system_text(messages);
+    if system.is_empty() {
+        return None;
+    }
+    let seen = key.and_then(remembered_instructions);
+    (seen != Some(instructions_fingerprint(&system))).then_some(system)
+}
+
+/// Changed instructions ride the prompt, ahead of the message, and say what
+/// they are — for every CLI, including the two with a system-prompt flag.
+/// Claude Code records its system prompt on a session's first request and
+/// reuses that snapshot on `--resume` (until compaction, or with
+/// `--system-prompt-snapshot off`, a flag older CLIs reject), so a flag passed
+/// on a resumed turn would be silently dropped. The prompt is the one channel
+/// a resumed session is guaranteed to read; the cold start folds the system
+/// block into the prompt the same way.
+fn resumed_prompt_with_instructions(system: &str, latest: &str) -> String {
+    format!(
+        "Klide's instructions for this conversation have changed. Follow these from now on:\n\n{system}\n\n---\n\n{latest}"
+    )
 }
 
 /// One conversation with one delegate. The provider is part of the key because
@@ -61,6 +132,10 @@ fn remember_session(key: &str, session: &str) {
 
 fn forget_session(key: &str) {
     if let Ok(mut map) = sessions().lock() {
+        map.remove(key);
+    }
+    // A new session has seen nothing; the cold start will fold it all in.
+    if let Ok(mut map) = instructions().lock() {
         map.remove(key);
     }
 }
@@ -118,9 +193,16 @@ pub async fn run_subscription_chat(
             None => typed,
         }
     });
+    // Instructions that changed since this session last saw them go ahead of
+    // the message. A `/` command turn carries them its own way
+    // (`with_command_instructions`), and a cold start folds everything in.
+    let stale = stale_instructions(resume.is_some(), key.as_deref(), &messages);
     let prompt = match (&resume, &command_message) {
         (_, Some(message)) => message.clone(),
-        (Some(_), None) => latest_user_message(&messages),
+        (Some(_), None) => match stale.as_deref() {
+            Some(system) => resumed_prompt_with_instructions(system, &latest_user_message(&messages)),
+            None => latest_user_message(&messages),
+        },
         (None, None) => prompt_from_messages(&messages),
     };
 
@@ -188,6 +270,11 @@ pub async fn run_subscription_chat(
         )
             .await?
     };
+    // The session has now seen the current instructions — whether folded into
+    // a cold start, carried on this resumed turn, or unchanged since last time.
+    if let Some(key) = key.as_deref() {
+        remember_instructions(key, instructions_fingerprint(&system_text(&messages)));
+    }
     Ok(AiChatResponse {
         content,
         thinking: None,
@@ -487,25 +574,23 @@ impl<'a> Emitter<'a> {
     }
 }
 
+/// A `/` command turn: native slash syntax stays on stdin while the system
+/// block rides the CLI's own system-prompt flag, when it has one — including
+/// the cold-session retry. (On a resumed Claude Code session that flag is
+/// read only after compaction; see [`resumed_prompt_with_instructions`].)
 fn with_command_instructions(
     mut command: TokioCommand,
     adapter: &dyn Delegate,
     cli_command: Option<&str>,
     messages: &[serde_json::Value],
 ) -> TokioCommand {
-    // Keep native slash syntax on stdin while carrying the current mode in
-    // the CLI's separate system channel, including cold-session retries.
     let Some(name) = cli_command else { return command };
     if let Some(args) = adapter.run_command_args(name) {
         command.args(args);
     }
     if let Some(flag) = adapter.append_system_prompt_flag() {
-        let system = messages.iter()
-            .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
-            .map(text_from_message)
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        if !system.trim().is_empty() {
+        let system = system_text(messages);
+        if !system.is_empty() {
             command.arg(flag).arg(system);
         }
     }
@@ -521,10 +606,9 @@ fn command_arguments(message: &str) -> &str {
 /// The newest user message, which is all a resumed session still needs — it
 /// already holds everything before it.
 ///
-/// Note what this deliberately does not carry: a system message. A mode change
-/// made mid-conversation (Chat → Goal) is announced in the system message, and
-/// a resumed session never sees it. That is the known edge of session reuse;
-/// the fresh-start path still folds the system message in.
+/// It deliberately carries no system message. A system message that changed
+/// since the session last saw it (Chat → Goal mid-conversation) is delivered
+/// separately — see [`stale_instructions`] — so this stays the bare message.
 fn latest_user_message(messages: &[serde_json::Value]) -> String {
     messages
         .iter()
@@ -745,6 +829,43 @@ mod tests {
         // cold start rather than a permanent failure.
         forget_session(&a);
         assert_eq!(remembered_session(&a), None);
+    }
+
+    #[test]
+    fn a_resumed_turn_carries_instructions_only_when_they_changed() {
+        let key = session_key("run-mode", "claude-code");
+        let chat = vec![msg("system", "CHAT MODE: answer, do not edit."), msg("user", "hi")];
+        let goal = vec![msg("system", "GOAL MODE: edit files directly."), msg("user", "now do it")];
+        // A cold start folds everything in; nothing is stale.
+        assert_eq!(stale_instructions(false, Some(&key), &goal), None);
+        // The first resumed turn after a cold start that recorded nothing
+        // still sends them: better said twice than never.
+        assert_eq!(stale_instructions(true, Some(&key), &chat).as_deref(), Some("CHAT MODE: answer, do not edit."));
+        remember_instructions(&key, instructions_fingerprint(&system_text(&chat)));
+        // Same instructions: the common turn sends only the message.
+        assert_eq!(stale_instructions(true, Some(&key), &chat), None);
+        // Chat → Goal mid-conversation: the session must hear it.
+        assert_eq!(stale_instructions(true, Some(&key), &goal).as_deref(), Some("GOAL MODE: edit files directly."));
+        // Whitespace alone is not a change.
+        let padded = vec![msg("system", "  CHAT MODE: answer, do not edit.\n"), msg("user", "hi")];
+        assert_eq!(stale_instructions(true, Some(&key), &padded), None);
+        // Forgetting the session forgets what it saw.
+        forget_session(&key);
+        assert_eq!(remembered_instructions(&key), None);
+        // No system message at all: nothing to carry.
+        assert_eq!(stale_instructions(true, Some(&key), &[msg("user", "hi")]), None);
+    }
+
+    #[test]
+    fn changed_instructions_ride_the_prompt_ahead_of_the_message() {
+        let prompt = resumed_prompt_with_instructions("GOAL MODE: edit files directly.", "now do it");
+        assert!(prompt.starts_with("Klide's instructions for this conversation have changed."));
+        assert!(prompt.contains("GOAL MODE: edit files directly.\n\n---\n\nnow do it"));
+        // Not on argv: an ordinary resumed turn adds no system flag, because
+        // Claude Code would ignore one on a resumed session.
+        let goal = vec![msg("system", "GOAL MODE: edit files directly."), msg("user", "now do it")];
+        let command = with_command_instructions(TokioCommand::new("claude"), &super::super::ClaudeCode, None, &goal);
+        assert_eq!(command.as_std().get_args().count(), 0);
     }
 
     #[test]
