@@ -101,6 +101,15 @@ forwards each operation to the journal's single writer gate, so a Delegate
 and a Harness Run share one authority and one change event.
 _Avoid_: MCP proxy, agent API, second journal writer, remote coordination endpoint
 
+**Coordination operation**:
+One of the five things a Run does on the journal — list, send, wait, cancel,
+read result — as a single core function that takes an actor a door already
+authenticated and returns one structured result rendered as one text. A door
+(the Harness's native Tools, the Delegate bridge) binds the actor and wraps
+the reply; it never decides what the operation does. One schema source lists
+the five for both doors.
+_Avoid_: bridge op, tool handler, per-door implementation, MCP tool (as the definition)
+
 **Coordination envelope**:
 A durable semantic payload addressed from an operator or authenticated Run to
 one stable Run id. It has an explicit kind, correlation/reply identity,
@@ -216,6 +225,20 @@ Workspace, lineage, Git metadata, and current Run activity. It owns navigation
 between fresh, restored, resumed, and branched Conversations; it is not itself
 a Run, because one Conversation session may be idle between Runs.
 _Avoid_: chat state, thread state, panel globals
+
+**Run controller**:
+The AI panel's one owner of the turn queue, the live Run attachment and the
+gate table for a Conversation session (`src/components/ai/runController.ts`).
+A sent turn queues and drains one at a time behind whatever Run is already in
+the thread; a Run is followed through its channel or, after a remount, the
+reattach broadcast; and everything a Run parks on — a diff, a permission, a
+question — sits in one table, so leaving the conversation for any reason
+(new chat, another thread, a deletion, an unmount, a Stop) takes one recipe
+and clears all of them. It is a plain module with no React in it: AiPanel
+renders the view it publishes and hands back the answers to its cards. It
+does not build a turn's request or decide what follows a turn — the panel
+supplies those as functions the controller calls at the moment it acts.
+_Avoid_: queue refs, panel globals, run loop (that is the Harness)
 
 **Project Memory**:
 Reviewed, Workspace-scoped knowledge that survives Runs: decisions,

@@ -210,6 +210,7 @@ Klide/
 │   │       ├── replayConversation.ts On-disk transcript → resumable panel Conversation
 │   │       ├── transcriptReducer.ts  Live Msg[] view of one run's fold (region splice, stable refs)
 │   │       ├── turnDriver.ts      Streaming state machine for one turn
+│   │       ├── runController.ts   The panel's one owner of the turn queue, the live Run attachment and the gate table — no React
 │   │       ├── conversationSession.ts Atomic live Conversation identity
 │   │       ├── contextBudget.ts   Context-window accounting + auto-compaction threshold
 │   │       ├── autonomyLadder.ts  Mode choices + the Goal policy cycle (review/auto/full)
@@ -300,7 +301,7 @@ Klide/
     │   ├── pty_wire.rs           Portable ptyd wire vocabulary — Request/Response/Event
     │   ├── pty_frame.rs          UTF-8 framing for PTY reads — a character split across reads stays whole
     │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, effort + MCP wiring
-    │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward
+    │   ├── coordination/         mod.rs: Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward · ops.rs: one core per operation (list/send/wait/cancel/read_result), one schema source, one reply text — the two doors only bind the actor
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
     │   ├── mcp_client.rs         Klide as an MCP client — one Session over stdio or Streamable HTTP: handshake, list tools, call one
@@ -529,7 +530,15 @@ received a reply. A wait that times out does not cancel, resend, or move the
 message back to `queued`. Historical journals keep their older replay rules;
 only new commands meet the stronger checks.
 
-There are two doors onto that one journal, and no third:
+There are two doors onto that one journal, and no third. The five operations
+themselves — list, send, wait, cancel, read_result — are each one function in
+`coordination/ops.rs`, taking an actor the door already authenticated and
+returning one structured result rendered as one text; `ops::tools()` is the
+one schema source both doors list, and a test runs one scenario through both
+doors and asserts identical journal effects and identical text. A door keeps
+only two jobs: bind the actor, and wrap the reply in its transport. An
+envelope is `delivered` when its text is about to be read — the turn boundary
+marks everything accepted, a wait marks only what it hands back.
 
 - **Harness Runs** call the native Tools `agent_list` / `agent_send` /
   `agent_wait` / `agent_cancel` / `agent_read_result` (`agent/tools.rs`); the
@@ -540,8 +549,8 @@ There are two doors onto that one journal, and no third:
   per-delivery random nonce a body cannot close. Every Mode is on the plane: Chat carries
   the coordination tools and nothing else (no files, shell, or memory), so any
   conversation with a Workspace can be addressed and can answer.
-- **Delegate CLIs** (Claude Code, Codex, OpenCode) get the same operations as
-  MCP tools from `klide mcp coordination` (`mcp_server.rs`) — the same binary
+- **Delegate CLIs** (Claude Code, Codex, OpenCode) get the same five operations
+  (`agent_cancel` included) as MCP tools from `klide mcp coordination` (`mcp_server.rs`) — the same binary
   as the app, started by the CLI as a stdio child, wired per session by the
   adapter (`Delegate::mcp_wiring`: `--mcp-config` file / `-c` overrides /
   `OPENCODE_CONFIG`). The MCP child owns nothing: it relays each call over

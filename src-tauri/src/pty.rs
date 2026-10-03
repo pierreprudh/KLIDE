@@ -1123,10 +1123,24 @@ pub fn delegate_pty_spawn(
 fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHooks {
     let emit_app = app.clone();
     let live_app = app.clone();
+    let cancel_app = app.clone();
     let recover_app = app.clone();
     let mission_app = app.clone();
     let permission_app = app.clone();
     crate::coordination_bridge::BridgeHooks {
+        // A Delegate's `agent_cancel` reaches a Harness Run's live token the
+        // way the Harness's own does; the journal already holds the request.
+        // A Delegate target has no token here — its PTY is the operator's to
+        // stop — so the durable request is all it gets.
+        cancel: Some(Box::new(move |run_id| {
+            cancel_app
+                .state::<crate::agent::AgentSupervisorState>()
+                .runs
+                .lock()
+                .ok()
+                .and_then(|runs| runs.get(run_id).map(|handle| handle.cancel.cancel()))
+                .is_some()
+        })),
         orchestrate: Some(Box::new(move |session, request| {
             tauri::async_runtime::block_on(crate::missions::orchestration::execute(
                 mission_app.clone(), session.workspace_root.clone(), session.run_id.clone(), request,
