@@ -324,6 +324,7 @@ Klide/
     │       ├── conversation_search.rs Workspace-scoped search over prior Harness transcripts
     │       ├── glob_match.rs      Shared */? matcher (glob tool + command allowlist)
     │       ├── permission.rs      Permission engine — classify, prompt, remember, persist
+    │       ├── permission_relay.rs A Delegate CLI's own permission prompt (Claude Code `--permission-prompt-tool`), raised on the Harness card of the bound Run — same event, slot, scopes
     │       ├── approval_store.rs  HEAD-fingerprinted persisted project approvals
     │       ├── command_allowlist.rs Per-project run_command approvals + wildcard rules
     │       ├── network_allowlist.rs Per-project network target approvals
