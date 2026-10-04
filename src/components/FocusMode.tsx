@@ -66,6 +66,10 @@ import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { SlashMenu } from "./ai/SlashMenu";
+import { MentionMenu } from "./ai/MentionMenu";
+import { mentionKeyAction, mentionQueryAt, replaceMention, type MentionQuery } from "./ai/mentions";
+import { matchSubagents } from "../agent/subagents";
+import { rankFiles } from "../fileSearch";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { ComposerHighlight } from "./ai/ComposerHighlight";
@@ -1596,6 +1600,21 @@ function FocusComposer({
   const [slash, setSlash] = useState<SlashQuery | null>(null);
   const cliCommandNames = useCliSlashCommands(provider, workspaceRoot, slash !== null);
   const [slashIdx, setSlashIdx] = useState(0);
+  // The `@` menu: open while the caret stands in an `@word`. The same rows
+  // the workbench composer shows — subagents when the `@` opens the message,
+  // workspace files anywhere — through the shared `mentions.ts` rule, so a
+  // first turn typed here reads exactly like one typed in the panel.
+  const [mention, setMention] = useState<MentionQuery | null>(null);
+  const [mentionIdx, setMentionIdx] = useState(0);
+  const [mentionFiles, setMentionFiles] = useState<string[]>([]);
+  useEffect(() => { setMentionFiles([]); setMention(null); }, [workspaceRoot]);
+  async function ensureMentionFiles() {
+    if (!workspaceRoot || mentionFiles.length > 0) return;
+    try { setMentionFiles(await listWorkspaceFiles(workspaceRoot)); } catch {}
+  }
+  const mentionSubagents = mention?.atStart ? matchSubagents(mention.query) : [];
+  const mentionPaths = mention !== null ? rankFiles(mentionFiles, mention.query) : [];
+  const mentionTotal = mentionSubagents.length + mentionPaths.length;
   // A mode one command pinned to the next send (/explain reads → plan). Cleared
   // when the turn leaves or the draft is emptied, so it never outlives its
   // command.
@@ -1773,6 +1792,7 @@ function FocusComposer({
     setDraft("");
     setAttachments([]);
     setSlash(null);
+    setMention(null);
     setNextSendMode(null);
     onSubmit(artifactPrompt(text, artifactOutput), attachments, artifactOutput ? { mode: "goal" } : mode ? { mode } : undefined);
   }
@@ -1784,9 +1804,37 @@ function FocusComposer({
     if (query !== null) {
       setSlash(query);
       setSlashIdx(0);
+      setMention(null);
+      return;
     } else if (slash !== null) {
       setSlash(null);
     }
+    const at = mentionQueryAt(value, caret);
+    if (at !== null) {
+      setMention(at);
+      setMentionIdx(0);
+      void ensureMentionFiles();
+    } else if (mention !== null) {
+      setMention(null);
+    }
+  }
+
+  // Accept a menu row by absolute index — subagents first, then files. The
+  // `@word` under the caret becomes `@label ` / `@path `, in draft space (the
+  // skill lede is a prefix of the draft the textarea doesn't show).
+  function acceptMention(idx: number) {
+    if (mention === null) return;
+    const text = idx < mentionSubagents.length
+      ? mentionSubagents[idx]?.label
+      : mentionPaths[idx - mentionSubagents.length];
+    if (!text) return;
+    const ta = taRef.current;
+    const caret = ta ? skillTokenCaret(skillToken, ta.selectionStart) : draft.length;
+    const next = replaceMention({ value: draft, start: mention.start, caret, text });
+    setDraft(next.value);
+    setMention(null);
+    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(body, body); });
   }
 
   async function addFiles(files: File[]) {
@@ -1812,7 +1860,7 @@ function FocusComposer({
   // panel is the one path a first turn takes.
   const providerDelegatesWork = isDelegateProvider(provider);
   const goalOrPlan = (): AgentMode => (supportsTools || providerDelegatesWork ? "goal" : "plan");
-  const clearDraft = () => { setDraft(""); setSlash(null); };
+  const clearDraft = () => { setDraft(""); setSlash(null); setMention(null); };
   const SLASH_COMMANDS: SlashCommand[] = [
     { name: "chat", desc: SLASH_DESC.chat, run: () => { selectAgentMode("chat"); clearDraft(); } },
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectAgentMode("plan"); clearDraft(); } },
@@ -1903,16 +1951,18 @@ function FocusComposer({
 
   function addFile(path: string) {
     const textarea = taRef.current;
-    const caret = textarea?.selectionStart ?? draft.length;
+    const caret = textarea ? skillTokenCaret(skillToken, textarea.selectionStart) : draft.length;
     const before = draft.slice(0, caret);
     const after = draft.slice(caret);
     const prefix = before.length === 0 || before.endsWith(" ") ? "" : " ";
     const inserted = `${before}${prefix}@${path} `;
     const next = inserted + after;
     setDraft(next);
+    setMention(null);
+    const body = inserted.length - (skillTokenOf(next, ledes)?.prefix.length ?? 0);
     requestAnimationFrame(() => {
       textarea?.focus();
-      textarea?.setSelectionRange(inserted.length, inserted.length);
+      textarea?.setSelectionRange(body, body);
     });
   }
 
@@ -1947,6 +1997,9 @@ function FocusComposer({
       <div style={{ position: "relative" }}>
       {slash !== null && (
         <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} ledes={ledes} />
+      )}
+      {mention !== null && (
+        <MentionMenu subagents={mentionSubagents} files={mentionPaths} activeIdx={mentionIdx} onHover={setMentionIdx} onAccept={acceptMention} />
       )}
       <div
         className="klide-focus-composer"
@@ -2002,7 +2055,7 @@ function FocusComposer({
           value={draftBody}
           onChange={(e) => changeDraft(joinSkillToken(skillToken, e.target.value), skillTokenCaret(skillToken, e.target.selectionStart ?? 0))}
           onFocus={() => setFocused(true)}
-          onBlur={() => { setFocused(false); setSlash(null); }}
+          onBlur={() => { setFocused(false); setSlash(null); setMention(null); }}
           onPaste={(e) => {
             const files = Array.from(e.clipboardData?.files ?? []);
             if (files.length && canAttachFiles) {
@@ -2027,6 +2080,17 @@ function FocusComposer({
                 else if (action === "prev") setSlashIdx((i) => stepSlashIndex(i, -1, slashMatches.length));
                 else if (action === "accept") acceptSlash(slashIdx);
                 else setSlash(null);
+                return;
+              }
+            }
+            if (mention !== null && mentionTotal > 0) {
+              const action = mentionKeyAction(e.key);
+              if (action) {
+                e.preventDefault();
+                if (action === "next") setMentionIdx((i) => (i + 1) % mentionTotal);
+                else if (action === "prev") setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal);
+                else if (action === "accept") acceptMention(mentionIdx);
+                else setMention(null);
                 return;
               }
             }

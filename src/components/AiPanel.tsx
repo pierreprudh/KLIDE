@@ -143,6 +143,8 @@ import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
 import { parseConfigUsage } from "./ai/cliConfig";
 import { SlashMenu } from "./ai/SlashMenu";
+import { MentionMenu } from "./ai/MentionMenu";
+import { mentionKeyAction, mentionQueryAt, type MentionQuery } from "./ai/mentions";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { ComposerHighlight } from "./ai/ComposerHighlight";
@@ -1169,7 +1171,7 @@ export function AiPanel({
   // in usePortalMenu, not five hand-rolled effects here.
 
   const [fileList, setFileList] = useState<string[]>([]);
-  const [mention, setMention] = useState<{ query: string; atStart: boolean } | null>(null);
+  const [mention, setMention] = useState<MentionQuery | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
   // When `@` opens the menu at the very start of the message, offer subagents
   // (above files). Mid-message `@` stays file-only, so the two never clash.
@@ -1514,7 +1516,7 @@ export function AiPanel({
     { name: "explain", desc: SLASH_DESC.explain, run: () => {
       setInput(`${EXPLAIN_PREFIX}@`);
       setNextSendMode("plan");
-      setMention({ query: "", atStart: false }); setMentionIdx(0);
+      setMention(mentionQueryAt(`${EXPLAIN_PREFIX}@`)); setMentionIdx(0);
       void ensureFileList();
       requestAnimationFrame(() => taRef.current?.focus());
     }},
@@ -1637,9 +1639,8 @@ export function AiPanel({
     const slashQuery = slashQueryAt(value, caret);
     if (slashQuery !== null) { setSlash(slashQuery); setSlashIdx(0); setMention(null); return; }
     else if (slash !== null) setSlash(null);
-    const before = value.slice(0, caret);
-    const m = before.match(/(?:^|\s)@([^\s@]*)$/);
-    if (m) { setMention({ query: m[1], atStart: /^@[^\s@]*$/.test(before) }); setMentionIdx(0); void ensureFileList(); }
+    const at = mentionQueryAt(value, caret);
+    if (at !== null) { setMention(at); setMentionIdx(0); void ensureFileList(); }
     else if (mention !== null) setMention(null);
   }
 
@@ -4703,39 +4704,8 @@ This user request requires workspace inspection. Before answering, you MUST call
           {slash !== null && (
             <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} ledes={ledes} />
           )}
-          {mention !== null && mentionTotal > 0 && (
-            <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 220, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
-              {subagentMatches.length > 0 && (
-                <div style={{ padding: "4px 8px 2px", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", userSelect: "none" }}>Subagents</div>
-              )}
-              {subagentMatches.map((sub, i) => (
-                <div key={sub.id} role="option" aria-selected={i === mentionIdx}
-                  onMouseDown={(e) => { e.preventDefault(); acceptSubagent(sub.label); }}
-                  onMouseEnter={() => setMentionIdx(i)}
-                  style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: i === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
-                  <span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>@{sub.label}</span>
-                  <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{sub.blurb}</span>
-                </div>
-              ))}
-              {mentionMatches.length > 0 && subagentMatches.length > 0 && (
-                <div style={{ padding: "6px 8px 2px", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", userSelect: "none" }}>Files</div>
-              )}
-              {mentionMatches.map((path, idx) => {
-                const absIdx = subagentMatches.length + idx;
-                const slash = path.lastIndexOf("/");
-                const dir = slash >= 0 ? path.slice(0, slash + 1) : "";
-                const base = slash >= 0 ? path.slice(slash + 1) : path;
-                return (
-                  <div key={path} role="option" aria-selected={absIdx === mentionIdx}
-                    onMouseDown={(e) => { e.preventDefault(); acceptMention(path); }}
-                    onMouseEnter={() => setMentionIdx(absIdx)}
-                    style={{ display: "flex", alignItems: "baseline", gap: 2, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: absIdx === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
-                    <span style={{ color: "var(--fg-strong)" }}>{base}</span>
-                    <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{dir && ` ${dir}`}</span>
-                  </div>
-                );
-              })}
-            </div>
+          {mention !== null && (
+            <MentionMenu subagents={subagentMatches} files={mentionMatches} activeIdx={mentionIdx} onHover={setMentionIdx} onAccept={acceptMentionAt} />
           )}
           <div style={{ overflow: "hidden", borderRadius: "var(--radius-lg)" }}>
           <input
@@ -4788,9 +4758,10 @@ This user request requires workspace inspection. Before answering, you MUST call
                 }
               }
               if (mention !== null && mentionTotal > 0) {
-                if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionTotal); return; }
-                if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal); return; }
-                if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptMentionAt(mentionIdx); return; }
+                const action = mentionKeyAction(e.key);
+                if (action === "next") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionTotal); return; }
+                if (action === "prev") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal); return; }
+                if (action === "accept") { e.preventDefault(); acceptMentionAt(mentionIdx); return; }
                 if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
               }
               if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
