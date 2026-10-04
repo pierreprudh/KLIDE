@@ -9,6 +9,7 @@ mod observers;
 mod command_allowlist;
 mod connector_tools;
 mod conversation_search;
+mod memory_recall;
 pub(crate) mod delivery;
 mod glob_match;
 #[cfg(test)]
@@ -699,6 +700,7 @@ async fn run_subagent_to_completion(
         initial_text: spec.task.clone(),
         attachments: vec![],
         context: Some(AgentContextSnapshot {
+            memory: None,
             workspace_root: spec.workspace_root.clone(),
             attachments: vec![],
             lens_items: vec![],
@@ -1033,6 +1035,7 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
         .context
         .clone()
         .unwrap_or_else(|| AgentContextSnapshot {
+            memory: None,
             workspace_root: request.workspace_root.clone(),
             attachments: request.attachments.clone(),
             lens_items: Vec::new(),
@@ -1685,6 +1688,7 @@ async fn start_run(
     request.attachments = clamped.kept;
     if !clamped.omitted.is_empty() {
         let mut snapshot = request.context.take().unwrap_or_else(|| AgentContextSnapshot {
+            memory: None,
             workspace_root: request.workspace_root.clone(),
             attachments: request.attachments.clone(),
             lens_items: Vec::new(),
@@ -1956,6 +1960,11 @@ async fn run_agent_loop(
     };
     write_summary(&runs_dir, &summary)?;
 
+    let memory_request = request.clone();
+    let memory_prior = prior_events.clone();
+    let memory = crate::blocking::run(move || {
+        Ok(memory_recall::for_conversation(&memory_request, &memory_prior, resuming))
+    }).await?;
     if !resuming {
         emit(AgentEvent::RunStarted {
             run_id: id.clone(),
@@ -1977,7 +1986,12 @@ async fn run_agent_loop(
         }
         emit(AgentEvent::ContextSnapshot {
             run_id: id.clone(),
-            snapshot: snapshot_for(&request),
+            snapshot: {
+                let mut snapshot = snapshot_for(&request);
+                snapshot.memory = memory.clone();
+                snapshot.estimated_tokens += memory.as_ref().map_or(0, |m| m.estimated_tokens);
+                snapshot
+            },
             ts: now_ms(),
         })?;
     }
@@ -1991,7 +2005,11 @@ async fn run_agent_loop(
         })?;
     }
 
-    let system = base_system_prompt(&request);
+    let mut system = base_system_prompt(&request);
+    if let Some(memory) = &memory {
+        system.push_str("\n\n");
+        system.push_str(&memory.prompt);
+    }
     let mut messages = provider_messages(&request, system, &id);
     if wake {
         // provider_messages ended with the (empty) user turn; the inbox

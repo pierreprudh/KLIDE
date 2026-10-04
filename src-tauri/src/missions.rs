@@ -919,6 +919,7 @@ fn start_request_for(
         initial_text: prompt,
         attachments: vec![],
         context: Some(AgentContextSnapshot {
+            memory: None,
             workspace_root: Some(workspace_root.to_string()),
             attachments: vec![],
             lens_items: vec![],

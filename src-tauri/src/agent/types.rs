@@ -43,6 +43,9 @@ pub struct AgentAttachment {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentContextSnapshot {
+    /// Rust-owned frozen recall, persisted once and reused on continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<super::memory_recall::MemorySnapshot>,
     pub workspace_root: Option<String>,
     #[serde(default)]
     pub attachments: Vec<AgentAttachment>,

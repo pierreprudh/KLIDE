@@ -76,8 +76,20 @@ This slice establishes the contract:
 - JSON Schemas, architecture documentation, and website-ready SVGs;
 - Rust round-trip, ranking, security, capability, and registry tests.
 
-It deliberately does not auto-inject memory. Models recall explicitly, which
-makes retrieval inspectable while the ranking and UX are proven.
+New Plan and Goal conversations now receive a bounded reviewed-memory snapshot
+from the Rust Harness. Up to five whole records fit in a 3,200-byte prompt
+budget (approximately 800 tokens using the Harness estimator). Query-term
+overlap ranks relevant entries; conventions are eligible without a query match.
+Oversized entries are skipped rather than truncated. Explicit recall remains
+available for deeper evidence.
+
+The ContextSnapshot records the exact prompt, estimated cost, and full entry
+versions with provenance. Continuations and process restarts reuse that recorded
+snapshot, never reselect from changed files. Older conversations without a
+snapshot retain their existing behavior. Chat mode, or disabling either memory
+recall Tool, suppresses automatic recall. Renderer-supplied memory is ignored.
+Snapshot text is JSON-quoted historical knowledge, subordinate to the current
+user request. Token counts are estimates, not tokenizer-enforced limits.
 
 ### PR 2 — Recall evidence and review UX
 
@@ -115,3 +127,24 @@ raw agent output:
 - Which Run, Transcript, commit, or file supports it?
 - Is it reviewed, stale, or superseded?
 - What new learning is waiting for my approval?
+
+## Memory panel upgrade — remaining work
+
+The Memory panel is the user-facing home for the remaining Hermes-inspired
+learning features:
+
+- inspect each Conversation's frozen recall, including entry versions, sources,
+  match reasons, and estimated context cost;
+- review memory proposals from a native `memory_propose` Harness Tool;
+- review bounded background learning that extracts corrections, decisions,
+  failures, and successful patterns from Run evidence;
+- accept, edit, or reject proposed merges and contradictions while preserving
+  superseded entries and their provenance;
+- review reusable Skill drafts alongside memory drafts, with a distinct
+  procedure type;
+- configure Workspace recall and learning budgets and local-model idle review.
+
+The panel presents and reviews these operations. The Rust memory engine and
+Harness continue owning persistence, retrieval, proposal validation, and
+background execution. This upgrade is planned; the shipped slice is bounded
+pre-conversation recall.

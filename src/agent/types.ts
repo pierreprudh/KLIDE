@@ -46,6 +46,8 @@ export type AgentContextPayload = {
 };
 
 export type AgentContextSnapshot = {
+  /** Rust-owned recall frozen at conversation start, including evidence. */
+  memory?: { prompt: string; estimatedTokens: number; entries: import("../memory").MemoryEntry[] };
   workspaceRoot: string | null;
   attachments: AgentAttachment[];
   lensItems: ProjectContextItem[];
