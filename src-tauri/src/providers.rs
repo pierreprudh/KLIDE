@@ -268,7 +268,7 @@ const NO_PRESETS: &[&str] = &[];
 
 /// The registry. One row per provider. Order is "local first, then hosted
 /// API, then subscription CLIs" — purely cosmetic, `lookup` scans.
-pub const LLAMACPP_DEFAULT_MODEL: &str = "Qwen/Qwen3-4B-GGUF:Q4_K_M";
+pub const LLAMACPP_DEFAULT_MODEL: &str = crate::llamacpp_models::KLIDE_MODEL;
 
 pub const PROVIDERS: &[ProviderEntry] = &[
     // ── Local: no key, no subscription ──────────────────────────────────

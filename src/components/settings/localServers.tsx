@@ -9,6 +9,8 @@ import {
   stopLocalProvider,
 } from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
+import { ProviderLogo } from "../ai/icons";
+import type { ProviderId } from "../../agent/types";
 import { providerDefaultModel, providerLabel } from "../../agent/providerCatalog";
 
 /** One managed local server (`isLocalServer` on its registry row). Its name
@@ -65,6 +67,7 @@ function ManagedLocalServerRow({ provider }: { provider: string }) {
 
   return (
     <Row
+      leading={<ProviderLogo id={provider as ProviderId} size={24} />}
       title={title}
       description={error ? error : running ? "Server is reachable on localhost." : "Server is not running. Start it to enable chat."}
       control={

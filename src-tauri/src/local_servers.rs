@@ -267,6 +267,7 @@ pub(crate) async fn ai_local_server_start(
 
     if provider == "llamacpp" {
         crate::llamacpp_setup::ensure_installed().await?;
+        crate::llamacpp_models::ensure_model().await?;
     }
     let (cmd, args) = local_server_command(&provider, &model)?;
 

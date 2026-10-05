@@ -4,6 +4,9 @@ import {
   selectLlamaModel, startLocalProvider, stopLocalProvider, type LlamaSetupInfo,
 } from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
+import { ChevronDown, ProviderLogo } from "../ai/icons";
+import "./llamaServerSetup.css";
+import { LlamaModelCards } from "./llamaModelCards";
 
 export function LlamaServerSetup() {
   const [info, setInfo] = useState<LlamaSetupInfo | null>(null);
@@ -53,43 +56,38 @@ export function LlamaServerSetup() {
 
   const chosen = info?.models.find((m) => m.id === model);
   const fits = chosen && info?.memoryBudgetGb != null ? chosen.memoryGb <= info.memoryBudgetGb : null;
-  const buttonStyle = { padding: "6px 12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-strong)", background: "var(--bg-hover)", color: "var(--fg-strong)", cursor: "pointer" };
-  return <div style={{ display: "grid", gap: 12, paddingBottom: 16 }}>
-    <Row title="llama.cpp" description={info
-      ? `${info.machine.chip} · ${info.machine.memoryGb == null ? "RAM unknown" : `${Math.round(info.machine.memoryGb)} GB RAM`} · ${info.machine.cpuCores} CPU cores · ${info.machine.acceleration}`
+  return <div className="klide-llama-setup">
+    <Row leading={<ProviderLogo id="llamacpp" size={24} />} title="llama.cpp" description={info
+      ? `${info.machine.chip} · ${info.machine.memoryGb == null ? "RAM unknown" : `${Math.round(info.machine.memoryGb)} GB RAM`}`
       : "Checking this machine…"}
       control={<StatusText tone={running ? "ok" : "idle"}>{running ? "Running" : info?.runtimeInstalled ? "Installed" : "Not installed"}</StatusText>} />
-    {info && <div style={{ display: "grid", gap: 10 }}>
-      <label style={{ display: "grid", gap: 6 }}>
-        <span>Choose a model for this machine</span>
-        <select className="klide-field" aria-label="llama.cpp model" value={model}
-          disabled={!!busy || running} onChange={(e) => setModel(e.target.value)}>
-          <option value="" disabled>Choose a model</option>
-          {info.models.map((m) => <option key={m.id} value={m.id}>
-            {m.label}{m.id === info.recommendedModel ? " · Recommended" : ""} · {m.downloadGb} GB download
-            {info.memoryBudgetGb != null && m.memoryGb > info.memoryBudgetGb ? " · May exceed available budget" : ""}
-          </option>)}
-        </select>
-      </label>
-      <div className="klide-row-description">
-        {info.memoryBudgetGb == null ? "Memory detection is unavailable. Choose a small model to start." : `Estimated model budget: ${info.memoryBudgetGb.toFixed(1)} GB, leaving memory for Klide and other apps.`}
-        {chosen && ` This model needs approximately ${chosen.memoryGb} GB at an 8k context.`}
-        {fits === false && " A smaller model is recommended to avoid heavy swapping."}
-        {" Recommendations estimate fit and favour smaller models on CPU. Inference speed has not been benchmarked."}
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {!info.runtimeInstalled && <button style={buttonStyle} disabled={!!busy} onClick={() => void act("runtime")}>Download llama.cpp</button>}
-        <button style={{ ...buttonStyle, background: "var(--accent)", color: "var(--control-primary-fg)" }}
+    {info && <div className="klide-llama-body">
+      <LlamaModelCards info={info} value={model} disabled={!!busy || running} onChange={setModel} />
+      <div className="klide-llama-controls">
+        <button className="klide-button klide-button-secondary"
           disabled={!!busy || (!running && !model)} onClick={() => void act(running ? "stop" : "model")}>
-          {running ? "Stop" : info.runtimeInstalled ? "Download & start model" : "Install & start selected model"}
+          {busy ? "Please wait…" : running ? "Stop" : info.runtimeInstalled ? `Start ${chosen?.label ?? "model"}` : "Set up & start"}
         </button>
+        <span className="klide-llama-hint">{running ? "Stop to change models" : "Downloads on first start"}</span>
       </div>
-      {busy && <div role="status" className="klide-row-description">
-        {busy === "runtime" ? "Downloading and verifying llama.cpp…" : busy === "stop" ? "Stopping…" : "Preparing runtime, downloading the selected model and waiting for it to load. First start can take several minutes…"}
+      {fits === false && <div className="klide-llama-hint">This model may exceed your memory budget. Choose a smaller one for smoother use.</div>}
+      {info.memoryBudgetGb == null && <div className="klide-llama-hint">RAM could not be detected. Start with a small model.</div>}
+      <details className="klide-llama-details">
+        <summary><span aria-hidden="true"><ChevronDown /></span>About this recommendation</summary>
+        <div>
+          {info.machine.cpuCores} CPU cores · {info.machine.acceleration}.
+          {info.memoryBudgetGb != null && ` Estimated model budget: ${info.memoryBudgetGb.toFixed(1)} GB, with room left for other apps.`}
+          {" Memory estimates use an 8k context. Smaller models favour speed; larger models favour quality. Actual speed depends on your workload and has not been benchmarked."}
+        </div>
+      </details>
+      {!info.runtimeInstalled && <button className="klide-button klide-button-subtle klide-llama-engine"
+        disabled={!!busy} onClick={() => void act("runtime")}>Download engine only</button>}
+      {busy && <div role="status" className="klide-llama-hint">
+        {busy === "runtime" ? "Downloading and verifying llama.cpp…" : busy === "stop" ? "Stopping…" : "Downloading and loading the model. First start may take several minutes…"}
       </div>}
     </div>}
-    {error && <div role="alert" className="klide-row-description">{error}
-      {!info && <button style={buttonStyle} onClick={() => { setError(null); setRetry((n) => n + 1); }}>Retry hardware detection</button>}
+    {error && <div role="alert" className="klide-llama-error">{error}
+      {!info && <button className="klide-button klide-button-secondary" onClick={() => { setError(null); setRetry((n) => n + 1); }}>Retry</button>}
     </div>}
   </div>;
 }

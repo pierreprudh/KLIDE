@@ -7,40 +7,56 @@ use std::path::PathBuf;
 pub struct ModelChoice {
     pub id: &'static str,
     pub label: &'static str,
+    pub maker: &'static str,
+    pub description: &'static str,
+    pub url: &'static str,
+    pub quantization: &'static str,
     pub download_gb: f64,
     pub memory_gb: f64,
 }
 // Runtime estimates include weights, an 8k KV cache and working buffers.
+pub const KLIDE_MODEL: &str = "pierreprudh/klide-8b";
+const KLIDE_DIGEST: &str = "c3c0bfb58561fba0d703d7dee5836c9c019a63f48d0980723c40e28a7a97d7b8";
 const MODELS: &[ModelChoice] = &[
     ModelChoice {
-        id: "Qwen/Qwen3-1.7B-GGUF:Q8_0",
-        label: "Qwen3 1.7B · Fast",
-        download_gb: 1.9,
-        memory_gb: 3.5,
-    },
-    ModelChoice {
-        id: "Qwen/Qwen3-4B-GGUF:Q4_K_M",
-        label: "Qwen3 4B · Balanced",
-        download_gb: 2.5,
-        memory_gb: 4.5,
+        id: KLIDE_MODEL,
+        label: "Klide 8B",
+        maker: "klide",
+        description: "Tuned for Klide’s tools and file edits.",
+        url: "https://ollama.com/pierreprudh/klide-8b",
+        quantization: "Q8_0",
+        download_gb: 9.01,
+        memory_gb: 12.0,
     },
     ModelChoice {
         id: "Qwen/Qwen3-8B-GGUF:Q4_K_M",
-        label: "Qwen3 8B · More capable",
+        label: "Qwen3 8B",
+        maker: "qwen",
+        description: "Reasoning, coding and everyday tasks.",
+        url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
+        quantization: "Q4_K_M",
         download_gb: 5.0,
         memory_gb: 7.5,
     },
     ModelChoice {
-        id: "Qwen/Qwen3-14B-GGUF:Q4_K_M",
-        label: "Qwen3 14B · Higher quality",
-        download_gb: 9.0,
-        memory_gb: 12.0,
+        id: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M",
+        label: "Llama 3.2 3B",
+        maker: "meta",
+        description: "A light option for everyday conversation.",
+        url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF",
+        quantization: "Q4_K_M",
+        download_gb: 2.02,
+        memory_gb: 3.5,
     },
     ModelChoice {
-        id: "Qwen/Qwen3-32B-GGUF:Q4_K_M",
-        label: "Qwen3 32B · Highest quality",
-        download_gb: 20.0,
-        memory_gb: 25.0,
+        id: "mistralai/Ministral-3-3B-Instruct-2512-GGUF:Q4_K_M",
+        label: "Ministral 3 3B",
+        maker: "mistral",
+        description: "Compact, multilingual instruction following.",
+        url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+        quantization: "Q4_K_M",
+        download_gb: 2.15,
+        memory_gb: 4.0,
     },
 ];
 
@@ -94,15 +110,20 @@ fn budget(machine: &Machine) -> Option<f64> {
 fn recommend(machine: &Machine) -> Option<&'static str> {
     let available = budget(machine)?;
     let accelerated = machine.acceleration.starts_with("Metal");
-    MODELS
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(i, m)| {
-            m.memory_gb <= available
-                && (accelerated || (*i <= 1 && machine.cpu_cores >= 4) || *i == 0)
-        })
-        .map(|(_, m)| m.id)
+    // Prefer Klide's tuned model when it fits, then Qwen on Metal.
+    // CPU inference favours the two smaller general-purpose models.
+    let order = if accelerated {
+        [0, 1, 3, 2]
+    } else if machine.cpu_cores >= 4 {
+        [3, 2, 1, 0]
+    } else {
+        [2, 3, 1, 0]
+    };
+    order
+        .into_iter()
+        .map(|i| &MODELS[i])
+        .find(|m| m.memory_gb <= available)
+        .map(|m| m.id)
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -133,12 +154,19 @@ pub(crate) fn selected_model() -> Option<String> {
 pub(crate) fn launch_model() -> String {
     selected_model()
         .or_else(|| recommend(&machine()).map(str::to_owned))
-        .unwrap_or_else(|| MODELS[0].id.to_owned())
+        .unwrap_or_else(|| MODELS[2].id.to_owned())
 }
 pub(crate) fn launch_args(model: &str) -> Vec<String> {
-    vec![
-        "-hf".into(),
-        model.into(),
+    let source = if model == KLIDE_MODEL {
+        vec![
+            "-m".into(),
+            klide_model_path().to_string_lossy().into_owned(),
+        ]
+    } else {
+        vec!["-hf".into(), model.into()]
+    };
+    let mut args = source;
+    args.extend([
         "--alias".into(),
         model.into(),
         "--host".into(),
@@ -148,7 +176,65 @@ pub(crate) fn launch_args(model: &str) -> Vec<String> {
         "--jinja".into(),
         "--ctx-size".into(),
         "8192".into(),
-    ]
+    ]);
+    args
+}
+fn klide_model_path() -> PathBuf {
+    crate::cli::home_dir_path()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".klide/models")
+        .join(format!("klide-8b-{KLIDE_DIGEST}.gguf"))
+}
+
+/// The published Ollama model layer is a GGUF, which llama.cpp loads directly.
+/// Pin its content digest and verify a streamed download before making it usable.
+pub(crate) async fn ensure_model() -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncWriteExt;
+    if launch_model() != KLIDE_MODEL {
+        return Ok(());
+    }
+    let path = klide_model_path();
+    if tokio::fs::try_exists(&path)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(());
+    }
+    tokio::fs::create_dir_all(path.parent().unwrap())
+        .await
+        .map_err(|e| e.to_string())?;
+    let url =
+        format!("https://registry.ollama.ai/v2/pierreprudh/klide-8b/blobs/sha256:{KLIDE_DIGEST}");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not download Klide's model: {e}"))?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+    let partial = path.with_extension("gguf.part");
+    let mut file = tokio::fs::File::create(&partial)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        hash.update(&chunk);
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    if format!("{:x}", hash.finalize()) != KLIDE_DIGEST {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err("Klide model download checksum mismatch. Please retry.".into());
+    }
+    tokio::fs::rename(partial, path)
+        .await
+        .map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub(crate) async fn ai_llamacpp_setup_info() -> Result<SetupInfo, String> {
@@ -208,27 +294,42 @@ mod tests {
     }
     #[test]
     fn recommendations_reserve_memory_for_other_apps() {
-        assert_eq!(recommend(&mac(8.0)), Some(MODELS[0].id));
-        assert_eq!(recommend(&mac(16.0)), Some(MODELS[2].id));
-        assert_eq!(recommend(&mac(24.0)), Some(MODELS[3].id));
-        assert_eq!(recommend(&mac(64.0)), Some(MODELS[4].id));
+        assert_eq!(recommend(&mac(8.0)), Some(MODELS[3].id));
+        assert_eq!(recommend(&mac(16.0)), Some(MODELS[1].id));
+        assert_eq!(recommend(&mac(24.0)), Some(MODELS[0].id));
+        assert_eq!(recommend(&mac(64.0)), Some(MODELS[0].id));
         assert_eq!(recommend(&mac(4.0)), None);
     }
     #[test]
     fn cpu_and_unknown_machines_do_not_get_large_recommendations() {
         let mut cpu = mac(64.0);
         cpu.acceleration = "CPU";
-        assert_eq!(recommend(&cpu), Some(MODELS[1].id));
+        assert_eq!(recommend(&cpu), Some(MODELS[3].id));
         cpu.cpu_cores = 2;
-        assert_eq!(recommend(&cpu), Some(MODELS[0].id));
+        assert_eq!(recommend(&cpu), Some(MODELS[2].id));
         cpu.memory_gb = None;
         assert_eq!(recommend(&cpu), None);
+    }
+    #[test]
+    fn catalog_has_four_distinct_models_and_the_default_link() {
+        assert_eq!(MODELS.len(), 4);
+        let ids: std::collections::HashSet<_> = MODELS.iter().map(|m| m.id).collect();
+        let makers: std::collections::HashSet<_> = MODELS.iter().map(|m| m.maker).collect();
+        assert_eq!(ids.len(), 4);
+        assert_eq!(makers.len(), 4);
+        assert_eq!(MODELS[0].url, "https://ollama.com/pierreprudh/klide-8b");
+        assert_eq!(crate::providers::LLAMACPP_DEFAULT_MODEL, KLIDE_MODEL);
     }
     #[test]
     fn alias_matches_the_selected_model() {
         for model in MODELS {
             let args = launch_args(model.id);
-            assert_eq!(args[1], model.id);
+            if model.id == KLIDE_MODEL {
+                assert_eq!(args[0], "-m");
+                assert!(args[1].ends_with(".gguf"));
+            } else {
+                assert_eq!(args[1], model.id);
+            }
             assert_eq!(args[3], model.id);
             assert!(args.iter().any(|a| a == "--jinja"));
         }

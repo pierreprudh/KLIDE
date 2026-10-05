@@ -68,7 +68,7 @@ export const PROVIDER_ROWS = [
     "keyEnv": null,
     "keyEnvLegacy": null,
     "keyPlaceholder": null,
-    "defaultModel": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+    "defaultModel": "pierreprudh/klide-8b",
     "presets": [],
     "brand": "llamacpp",
     "hasCredits": false,
