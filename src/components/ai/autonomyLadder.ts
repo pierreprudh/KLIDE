@@ -2,7 +2,11 @@
 //
 // **Mode** is a domain noun (see CONTEXT.md): the capability tier of a Run —
 // `chat` (no tools), `plan` (read-only tools), `goal` (full tools). The + menu
-// offers exactly these three.
+// offers two of them: Plan, and `goal` under its working name, **Work**. Work
+// is the default — an editor's assistant edits. `chat` is not picked: it is
+// what Work collapses to when the model cannot call tools (`effectiveMode`).
+// "Goal" as a word is now the `/goal` command — an objective the run works
+// toward until it is done (`goalDirectiveOf`) — not a tier.
 //
 // **Goal policy** is what Goal mode does with its two gates: review every edit
 // (the default), auto-accept edits (commands still ask), or full auto (edits
@@ -22,10 +26,22 @@ export type ModeChoice = {
 };
 
 export const MODE_CHOICES: ModeChoice[] = [
-  { mode: "chat", label: "Chat", description: "no tools" },
   { mode: "plan", label: "Plan", description: "read-only, proposes" },
-  { mode: "goal", label: "Goal", description: "edits and commands" },
+  { mode: "goal", label: "Work", description: "edits and commands" },
 ];
+
+/** The Mode a composer opens on. Work, unless the last pick was Plan: the
+ *  stored value is the picker's own, so a `chat` left over from the three-row
+ *  menu lands on Work rather than on a row that is no longer there. */
+export function initialMode(stored: string | null): AgentMode {
+  return stored === "plan" ? "plan" : "goal";
+}
+
+/** The label a Mode wears in the UI (`goal` reads Work). Chat is named only
+ *  when it is the effective tier of a tool-less model. */
+export function modeLabel(mode: AgentMode): string {
+  return MODE_CHOICES.find((c) => c.mode === mode)?.label ?? "Chat";
+}
 
 export type GoalPolicy = "review" | "auto" | "full";
 
@@ -68,8 +84,8 @@ export function nextGoalPolicy(current: GoalPolicy): GoalPolicyChoice {
 /**
  * The mode a pick collapses to when the model cannot call tools.
  *
- * A model with no tool support cannot execute a Goal, so offering one would
- * produce a run that silently does nothing. Delegate providers are exempt: the
+ * A model with no tool support cannot Work, so offering it would produce a
+ * run that silently does nothing. Delegate providers are exempt: the
  * CLI behind them runs its own tools, so Klide's view of "does this model
  * support tools" does not apply.
  *

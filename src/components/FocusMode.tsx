@@ -76,6 +76,7 @@ import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import {
   EXPLAIN_PREFIX,
+  GOAL_PREFIX,
   SLASH_DESC,
   skillSlashCommands,
   SLASH_PROMPTS,
@@ -89,13 +90,12 @@ import {
   type SlashQuery,
 } from "./ai/slashCommands";
 import { notify } from "../toast";
-import { GOAL_POLICIES, MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf } from "./ai/autonomyLadder";
+import { GOAL_POLICIES, MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf, initialMode } from "./ai/autonomyLadder";
 import {
   PROVIDER_GROUPS,
   defaultModelForProvider,
   isDelegateProvider,
   isManagedLocalProvider,
-  normalizeAgentMode,
   providerGroupsWithCustom,
   providerName,
   providerNeedsApiKey,
@@ -1410,7 +1410,9 @@ function FocusAddMenu({
               <ArtifactOutputRows value={artifactOutput} disabled={!supportsTools && !providerDelegatesWork} onChange={(value) => { onArtifactOutputChange(value); if (value) onModeChange("goal"); }} />
               {MODE_CHOICES.map((choice) => {
                 const disabled = choice.mode === "goal" && !supportsTools;
-                const active = choice.mode === effectiveMode;
+                // Chat has no row: a tool-less model that collapsed Work to
+                // it still shows Work as the pick, greyed.
+                const active = choice.mode === effectiveMode || (effectiveMode === "chat" && choice.mode === mode);
                 return (
                   <button
                     key={choice.mode}
@@ -1438,8 +1440,8 @@ function FocusAddMenu({
                   </button>
                 );
               })}
-              {/* Only Goal has gates to set, so the policy rows appear only
-                  when Goal is what the first run will actually be. */}
+              {/* Only Work has gates to set, so the policy rows appear only
+                  when Work is what the first run will actually be. */}
               {effectiveMode === "goal" && (
                 <>
                   <div className="klide-focus-add-menu-divider" />
@@ -1577,7 +1579,7 @@ function FocusComposer({
   const [dropping, setDropping] = useState(false);
   const [supportsVision, setSupportsVision] = useState(false);
   const [agentMode, setAgentMode] = useState<AgentMode>(
-    () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
+    () => initialMode(localStorage.getItem("klide.agentMode"))
   );
   const [supportsTools, setSupportsTools] = useState(true);
   // The reasoning efforts this provider+model accepts. Empty means the pair
@@ -1861,10 +1863,24 @@ function FocusComposer({
   const providerDelegatesWork = isDelegateProvider(provider);
   const goalOrPlan = (): AgentMode => (supportsTools || providerDelegatesWork ? "goal" : "plan");
   const clearDraft = () => { setDraft(""); setSlash(null); setMention(null); };
+  // A command that stays in the draft (`/goal`, a Skill) lands where it was
+  // typed — see `replaceSlashWord`.
+  const insertSlashPrefix = (prefix: string) => {
+    const open = slash;
+    const next = open === null
+      ? { value: prefix, caret: prefix.length }
+      : replaceSlashWord({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix });
+    setSlash(null);
+    setDraft(next.value);
+    // The textarea holds the body; a wired skill is drawn as a lede, so the
+    // caret lands short of the prefix that lede stands in for.
+    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
+  };
   const SLASH_COMMANDS: SlashCommand[] = [
-    { name: "chat", desc: SLASH_DESC.chat, run: () => { selectAgentMode("chat"); clearDraft(); } },
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectAgentMode("plan"); clearDraft(); } },
-    { name: "goal", desc: SLASH_DESC.goal, run: () => { selectAgentMode(goalOrPlan()); clearDraft(); } },
+    { name: "work", desc: SLASH_DESC.work, run: () => { selectAgentMode(goalOrPlan()); clearDraft(); } },
+    { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => {
       clearDraft();
       notify(currentModeText({
@@ -1918,19 +1934,7 @@ function FocusComposer({
       onSubmit(SLASH_PROMPTS.interview.text, [], { mode: SLASH_PROMPTS.interview.mode });
     } },
   ];
-  // A Skill lands where it was typed — see `replaceSlashWord`.
-  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
-    const open = slash;
-    const next = open === null
-      ? { value: prefix, caret: prefix.length }
-      : replaceSlashWord({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix });
-    setSlash(null);
-    setDraft(next.value);
-    // The textarea holds the body; a wired skill is drawn as a lede, so the
-    // caret lands short of the prefix that lede stands in for.
-    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
-    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
-  });
+  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, insertSlashPrefix);
   SLASH_COMMANDS.push(...SKILL_COMMANDS);
   // On Claude Code the CLI's own commands join the head of the list; the
   // message goes out as typed and the CLI answers it (`cliSlashCommands.ts`).

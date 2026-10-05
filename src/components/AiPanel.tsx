@@ -152,7 +152,7 @@ import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
-import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
+import { EXPLAIN_PREFIX, GOAL_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, goalDirectiveOf, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
@@ -187,7 +187,7 @@ import {
 } from "./ai/utils";
 
 import type { Msg, QueuedTurn, Conversation } from "./ai/types";
-import { MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf, nextGoalPolicy } from "./ai/autonomyLadder";
+import { MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf, initialMode as initialAgentMode, nextGoalPolicy } from "./ai/autonomyLadder";
 import {
   canCompactConversation,
   computeContextBudget,
@@ -1071,7 +1071,7 @@ export function AiPanel({
   const cancelledWarmupRef = useRef(false);
   const [serverRefresh] = useState(0);
   const [agentMode, setAgentMode] = useState<AgentMode>(
-    () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
+    () => initialAgentMode(localStorage.getItem("klide.agentMode"))
   );
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
@@ -1155,8 +1155,9 @@ export function AiPanel({
   const toggleMode = () => {
     setNextSendMode(null);
     setAgentMode((m) => {
-      const order: AgentMode[] = modelSupportsTools || providerDelegatesWork ? ["chat", "plan", "goal"] : ["chat", "plan"];
-      const next = order[(order.indexOf(m) + 1) % order.length] ?? "chat";
+      // Two rows to walk: Plan and Work. A model with no tools has only Plan.
+      const order: AgentMode[] = modelSupportsTools || providerDelegatesWork ? ["plan", "goal"] : ["plan"];
+      const next = order[(order.indexOf(m) + 1) % order.length] ?? "goal";
       agentModeRef.current = next;
       localStorage.setItem("klide.agentMode", next);
       return next;
@@ -1474,13 +1475,27 @@ export function AiPanel({
   function currentModeText(): string {
     return modeText({ effectiveMode, requireDiffReview, autoApproveCommands });
   }
-  // /auto-mode and /review-mode imply Goal mode (edits only happen there).
+  // /auto-mode and /review-mode imply Work mode (edits only happen there).
   const goalOrPlan = () => (modelSupportsTools || providerDelegatesWork ? "goal" : "plan") as AgentMode;
+  // A command that stays in the draft (`/goal`, a Skill) lands where it was
+  // typed, with the caret after it — see `replaceSlashWord`.
+  const insertSlashPrefix = (prefix: string) => {
+    const open = slash;
+    const next = open === null
+      ? { value: prefix, caret: prefix.length }
+      : replaceSlashWord({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix });
+    setInput(next.value);
+    setSlash(null);
+    // The textarea holds the body, not the draft: a wired skill is a lede, so
+    // the caret lands short of the prefix it stands in for.
+    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
+  };
 
   const SLASH_COMMANDS: SlashCommand[] = [
-    { name: "chat", desc: SLASH_DESC.chat, run: () => { selectMode("chat"); setInput(""); } },
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectMode("plan"); setInput(""); } },
-    { name: "goal", desc: SLASH_DESC.goal, run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
+    { name: "work", desc: SLASH_DESC.work, run: () => { selectMode(goalOrPlan()); setInput(""); } },
+    { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
     { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
     { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
@@ -1536,18 +1551,7 @@ export function AiPanel({
   // where it was typed, with the cursor after it — at the head of the draft
   // that is a lede, mid-sentence it is the command as text, which is what the
   // model is sent either way.
-  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
-    const open = slash;
-    const next = open === null
-      ? { value: prefix, caret: prefix.length }
-      : replaceSlashWord({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix });
-    setInput(next.value);
-    setSlash(null);
-    // The textarea holds the body, not the draft: a wired skill is a lede, so
-    // the caret lands short of the prefix it stands in for.
-    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
-    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
-  });
+  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, insertSlashPrefix);
   SLASH_COMMANDS.push(...SKILL_COMMANDS);
   // A Claude Code conversation also offers the CLI's own commands, head only:
   // the CLI reads one only when it opens the message.
@@ -3317,6 +3321,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     // A skill lede on its own is not a turn either — the skill still needs
     // something to apply itself to.
     if (opts?.text === undefined && skillToken && !draftBody.trim() && stagedFiles.length === 0) return;
+    // Nor is `/goal` with no objective after it.
+    const goal = goalDirectiveOf(text);
+    if (goal && !goal.objective && stagedFiles.length === 0) return;
     // Delegate TUIs do not accept image-only turns.
     if (delegateSession && !text.trim()) return;
     if (delegateSession) {
@@ -3354,9 +3361,14 @@ This user request requires workspace inspection. Before answering, you MUST call
     const directive = parseSubagentDirective(text);
     const effectiveText = directive ? directive.task : text;
     const subagentModel = directive?.subagent.model;
+    // A `/goal` lede rides in Work whatever the picker says — reaching an
+    // objective takes edits. The text goes out as typed; the system prompt
+    // names what the lede asks (`buildSystemPrompt`).
     const requestedMode = directive
       ? directive.subagent.mode
-      : opts?.mode ?? nextSendMode ?? agentModeRef.current;
+      : goal
+        ? "goal"
+        : opts?.mode ?? nextSendMode ?? agentModeRef.current;
     const availableMode: AgentMode =
       !supportsToolsForTurn && !providerDelegatesWork && requestedMode === "goal" ? "chat" : requestedMode;
     const mode: AgentMode =
@@ -4877,7 +4889,9 @@ This user request requires workspace inspection. Before answering, you MUST call
                       <ArtifactOutputRows value={artifactOutput} disabled={goalDisabled} onChange={(value) => { setArtifactOutput(value); if (value) selectMode("goal", false); }} />
                       {MODE_CHOICES.map((rung) => {
                         const disabled = rung.mode === "goal" && goalDisabled;
-                        const active = rung.mode === effectiveMode;
+                        // Chat has no row: a tool-less model that collapsed
+                        // Work to it still shows Work as the pick, greyed.
+                        const active = rung.mode === effectiveMode || (effectiveMode === "chat" && rung.mode === agentMode);
                         return (
                           <button key={rung.mode} type="button" role="menuitemradio" aria-checked={active} disabled={disabled}
                             onClick={() => { if (!disabled) selectMode(rung.mode); }}

@@ -4,12 +4,30 @@ import {
   MODE_CHOICES,
   effectiveMode,
   goalPolicyOf,
+  initialMode,
+  modeLabel,
   nextGoalPolicy,
 } from "./autonomyLadder";
 
 describe("the mode menu", () => {
-  it("offers each Mode capability tier exactly once — policies live in the foot bar", () => {
-    expect(MODE_CHOICES.map((c) => c.mode)).toEqual(["chat", "plan", "goal"]);
+  it("offers Plan and Work, in that order — Chat is a collapse, not a pick", () => {
+    expect(MODE_CHOICES.map((c) => c.mode)).toEqual(["plan", "goal"]);
+    expect(MODE_CHOICES.map((c) => c.label)).toEqual(["Plan", "Work"]);
+  });
+
+  it("calls the goal tier Work and the collapse Chat", () => {
+    expect(modeLabel("goal")).toBe("Work");
+    expect(modeLabel("plan")).toBe("Plan");
+    expect(modeLabel("chat")).toBe("Chat");
+  });
+
+  it("opens on Work unless the last pick was Plan", () => {
+    expect(initialMode(null)).toBe("goal");
+    expect(initialMode("goal")).toBe("goal");
+    expect(initialMode("plan")).toBe("plan");
+    // Left over from the three-row menu: there is no Chat row to land on.
+    expect(initialMode("chat")).toBe("goal");
+    expect(initialMode("build")).toBe("goal");
   });
 
   it("gives every choice a label and a description", () => {
