@@ -27,7 +27,18 @@ model cannot call tools, and the tier a Run without a Workspace gets.
 
 A `/goal <objective>` message is not a Mode: it is one turn that rides in
 `goal` whatever the picker says, with the system prompt asking the model to
-work until the objective is met. The Harness sees an ordinary `goal` Run.
+work until the objective is met. The Harness sees an ordinary `goal` Run with
+one extra rule at the end, the **goal gate** (`agent/goal.rs`): when the model
+stops calling tools, and the Run changed the workspace (an applied edit or a
+command), the Harness runs the configured post-edit check command once more.
+A failing check does not end the Run — its output goes back to the model as
+the next user turn and the model goes another round, three by default
+(`goal.maxRounds`, ceiling 10). A passing check, a Run that changed nothing,
+or no configured check ends the Run as usual; a `SteeringInjected` marker in
+the Transcript says which (`Goal reached`, `Goal not reached`, `not
+verified`). The gate runs the command outside the permission engine, as the
+post-edit check already does: the operator configured it, the model did not
+propose it. A `/goal` turn also runs under a tool-turn cap of at least 200.
 
 Mode filtering happens twice:
 

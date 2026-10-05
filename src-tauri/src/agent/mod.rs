@@ -12,6 +12,7 @@ mod conversation_search;
 mod memory_recall;
 pub(crate) mod delivery;
 mod glob_match;
+pub mod goal;
 #[cfg(test)]
 mod eval;
 #[cfg(test)]
@@ -723,6 +724,7 @@ async fn run_subagent_to_completion(
         routed: None,
         command_timeout_secs: spec.command_timeout_secs,
         test_after_edit_command: None,
+        goal: None,
         command_allowlist: vec![],
         require_diff_review: spec.require_diff_review,
         // Never inherited from the parent: the parent conversation's operator
@@ -1382,6 +1384,32 @@ async fn run_test_after_edit(
             .content
             .push_str("\nThe edit was applied; inspect the failing check and fix forward.");
     }
+}
+
+/// The `/goal` gate's check: the configured post-edit command, run once more
+/// when the model claims the goal is reached. `None` when no command is set —
+/// the gate then finishes without verifying, and says so. A cancelled check
+/// reports as failed; the loop settles the cancellation right after.
+async fn run_goal_check(
+    root: &str,
+    command: Option<&str>,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Option<goal::CheckOutcome> {
+    let command = command.map(str::trim).filter(|c| !c.is_empty())?;
+    let result = match run_command_capture_in(root, root, command, timeout_secs, cancel).await {
+        tools::CommandRun::Done(result) => result,
+        tools::CommandRun::Cancelled => ToolResult {
+            ok: false,
+            content: "Stopped before it finished: the run was cancelled.".to_string(),
+            metadata: None,
+        },
+    };
+    Some(goal::CheckOutcome {
+        command: command.to_string(),
+        ok: result.ok,
+        output: result.content,
+    })
 }
 
 /// Run read-only tool calls concurrently, capped at `max_parallel` at a time,
@@ -2104,6 +2132,11 @@ async fn run_agent_loop(
     // Bounded, because a model that does this twice is not going to stop.
     const MAX_RUNAWAY_RESAMPLES: usize = 2;
     let mut runaway_resamples = 0usize;
+    // The `/goal` finish line (`goal.rs`): whether this Run has changed the
+    // workspace — an applied edit or a command — and how many "done" claims
+    // the gate has already sent back. Both stay zero on an ordinary turn.
+    let mut goal_work_done = false;
+    let mut goal_rounds_used = 0usize;
     // Reduced for the turn after a runaway. `None` means "whatever the request
     // asked for".
     let mut reply_budget_override: Option<usize> = None;
@@ -2608,6 +2641,50 @@ async fn run_agent_loop(
                     timing: turn_timing,
                     ts: now_ms(),
                 })?;
+                // A `/goal` turn's "done" is a claim: run the project's check
+                // and let the gate decide whether the Run may end. The
+                // assistant message is already in `messages` (pushed above),
+                // so a retry reads as: the model said done, the user replied
+                // with the failing check.
+                if let Some(spec) = request.goal.as_ref() {
+                    let check = match (request.workspace_root.as_deref(), goal_work_done) {
+                        (Some(root), true) => {
+                            run_goal_check(
+                                root,
+                                request.test_after_edit_command.as_deref(),
+                                request.command_timeout_secs.unwrap_or(180).clamp(1, 1800),
+                                &cancel,
+                            )
+                            .await
+                        }
+                        _ => None,
+                    };
+                    if cancel.is_cancelled() {
+                        finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
+                        return Ok(());
+                    }
+                    match goal::verdict(spec, goal_work_done, check.as_ref(), goal_rounds_used) {
+                        goal::GateVerdict::Retry { marker, message } => {
+                            goal_rounds_used += 1;
+                            emit(AgentEvent::SteeringInjected {
+                                run_id: id.clone(),
+                                reason: marker,
+                                ts: now_ms(),
+                            })?;
+                            messages.push(user_provider_message(&message, &[]));
+                            message_count += 1;
+                            continue;
+                        }
+                        goal::GateVerdict::Finish { marker: Some(marker) } => {
+                            emit(AgentEvent::SteeringInjected {
+                                run_id: id.clone(),
+                                reason: marker,
+                                ts: now_ms(),
+                            })?;
+                        }
+                        goal::GateVerdict::Finish { marker: None } => {}
+                    }
+                }
                 emit(AgentEvent::RunResult {
                     run_id: id.clone(),
                     result: serde_json::json!({ "status": "done" }),
@@ -2687,7 +2764,14 @@ async fn run_agent_loop(
             })?;
 
             let kind = match plan_tool_step(&subject, &call, kind) {
-                ToolStepPlan::Execute { kind } => kind,
+                ToolStepPlan::Execute { kind } => {
+                    // A write or a command is work the goal gate must check;
+                    // a blocked call did nothing.
+                    if matches!(kind, Some(ToolKind::Write | ToolKind::Command)) {
+                        goal_work_done = true;
+                    }
+                    kind
+                }
                 ToolStepPlan::Blocked { result } => {
                     turn_observations.push(steering::CallObservation {
                         signature: steering::call_signature(&call),
@@ -5757,6 +5841,81 @@ mod run_loop_tests {
         )
         .await
         .expect("run loop settles without an infrastructure error");
+    }
+
+    /// A `/goal` run's "done" is checked. The first claim fails the check
+    /// (the file the check wants is not there), the output goes back as a user
+    /// turn and the model gets another round; the second claim passes and the
+    /// Run ends done with both markers in the Transcript.
+    #[tokio::test]
+    async fn a_goal_claim_that_fails_the_check_buys_another_round() {
+        let (runs_dir, root) = sandbox("goal-gate");
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn(
+                "Writing the note.",
+                vec![scripted_tool_call(
+                    "call_a",
+                    "create_file",
+                    serde_json::json!({ "path": "note.txt", "contents": "draft" }),
+                )],
+            ),
+            scripted_turn("Done — the note is written.", vec![]),
+            scripted_turn(
+                "The check wants ok.txt; creating it.",
+                vec![scripted_tool_call(
+                    "call_b",
+                    "create_file",
+                    serde_json::json!({ "path": "ok.txt", "contents": "ok" }),
+                )],
+            ),
+            scripted_turn("Done, and the check passes now.", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-run"));
+        let mut request = test_request(&root, &[]);
+        request.test_after_edit_command = Some("test -f ok.txt".to_string());
+        request.goal = Some(goal::GoalSpec { objective: "leave a note and an ok marker".into(), max_rounds: None });
+        drive_loop(sup, &runs_dir, "goal-run", request, caller.clone()).await;
+
+        assert_eq!(read_summary(&runs_dir, "goal-run").unwrap().status, "done");
+        let events = read_events(&runs_dir, "goal-run").unwrap();
+        let markers: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::SteeringInjected { reason, .. } if reason.starts_with("Goal") => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            markers,
+            vec![
+                "Goal check `test -f ok.txt` failed — round 1 of 3, going again".to_string(),
+                "Goal reached: `test -f ok.txt` passed after 2 rounds".to_string(),
+            ]
+        );
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::RunResult { .. })).count(), 1);
+        // The third call saw the failing check as the newest user turn.
+        let seen = caller.seen_messages.lock().unwrap();
+        let third_last = seen[2].last().unwrap();
+        assert_eq!(third_last["role"], "user");
+        let text = third_last["content"].as_str().unwrap();
+        assert!(text.contains("round 1 of 3"), "{text}");
+        assert!(text.contains("Goal: leave a note and an ok marker"), "{text}");
+    }
+
+    /// Without a change to the workspace there is nothing to check: a `/goal`
+    /// that was answered in words ends like any other turn, no marker.
+    #[tokio::test]
+    async fn a_goal_answered_without_work_ends_quietly() {
+        let (runs_dir, root) = sandbox("goal-nowork");
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Already true.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-nowork"));
+        let mut request = test_request(&root, &[]);
+        request.test_after_edit_command = Some("false".to_string());
+        request.goal = Some(goal::GoalSpec { objective: "confirm the sky is blue".into(), max_rounds: None });
+        drive_loop(sup, &runs_dir, "goal-nowork", request, caller).await;
+        assert_eq!(read_summary(&runs_dir, "goal-nowork").unwrap().status, "done");
+        let events = read_events(&runs_dir, "goal-nowork").unwrap();
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::SteeringInjected { .. })));
     }
 
     /// Stop during a foreground command ends the Run as cancelled at once —

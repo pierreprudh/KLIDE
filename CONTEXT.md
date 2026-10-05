@@ -42,6 +42,14 @@ tells the model what the lede asks — say what done means, verify, keep going,
 report. Not a Mode and not a Mission: one conversation turn with a finish line.
 _Avoid_: goal mode, task (a Mission Task is a different lifecycle)
 
+**Goal gate**:
+The Harness' check on a Goal's "done": when the model stops calling tools after
+changing the workspace, the configured post-edit check command runs once more.
+A failure goes back to the model as the next user turn for another round
+(three by default); a pass, no change, or no configured command ends the Run,
+with a Transcript marker saying which. Where Claude Code has a Stop hook.
+_Avoid_: validation contract (that is the Mission's), reviewer (a model pass, not shipped)
+
 **Goal policy**:
 What a Work (`goal`) run does with its two review gates — `review` (every edit pauses,
 commands ask), `auto` (edits apply, still checkpointed; commands ask), `full`

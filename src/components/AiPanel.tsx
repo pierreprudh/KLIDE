@@ -211,6 +211,11 @@ import { delegateSessionId, stopDelegatePty, writeDelegatePty } from "../ipc/del
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
 import { SETTINGS, useSetting } from "../settingsStore";
 
+/** The tool-turn cap a `/goal` turn runs under when Settings asks for less.
+ *  Claude Code and Codex give a goal no practical cap; 200 is a long leash
+ *  that still ends a run stuck in a loop. */
+const GOAL_MIN_TURNS = 200;
+
 function LocalServerStartingRow({ providerLabel, centered = false }: { providerLabel: string; centered?: boolean }) {
   const hairline = (
     <span
@@ -3131,7 +3136,11 @@ This user request requires workspace inspection. Before answering, you MUST call
       turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
     const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
     const maxParallelTools = harnessSettings?.maxParallelTools;
-    const maxTurns = harnessSettings?.maxTurns;
+    // A goal is worked to its finish line, not to a step: the runaway guard
+    // moves out to GOAL_MIN_TURNS unless Settings already allows more.
+    const maxTurns = turn.goal
+      ? Math.max(harnessSettings?.maxTurns ?? 0, GOAL_MIN_TURNS)
+      : harnessSettings?.maxTurns;
     const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
     const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
     return {
@@ -3149,6 +3158,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       requireDiffReview,
       autoApproveCommands: autoApproveCommands || undefined,
       testAfterEditCommand: testAfterEditCommand || undefined,
+      goal: turn.goal,
       // Stars are the router's strongest preference and live only in this
       // renderer's storage, so an `auto` turn carries them along.
       preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
@@ -3383,7 +3393,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // Staged photos/documents ride ahead of @-mention file attachments.
     const attachments = [...stagedFiles, ...collected];
     const activeProjectContext = lensItemsForPrompt(projectContext, effectiveText, contextMode);
-    controller.send({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools: supportsToolsForTurn, modelSupportsReflection: supportsReflectionForTurn, reflectionLevel: supportsReflectionForTurn ? panelReflectionLevel : undefined, attachments, subagent: directive?.subagent.id, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
+    controller.send({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools: supportsToolsForTurn, modelSupportsReflection: supportsReflectionForTurn, reflectionLevel: supportsReflectionForTurn ? panelReflectionLevel : undefined, attachments, subagent: directive?.subagent.id, goal: goal && !directive ? { objective: goal.objective } : undefined, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
     // A subagent named *inside* a larger message (not a leading directive) runs
     // in the background, concurrent with the main answer above.
     if (!directive) {
