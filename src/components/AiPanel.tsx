@@ -22,6 +22,7 @@ import {
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  LOCAL_MODEL_CHANGED_EVENT,
   listProviderModels,
   readModelCapabilities,
   readModelPricing,
@@ -1076,7 +1077,12 @@ export function AiPanel({
   // there is no harness run to abort yet, so we flag the pending send to bail
   // once the server is ready instead of launching a turn they backed out of.
   const cancelledWarmupRef = useRef(false);
-  const [serverRefresh] = useState(0);
+  const [serverRefresh, setServerRefresh] = useState(0);
+  useEffect(() => {
+    const refresh = () => setServerRefresh((n) => n + 1);
+    window.addEventListener(LOCAL_MODEL_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(LOCAL_MODEL_CHANGED_EVENT, refresh);
+  }, []);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => initialAgentMode(localStorage.getItem("klide.agentMode"))
   );

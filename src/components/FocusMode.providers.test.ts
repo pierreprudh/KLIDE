@@ -18,6 +18,13 @@ const rowFor = (options: ReturnType<typeof buildProviderOptions>, value: string)
   options.find((option) => option.value === value);
 
 describe("Focus provider stack", () => {
+  it("offers llama.cpp alongside other local inference providers", () => {
+    const options = buildProviderOptions([], new Set(), vi.fn());
+    const row = rowFor(options, "llamacpp");
+    expect(row?.label).toBe("llama.cpp");
+    expect(row?.dimmed).toBeFalsy();
+    expect(row?.resolve).toBeUndefined();
+  });
   it("offers self-hosted endpoints under their own heading", () => {
     const options = buildProviderOptions([gateway], new Set(), vi.fn());
 

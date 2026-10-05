@@ -23,6 +23,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  LOCAL_MODEL_CHANGED_EVENT,
   listProviderModels,
   modelReflectionLevels as queryModelReflectionLevels,
   modelSupportsTools as queryModelSupportsTools,
@@ -1657,6 +1658,12 @@ function FocusComposer({
   // Self-hosted endpoints, from the shared store — it refreshes on mount and
   // republishes on add/rename/remove, so the stack here matches Settings
   // without leaving Focus.
+  const [localModelVersion, setLocalModelVersion] = useState(0);
+  useEffect(() => {
+    const refresh = () => setLocalModelVersion((n) => n + 1);
+    window.addEventListener(LOCAL_MODEL_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(LOCAL_MODEL_CHANGED_EVENT, refresh);
+  }, []);
   const customProviders = useCustomProviders();
   const providerMenuOptions = useMemo(
     () => buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api")),
@@ -1672,7 +1679,10 @@ function FocusComposer({
     setModels(Array.from(new Set(fallback)));
     listProviderModels(provider)
       .then((list) => {
-        if (!cancelled && Array.isArray(list) && list.length > 0) setModels(list);
+        if (!cancelled && Array.isArray(list) && list.length > 0) {
+          setModels(list);
+          if (provider === "llamacpp" && !list.includes(model)) onModelChange(list[0]);
+        }
       })
       .catch(() => {
         /* server down / no key — keep the fallback */
@@ -1681,7 +1691,7 @@ function FocusComposer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
+  }, [provider, localModelVersion]);
 
   useEffect(() => {
     let cancelled = false;

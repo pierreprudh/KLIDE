@@ -268,6 +268,8 @@ const NO_PRESETS: &[&str] = &[];
 
 /// The registry. One row per provider. Order is "local first, then hosted
 /// API, then subscription CLIs" — purely cosmetic, `lookup` scans.
+pub const LLAMACPP_DEFAULT_MODEL: &str = "Qwen/Qwen3-4B-GGUF:Q4_K_M";
+
 pub const PROVIDERS: &[ProviderEntry] = &[
     // ── Local: no key, no subscription ──────────────────────────────────
     ProviderEntry {
@@ -332,6 +334,36 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             append_todo_updates: true,
         },
         context_window: Some(128_000),
+    },
+    ProviderEntry {
+        id: "llamacpp",
+        label: "llama.cpp",
+        short_label: None,
+        group: ProviderGroup::Local,
+        wire: WireFormat::OpenAi(OpenAiConfig {
+            chat_url: "http://127.0.0.1:8081/v1/chat/completions",
+            models_url: "http://127.0.0.1:8081/v1/models",
+            include_tools: true,
+            include_usage_in_stream: true,
+            supports_reasoning_effort: false,
+            include_cost_accounting: false,
+            send_attribution: false,
+        }),
+        key: KeySource::Local,
+        models: ModelsHandler::StaticPresets(&[LLAMACPP_DEFAULT_MODEL]),
+        subscription: None,
+        default_model: Some(LLAMACPP_DEFAULT_MODEL),
+        presets: NO_PRESETS,
+        brand: "llamacpp",
+        credits: CreditsSource::None,
+        is_local_server: true,
+        has_num_ctx: false,
+        caps: ProviderCaps {
+            structured_replay: true,
+            minimal_chat_context: true,
+            append_todo_updates: true,
+        },
+        context_window: Some(8192),
     },
     // LM Studio is a one-row affair now. Previously it would have meant
     // adding to four match statements + the frontend's PROVIDER_GROUPS

@@ -69,9 +69,16 @@ describe("Provider catalog", () => {
     );
   });
 
+  it("offers llama.cpp as an available local provider in the chat picker", () => {
+    const local = PROVIDER_GROUPS.find((group) => group.label === "Local");
+    expect(local?.items).toContainEqual({ id: "llamacpp", name: "llama.cpp", available: true });
+    expect(selectableProviders().some((provider) => provider.id === "llamacpp")).toBe(true);
+  });
+
   it("classifies only app-managed local servers as managed local", () => {
     expect(isManagedLocalProvider("ollama")).toBe(true);
     expect(isManagedLocalProvider("mlx")).toBe(true);
+    expect(isManagedLocalProvider("llamacpp")).toBe(true);
     expect(isManagedLocalProvider("lmstudio")).toBe(false);
     expect(isManagedLocalProvider("openai")).toBe(false);
   });

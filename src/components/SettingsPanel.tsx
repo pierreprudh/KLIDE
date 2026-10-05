@@ -1765,6 +1765,7 @@ export function SettingsPanel({
                 <Panel>
                   <LocalServerRow provider="ollama" />
                   <LocalServerRow provider="mlx" />
+                  <LocalServerRow provider="llamacpp" />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Notes">

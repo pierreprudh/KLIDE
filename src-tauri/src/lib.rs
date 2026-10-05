@@ -1,3 +1,5 @@
+mod llamacpp_models;
+mod llamacpp_setup;
 mod visual_export;
 mod accounts;
 mod usage;
@@ -1066,6 +1068,9 @@ pub fn run() {
             account_activate,
             set_active_workspace,
             ai_chat,
+            llamacpp_setup::ai_llamacpp_install,
+            llamacpp_models::ai_llamacpp_setup_info,
+            llamacpp_models::ai_llamacpp_select_model,
             local_servers::ai_local_server_start,
             local_servers::ai_local_server_stop,
             local_servers::ai_local_server_status,

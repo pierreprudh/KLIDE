@@ -228,3 +228,26 @@ Klide is built with [Tauri](https://v2.tauri.app), [Monaco](https://microsoft.gi
 ## License
 
 Klide is available under the [MIT License](./LICENSE).
+
+### llama.cpp setup for your machine
+
+Settings → llama.cpp detects your Mac's chip, RAM and CPU cores and recommends
+a model with room left for the OS and other apps. Choose among Qwen3 1.7B, 4B,
+8B, 14B and 32B, with estimated download and runtime memory sizes shown before
+downloading. Recommendations favour smaller models for CPU inference and use
+larger models when Apple Silicon unified memory allows it. These are hardware
+fit estimates, not measured speed benchmarks; other active workloads can reduce
+available memory.
+
+Click **Download llama.cpp** to install only the engine, or **Install & start
+selected model** to install both in one action. Klide downloads an official
+runtime into `~/.klide/runtimes/llamacpp`, verifies its release checksum, and
+launches the model you chose. No Homebrew or administrator password is needed.
+The first model download can take several minutes; later starts reuse cached
+files. The choice is saved in `~/.klide/llamacpp.json` and appears in the chat
+and Focus model pickers. Stop the server before choosing a different model.
+
+The server listens on `127.0.0.1:8081`. Stop terminates servers launched by
+Klide; externally launched servers must be stopped externally. An existing
+`llama-server` on PATH is reused. Automatic runtime installation currently
+supports macOS; other platforms require an installed llama-server.

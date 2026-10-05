@@ -60,6 +60,28 @@ export const PROVIDER_ROWS = [
     "contextWindow": 128000
   },
   {
+    "id": "llamacpp",
+    "label": "llama.cpp",
+    "shortLabel": null,
+    "group": "local",
+    "wire": "openai",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+    "presets": [],
+    "brand": "llamacpp",
+    "hasCredits": false,
+    "isLocalServer": true,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": true,
+      "appendTodoUpdates": true
+    },
+    "contextWindow": 8192
+  },
+  {
     "id": "lmstudio",
     "label": "LM Studio",
     "shortLabel": null,

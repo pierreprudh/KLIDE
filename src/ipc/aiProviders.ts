@@ -150,3 +150,24 @@ export function startLocalProvider({
 export async function stopLocalProvider(provider: string): Promise<void> {
   await invoke("ai_local_server_stop", { provider });
 }
+
+export const LOCAL_MODEL_CHANGED_EVENT = "klide:local-model-changed";
+export type LlamaSetupInfo = {
+  machine: { chip: string; memoryGb: number | null; cpuCores: number; acceleration: string };
+  models: { id: string; label: string; downloadGb: number; memoryGb: number }[];
+  recommendedModel: string | null;
+  selectedModel: string | null;
+  memoryBudgetGb: number | null;
+  runtimeInstalled: boolean;
+};
+export function readLlamaSetupInfo(): Promise<LlamaSetupInfo> {
+  return invoke<LlamaSetupInfo>("ai_llamacpp_setup_info");
+}
+export function installLlamaRuntime(): Promise<void> {
+  return invoke("ai_llamacpp_install");
+}
+export async function selectLlamaModel(model: string): Promise<void> {
+  await invoke("ai_llamacpp_select_model", { model });
+  localStorage.setItem("klide.model.llamacpp", model);
+  window.dispatchEvent(new CustomEvent(LOCAL_MODEL_CHANGED_EVENT, { detail: { provider: "llamacpp", model } }));
+}

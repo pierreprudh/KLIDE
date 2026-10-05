@@ -1,6 +1,7 @@
 // Local AI servers — start/stop/status row for Ollama and MLX. Extracted
 // from SettingsPanel.tsx.
 
+import { LlamaServerSetup } from "./llamaServerSetup";
 import { useEffect, useState } from "react";
 import {
   readLocalProviderStatus,
@@ -13,6 +14,9 @@ import { providerDefaultModel, providerLabel } from "../../agent/providerCatalog
 /** One managed local server (`isLocalServer` on its registry row). Its name
  *  and the model it warms up with are the row's, not props. */
 export function LocalServerRow({ provider }: { provider: string }) {
+  return provider === "llamacpp" ? <LlamaServerSetup /> : <ManagedLocalServerRow provider={provider} />;
+}
+function ManagedLocalServerRow({ provider }: { provider: string }) {
   const title = providerLabel(provider) ?? provider;
   const defaultModel = providerDefaultModel(provider) ?? "";
   const [running, setRunning] = useState(false);

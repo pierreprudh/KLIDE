@@ -69,6 +69,10 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
     if crate::agent::routing::is_auto(&provider) {
         return Ok(vec![crate::agent::routing::AUTO_MODEL.to_string()]);
     }
+    if provider == "llamacpp" {
+        return tokio::task::spawn_blocking(|| Ok(vec![crate::llamacpp_models::launch_model()]))
+            .await.map_err(|e| e.to_string())?;
+    }
     // A registry miss falls through to the custom (self-hosted) store —
     // those endpoints expose the OpenAI `/v1/models` listing, queried
     // with their (optional) keychain token.
