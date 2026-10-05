@@ -29,6 +29,15 @@ Notable changes per milestone. Dates are completion dates.
   bare `/goal` is not a turn.
 - The transcript, the Rust Harness and the Mission documents keep `goal` as
   the tier's id; only the words changed (CONTEXT.md, HARNESS_CONTRACT.md).
+- **The goal gate.** A `/goal` turn's "done" is checked. When the model stops
+  after changing the workspace, the Harness runs the post-edit check command
+  (Settings → Harness → Test after edit) once more; a failure comes back to the
+  model as the next message and it goes another round, three by default. The
+  conversation shows each round as a marker — `Goal check … failed — round 1
+  of 3, going again`, then `Goal reached: … passed` — or says plainly that no
+  check is set, so an unverified finish never reads as a verified one. A
+  `/goal` turn also gets a tool-turn cap of at least 200, the long leash a
+  goal needs.
 
 ### Approving from the keyboard
 

@@ -141,6 +141,9 @@ export type QueuedTurn = {
   projectContext?: ProjectContextPayload;
   /** Set when the user dispatched this turn to a named subagent via `@<id>`. */
   subagent?: string;
+  /** Set when the turn opened with `/goal`: the objective the Harness holds
+   *  the model to at the finish line. */
+  goal?: { objective: string };
   /** See `Msg.wake`. Sent with empty text; the harness records no user message. */
   wake?: true;
 };

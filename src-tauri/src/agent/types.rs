@@ -107,6 +107,12 @@ pub struct StartRunRequest {
     /// failing check is returned to the model as a not-ok tool result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_after_edit_command: Option<String>,
+    /// Set when this turn was a `/goal <objective>`: the model's "done" is
+    /// checked against `test_after_edit_command` before the Run may end, and a
+    /// failing check buys another round (`agent::goal`). Absent on an
+    /// ordinary turn, which ends when the model stops calling tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<super::goal::GoalSpec>,
     /// Backend-populated project approvals. Renderer input is deliberately
     /// ignored: a compromised webview must not be able to mint command trust.
     #[serde(default, skip_deserializing)]

@@ -381,6 +381,10 @@ export type StartAgentRunInput = {
   autoApproveCommands?: boolean;
   /** Optional command to run after an accepted edit/create. */
   testAfterEditCommand?: string;
+  /** Set when the turn was a `/goal <objective>`: the model's "done" is
+   *  checked against `testAfterEditCommand` before the run may end, and a
+   *  failing check buys another round (Rust `agent::goal`, default 3). */
+  goal?: { objective: string; maxRounds?: number };
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
   /** The user's starred models, sent when `provider` is `auto` so the Rust
