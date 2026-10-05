@@ -2,6 +2,8 @@
 
 ## 0.6.6 (2026-10-05)
 
+- The Settings advisor model picker opens toward the available space in the window.
+
 - Failed `/goal` checks now end the Run in error with the check output, rather than reporting successful completion. Delegate CLI goals also run the configured check even when Klide dispatched no tools.
 - Project Memory now proposes up to two evidence-backed lessons for review after meaningful work. The Memory inbox shows pending proposals; users can keep or dismiss them. Duplicate and dismissed lessons are suppressed, with bounded pending proposals and automatic expiry.
 
