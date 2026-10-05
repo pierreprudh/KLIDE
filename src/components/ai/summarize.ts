@@ -9,6 +9,7 @@
 // filesystem writes.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { MEMORY_LEARNING_PROMPT, parseMemoryLessons, type MemoryLesson } from "../../memoryLearning";
 import { writeMemory, type MemoryEntry, type MemoryInput } from "../../memory";
 import { writeWorkspaceTextFile } from "../../workspaceFs";
 import type { Msg } from "./types";
@@ -277,4 +278,16 @@ export async function detectAndGenerateSkill(
     slug: cls.slug,
     relPath,
   };
+}
+
+/** One bounded extraction call; no fallback that invents a routine handoff. */
+export async function generateMemoryLessons(input: SummarizeInput): Promise<MemoryLesson[]> {
+  // Recent evidence only, capped independently of conversation length.
+  const transcript = serializeConversation(input.msgs.slice(-12)).slice(-12000);
+  if (!transcript.trim()) return [];
+  const text = await callModel(input.provider, input.model, [
+    { role: "system", content: MEMORY_LEARNING_PROMPT },
+    { role: "user", content: transcript },
+  ]);
+  return parseMemoryLessons(text, transcript, input);
 }

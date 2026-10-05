@@ -2135,7 +2135,10 @@ async fn run_agent_loop(
     // The `/goal` finish line (`goal.rs`): whether this Run has changed the
     // workspace — an applied edit or a command — and how many "done" claims
     // the gate has already sent back. Both stay zero on an ordinary turn.
-    let mut goal_work_done = false;
+    // Delegate CLIs execute outside our tool dispatch. Always check their
+    // goal claims: observed events cannot prove that the workspace is unchanged.
+    let mut goal_work_done = request.goal.is_some()
+        && crate::delegate::lookup(&request.provider).is_some();
     let mut goal_rounds_used = 0usize;
     // Reduced for the turn after a runaway. `None` means "whatever the request
     // asked for".
@@ -2676,6 +2679,28 @@ async fn run_agent_loop(
                             continue;
                         }
                         goal::GateVerdict::Finish { marker: Some(marker) } => {
+                            if check.as_ref().is_some_and(|check| !check.ok) {
+                                let message = format!("{marker}\n\n{}", check.as_ref().unwrap().output);
+                                emit(AgentEvent::SteeringInjected {
+                                    run_id: id.clone(), reason: marker, ts: now_ms(),
+                                })?;
+                                emit(AgentEvent::RunResult {
+                                    run_id: id.clone(),
+                                    result: serde_json::json!({ "status": "error", "message": message }),
+                                    ts: now_ms(),
+                                })?;
+                                emit(AgentEvent::RunError {
+                                    run_id: id.clone(),
+                                    error: AgentError {
+                                        code: "goal_check_failed".into(), message,
+                                        detail: None, retryable: true,
+                                    },
+                                    ts: now_ms(),
+                                })?;
+                                settle_run(&mut lease, &runs_dir, &summary, message_count, AgentRunStatus::Error)?;
+                                completed = true;
+                                break;
+                            }
                             emit(AgentEvent::SteeringInjected {
                                 run_id: id.clone(),
                                 reason: marker,
@@ -5900,6 +5925,38 @@ mod run_loop_tests {
         let text = third_last["content"].as_str().unwrap();
         assert!(text.contains("round 1 of 3"), "{text}");
         assert!(text.contains("Goal: leave a note and an ok marker"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_goal_with_exhausted_checks_ends_in_error() {
+        let (runs_dir, root) = sandbox("goal-exhausted");
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Write.", vec![scripted_tool_call("write", "create_file",
+                serde_json::json!({ "path": "note.txt", "contents": "draft" }))]),
+            scripted_turn("Done.", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-exhausted"));
+        let mut request = test_request(&root, &[]);
+        request.test_after_edit_command = Some("false".into());
+        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1) });
+        drive_loop(sup, &runs_dir, "goal-exhausted", request, caller).await;
+        assert_eq!(read_summary(&runs_dir, "goal-exhausted").unwrap().status, "error");
+        let events = read_events(&runs_dir, "goal-exhausted").unwrap();
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::RunResult { result, .. }
+            if result["status"] == "error" && result["message"].as_str().unwrap_or("").contains("Goal not reached"))));
+    }
+
+    #[tokio::test]
+    async fn a_delegate_goal_checks_even_without_dispatched_tools() {
+        let (runs_dir, root) = sandbox("goal-delegate");
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Done.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-delegate"));
+        let mut request = test_request(&root, &[]);
+        request.provider = "claude-code".into();
+        request.test_after_edit_command = Some("false".into());
+        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1) });
+        drive_loop(sup, &runs_dir, "goal-delegate", request, caller).await;
+        assert_eq!(read_summary(&runs_dir, "goal-delegate").unwrap().status, "error");
     }
 
     /// Without a change to the workspace there is nothing to check: a `/goal`

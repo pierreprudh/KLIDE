@@ -46,8 +46,9 @@ _Avoid_: goal mode, task (a Mission Task is a different lifecycle)
 The Harness' check on a Goal's "done": when the model stops calling tools after
 changing the workspace, the configured post-edit check command runs once more.
 A failure goes back to the model as the next user turn for another round
-(three by default); a pass, no change, or no configured command ends the Run,
-with a Transcript marker saying which. Where Claude Code has a Stop hook.
+(three by default); exhausted failures end the Run in error with the check
+output. Delegate CLI goals always run the configured check. A pass, no native
+work, or no configured command ends the Run, with a Transcript marker saying which. Where Claude Code has a Stop hook.
 _Avoid_: validation contract (that is the Mission's), reviewer (a model pass, not shipped)
 
 **Goal policy**:

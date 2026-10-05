@@ -148,3 +148,26 @@ The panel presents and reviews these operations. The Rust memory engine and
 Harness continue owning persistence, retrieval, proposal validation, and
 background execution. This upgrade is planned; the shipped slice is bounded
 pre-conversation recall.
+
+## Quiet learning inbox
+
+Automatic handoff drafting in the AI panel is replaced by selective lesson
+extraction. Completed native Plan/Goal turns with tool activity or an explicit
+learning signal can make one extraction call over at most 12 recent messages
+and 12,000 characters. The model returns zero to two lessons. Each must include
+a supporting quote present in the supplied evidence and a future-use rationale.
+Malformed responses, routine handoffs, and oversized lessons are discarded.
+
+Pending automatic drafts are capped at ten per Workspace. Exact normalized
+lesson duplicates are suppressed against pending drafts and reviewed entries;
+dismissed lessons are remembered (up to 100 per Workspace). Automatic drafts
+expire after 30 days; manual drafts and published knowledge do not expire. A
+quiet count on the Memory entry point replaces per-turn draft notifications.
+The panel shows the rationale, evidence quote, and source Run before Keep or
+Dismiss; fields remain editable. No automatic durable publication occurs.
+
+This uses the existing panel-driven extraction path, not a new Harness loop.
+Semantic duplicate/contradiction detection, Rust-owned proposal persistence,
+idle scheduling, native `memory_propose`, and Skill proposal review remain
+future engine work. The quote check grounds proposals but does not certify
+the truth of an assistant claim.

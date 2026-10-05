@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.6 (2026-10-05)
+
+- Failed `/goal` checks now end the Run in error with the check output, rather than reporting successful completion. Delegate CLI goals also run the configured check even when Klide dispatched no tools.
+- Project Memory now proposes up to two evidence-backed lessons for review after meaningful work. The Memory inbox shows pending proposals; users can keep or dismiss them. Duplicate and dismissed lessons are suppressed, with bounded pending proposals and automatic expiry.
+
 ## Claude Code effort (2026-09-26)
 
 - Claude Code now offers low, medium, high, xhigh, and max reasoning effort in the existing picker. The selection reaches both terminal launch/resume and Focus chat turns.
