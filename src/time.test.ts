@@ -81,8 +81,8 @@ describe("formatHours", () => {
 });
 
 describe("formatDayStamp", () => {
-  // Pinned locale + zone: the output is for a reader, so it's locale text.
-  const opts = { locale: "en-US", timeZone: "UTC" };
+  // Pinned zone; the wording is English regardless of locale.
+  const opts = { timeZone: "UTC" };
   // 2026-10-05 11:29 UTC, a Monday.
   const now = Date.UTC(2026, 9, 5, 11, 29);
 

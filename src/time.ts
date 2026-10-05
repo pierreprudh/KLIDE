@@ -69,15 +69,19 @@ export function relativeTimeLong(ts: number, nowMs: number = Date.now()): string
   return `${Math.floor(mo / 12)}y ago`;
 }
 
-/** A clock reading in the reader's locale: "11:29 AM" or "11:29". The locale
- *  and zone are injectable so a test can pin them; callers pass nothing. */
-export function formatClock(ts: number, opts: { locale?: string; timeZone?: string } = {}): string {
-  return new Date(ts).toLocaleTimeString(opts.locale, { hour: "numeric", minute: "2-digit", timeZone: opts.timeZone });
+/** The stamps are English, always — "Yesterday" and "Today" are, so the
+ *  weekday and month beside them are too, whatever the system locale says.
+ *  The zone is injectable so a test can pin it; callers pass nothing. */
+const STAMP_LOCALE = "en-US";
+
+/** A clock reading: "11:29 AM". */
+export function formatClock(ts: number, opts: { timeZone?: string } = {}): string {
+  return new Date(ts).toLocaleTimeString(STAMP_LOCALE, { hour: "numeric", minute: "2-digit", timeZone: opts.timeZone });
 }
 
 /** Calendar day in the given zone as an integer, so two stamps can be
  *  compared by day without a day being 24 hours (it isn't, twice a year). */
-function dayIndex(ts: number, opts: { locale?: string; timeZone?: string }): number {
+function dayIndex(ts: number, opts: { timeZone?: string }): number {
   const parts = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: opts.timeZone }).format(new Date(ts));
   const [y, m, d] = parts.split("-").map(Number);
   return Math.round(Date.UTC(y, m - 1, d) / 86_400_000);
@@ -87,17 +91,17 @@ function dayIndex(ts: number, opts: { locale?: string; timeZone?: string }): num
  *  it: "Today 11:29 AM", "Yesterday 4:40 PM", a weekday inside the week
  *  ("Monday 4:40 PM"), then a date ("3 Oct 4:40 PM"), with the year only once
  *  it differs from this one. */
-export function formatDayStamp(ts: number, nowMs: number = Date.now(), opts: { locale?: string; timeZone?: string } = {}): string {
+export function formatDayStamp(ts: number, nowMs: number = Date.now(), opts: { timeZone?: string } = {}): string {
   const clock = formatClock(ts, opts);
   const days = dayIndex(nowMs, opts) - dayIndex(ts, opts);
   if (days === 0) return `Today ${clock}`;
   if (days === 1) return `Yesterday ${clock}`;
   const date = new Date(ts);
   if (days > 1 && days < 7) {
-    return `${date.toLocaleDateString(opts.locale, { weekday: "long", timeZone: opts.timeZone })} ${clock}`;
+    return `${date.toLocaleDateString(STAMP_LOCALE, { weekday: "long", timeZone: opts.timeZone })} ${clock}`;
   }
-  const sameYear = new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone: opts.timeZone }).format(date)
-    === new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone: opts.timeZone }).format(new Date(nowMs));
-  const day = date.toLocaleDateString(opts.locale, { day: "numeric", month: "short", ...(sameYear ? {} : { year: "numeric" }), timeZone: opts.timeZone });
+  const sameYear = new Intl.DateTimeFormat(STAMP_LOCALE, { year: "numeric", timeZone: opts.timeZone }).format(date)
+    === new Intl.DateTimeFormat(STAMP_LOCALE, { year: "numeric", timeZone: opts.timeZone }).format(new Date(nowMs));
+  const day = date.toLocaleDateString(STAMP_LOCALE, { day: "numeric", month: "short", ...(sameYear ? {} : { year: "numeric" }), timeZone: opts.timeZone });
   return `${day} ${clock}`;
 }
