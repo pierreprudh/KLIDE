@@ -5,6 +5,7 @@ import { wakeTurnMode } from "./ai/wake";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -109,6 +110,8 @@ import type {
 import { enabledSkillsPrompt, type Skill } from "../skills";
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
+import { formatClock, formatDayStamp } from "../time";
+import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
@@ -4059,8 +4062,18 @@ This user request requires workspace inspection. Before answering, you MUST call
                 ))}
               </div>
             );
+            // A turn that reopens the thread after a silence says when — the
+            // first turn, and any turn an hour or a day after the last word
+            // (`turnStamps.ts`). Centered and dim: a place marker, not a row.
+            const stamp = stampBefore(msgs, i) && m.ts !== undefined ? formatDayStamp(m.ts) : null;
             return (
-              <div key={i} className="ai-msg-in" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+              <Fragment key={i}>
+              {stamp && (
+                <div className="ai-msg-in" style={{ textAlign: "center", margin: "26px 0 2px", fontSize: 11.5, color: "var(--fg-dim)", letterSpacing: "0.01em", userSelect: "none" }}>
+                  {stamp}
+                </div>
+              )}
+              <div className="ai-msg-in" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
                 {m.subagent && (
                   <div style={{ marginBottom: 4, paddingRight: askerGutter + 2, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", userSelect: "none" }}>
                     @{m.subagent}
@@ -4119,16 +4132,18 @@ This user request requires workspace inspection. Before answering, you MUST call
                     />
                   </div>
                 )}
-                {!isEditing && m.tokenInfo && hasText && (
+                {!isEditing && hasText && !queued && !running && (m.ts !== undefined || m.tokenInfo) && (
                   <div
                     className="klide-msg-meta"
-                    title={m.tokenInfo.exact ? "Exact count from the model's tokenizer" : "Estimate — this provider has no tokenizer endpoint"}
-                    style={{ marginTop: 3, paddingRight: askerGutter, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-dim)", letterSpacing: "0.02em", userSelect: "none" }}
+                    title={m.tokenInfo ? (m.tokenInfo.exact ? "Exact count from the model's tokenizer" : "Estimate — this provider has no tokenizer endpoint") : undefined}
+                    style={{ marginTop: 3, paddingRight: askerGutter, display: "flex", gap: 12, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-dim)", letterSpacing: "0.02em", userSelect: "none" }}
                   >
-                    {m.tokenInfo.exact ? "" : "~"}{m.tokenInfo.count.toLocaleString()} tokens
+                    {m.ts !== undefined && <span>{formatClock(m.ts)}</span>}
+                    {m.tokenInfo && <span>{m.tokenInfo.exact ? "" : "~"}{m.tokenInfo.count.toLocaleString()} tokens</span>}
                   </div>
                 )}
               </div>
+              </Fragment>
             );
           }
 
