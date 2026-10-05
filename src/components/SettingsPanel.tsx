@@ -370,6 +370,7 @@ function AdvisorControl({
         provider={provider as ProviderId}
         model={model}
         availableModels={models}
+        direction="down"
         onChange={(m) => onChange({ advisorProvider: provider, advisorModel: m })}
       />
     </div>

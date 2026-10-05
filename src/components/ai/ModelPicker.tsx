@@ -40,6 +40,9 @@ function trimPrice(n: number): string {
   return n >= 1 ? `${Math.round(n * 100) / 100}` : `${Math.round(n * 1000) / 1000}`;
 }
 
+/** The menu's tallest form — the room a side needs before it's chosen. */
+const MENU_MAX_HEIGHT = 360;
+
 type Props = {
   provider: ProviderId;
   model: string;
@@ -197,8 +200,19 @@ export function ModelPicker({
     const gap = 8;
     const idealLeft = rect.right - width; // right-align to the trigger
     const left = Math.max(8, Math.min(idealLeft, window.innerWidth - width - 8));
+    // `direction` is a preference, not a promise: a trigger near the top of
+    // the window (the Settings advisor row) has no room above it, and a menu
+    // drawn past the viewport edge isn't just clipped — focusing its filter
+    // input scrolls the page, which the scroll listener reads as "close".
+    // Open toward whichever side can hold the menu; keep the preference when
+    // both can.
+    const roomAbove = rect.top - gap;
+    const roomBelow = window.innerHeight - rect.bottom - gap;
+    const fits = (room: number) => room >= MENU_MAX_HEIGHT;
+    const openDown =
+      direction === "down" ? fits(roomBelow) || roomBelow >= roomAbove : !fits(roomAbove) && roomBelow > roomAbove;
     setMenuPos(
-      direction === "down"
+      openDown
         ? { top: Math.round(rect.bottom + gap), left: Math.round(left), width }
         : { bottom: Math.round(window.innerHeight - rect.top + gap), left: Math.round(left), width },
     );
@@ -404,7 +418,7 @@ export function ModelPicker({
             top: menuPos.top,
             left: menuPos.left,
             width: menuPos.width,
-            maxHeight: 360,
+            maxHeight: MENU_MAX_HEIGHT,
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",

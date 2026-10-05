@@ -9,7 +9,8 @@
 //! Run: its output goes back to the model as the next user turn and the
 //! model goes another round, up to `max_rounds`. A passing check, a Run that
 //! changed nothing, or a missing check command ends the Run as before — the
-//! marker left in the Transcript says which.
+//! marker left in the Transcript says which. Exhausted failures end in error.
+//! Delegate CLI goals are always checked, since their work bypasses dispatch.
 //!
 //! This module is the pure half: what to do with a check's outcome, and the
 //! words. Running the command and pushing the message is the loop's job

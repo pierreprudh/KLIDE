@@ -154,8 +154,10 @@ import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import { EXPLAIN_PREFIX, GOAL_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, goalDirectiveOf, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
-import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
-import { addMemoryDraft } from "../memoryDrafts";
+import { summarizeAndHandoff, generateMemoryLessons, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
+import { listMemory } from "../memory";
+import { memoryFingerprint } from "../memoryLearning";
+import { addMemoryDraft, getMemoryDrafts, MAX_PENDING_MEMORY, MEMORY_DRAFT_TTL } from "../memoryDrafts";
 import { writeMemory } from "../memory";
 import { shouldReadoptConversation } from "./ai/leavingRun";
 import { extractAssistantText } from "../agent/foldEvents";
@@ -2412,20 +2414,19 @@ This user request requires workspace inspection. Before answering, you MUST call
     }
   }
 
-  // Auto-summarize a finished run. Fire-and-forget — the run is already
-  // done, the user has moved on, and the worst case is a model call that
-  // fails silently. The call is keyed to the run's `currentId` and
-  // status "done" so the entry's frontmatter tells a future agent when
-  // and why it was written. The inline notice under the composer is the
-  // only UI feedback — a one-line ✓ Auto-saved to memory, fades after a
-  // few seconds, distinct from the manual Summarize button's text.
-  //
-  // Skips when there are fewer than two messages: a single user message
-  // with no assistant reply isn't a conversation worth summarising.
+  // Quiet learning: one bounded extraction after meaningful tool work or an
+  // explicit correction. Zero lessons is normal. Durable writes require review.
   async function runAutoSummarize(turn: QueuedTurn) {
     if (!workspaceRoot || summarizing) return;
     const snapshot = msgsRef.current;
-    if (snapshot.length < 2) return;
+    if (snapshot.length < 2 || normalizeAgentMode(turn.mode) === "chat") return;
+    if (getMemoryDrafts().filter((d) => d.workspaceRoot === workspaceRoot && (!d.automatic || Date.now() - d.createdAtMs < MEMORY_DRAFT_TTL)).length >= MAX_PENDING_MEMORY) return;
+    const lastUserIndex = snapshot.map((m) => m.role).lastIndexOf("user");
+    const recent = snapshot.slice(Math.max(0, lastUserIndex));
+    const lastUser = [...recent].reverse().find((m) => m.role === "user");
+    const explicitSignal = /remember|always|never|prefer|instead|correction|decid|souviens|toujours|jamais|préfère/i.test(lastUser?.content ?? "");
+    const toolWork = recent.some((m) => m.role === "assistant" && (m.toolCalls?.length ?? 0) > 0);
+    if (!explicitSignal && !toolWork) return;
     setSummarizing(true);
     try {
       // Reviewable memory: generate the note but DON'T write it. Park it as a
@@ -2434,7 +2435,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       // The note is written by the model that ran the turn; on Auto that is
       // the origin the run stamped, not the picker's sentinel.
       const origin = conversationSessionRef.current;
-      const note = await generateMemoryNote({
+      const captureWorkspace = workspaceRoot;
+      const captureRunId = currentId;
+      const notes = await generateMemoryLessons({
         workspaceRoot,
         provider: isAutoProvider(turn.provider) ? (origin.originProvider ?? turn.provider) : turn.provider,
         model: isAutoProvider(turn.provider) ? (origin.originModel ?? turn.model) : turn.model,
@@ -2443,11 +2446,13 @@ This user request requires workspace inspection. Before answering, you MUST call
         runId: currentId,
         status: "done",
       });
-      addMemoryDraft(note, workspaceRoot);
-      // Signal a draft is ready; the "review draft" pencil under the last
-      // reply surfaces it (no fading pill, no timer). Cleared on the next
-      // turn / cancel / history load via the existing reset paths.
-      setAutoMemoryNotice(note.title);
+      if (notes.length === 0) return;
+      const existing = await listMemory(captureWorkspace, 500);
+      for (const { why, evidence, ...note } of notes) {
+        if (existing.some((entry) => entry.reviewState === "reviewed" && memoryFingerprint(entry) === memoryFingerprint(note))) continue;
+        addMemoryDraft({ ...note, runId: captureRunId }, captureWorkspace, { automatic: true, why, evidence });
+      }
+      // Pending count in the Memory entry point is the only notification.
     } catch (err) {
       console.error("Auto-summarize failed:", err);
     } finally {

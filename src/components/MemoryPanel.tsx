@@ -16,6 +16,8 @@ import {
   subscribeMemoryDrafts,
   getMemoryDrafts,
   removeMemoryDraft,
+  dismissMemoryDraft,
+  MEMORY_DRAFT_TTL,
   type MemoryDraft,
 } from "../memoryDrafts";
 import {
@@ -244,7 +246,7 @@ export function MemoryPanel({
   // The store snapshot is shared across panels; filter to this workspace.
   const allDrafts = useSyncExternalStore(subscribeMemoryDrafts, getMemoryDrafts);
   const drafts = useMemo(
-    () => allDrafts.filter((d) => d.workspaceRoot === workspaceRoot),
+    () => allDrafts.filter((d) => d.workspaceRoot === workspaceRoot && (!d.automatic || Date.now() - d.createdAtMs < MEMORY_DRAFT_TTL)),
     [allDrafts, workspaceRoot]
   );
   const selectedDraft =
@@ -255,7 +257,7 @@ export function MemoryPanel({
   async function acceptDraft(draft: MemoryDraft) {
     if (!workspaceRoot) return;
     try {
-      const { draftId, createdAtMs, workspaceRoot: _ws, ...input } = draft;
+      const { draftId, createdAtMs, workspaceRoot: _ws, automatic: _auto, why: _why, evidence: _evidence, ...input } = draft;
       const entry = await writeMemory(workspaceRoot, input);
       removeMemoryDraft(draftId);
       setSelectedDraftId(null);
@@ -734,7 +736,7 @@ export function MemoryPanel({
               draft={selectedDraft}
               onAccept={(edited) => void acceptDraft(edited)}
               onSkip={() => {
-                removeMemoryDraft(selectedDraft.draftId);
+                dismissMemoryDraft(selectedDraft);
                 setSelectedDraftId(null);
               }}
             />
@@ -1217,14 +1219,17 @@ function DraftReview({
         </span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button onClick={onSkip} style={ghostBtnStyle()}>
-            Skip
+            Dismiss
           </button>
           <button onClick={accept} style={primaryBtnStyle()}>
-            Accept &amp; save
+            Keep memory
           </button>
         </span>
       </div>
 
+      {draft.why && <Section title="Why keep this"><p>{draft.why}</p></Section>}
+      {draft.evidence && <Section title="Supporting evidence"><blockquote style={{ margin: 0, whiteSpace: "pre-wrap" }}>{draft.evidence}</blockquote></Section>}
+      {draft.sourceRefs.length > 0 && <Section title="Source">{draft.sourceRefs.map((ref) => <div key={ref.id}>{ref.label ?? ref.sourceType}: {ref.id}</div>)}</Section>}
       <Section title="Title">
         <input value={title} onChange={(e) => setTitle(e.target.value)} style={fieldStyle} />
       </Section>

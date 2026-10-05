@@ -33,7 +33,11 @@ stops calling tools, and the Run changed the workspace (an applied edit or a
 command), the Harness runs the configured post-edit check command once more.
 A failing check does not end the Run — its output goes back to the model as
 the next user turn and the model goes another round, three by default
-(`goal.maxRounds`, ceiling 10). A passing check, a Run that changed nothing,
+(`goal.maxRounds`, ceiling 10). Exhausted failing checks end in `error`,
+with the check output in the result and a `RunError`; they never produce a
+successful completion. Delegate CLI goals always run the configured check,
+because their observed activity cannot prove that the workspace is unchanged.
+A passing check, a native Run that changed nothing,
 or no configured check ends the Run as usual; a `SteeringInjected` marker in
 the Transcript says which (`Goal reached`, `Goal not reached`, `not
 verified`). The gate runs the command outside the permission engine, as the
