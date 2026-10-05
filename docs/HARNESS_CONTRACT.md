@@ -14,13 +14,20 @@ UI surfaces observe the Harness. They do not reimplement the run loop.
 
 ## Modes
 
-Modes are capability tiers:
+Modes are capability tiers. The wire and the Transcript use the ids below;
+the picker shows two of them, Plan and **Work** (the `goal` tier), and opens on
+Work. `chat` is never picked — it is the tier a Work run falls to when the
+model cannot call tools, and the tier a Run without a Workspace gets.
 
-| Mode | Tool surface | Trust rule |
-|---|---|---|
-| `chat` | No tools | The model can only answer from provided context. |
-| `plan` | Built-in read-only tools | The model can inspect the Workspace, Conversation history, and reviewed Project Memory, but cannot write files, run commands, use dynamic tools, or pause for approval. |
-| `goal` | All built-in tools plus dynamic tools | Writes require Diff review; commands and dynamic tools require permission. |
+| Mode | Shown as | Tool surface | Trust rule |
+|---|---|---|---|
+| `chat` | — (collapse only) | No tools | The model can only answer from provided context. |
+| `plan` | Plan | Built-in read-only tools | The model can inspect the Workspace, Conversation history, and reviewed Project Memory, but cannot write files, run commands, use dynamic tools, or pause for approval. |
+| `goal` | Work | All built-in tools plus dynamic tools | Writes require Diff review; commands and dynamic tools require permission. |
+
+A `/goal <objective>` message is not a Mode: it is one turn that rides in
+`goal` whatever the picker says, with the system prompt asking the model to
+work until the objective is met. The Harness sees an ordinary `goal` Run.
 
 Mode filtering happens twice:
 
@@ -38,9 +45,9 @@ turned off by `disabledTools` on the run request: a Settings toggle arrives as
 Mode. A turned-off Tool is neither advertised nor dispatched — a call to it
 returns a not-ok result.
 
-## Goal Mode vs Mission Supervision
+## Work (`goal`) Mode vs Mission Supervision
 
-`goal` mode is a capability tier: the model may use the full Tool surface, while
+`goal` mode — Work, in the picker — is a capability tier: the model may use the full Tool surface, while
 writes, commands, and pause points stay gated by the Harness.
 
 A supervisor contract sits above one or more Runs. It does not execute tools

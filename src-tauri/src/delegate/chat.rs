@@ -624,7 +624,7 @@ fn prompt_from_messages(messages: &[serde_json::Value]) -> String {
     let mut out = String::from(
         "You are running as a subscription CLI backend inside Klide.\n\
          Answer the user's latest request using the conversation below.\n\
-         Follow the active Klide mode described in the system message. In Goal mode,\n\
+         Follow the active Klide mode described in the system message. In Work mode,\n\
          you may edit files directly in the current workspace; Klide will surface the\n\
          resulting file and git diffs after you finish. In Chat or Plan mode, do not\n\
          edit files unless the mode instructions explicitly allow it.\n\n",

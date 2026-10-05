@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  GOAL_PREFIX,
   currentModeText,
   filterSlashCommands,
+  goalDirectiveOf,
   replaceSlashWord,
   skillSlashCommands,
   skillSlashName,
@@ -82,7 +84,7 @@ describe("slashKeyAction", () => {
 
 describe("currentModeText", () => {
   it("reads the Goal policy only when the mode is goal", () => {
-    expect(currentModeText({ effectiveMode: "chat", requireDiffReview: false, autoApproveCommands: true })).toBe("chat mode · no tools");
+    expect(currentModeText({ effectiveMode: "chat", requireDiffReview: false, autoApproveCommands: true })).toBe("no tools · this model can't call any");
     expect(currentModeText({ effectiveMode: "plan", requireDiffReview: false, autoApproveCommands: false })).toBe("plan mode · read-only");
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: true, autoApproveCommands: false })).toBe("reviewing every edit");
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: false, autoApproveCommands: false })).toBe("auto-accept edits on");
@@ -148,5 +150,23 @@ describe("replaceSlashWord", () => {
       value: "draw /visualise the auth flow",
       caret: 15,
     });
+  });
+});
+
+describe("goalDirectiveOf", () => {
+  it("reads the objective after a /goal lede", () => {
+    expect(goalDirectiveOf("/goal fix the flaky tab test")).toEqual({ objective: "fix the flaky tab test" });
+    expect(goalDirectiveOf(`${GOAL_PREFIX}ship it\nwith tests`)).toEqual({ objective: "ship it\nwith tests" });
+  });
+
+  it("recognises a bare /goal as the command with nothing to reach yet", () => {
+    expect(goalDirectiveOf("/goal")).toEqual({ objective: "" });
+    expect(goalDirectiveOf("/goal   ")).toEqual({ objective: "" });
+  });
+
+  it("leaves other messages alone — a goal is a lede, not a word", () => {
+    expect(goalDirectiveOf("my /goal is speed")).toBeNull();
+    expect(goalDirectiveOf("/goals for Q4")).toBeNull();
+    expect(goalDirectiveOf("/plan the release")).toBeNull();
   });
 });

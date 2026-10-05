@@ -31,11 +31,19 @@ expectations. `docs/HARNESS_CONTRACT.md` is the source of truth for this contrac
 _Avoid_: implementation notes, rough docs
 
 **Mode**:
-The capability tier of a run — `chat` (no tools), `plan` (read-only tools), `goal` (full tools). Decided when the run starts.
-_Avoid_: agent type, permission level
+The capability tier of a run — `chat` (no tools), `plan` (read-only tools), `goal` (full tools). Decided when the run starts. The picker offers two: **Plan**, and `goal` under its working name **Work**, the default. `chat` is not picked; it is what Work collapses to when the model cannot call tools.
+_Avoid_: agent type, permission level, "Goal mode" (Goal is the `/goal` command now)
+
+**Goal**:
+An objective a run works toward until it is done, named with the `/goal` lede
+in the composer (`/goal fix the flaky tab test`). The message goes out as
+typed; the turn rides in Work whatever the picker says, and the system prompt
+tells the model what the lede asks — say what done means, verify, keep going,
+report. Not a Mode and not a Mission: one conversation turn with a finish line.
+_Avoid_: goal mode, task (a Mission Task is a different lifecycle)
 
 **Goal policy**:
-What a `goal` run does with its two review gates — `review` (every edit pauses,
+What a Work (`goal`) run does with its two review gates — `review` (every edit pauses,
 commands ask), `auto` (edits apply, still checkpointed; commands ask), `full`
 (edits and commands, no prompts). Chosen per conversation — the live foot bar's
 note cycles it; before a conversation exists, Focus's start-stage "+" menu lists

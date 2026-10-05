@@ -15,6 +15,21 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Plan or Work, and a `/goal` to reach
+
+- **Two rows.** The Mode menu offers Plan and Work — Work is the `goal` tier
+  under the name of what it does, and it is the default: a new composer opens
+  on it. Chat is no longer a pick; a model that cannot call tools still
+  collapses Work to it, and the Work row stays marked, greyed, so the pick
+  is still readable. `/work` and `/plan` switch; `/chat` is gone.
+- **`/goal <objective>`.** Goal is a command now, the way Claude Code and Codex
+  spell a one-shot: it stays in the draft as typed, the turn rides in Work
+  whatever the picker says, and the system prompt asks the model to say what
+  done means, work through the checks, and stop only at the finish line. A
+  bare `/goal` is not a turn.
+- The transcript, the Rust Harness and the Mission documents keep `goal` as
+  the tier's id; only the words changed (CONTEXT.md, HARNESS_CONTRACT.md).
+
 ### Approving from the keyboard
 
 - **↵ runs, Esc denies.** The command card the run is blocked on answers the
