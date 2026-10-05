@@ -5971,6 +5971,9 @@ button:focus-visible .menu-leadout {
   color: var(--fg);
   font: inherit;
   text-align: left;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
   opacity: 1;
   visibility: visible;
   backdrop-filter: var(--composer-blur);
@@ -6006,8 +6009,10 @@ button:focus-visible .menu-leadout {
   }
 }
 
-.klide-focus-git-island:hover {
+.klide-focus-git-island:hover,
+.klide-focus-git-island:focus-visible {
   border-color: var(--border-strong);
+  outline: none;
 }
 
 /* Pinged by the branch in the composer strip: the island swells a little and
