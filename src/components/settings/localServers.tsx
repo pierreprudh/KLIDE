@@ -1,3 +1,4 @@
+import { useLlamaSetupMode, setLlamaSetupMode } from "../../hooks/useLlamaSetupMode";
 // Local AI servers — start/stop/status row for Ollama and MLX. Extracted
 // from SettingsPanel.tsx.
 
@@ -26,20 +27,15 @@ export function LocalServerRow({ provider }: { provider: string }) {
   return provider === "llamacpp" ? <LlamaLocalSetup /> : <ManagedLocalServerRow provider={provider} />;
 }
 function LlamaLocalSetup() {
-  const [mode, setMode] = useState<"klide" | "app">(() => {
-    try { return localStorage.getItem("klide.llamaSetupMode") === "app" ? "app" : "klide"; }
-    catch { return "klide"; }
-  });
+  const mode = useLlamaSetupMode();
   function choose(value: number | string | undefined) {
-    const next = value === "app" ? "app" : "klide";
-    setMode(next);
-    try { localStorage.setItem("klide.llamaSetupMode", next); } catch { /* View preference is optional. */ }
+    setLlamaSetupMode(value === "app" ? "app" : "klide");
   }
   return <>
     <Row
       leading={<ProviderLogo id="llamacpp" size={24} />}
       title="Llama"
-      description="Choose who manages llama.cpp. Select the matching provider in the AI panel."
+      description="Choose who manages llama.cpp. The selected setup appears in the provider selector."
       control={<Segmented
         label="Llama setup"
         options={[{ label: "Klide", value: "klide" }, { label: "Llama app", value: "app" }]}

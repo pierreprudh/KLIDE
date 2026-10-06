@@ -1,3 +1,4 @@
+import { useLlamaSetupMode, isSelectedLlamaProvider } from "../hooks/useLlamaSetupMode";
 import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
@@ -1418,9 +1419,12 @@ export function AiPanel({
   useEffect(() => {
     void refreshCustomCli().then(setCustomCli).catch(() => {});
   }, []);
+  const llamaSetupMode = useLlamaSetupMode();
   const providerGroups = useMemo(
-    () => providerGroupsWithCustom(customProviders, customCli),
-    [customProviders, customCli]
+    () => providerGroupsWithCustom(customProviders, customCli).map(group => ({
+      ...group, items: group.items.filter(item => isSelectedLlamaProvider(item.id, llamaSetupMode)),
+    })),
+    [customProviders, customCli, llamaSetupMode]
   );
   // Focus offers the same stacks the workbench does, delegates included: the
   // canvas hosts their session the same way a panel does, and they are the one

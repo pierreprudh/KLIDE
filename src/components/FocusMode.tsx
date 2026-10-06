@@ -1,3 +1,4 @@
+import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from "../hooks/useLlamaSetupMode";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 // FocusMode — Klide's chat-first workspace, blending the project/thread
@@ -1019,6 +1020,7 @@ export function buildProviderOptions(
   custom: CustomProvider[],
   keyless: ReadonlySet<string>,
   onOpenKeySettings: () => void,
+  llamaSetupMode: LlamaSetupMode = "klide",
 ): MenuOption[] {
   return providerGroupsWithCustom(custom).flatMap((group) => {
     // Delegate CLIs belong here too. They run on the subscription you already
@@ -1026,7 +1028,7 @@ export function buildProviderOptions(
     // session instead of a message list, which is a different surface but the
     // same conversation. They are never quieted: a delegate authenticates
     // through its own login, so `keyless` has nothing to say about it.
-    const items = group.items.filter((item) => item.available);
+    const items = group.items.filter((item) => item.available && isSelectedLlamaProvider(item.id, llamaSetupMode));
     if (items.length === 0) return [];
     const rows: MenuOption[] = items.map((item) => {
       // A delegate is exempt by construction, not by luck: it authenticates
@@ -1665,9 +1667,10 @@ function FocusComposer({
     return () => window.removeEventListener(LOCAL_MODEL_CHANGED_EVENT, refresh);
   }, []);
   const customProviders = useCustomProviders();
+  const llamaSetupMode = useLlamaSetupMode();
   const providerMenuOptions = useMemo(
-    () => buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api")),
-    [customProviders, keylessProviders, onOpenSettingsSection],
+    () => buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api"), llamaSetupMode),
+    [customProviders, keylessProviders, onOpenSettingsSection, llamaSetupMode],
   );
 
   useEffect(() => {

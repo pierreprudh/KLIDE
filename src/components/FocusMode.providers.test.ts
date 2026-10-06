@@ -18,6 +18,15 @@ const rowFor = (options: ReturnType<typeof buildProviderOptions>, value: string)
   options.find((option) => option.value === value);
 
 describe("Focus provider stack", () => {
+  it("shows only the Llama setup chosen in Local AI", () => {
+    const managed = buildProviderOptions([], new Set(), vi.fn(), "klide");
+    expect(rowFor(managed, "llamacpp")).toBeDefined();
+    expect(rowFor(managed, "llamaapp")).toBeUndefined();
+    const app = buildProviderOptions([], new Set(), vi.fn(), "app");
+    expect(rowFor(app, "llamaapp")).toBeDefined();
+    expect(rowFor(app, "llamacpp")).toBeUndefined();
+    expect(rowFor(app, "ollama")).toBeDefined();
+  });
   it("offers llama.cpp alongside other local inference providers", () => {
     const options = buildProviderOptions([], new Set(), vi.fn());
     const row = rowFor(options, "llamacpp");

@@ -172,8 +172,8 @@ The model appears in Klide's Ollama picker after the download finishes.
 Llama app configuration tests pass; live inference through that provider is not yet verified.
 
 Local Servers groups both llama.cpp setups under **Llama**, with a **Klide / Llama app**
-switch. It remembers the setup view; select the matching provider separately in the AI panel.
-Switching the view does not start or stop a server.
+switch. It remembers the selection and shows only that Llama setup in the AI and Focus provider selectors.
+Switching the setup does not start or stop a server or change existing conversations.
 
 ### Connection flow
 
