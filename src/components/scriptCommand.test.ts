@@ -8,7 +8,7 @@ from pathlib import Path
 p=Path('src-tauri/src/bench.rs');s=p.read_text().replace('"a"','"b"');p.write_text(s)
 PY`;
     expect(parseScriptCommand(command)).toEqual({
-      head: "python3 -",
+      head: "python3",
       lines: [
         "from pathlib import Path",
         "p=Path('src-tauri/src/bench.rs')",
@@ -21,7 +21,7 @@ PY`;
 
   it("keeps a semicolon inside a string, and a comment, on its line", () => {
     const parsed = parseScriptCommand(`python3 -c 'print("a;b")  # x; y'`);
-    expect(parsed?.head).toBe("python3 -c");
+    expect(parsed?.head).toBe("python3");
     expect(parsed?.lines).toEqual([`print("a;b")  # x; y`]);
     expect(parsed?.writes).toEqual([]);
   });

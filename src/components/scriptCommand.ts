@@ -8,7 +8,8 @@
 // line, so the card never hides part of what will run.
 
 export type ScriptCommand = {
-  /** What runs it, as typed — `python3 -`, `python -c`. */
+  /** The interpreter, as typed — `python3`, `/usr/bin/python3.12`. The `-`
+   *  or `-c` that hands it the program is plumbing, not shown. */
   head: string;
   /** The program, one statement per line (`a;b` on one line is split). */
   lines: string[];
@@ -18,8 +19,8 @@ export type ScriptCommand = {
 };
 
 const INTERPRETER = String.raw`(?:\S*/)?python(?:3(?:\.\d+)?)?`;
-const HEREDOC_RE = new RegExp(String.raw`^\s*(${INTERPRETER}\s+-)\s*<<-?\s*(['"]?)([A-Za-z_]\w*)\2[ \t]*\n([\s\S]*?)\n[ \t]*\3[ \t]*$`);
-const DASH_C_RE = new RegExp(String.raw`^\s*(${INTERPRETER}\s+-c)\s+(?:'([^']*)'|"((?:\\.|[^"\\])*)")\s*$`);
+const HEREDOC_RE = new RegExp(String.raw`^\s*(${INTERPRETER})\s+-\s*<<-?\s*(['"]?)([A-Za-z_]\w*)\2[ \t]*\n([\s\S]*?)\n[ \t]*\3[ \t]*$`);
+const DASH_C_RE = new RegExp(String.raw`^\s*(${INTERPRETER})\s+-c\s+(?:'([^']*)'|"((?:\\.|[^"\\])*)")\s*$`);
 
 export function parseScriptCommand(command: string): ScriptCommand | null {
   const trimmed = command.replace(/\s+$/, "");
@@ -28,10 +29,10 @@ export function parseScriptCommand(command: string): ScriptCommand | null {
   const heredoc = HEREDOC_RE.exec(trimmed);
   const dashC = heredoc ? null : DASH_C_RE.exec(trimmed);
   if (heredoc) {
-    head = heredoc[1].replace(/\s+/g, " ");
+    head = heredoc[1];
     body = heredoc[4];
   } else if (dashC) {
-    head = dashC[1].replace(/\s+/g, " ");
+    head = dashC[1];
     body = dashC[2] ?? dashC[3].replace(/\\(["\\$`])/g, "$1");
   } else {
     return null;
