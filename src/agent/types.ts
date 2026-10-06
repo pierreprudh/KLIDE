@@ -313,7 +313,10 @@ export type AgentEvent =
       runId: string;
       provider: ProviderId;
       model: string;
-      described: { path: string; description: string }[];
+      /** `usage` is what the eyes' own turn cost — tokens, and USD when their
+       *  pair is priced. Billed to this conversation: the turn footer and the
+       *  Eyes participant's card both add it in. */
+      described: { path: string; description: string; usage?: AgentUsage }[];
       dropped: { path: string; reason: string }[];
       ts: number;
     };

@@ -1313,7 +1313,7 @@ fn reconstruct_structured_messages(
 /// Map the private provider-side `AiUsage` into the wire-format
 /// `AgentUsage` so the frontend can decode it without depending on a
 /// private type. Cheap (four `Option<u64>`s); done on every turn.
-fn agent_usage_from(usage: Option<AiUsage>, provider: &str, model: &str) -> Option<AgentUsage> {
+pub(super) fn agent_usage_from(usage: Option<AiUsage>, provider: &str, model: &str) -> Option<AgentUsage> {
     let u = usage?;
     if u.is_empty() {
         return None;
@@ -2036,6 +2036,21 @@ async fn run_agent_loop(
         }
         let sighted = sight::lend(&mut request, eyes.clone(), &sight::LiveEyes).await;
         sight::record(&mut request, &sighted);
+        // The look was on this conversation's behalf, so its tokens and cost
+        // join the run's totals — Mission Control and Stats bill the eyes to
+        // the thread that borrowed them, not to nowhere.
+        for description in &sighted.described {
+            if let Some(u) = &description.usage {
+                summary.input_tokens = summary.input_tokens.saturating_add(u.prompt_tokens.unwrap_or(0) as i64);
+                summary.output_tokens = summary.output_tokens.saturating_add(u.completion_tokens.unwrap_or(0) as i64);
+                if let Some(c) = u.cost_usd {
+                    summary.cost_usd = Some(summary.cost_usd.unwrap_or(0.0) + c);
+                }
+            }
+        }
+        if !sighted.described.is_empty() {
+            write_summary(&runs_dir, &summary)?;
+        }
         if let Some(eyes) = &eyes {
             emit(AgentEvent::SightResolved {
                 run_id: id.clone(),

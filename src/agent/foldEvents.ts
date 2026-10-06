@@ -27,6 +27,12 @@ import type { RunCompletion } from "./completion";
  *  can call (yet) — the harness ran it for the model (Rust `agent::sight`). */
 export const SIGHT_TOOL = "look_at_image";
 
+/** What a `look_at_image` step's input says it cost, in USD; 0 when unpriced. */
+export function sightCostOf(call: { input?: unknown }): number {
+  const usage = (call.input as { usage?: AgentUsage } | undefined)?.usage;
+  return usage?.costUsd ?? 0;
+}
+
 export type FoldedToolCall = {
   id: string;
   name: string;
@@ -291,6 +297,9 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
   let sightSeq = 0;
   const sightIds = new Map<string, string>();
   let pendingSight: FoldedToolCall[] = [];
+  // What this turn's looks cost, added to the turn's own footer when it
+  // closes: the eyes were spent on this answer, so the answer carries them.
+  let sightCostUsd = 0;
   const sightCall = (path: string, eyes: string): FoldedToolCall => {
     const id = `sight:${++sightSeq}:${path}`;
     sightIds.set(path, id);
@@ -326,6 +335,7 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     }
 
     if (event.type === "run_started") {
+      sightCostUsd = 0;
       completionMode = event.mode;
       completed = false;
       attemptStart = open && !open.row.text && !open.row.toolCalls.length ? open.idx : rows.length;
@@ -358,6 +368,7 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         ts: event.ts,
       });
       const userIdx = rows.length - 1;
+      sightCostUsd = pendingSight.reduce((sum, c) => sum + sightCostOf(c), 0);
       const placed = placeSight(pendingSight);
       pendingSight = [];
       return { changed: [...interrupted, userIdx, ...placed] };
@@ -376,33 +387,37 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     if (event.type === "sight_resolved") {
       const eyes = `${event.provider}/${event.model}`;
       const changed: number[] = [];
-      const settle = (path: string, result: { content: string; ok: boolean }) => {
+      const settle = (path: string, result: { content: string; ok: boolean }, usage?: AgentUsage) => {
+        const finish = (t: FoldedToolCall) => {
+          t.result = result;
+          t.status = "finished";
+          if (usage) t.input = { ...(t.input as Record<string, unknown>), usage };
+        };
         const id = sightIds.get(path);
         const waiting = id ? pendingSight.find((c) => c.id === id) : undefined;
         if (waiting) {
-          waiting.result = result;
-          waiting.status = "finished";
+          finish(waiting);
           return;
         }
         if (id) {
-          changed.push(upsertTool(id, (t) => {
-            t.result = result;
-            t.status = "finished";
-          }));
+          changed.push(upsertTool(id, finish));
+          // Placed already (live), so the turn footer learns the cost here.
+          sightCostUsd += usage?.costUsd ?? 0;
           return;
         }
         // A step the fold never saw start (an older transcript, a dropped
         // event) still gets its row, placed the way a start would have been.
         const call = sightCall(path, eyes);
-        call.result = result;
-        call.status = "finished";
-        if (open || turnOpen) changed.push(...placeSight([call]));
-        else pendingSight.push(call);
+        finish(call);
+        if (open || turnOpen) {
+          changed.push(...placeSight([call]));
+          sightCostUsd += usage?.costUsd ?? 0;
+        } else pendingSight.push(call);
       };
       // A transcript from before the event carried its descriptions has
       // neither list; the described attachments on its user message still say
       // who looked.
-      for (const d of event.described ?? []) settle(d.path, { content: d.description, ok: true });
+      for (const d of event.described ?? []) settle(d.path, { content: d.description, ok: true }, d.usage);
       for (const d of event.dropped ?? []) settle(d.path, { content: d.reason, ok: false });
       return { changed: [...new Set(changed)] };
     }
@@ -474,6 +489,10 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         ttftFallbackMs: live?.ttftFallbackMs,
         pricing,
       });
+      if (meta && sightCostUsd > 0) {
+        meta.costUsd = (meta.costUsd ?? 0) + sightCostUsd;
+        sightCostUsd = 0;
+      }
       row.meta = meta ?? undefined;
       row.ts = event.ts;
       turnRendered = "";

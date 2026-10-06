@@ -30,7 +30,7 @@
 //! tested; `resolve` and `LiveEyes` are the async shells that feed them.
 
 use crate::agent::types::{
-    AgentAttachment, PreferredModel, SightDescription, SightDrop, StartRunRequest,
+    AgentAttachment, AgentUsage, PreferredModel, SightDescription, SightDrop, StartRunRequest,
 };
 use crate::providers::{self, KeySource};
 use serde::Serialize;
@@ -210,6 +210,13 @@ pub(crate) async fn ai_sight_eyes(
 
 // ── Describing ────────────────────────────────────────────────────────────
 
+/// What one look produced: the prose, and what the eyes' turn cost.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Described {
+    pub text: String,
+    pub usage: Option<AgentUsage>,
+}
+
 /// The seam between the pure lending and the network: something that, given
 /// eyes and a picture, returns prose. Production is `LiveEyes`; tests answer
 /// from a table.
@@ -220,7 +227,7 @@ pub trait Describer {
         image: &AgentAttachment,
         context: &str,
         workspace_root: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<String, String>> + Send;
+    ) -> impl std::future::Future<Output = Result<Described, String>> + Send;
 }
 
 /// How long one description may take before the photo is dropped instead.
@@ -271,7 +278,7 @@ impl Describer for LiveEyes {
         image: &AgentAttachment,
         context: &str,
         workspace_root: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<Described, String> {
         let Some(data_uri) = image.data_uri.clone() else {
             return Err("not an image".to_string());
         };
@@ -304,7 +311,10 @@ impl Describer for LiveEyes {
         if text.is_empty() {
             return Err(format!("{} returned no description", eyes.label()));
         }
-        Ok(text)
+        // Priced the way every turn is: the provider's own figure, else the
+        // eyes' list price × tokens, else nothing (local, unknown).
+        let usage = super::agent_usage_from(response.usage, &eyes.provider, &eyes.model);
+        Ok(Described { text, usage })
     }
 }
 
@@ -370,12 +380,13 @@ pub async fn lend<D: Describer>(
             .describe(eyes, &attachment, &context, workspace_root.as_deref())
             .await
         {
-            Ok(description) => {
-                attachment.content = description.clone();
+            Ok(Described { text, usage }) => {
+                attachment.content = text.clone();
                 attachment.seen_by = Some(eyes.label());
                 out.described.push(SightDescription {
                     path: attachment.path.clone(),
-                    description,
+                    description: text,
+                    usage,
                 });
                 kept.push(attachment);
             }
@@ -524,6 +535,17 @@ mod tests {
         asked: Mutex<Vec<(String, String)>>,
     }
 
+    fn usage(prompt: u64, completion: u64, cost: f64) -> AgentUsage {
+        AgentUsage {
+            prompt_tokens: Some(prompt),
+            completion_tokens: Some(completion),
+            eval_duration_ms: None,
+            prompt_eval_duration_ms: None,
+            cost_usd: Some(cost),
+            context_window: None,
+        }
+    }
+
     impl Describer for TableEyes {
         async fn describe(
             &self,
@@ -531,12 +553,17 @@ mod tests {
             image: &AgentAttachment,
             context: &str,
             _workspace_root: Option<&str>,
-        ) -> Result<String, String> {
+        ) -> Result<Described, String> {
             self.asked
                 .lock()
                 .unwrap()
                 .push((image.path.clone(), format!("{}|{}", eyes.label(), context)));
-            self.answers.lock().unwrap().remove(0)
+            // Every table answer is billed the same: 1,200 in, 300 out, a cent.
+            self.answers
+                .lock()
+                .unwrap()
+                .remove(0)
+                .map(|text| Described { text, usage: Some(usage(1_200, 300, 0.01)) })
         }
     }
 
@@ -615,6 +642,7 @@ mod tests {
         assert_eq!(sighted.described.len(), 1);
         assert_eq!(sighted.described[0].path, "shot.png");
         assert_eq!(sighted.described[0].description, "A terminal showing EADDRINUSE.");
+        assert_eq!(sighted.described[0].usage, Some(usage(1_200, 300, 0.01)));
         assert_eq!(sighted.eyes, Some(eyes));
         assert!(sighted.dropped.is_empty());
         assert_eq!(req.attachments.len(), 2);
@@ -676,7 +704,7 @@ mod tests {
         req.attachments[0].content = "desc".into();
         let sighted = Sighted {
             eyes: None,
-            described: vec![SightDescription { path: "a.png".into(), description: "desc".into() }],
+            described: vec![SightDescription { path: "a.png".into(), description: "desc".into(), usage: None }],
             dropped: vec![SightDrop { path: "b.png".into(), reason: "r".into() }],
         };
         record(&mut req, &sighted);

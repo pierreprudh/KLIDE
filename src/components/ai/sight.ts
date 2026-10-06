@@ -59,6 +59,29 @@ export function eyesOf(
   return [...seen.values()];
 }
 
+/** What one pair's looks cost this conversation, read off the `look_at_image`
+ *  steps that name it: images, tokens, USD. The step's input carries the
+ *  eyes' own usage (see foldEvents `sight_resolved`). */
+export function eyesStats(
+  msgs: readonly { role: string; toolCalls?: readonly { name: string; args?: unknown }[] }[],
+  eyes: { provider: string; model: string },
+): { images: number; tokens: number; costUsd: number } {
+  const label = `${eyes.provider}/${eyes.model}`;
+  let images = 0, tokens = 0, costUsd = 0;
+  for (const msg of msgs) {
+    if (msg.role !== "assistant") continue;
+    for (const call of msg.toolCalls ?? []) {
+      if (call.name !== "look_at_image") continue;
+      const args = call.args as { eyes?: unknown; usage?: { promptTokens?: number; completionTokens?: number; costUsd?: number } } | undefined;
+      if (args?.eyes !== label) continue;
+      images += 1;
+      tokens += (args.usage?.promptTokens ?? 0) + (args.usage?.completionTokens ?? 0);
+      costUsd += args.usage?.costUsd ?? 0;
+    }
+  }
+  return { images, tokens, costUsd };
+}
+
 /** The model half of a `seen_by` label (`provider/model`). Provider ids carry
  *  no `/`, so the first one is the split — a namespaced model id keeps its own. */
 export function seenByModel(seenBy: string): string {

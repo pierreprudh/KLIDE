@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eyesName, eyesOf, eyesSettingOf, photoGate, seenByModel, type Eyes } from "./sight";
+import { eyesName, eyesOf, eyesSettingOf, eyesStats, photoGate, seenByModel, type Eyes } from "./sight";
 
 const local: Eyes = { provider: "ollama", model: "gemma3:12b", source: "local" };
 
@@ -61,6 +61,20 @@ describe("eyesOf", () => {
 
   it("is empty for a conversation that borrowed no eyes", () => {
     expect(eyesOf([{ role: "user", attachments: [{ path: "shot.png" }] }, { role: "assistant" }])).toEqual([]);
+  });
+});
+
+describe("eyesStats", () => {
+  it("sums one pair's looks from the step rows, ignoring other eyes", () => {
+    const msgs = [
+      { role: "assistant", toolCalls: [
+        { name: "look_at_image", args: { path: "a.png", eyes: "anthropic/claude-sonnet-4-6", usage: { promptTokens: 1000, completionTokens: 200, costUsd: 0.01 } } },
+        { name: "look_at_image", args: { path: "b.png", eyes: "ollama/gemma4:12b", usage: { promptTokens: 900, completionTokens: 100 } } },
+      ] },
+      { role: "assistant", toolCalls: [{ name: "look_at_image", args: { path: "c.png", eyes: "anthropic/claude-sonnet-4-6", usage: { promptTokens: 500, completionTokens: 100, costUsd: 0.005 } } }] },
+    ];
+    expect(eyesStats(msgs, { provider: "anthropic", model: "claude-sonnet-4-6" })).toEqual({ images: 2, tokens: 1800, costUsd: 0.015 });
+    expect(eyesStats(msgs, { provider: "ollama", model: "gemma4:12b" })).toEqual({ images: 1, tokens: 1000, costUsd: 0 });
   });
 });
 

@@ -769,6 +769,21 @@ describe("eyes for a blind model", () => {
     expect(rows[2]).toMatchObject({ kind: "assistant", text: "An error." });
   });
 
+  it("bills the eyes to the turn: their cost joins the footer, and rides the step's input", () => {
+    const usage = { promptTokens: 1_200, completionTokens: 300, costUsd: 0.012 };
+    const rows = foldAgentEvents([
+      runStarted("openrouter", "deepseek/deepseek-v4-flash"),
+      started(["shot.png"]),
+      { type: "sight_resolved", runId: RUN, provider: "anthropic", model: "claude-sonnet-4-6", described: [{ path: "shot.png", description: "desc", usage }], dropped: [], ts: at() },
+      userMessage("what's this?"),
+      assistantMessage("An error.", { usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 } }),
+    ]);
+    const step = rows[1];
+    expect(step.kind === "assistant" && step.toolCalls[0].input).toMatchObject({ path: "shot.png", usage });
+    const answer = rows[2];
+    expect(answer.kind === "assistant" && answer.meta?.costUsd).toBeCloseTo(0.013, 6);
+  });
+
   it("a second turn's photo gets its own step, not the first turn's row", () => {
     const rows = foldAgentEvents([
       started(["shot.png"]),

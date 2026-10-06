@@ -5,7 +5,8 @@ import { conversationMark } from "../../modelIdentity";
 import type { PeerLink } from "./PeerLink";
 import { peerName, workerChildrenOf } from "./coordinationPeers";
 import { shellAgentsOf } from "./shellAgentEvidence";
-import { eyesName, eyesOf } from "./sight";
+import { eyesName, eyesOf, eyesStats } from "./sight";
+import { formatCost } from "../../runs";
 import type { Conversation, Msg } from "./types";
 import type { ProviderId } from "../../agent/types";
 import { createPortal } from "react-dom";
@@ -142,6 +143,14 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
       }} />)}
     {eyes.map((e) => <Participant key={`eyes:${e.provider}/${e.model}`} name={eyesName(e)}
       mark={conversationMark(e.model, (e.provider || null) as ProviderId | null, 16)?.node ?? <AgentMark size={16} />}
-      status="Eyes" stats={() => `${e.images} ${e.images === 1 ? "image" : "images"} described · Usage unavailable`} />)}
+      status="Eyes" stats={() => {
+        // The described photos say how many; the step rows say what it cost.
+        const stats = eyesStats(msgs, e);
+        const parts = [`${e.images} ${e.images === 1 ? "image" : "images"} described`];
+        if (stats.tokens > 0) parts.push(`${stats.tokens.toLocaleString()} tokens`);
+        const cost = formatCost(stats.costUsd);
+        parts.push(cost ?? (stats.tokens > 0 ? "no list price" : "Usage unavailable"));
+        return parts.join(METRIC_GAP);
+      }} />)}
   </div>;
 }

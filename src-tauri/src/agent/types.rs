@@ -174,6 +174,11 @@ pub struct StartRunRequest {
 pub struct SightDescription {
     pub path: String,
     pub description: String,
+    /// What the eyes' turn cost — tokens, and USD when their pair is priced
+    /// (`agent_usage_from`). The run's own totals include it, so a borrowed
+    /// look is billed to the conversation that borrowed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentUsage>,
 }
 
 /// One photo the eyes could not read, for `SightResolved`.
@@ -348,7 +353,7 @@ pub struct ToolResult {
 /// what their wire format exposes; the UI falls back to estimates when
 /// absent. Mirrors `crate::AiUsage` but lives in the agent protocol so the
 /// frontend can decode it without depending on a private provider type.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentUsage {
     #[serde(skip_serializing_if = "Option::is_none", default)]
