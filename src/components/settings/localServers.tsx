@@ -9,7 +9,7 @@ import {
   startLocalProvider,
   stopLocalProvider,
 } from "../../ipc/aiProviders";
-import { LinkButton, Row, StatusText } from "./controls";
+import { LinkButton, Row, Segmented, StatusText } from "./controls";
 import { ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import { providerDefaultModel, providerLabel } from "../../agent/providerCatalog";
@@ -23,8 +23,34 @@ export function LocalServerRow({ provider }: { provider: string }) {
     description="Install Llama, choose a model, then select Llama app in the AI panel. Connects on localhost:9931."
     control={<LinkButton onClick={() => void openUrl("https://llama.app")}>Get Llama</LinkButton>}
   />;
-  return provider === "llamacpp" ? <LlamaServerSetup /> : <ManagedLocalServerRow provider={provider} />;
+  return provider === "llamacpp" ? <LlamaLocalSetup /> : <ManagedLocalServerRow provider={provider} />;
 }
+function LlamaLocalSetup() {
+  const [mode, setMode] = useState<"klide" | "app">(() => {
+    try { return localStorage.getItem("klide.llamaSetupMode") === "app" ? "app" : "klide"; }
+    catch { return "klide"; }
+  });
+  function choose(value: number | string | undefined) {
+    const next = value === "app" ? "app" : "klide";
+    setMode(next);
+    try { localStorage.setItem("klide.llamaSetupMode", next); } catch { /* View preference is optional. */ }
+  }
+  return <>
+    <Row
+      leading={<ProviderLogo id="llamacpp" size={24} />}
+      title="Llama"
+      description="Choose who manages llama.cpp. Select the matching provider in the AI panel."
+      control={<Segmented
+        label="Llama setup"
+        options={[{ label: "Klide", value: "klide" }, { label: "Llama app", value: "app" }]}
+        value={mode}
+        onChange={choose}
+      />}
+    />
+    {mode === "klide" ? <LlamaServerSetup /> : <LocalServerRow provider="llamaapp" />}
+  </>;
+}
+
 function ManagedLocalServerRow({ provider }: { provider: string }) {
   const title = providerLabel(provider) ?? provider;
   const defaultModel = providerDefaultModel(provider) ?? "";

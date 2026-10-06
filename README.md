@@ -166,10 +166,14 @@ The model appears in Klide's Ollama picker after the download finishes.
 | Ollama | Install Ollama; select a downloaded model in Klide | `localhost:11434` | Klide can start and stop the server |
 | MLX-LM 0.31.3¹ | Install `mlx-lm`; start from Local Servers settings | `localhost:8080` | Klide can start and stop the server |
 | llama.cpp | Choose a model in Local Servers settings; install and start in one action | `localhost:8081` | Klide |
-| [Llama app](https://llama.app) | **Get Llama** in Local Servers settings; choose a model in Llama, then select it in Klide | `localhost:9931/v1` | Llama app; Klide discovers its models |
+| [Llama app](https://llama.app) | **Llama → Llama app → Get Llama** in Local Servers settings; choose a model in Llama, then select it in Klide | `localhost:9931/v1` | Llama app; Klide discovers its models |
 | LM Studio | Start its local server; select LM Studio in Klide | `localhost:1234/v1` | LM Studio |
 
 Llama app configuration tests pass; live inference through that provider is not yet verified.
+
+Local Servers groups both llama.cpp setups under **Llama**, with a **Klide / Llama app**
+switch. It remembers the setup view; select the matching provider separately in the AI panel.
+Switching the view does not start or stop a server.
 
 ### Connection flow
 
