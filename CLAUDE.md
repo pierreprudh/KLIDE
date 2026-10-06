@@ -218,6 +218,7 @@ Klide/
 │   │       ├── workspaceFiles.ts  Bounded file walk for @mentions
 │   │       ├── summarize.ts       Summarize-and-handoff + auto-skill detect
 │   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, refuse binaries (AttachmentTray.tsx: staged strip)
+│   │       ├── sight.ts           The composer's half of eyes for a blind model — may a photo be dropped, what the hint says, who looked
 │   │       ├── toolRuns.ts        Fold a prose-free stretch of tool messages into one openable row
 │   │       ├── CompletionCard.tsx A finished run's evidence — what changed, what it ran, documents to open
 │   │       ├── QuestionCard.tsx   A question the run is waiting on, answered in place
@@ -313,6 +314,7 @@ Klide/
     │       ├── stream_log.rs      Streamed output of a background turn — deltas merged per 150 ms, written without a disk wait
     │       ├── run_core.rs        Tauri-free turn prep — provider quirks, message assembly, compaction
     │       ├── routing.rs         The `auto` Provider → one concrete provider+model at run start (gate, rank, lock)
+    │       ├── sight.rs           Eyes for a blind model — another model describes a turn's photos before a model that can't see them reads the turn
     │       ├── tools.rs           Tool registry (schema + capability + execution, including native memory recall)
     │       ├── spreadsheet_tools.rs Native workbook Tools — recalculated and exported before review
     │       ├── artifacts.rs       What a command left behind — the dirty set bracketed around a run_command

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ProviderRow } from "../agent/providerCatalog";
+import type { Eyes } from "../components/ai/sight";
 
 /** The Rust registry, one published row per Provider — the same rows the
  *  generated mirror (`src/agent/providerCatalog.generated.ts`) holds for
@@ -125,6 +126,25 @@ export function modelReflectionLevels(provider: string, model: string): Promise<
 
 export function modelSupportsVision(provider: string, model: string): Promise<boolean> {
   return invoke<boolean>("ai_model_supports_vision", { provider, model });
+}
+
+/** Who would describe a photo for this pair, if it cannot see one: the
+ *  Settings pair when usable, else an installed local vision model, else a
+ *  hosted default behind a key. `null` means a photo should still be refused.
+ *  Rust owns the order (`agent::sight`); this only asks. */
+export function resolveEyes(
+  provider: string,
+  model: string,
+  setting: { provider: string; model: string } | undefined,
+  workspaceRoot: string | null,
+): Promise<Eyes | null> {
+  return invoke<Eyes | null>("ai_sight_eyes", {
+    provider,
+    model,
+    eyesProvider: setting?.provider,
+    eyesModel: setting?.model,
+    workspaceRoot,
+  });
 }
 
 /** The model's trained window, or `null` when nobody published one. */

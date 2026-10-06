@@ -1044,6 +1044,7 @@ pub fn run() {
             models::ai_context_window,
             models::ai_model_supports_tools,
             models::ai_model_supports_vision,
+            agent::sight::ai_sight_eyes,
             models::ai_model_supports_reflection,
             models::ai_model_reflection_levels,
             models::ai_count_tokens,

@@ -956,6 +956,7 @@ fn start_request_for(
         // Approval froze a concrete provider and model into the task file, so a
         // Mission attempt never arrives as `auto` and has no stars to carry.
         preferred_models: vec![],
+        eyes: None,
         routed: None,
     })
 }

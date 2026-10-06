@@ -326,15 +326,48 @@ function AdvisorControl({
   model: string;
   onChange: (next: { advisorProvider: string; advisorModel: string }) => void;
 }) {
-  const groups = PROVIDER_GROUPS.filter(
-    (g) => g.label === "Local" || g.label === "API" || g.label === "Subscription"
+  return (
+    <ModelPairControl
+      label="Advisor"
+      provider={provider}
+      model={model}
+      groups={["Local", "API", "Subscription"]}
+      onChange={(p, m) => onChange({ advisorProvider: p, advisorModel: m })}
+    />
   );
+}
+
+// One provider + model pairing, as Settings rows pick them: a provider select
+// over the picker's groups and the same ModelPicker the AI panel uses. With
+// `automatic`, an empty provider is a real choice — "let Klide decide" — and
+// the model picker steps aside.
+function ModelPairControl({
+  label,
+  provider,
+  model,
+  groups: groupLabels,
+  automatic,
+  onChange,
+}: {
+  label: string;
+  provider: string;
+  model: string;
+  groups: string[];
+  /** The caption of the empty choice, when there is one. */
+  automatic?: string;
+  onChange: (provider: string, model: string) => void;
+}) {
+  const groups = PROVIDER_GROUPS.filter((g) => groupLabels.includes(g.label));
   // Real model list for the chosen provider (installed Ollama/MLX models, or a
   // hosted catalog), fetched the same way the AI panel does. Refetched whenever
   // the advisor provider changes so the model dropdown always reflects it.
   const [models, setModels] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
+    if (!provider) {
+      setModels([]);
+      return;
+    }
     listProviderModels(provider)
       .then((list) => alive && setModels(list))
       .catch(() => alive && setModels([]));
@@ -345,15 +378,16 @@ function AdvisorControl({
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
       <select
-        aria-label="Advisor provider"
+        aria-label={`${label} provider`}
         className="klide-field"
         value={provider}
         onChange={(e) => {
           const p = e.target.value;
-          onChange({ advisorProvider: p, advisorModel: DEFAULT_MODELS[p as ProviderId] ?? "" });
+          onChange(p, p ? DEFAULT_MODELS[p as ProviderId] ?? "" : "");
         }}
         style={{ height: 34, padding: "0 10px", fontSize: 12 }}
       >
+        {automatic && <option value="">{automatic}</option>}
         {groups.map((g) => (
           <optgroup key={g.label} label={g.label}>
             {g.items
@@ -366,13 +400,15 @@ function AdvisorControl({
           </optgroup>
         ))}
       </select>
-      <ModelPicker
-        provider={provider as ProviderId}
-        model={model}
-        availableModels={models}
-        direction="down"
-        onChange={(m) => onChange({ advisorProvider: provider, advisorModel: m })}
-      />
+      {provider && (
+        <ModelPicker
+          provider={provider as ProviderId}
+          model={model}
+          availableModels={models}
+          direction="down"
+          onChange={(m) => onChange(provider, m)}
+        />
+      )}
     </div>
   );
 }
@@ -1678,6 +1714,22 @@ export function SettingsPanel({
                         provider={harnessSettings?.advisorProvider ?? DEFAULT_ADVISOR_PROVIDER}
                         model={harnessSettings?.advisorModel ?? DEFAULT_ADVISOR_MODEL}
                         onChange={(next) => onHarnessSettingsChange?.({ ...harnessSettings, ...next })}
+                      />
+                    }
+                  />
+
+                  {/* Eyes — who describes a photo for a model that cannot see one */}
+                  <Row
+                    title="Eyes model"
+                    description="Which model describes an image when the model you're talking to can't see it. Automatic tries an installed local vision model first (the picture stays on this machine), then a hosted model you have a key for. Describing happens once per turn, before the message goes out, and the thread says who looked. Subscription CLIs can't be eyes yet."
+                    control={
+                      <ModelPairControl
+                        label="Eyes"
+                        provider={harnessSettings?.eyesProvider ?? ""}
+                        model={harnessSettings?.eyesModel ?? ""}
+                        groups={["Local", "API"]}
+                        automatic="Automatic — local first, then hosted"
+                        onChange={(p, m) => onHarnessSettingsChange?.({ ...harnessSettings, eyesProvider: p || undefined, eyesModel: m || undefined })}
                       />
                     }
                   />

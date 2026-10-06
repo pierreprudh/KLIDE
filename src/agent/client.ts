@@ -35,6 +35,7 @@ type StartRunRequest = {
   missionId?: string;
   missionTaskId?: string;
   preferredModels?: { provider: string; model: string }[];
+  eyes?: { provider: string; model: string };
 };
 
 type StartRunResponse = {
@@ -95,6 +96,7 @@ export async function startAgentRun(
       missionId: input.missionId,
       missionTaskId: input.missionTaskId,
       preferredModels: input.preferredModels,
+      eyes: input.eyes,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,
   });

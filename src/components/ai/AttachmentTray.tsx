@@ -18,24 +18,36 @@ export function AttachmentTray({
   onRemove,
   onOpenPhoto,
   padding = "10px 12px 2px",
+  photoNote = null,
 }: {
   attachments: readonly Attachment[];
   onRemove: (index: number) => void;
   /** Click-through on a photo — the composer's lightbox, where there is one. */
   onOpenPhoto?: (dataUri: string) => void;
   padding?: string;
+  /** What will happen to the staged photos that the person should know —
+   *  "Described by gemma3" when the model cannot see and other eyes will
+   *  read the picture for it (see ./sight.ts). Null when the model sees. */
+  photoNote?: string | null;
 }) {
   if (attachments.length === 0) return null;
+  const hasPhoto = attachments.some(isPhotoAttachment);
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding, alignItems: "flex-end" }}>
       {attachments.map((a, i) => (
         <AttachmentTile
           key={`${a.path}-${i}`}
           attachment={a}
           onRemove={() => onRemove(i)}
           onOpen={a.dataUri && onOpenPhoto ? () => onOpenPhoto(a.dataUri as string) : undefined}
+          title={isPhotoAttachment(a) && photoNote ? photoNote : undefined}
         />
       ))}
+      {hasPhoto && photoNote && (
+        <span style={{ fontSize: 11, color: "var(--fg-dim)", letterSpacing: "0.01em", userSelect: "none", paddingBottom: 2 }}>
+          {photoNote}
+        </span>
+      )}
     </div>
   );
 }
@@ -44,10 +56,13 @@ function AttachmentTile({
   attachment,
   onRemove,
   onOpen,
+  title,
 }: {
   attachment: Attachment;
   onRemove: () => void;
   onOpen?: () => void;
+  /** Overrides the tile's tooltip — the tray's note on a photo. */
+  title?: string;
 }) {
   const [hover, setHover] = useState(false);
   const photo = isPhotoAttachment(attachment);
@@ -56,7 +71,7 @@ function AttachmentTile({
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={photo ? name : `${name} — sent as text`}
+      title={title ? `${name} — ${title}` : photo ? name : `${name} — sent as text`}
       style={{
         position: "relative",
         height: TILE,

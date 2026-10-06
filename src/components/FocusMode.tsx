@@ -28,6 +28,7 @@ import {
   modelReflectionLevels as queryModelReflectionLevels,
   modelSupportsTools as queryModelSupportsTools,
   modelSupportsVision as queryModelSupportsVision,
+  resolveEyes,
   readLocalProviderStatus,
   readProviderContextWindow,
   readProviderKeyStatus,
@@ -64,6 +65,8 @@ import type { Conversation } from "./ai/types";
 import type { AgentAttachment as Attachment, AgentMode, ProviderId } from "../agent/types";
 import type { Skill } from "../skills";
 import { stageFiles, stagedImageBytes } from "./ai/attachments";
+import { eyesSettingOf, photoGate as photoGateOf, type Eyes } from "./ai/sight";
+import { SETTINGS, useSetting } from "../settingsStore";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { SlashMenu } from "./ai/SlashMenu";
@@ -1179,7 +1182,7 @@ function FocusAddMenu({
   onModeChange,
   onAddFile,
   canAttachFiles,
-  supportsVision,
+  photoGate,
   onAttachFiles,
   requireDiffReview,
   autoApproveCommands,
@@ -1197,8 +1200,9 @@ function FocusAddMenu({
   onAddFile: (path: string) => void;
   /** False for a delegate CLI, which takes text on its stdin and nothing else. */
   canAttachFiles: boolean;
-  /** Whether the chosen model can see a photo — decides what this row promises. */
-  supportsVision: boolean;
+  /** What the attach row may promise about a photo — the model sees, other
+   *  eyes will describe it, or documents only (see ./ai/sight.ts). */
+  photoGate: ReturnType<typeof photoGateOf>;
   onAttachFiles: (files: File[]) => void;
   requireDiffReview: boolean;
   autoApproveCommands: boolean;
@@ -1392,18 +1396,12 @@ function FocusAddMenu({
                 role="menuitem"
                 className="klide-focus-add-menu-row"
                 disabled={!canAttachFiles}
-                title={
-                  canAttachFiles
-                    ? supportsVision
-                      ? "Attach a photo or a text document"
-                      : "This model can't see images — attach a text document"
-                    : "This CLI takes text only"
-                }
+                title={canAttachFiles ? photoGate.menuTitle : "This CLI takes text only"}
                 onClick={() => pickerRef.current?.click()}
               >
                 <span>
-                  {supportsVision ? "Photo or document" : "Document"}
-                  <small>{supportsVision ? "Attach an image or text file" : "Attach a text file"}</small>
+                  {photoGate.menuLabel}
+                  <small>{photoGate.allowPhotos ? (photoGate.stagedNote ? `Attach an image or text file — ${photoGate.stagedNote.toLowerCase()}` : "Attach an image or text file") : "Attach a text file"}</small>
                 </span>
                 <AttachIcon size={14} />
               </button>
@@ -1579,6 +1577,10 @@ function FocusComposer({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dropping, setDropping] = useState(false);
   const [supportsVision, setSupportsVision] = useState(false);
+  // Who describes a photo when this model cannot see one, or null when nobody
+  // can (see ./ai/sight.ts). Asked only for a blind wire model.
+  const [eyes, setEyes] = useState<Eyes | null>(null);
+  const [harnessSettings] = useSetting(SETTINGS.harnessSettings);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => initialMode(localStorage.getItem("klide.agentMode"))
   );
@@ -1743,16 +1745,15 @@ function FocusComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider, model]);
 
-  // Vision is a per-model fact, so switching models can strand a staged photo.
-  // Drop the photos when that happens (documents are text — they still travel)
-  // rather than sending an image somewhere it can't be seen.
+  // Vision is a per-model fact. A blind model no longer strands a staged
+  // photo on its own: the eyes effect below asks who could describe it, and
+  // drops the photos only when nobody can (documents are text — they always
+  // travel).
   useEffect(() => {
     let cancelled = false;
     queryModelSupportsVision(provider, model)
       .then((supported) => {
-        if (cancelled) return;
-        setSupportsVision(supported);
-        if (!supported) setAttachments((prev) => prev.filter((a) => !a.dataUri));
+        if (!cancelled) setSupportsVision(supported);
       })
       .catch(() => {
         if (!cancelled) setSupportsVision(false);
@@ -1761,6 +1762,32 @@ function FocusComposer({
       cancelled = true;
     };
   }, [provider, model]);
+
+  const eyesSetting = eyesSettingOf(harnessSettings);
+  const eyesSettingKey = eyesSetting ? `${eyesSetting.provider}/${eyesSetting.model}` : "";
+  useEffect(() => {
+    if (supportsVision || isDelegateProvider(provider)) {
+      setEyes(null);
+      return;
+    }
+    let cancelled = false;
+    resolveEyes(provider, model, eyesSetting, workspaceRoot)
+      .then((found) => {
+        if (cancelled) return;
+        setEyes(found);
+        if (!found) setAttachments((prev) => prev.filter((a) => !a.dataUri));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setEyes(null);
+        setAttachments((prev) => prev.filter((a) => !a.dataUri));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, model, supportsVision, eyesSettingKey, workspaceRoot]);
+  const gate = photoGateOf(supportsVision, eyes);
 
   useEffect(() => {
     if (autoFocus) taRef.current?.focus();
@@ -1852,7 +1879,7 @@ function FocusComposer({
   async function addFiles(files: File[]) {
     if (!canAttachFiles || files.length === 0) return;
     const staged = await stageFiles(files, {
-      allowPhotos: supportsVision,
+      allowPhotos: gate.allowPhotos,
       alreadyStaged: attachments.length,
       alreadyImageBytes: stagedImageBytes(attachments),
     });
@@ -2040,10 +2067,11 @@ function FocusComposer({
           attachments={attachments}
           onRemove={(i) => setAttachments((prev) => prev.filter((_, j) => j !== i))}
           padding="12px 14px 0"
+          photoNote={gate.stagedNote}
         />
         {dropping && attachments.length === 0 && (
           <div className="klide-focus-composer-drop-hint" aria-hidden="true">
-            {supportsVision ? "Drop a photo or document" : "Drop a document"}
+            {gate.dropHint}
           </div>
         )}
         <div style={{ position: "relative", zIndex: 1 }}>
@@ -2130,7 +2158,7 @@ function FocusComposer({
               onModeChange={selectAgentMode}
               onAddFile={addFile}
               canAttachFiles={canAttachFiles}
-              supportsVision={supportsVision}
+              photoGate={gate}
               onAttachFiles={(files) => void addFiles(files)}
               requireDiffReview={requireDiffReview}
               autoApproveCommands={autoApproveCommands}

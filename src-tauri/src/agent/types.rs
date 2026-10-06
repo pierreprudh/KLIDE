@@ -38,6 +38,13 @@ pub struct AgentAttachment {
     /// attachments leave this `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_uri: Option<String>,
+    /// Set when the run's own model could not see this image and another
+    /// model described it on its behalf (`agent::sight`): `provider/model`
+    /// of those eyes. `content` then holds the description, and the
+    /// attachment rides the wire as text — `data_uri` stays only so the
+    /// thread can still draw the picture the person attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -147,6 +154,13 @@ pub struct StartRunRequest {
     /// (`agent::routing`). Ignored for a concrete Provider.
     #[serde(default)]
     pub preferred_models: Vec<PreferredModel>,
+    /// The pair Settings names as the eyes for a model that cannot see images
+    /// (Harness settings → "Eyes model"). Absent = automatic: an installed
+    /// local vision model first, then a hosted one behind a key. Read only
+    /// when a turn carries a photo the run's own model cannot see
+    /// (`agent::sight`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eyes: Option<PreferredModel>,
     /// Backend-populated: how an `auto` request was routed, so the loop can
     /// record the decision on the Transcript right after `RunStarted`. Renderer
     /// input is ignored — the router is the only writer.
@@ -499,7 +513,8 @@ impl AgentEvent {
             | AgentEvent::AdvisorResolved { ts, .. }
             | AgentEvent::ObserverCompleted { ts, .. }
             | AgentEvent::SteeringInjected { ts, .. }
-            | AgentEvent::RouteResolved { ts, .. } => *ts,
+            | AgentEvent::RouteResolved { ts, .. }
+            | AgentEvent::SightResolved { ts, .. } => *ts,
         }
     }
 }
@@ -750,6 +765,18 @@ pub enum AgentEvent {
         model: String,
         reason: String,
         skipped: Vec<String>,
+        ts: i64,
+    },
+    /// The turn carried photos the run's own model cannot see, and this
+    /// pair described them on its behalf before the turn went out
+    /// (`agent::sight`). Follows `RunStarted`; `images` is how many were
+    /// described. The described attachments themselves carry `seen_by`, so
+    /// a replayed thread knows which pictures the model read as prose.
+    SightResolved {
+        run_id: String,
+        provider: String,
+        model: String,
+        images: usize,
         ts: i64,
     },
     /// The model called `userAnswerQuestion` and is paused waiting for the

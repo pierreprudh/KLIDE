@@ -25,6 +25,7 @@ pub(crate) mod permission_relay;
 mod retained;
 pub mod routing;
 mod run_core;
+pub mod sight;
 mod steering;
 pub mod subagents;
 mod tool_handlers;
@@ -721,6 +722,7 @@ async fn run_subagent_to_completion(
         max_parallel_tools: None,
         max_turns: spec.max_turns,
         preferred_models: vec![],
+        eyes: None,
         routed: None,
         command_timeout_secs: spec.command_timeout_secs,
         test_after_edit_command: None,
@@ -1901,7 +1903,7 @@ async fn run_agent_loop(
     supervisor: Arc<dyn RunSupervisor>,
     runs_dir: PathBuf,
     id: String,
-    request: StartRunRequest,
+    mut request: StartRunRequest,
     on_event: Channel<AgentEvent>,
     cancel: CancellationToken,
     provider_caller: impl AgentProviderCaller,
@@ -1942,6 +1944,14 @@ async fn run_agent_loop(
     // is no user message to record or to send — the accepted inbox is the
     // turn's input — and the thread keeps the title it had.
     let wake = resuming && request.initial_text.trim().is_empty() && request.attachments.is_empty();
+    // A photo the run's own model cannot see is described by other eyes
+    // before the turn is recorded, so the transcript and every replay carry
+    // the prose the model actually read (`agent::sight`). Nothing happens
+    // here for a turn without photos or a model that sees.
+    let sighted = sight::lend_eyes(&mut request).await;
+    if let Some(sighted) = &sighted {
+        sight::record(&mut request, sighted);
+    }
 
     let mut emit = |event: AgentEvent| -> Result<(), String> {
         let mut seq = sequence.lock().map_err(|_| "Transcript sequence unavailable")?;
@@ -2012,6 +2022,19 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
         }
+    }
+    // Recorded on every turn that borrowed eyes, first or not — each turn's
+    // photos are described anew.
+    if let Some(sight::Sighted { eyes: Some(eyes), described, .. }) = &sighted {
+        emit(AgentEvent::SightResolved {
+            run_id: id.clone(),
+            provider: eyes.provider.clone(),
+            model: eyes.model.clone(),
+            images: *described,
+            ts: now_ms(),
+        })?;
+    }
+    if !resuming {
         emit(AgentEvent::ContextSnapshot {
             run_id: id.clone(),
             snapshot: {
