@@ -302,9 +302,21 @@ export type AgentEvent =
    *  already carries the resolved provider/model); `skipped` names each
    *  candidate ranked above the pick and why it was ruled out. */
   | { type: "route_resolved"; runId: string; provider: ProviderId; model: string; reason: string; skipped: string[]; ts: number }
-  /** The turn carried photos the run's own model cannot see, and this pair
-   *  described them before the turn went out. `images` is how many. */
-  | { type: "sight_resolved"; runId: string; provider: ProviderId; model: string; images: number; ts: number };
+  /** The turn carries photos the run's own model cannot see, and this pair is
+   *  about to describe them (Rust `agent::sight`). The fold draws a running
+   *  `look_at_image` step per path until `sight_resolved` lands. */
+  | { type: "sight_started"; runId: string; provider: ProviderId; model: string; paths: string[]; ts: number }
+  /** What the eyes read: one description per photo, verbatim — the same text
+   *  the blind model receives — and one reason per photo they could not read. */
+  | {
+      type: "sight_resolved";
+      runId: string;
+      provider: ProviderId;
+      model: string;
+      described: { path: string; description: string }[];
+      dropped: { path: string; reason: string }[];
+      ts: number;
+    };
 
 export type AgentMessageView = {
   id: string;

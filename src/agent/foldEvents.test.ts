@@ -715,6 +715,77 @@ describe("foldAgentEvents", () => {
   });
 });
 
+describe("eyes for a blind model", () => {
+  const started = (paths: string[]): AgentEvent => ({
+    type: "sight_started", runId: RUN, provider: "ollama", model: "gemma4:12b", paths, ts: at(),
+  });
+  const resolved = (
+    described: { path: string; description: string }[],
+    dropped: { path: string; reason: string }[] = [],
+  ): AgentEvent => ({
+    type: "sight_resolved", runId: RUN, provider: "ollama", model: "gemma4:12b", described, dropped, ts: at(),
+  });
+
+  it("live: the step lands on the seeded bubble at once, running, then carries what the eyes read", () => {
+    const fold = createFold({ seedOpenAssistant: true });
+    fold.apply(started(["shot.png"]));
+    let rows = fold.rows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "assistant",
+      toolCalls: [{ name: "look_at_image", input: { path: "shot.png", eyes: "ollama/gemma4:12b" }, status: "started" }],
+    });
+    // While running, the projection draws the same pending row a tool gets.
+    const live = foldedRowToMsgs(rows[0], { runningPlaceholders: true });
+    expect(live[1]).toMatchObject({ role: "tool", toolName: "look_at_image", content: "Running look_at_image..." });
+
+    fold.apply(resolved([{ path: "shot.png", description: "A red banner reading EADDRINUSE." }]));
+    fold.apply(delta("The port is taken."));
+    rows = fold.rows();
+    expect(rows.map((r) => r.kind)).toEqual(["assistant", "assistant"]);
+    expect(rows[0]).toMatchObject({
+      kind: "assistant",
+      toolCalls: [{ name: "look_at_image", status: "finished", result: { content: "A red banner reading EADDRINUSE.", ok: true } }],
+    });
+    expect(rows[1]).toMatchObject({ kind: "assistant", text: "The port is taken." });
+  });
+
+  it("replay: the step waits for its user message and opens the row under it, never above", () => {
+    const rows = foldAgentEvents([
+      runStarted("ollama", "lfm2.5"),
+      started(["a.png", "b.png"]),
+      resolved([{ path: "a.png", description: "desc a" }], [{ path: "b.png", reason: "ollama/gemma4:12b could not read this image: timeout" }]),
+      userMessage("what's this?"),
+      assistantMessage("An error."),
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["user", "assistant", "assistant"]);
+    expect(rows[1]).toMatchObject({
+      kind: "assistant",
+      toolCalls: [
+        { name: "look_at_image", input: { path: "a.png" }, status: "finished", result: { content: "desc a", ok: true } },
+        { name: "look_at_image", input: { path: "b.png" }, status: "finished", result: { ok: false } },
+      ],
+    });
+    expect(rows[2]).toMatchObject({ kind: "assistant", text: "An error." });
+  });
+
+  it("a second turn's photo gets its own step, not the first turn's row", () => {
+    const rows = foldAgentEvents([
+      started(["shot.png"]),
+      resolved([{ path: "shot.png", description: "first" }]),
+      userMessage("one"),
+      assistantMessage("ok"),
+      started(["shot.png"]),
+      resolved([{ path: "shot.png", description: "second" }]),
+      userMessage("two"),
+      assistantMessage("ok again"),
+    ]);
+    const steps = rows.filter((r) => r.kind === "assistant" && r.toolCalls.length);
+    expect(steps).toHaveLength(2);
+    expect(steps.map((r) => r.kind === "assistant" && r.toolCalls[0].result?.content)).toEqual(["first", "second"]);
+  });
+});
+
 describe("a turn the app was closed on", () => {
   // The transcript of a run killed mid-turn ends on the user message: no
   // assistant_message, no run_result, no run_error — the Harness writes one

@@ -29,7 +29,9 @@
 //! (`ai_sight_eyes`). The pure parts (`pick`, `lend`) are Tauri-free and
 //! tested; `resolve` and `LiveEyes` are the async shells that feed them.
 
-use crate::agent::types::{AgentAttachment, PreferredModel, StartRunRequest};
+use crate::agent::types::{
+    AgentAttachment, PreferredModel, SightDescription, SightDrop, StartRunRequest,
+};
 use crate::providers::{self, KeySource};
 use serde::Serialize;
 use std::time::Duration;
@@ -313,18 +315,29 @@ impl Describer for LiveEyes {
 pub struct Sighted {
     /// The eyes used, when any photo was described.
     pub eyes: Option<Eyes>,
-    /// How many photos now ride as prose.
-    pub described: usize,
-    /// Photos dropped, in the context snapshot's `omitted` shape.
-    pub omitted: Vec<serde_json::Value>,
+    /// Each photo that now rides as prose, with the prose.
+    pub described: Vec<SightDescription>,
+    /// Each photo dropped, and why.
+    pub dropped: Vec<SightDrop>,
 }
 
-/// The photos on a turn nobody has described yet.
-pub fn undescribed_photos(attachments: &[AgentAttachment]) -> usize {
+impl Sighted {
+    /// The drops in the context snapshot's `omitted` shape.
+    pub fn omitted(&self) -> Vec<serde_json::Value> {
+        self.dropped
+            .iter()
+            .map(|d| serde_json::json!({ "reason": d.reason, "path": d.path }))
+            .collect()
+    }
+}
+
+/// The photos on a turn nobody has described yet, by path.
+pub fn undescribed_photos(attachments: &[AgentAttachment]) -> Vec<String> {
     attachments
         .iter()
         .filter(|a| a.data_uri.is_some() && a.seen_by.is_none())
-        .count()
+        .map(|a| a.path.clone())
+        .collect()
 }
 
 /// Describe every undescribed photo on the turn with `eyes`, in place. A
@@ -347,10 +360,10 @@ pub async fn lend<D: Describer>(
             continue;
         }
         let Some(eyes) = eyes.as_ref() else {
-            out.omitted.push(serde_json::json!({
-                "reason": "no model could see this image",
-                "path": attachment.path,
-            }));
+            out.dropped.push(SightDrop {
+                path: attachment.path,
+                reason: "no model could see this image".to_string(),
+            });
             continue;
         };
         match describer
@@ -358,32 +371,36 @@ pub async fn lend<D: Describer>(
             .await
         {
             Ok(description) => {
-                attachment.content = description;
+                attachment.content = description.clone();
                 attachment.seen_by = Some(eyes.label());
-                out.described += 1;
+                out.described.push(SightDescription {
+                    path: attachment.path.clone(),
+                    description,
+                });
                 kept.push(attachment);
             }
             Err(error) => {
-                out.omitted.push(serde_json::json!({
-                    "reason": format!("{} could not read this image: {error}", eyes.label()),
-                    "path": attachment.path,
-                }));
+                out.dropped.push(SightDrop {
+                    path: attachment.path,
+                    reason: format!("{} could not read this image: {error}", eyes.label()),
+                });
             }
         }
     }
     request.attachments = kept;
-    if out.described > 0 {
+    if !out.described.is_empty() {
         out.eyes = eyes;
     }
     out
 }
 
-/// The run loop's one call: if this turn carries photos its own model cannot
-/// see, find eyes and lend them. A turn without photos, or on a model that
-/// sees, is untouched and costs no network.
-pub async fn lend_eyes(request: &mut StartRunRequest) -> Option<Sighted> {
-    if undescribed_photos(&request.attachments) == 0 {
-        return None;
+/// The run loop's first question: which photos on this turn can the run's
+/// own model not see? Empty for a turn without photos or a model that sees —
+/// and then nothing else here runs and no network is touched.
+pub async fn blind_photos(request: &StartRunRequest) -> Vec<String> {
+    let photos = undescribed_photos(&request.attachments);
+    if photos.is_empty() {
+        return photos;
     }
     // Conservative on the unknown side, like the composer: a pair whose facts
     // cannot be read is treated as blind, and the eyes answer instead.
@@ -392,22 +409,27 @@ pub async fn lend_eyes(request: &mut StartRunRequest) -> Option<Sighted> {
         .map(|caps| caps.supports_vision)
         .unwrap_or(false);
     if sees {
-        return None;
+        Vec::new()
+    } else {
+        photos
     }
-    let eyes = resolve(
+}
+
+/// The eyes for this request's pair, from its Settings pair and its Workspace.
+pub async fn eyes_for(request: &StartRunRequest) -> Option<Eyes> {
+    resolve(
         request.eyes.as_ref(),
         (&request.provider, &request.model),
         request.workspace_root.as_deref(),
     )
-    .await;
-    Some(lend(request, eyes, &LiveEyes).await)
+    .await
 }
 
 /// Fold what lending did into the request's context snapshot, which is what
 /// `ContextSnapshot` records and the panel reads: the attachments as they now
 /// are, plus the drops. Same shape `start_run` uses for the clamp.
 pub fn record(request: &mut StartRunRequest, sighted: &Sighted) {
-    if request.context.is_none() && sighted.omitted.is_empty() && sighted.described == 0 {
+    if request.context.is_none() && sighted.dropped.is_empty() && sighted.described.is_empty() {
         return;
     }
     let mut snapshot = request
@@ -422,7 +444,7 @@ pub fn record(request: &mut StartRunRequest, sighted: &Sighted) {
             omitted: Vec::new(),
         });
     snapshot.attachments = request.attachments.clone();
-    snapshot.omitted.extend(sighted.omitted.iter().cloned());
+    snapshot.omitted.extend(sighted.omitted());
     request.context = Some(snapshot);
 }
 
@@ -590,9 +612,11 @@ mod tests {
         };
         let mut req = request(vec![document("main.rs"), photo("shot.png")]);
         let sighted = block_on(lend(&mut req, Some(eyes.clone()), &table));
-        assert_eq!(sighted.described, 1);
+        assert_eq!(sighted.described.len(), 1);
+        assert_eq!(sighted.described[0].path, "shot.png");
+        assert_eq!(sighted.described[0].description, "A terminal showing EADDRINUSE.");
         assert_eq!(sighted.eyes, Some(eyes));
-        assert!(sighted.omitted.is_empty());
+        assert!(sighted.dropped.is_empty());
         assert_eq!(req.attachments.len(), 2);
         let seen = &req.attachments[1];
         assert_eq!(seen.seen_by.as_deref(), Some("ollama/gemma3:12b"));
@@ -618,15 +642,15 @@ mod tests {
         };
         let mut req = request(vec![photo("a.png"), photo("b.png")]);
         let sighted = block_on(lend(&mut req, Some(eyes), &table));
-        assert_eq!(sighted.described, 1);
+        assert_eq!(sighted.described.len(), 1);
         assert_eq!(req.attachments.len(), 1);
         assert_eq!(req.attachments[0].path, "b.png");
-        assert_eq!(sighted.omitted.len(), 1);
-        assert_eq!(sighted.omitted[0]["path"], "a.png");
-        assert!(sighted.omitted[0]["reason"]
-            .as_str()
-            .unwrap()
+        assert_eq!(sighted.dropped.len(), 1);
+        assert_eq!(sighted.dropped[0].path, "a.png");
+        assert!(sighted.dropped[0]
+            .reason
             .starts_with("openai/gpt-5 could not read this image"));
+        assert_eq!(sighted.omitted()[0]["path"], "a.png");
     }
 
     #[test]
@@ -637,11 +661,11 @@ mod tests {
         };
         let mut req = request(vec![photo("a.png"), document("x.md")]);
         let sighted = block_on(lend(&mut req, None, &table));
-        assert_eq!(sighted.described, 0);
+        assert!(sighted.described.is_empty());
         assert_eq!(sighted.eyes, None);
         assert_eq!(req.attachments.len(), 1);
         assert_eq!(req.attachments[0].path, "x.md");
-        assert_eq!(sighted.omitted[0]["reason"], "no model could see this image");
+        assert_eq!(sighted.dropped[0].reason, "no model could see this image");
         assert!(table.asked.lock().unwrap().is_empty());
     }
 
@@ -652,14 +676,22 @@ mod tests {
         req.attachments[0].content = "desc".into();
         let sighted = Sighted {
             eyes: None,
-            described: 1,
-            omitted: vec![serde_json::json!({ "reason": "r", "path": "b.png" })],
+            described: vec![SightDescription { path: "a.png".into(), description: "desc".into() }],
+            dropped: vec![SightDrop { path: "b.png".into(), reason: "r".into() }],
         };
         record(&mut req, &sighted);
         let snapshot = req.context.expect("snapshot");
         assert_eq!(snapshot.attachments.len(), 1);
         assert_eq!(snapshot.attachments[0].seen_by.as_deref(), Some("ollama/gemma3:12b"));
         assert_eq!(snapshot.omitted.len(), 1);
+    }
+
+    #[test]
+    fn undescribed_photos_names_only_what_nobody_has_read() {
+        let mut seen = photo("seen.png");
+        seen.seen_by = Some("x/y".into());
+        let paths = undescribed_photos(&[document("a.md"), seen, photo("new.png")]);
+        assert_eq!(paths, vec!["new.png".to_string()]);
     }
 
     #[test]

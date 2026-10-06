@@ -23,6 +23,10 @@ import type { RunMessage, RunToolCall } from "../runs";
 import { estimateTokens } from "../components/ai/utils";
 import type { RunCompletion } from "./completion";
 
+/** The name the describing step wears in the thread. Not a Tool the model
+ *  can call (yet) — the harness ran it for the model (Rust `agent::sight`). */
+export const SIGHT_TOOL = "look_at_image";
+
 export type FoldedToolCall = {
   id: string;
   name: string;
@@ -278,6 +282,36 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     return host.idx;
   };
 
+  // Eyes for a blind model (Rust `agent::sight`): the describing step is drawn
+  // as a `look_at_image` tool call under the message, running until the eyes
+  // answer. On the live path the panel's seeded bubble is already open when
+  // `sight_started` arrives, so the calls land on it at once; on replay the
+  // event precedes the `user_message` it belongs to, so the calls wait and
+  // open the assistant row right after the user row — never above it.
+  let sightSeq = 0;
+  const sightIds = new Map<string, string>();
+  let pendingSight: FoldedToolCall[] = [];
+  const sightCall = (path: string, eyes: string): FoldedToolCall => {
+    const id = `sight:${++sightSeq}:${path}`;
+    sightIds.set(path, id);
+    return { id, name: SIGHT_TOOL, input: { path, eyes }, summary: path, status: "started" };
+  };
+  const placeSight = (calls: FoldedToolCall[]): number[] => {
+    if (calls.length === 0) return [];
+    // The seeded live bubble first; an open turn's last row next; else a row
+    // of its own (replay, placed right after the user row by the caller).
+    let host = open ?? (turnOpen ? lastAssistant() : null);
+    if (!host) {
+      const created = newAssistant();
+      rows.push(created);
+      host = { row: created, idx: rows.length - 1 };
+    }
+    host.row.toolCalls.push(...calls);
+    // Whatever streams next belongs under the step, not merged above it.
+    open = null;
+    return [host.idx];
+  };
+
   const apply = (event: AgentEvent, live?: FoldLiveTiming): FoldStep => {
     if (event.type === "run_result" || event.type === "run_error" || event.type === "assistant_message") turnOpen = false;
     // A turn that never settled before the next one began was killed with the
@@ -323,7 +357,51 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         attachments: event.attachments?.length ? event.attachments : undefined,
         ts: event.ts,
       });
-      return { changed: [...interrupted, rows.length - 1] };
+      const userIdx = rows.length - 1;
+      const placed = placeSight(pendingSight);
+      pendingSight = [];
+      return { changed: [...interrupted, userIdx, ...placed] };
+    }
+
+    if (event.type === "sight_started") {
+      const eyes = `${event.provider}/${event.model}`;
+      const calls = event.paths.map((path) => sightCall(path, eyes));
+      // Live: the seeded bubble (or an open turn) takes the step now. Replay:
+      // the user row has not been written yet — hold the step for it.
+      if (open || turnOpen) return { changed: placeSight(calls) };
+      pendingSight.push(...calls);
+      return { changed: [] };
+    }
+
+    if (event.type === "sight_resolved") {
+      const eyes = `${event.provider}/${event.model}`;
+      const changed: number[] = [];
+      const settle = (path: string, result: { content: string; ok: boolean }) => {
+        const id = sightIds.get(path);
+        const waiting = id ? pendingSight.find((c) => c.id === id) : undefined;
+        if (waiting) {
+          waiting.result = result;
+          waiting.status = "finished";
+          return;
+        }
+        if (id) {
+          changed.push(upsertTool(id, (t) => {
+            t.result = result;
+            t.status = "finished";
+          }));
+          return;
+        }
+        // A step the fold never saw start (an older transcript, a dropped
+        // event) still gets its row, placed the way a start would have been.
+        const call = sightCall(path, eyes);
+        call.result = result;
+        call.status = "finished";
+        if (open || turnOpen) changed.push(...placeSight([call]));
+        else pendingSight.push(call);
+      };
+      for (const d of event.described) settle(d.path, { content: d.description, ok: true });
+      for (const d of event.dropped) settle(d.path, { content: d.reason, ok: false });
+      return { changed: [...new Set(changed)] };
     }
 
     if (event.type === "assistant_delta") {

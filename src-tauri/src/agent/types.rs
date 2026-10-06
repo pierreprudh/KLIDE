@@ -168,6 +168,22 @@ pub struct StartRunRequest {
     pub routed: Option<RouteDecision>,
 }
 
+/// One photo the eyes described, for `SightResolved`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SightDescription {
+    pub path: String,
+    pub description: String,
+}
+
+/// One photo the eyes could not read, for `SightResolved`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SightDrop {
+    pub path: String,
+    pub reason: String,
+}
+
 /// One starred provider + model pair, as the picker records it.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -514,6 +530,7 @@ impl AgentEvent {
             | AgentEvent::ObserverCompleted { ts, .. }
             | AgentEvent::SteeringInjected { ts, .. }
             | AgentEvent::RouteResolved { ts, .. }
+            | AgentEvent::SightStarted { ts, .. }
             | AgentEvent::SightResolved { ts, .. } => *ts,
         }
     }
@@ -767,16 +784,28 @@ pub enum AgentEvent {
         skipped: Vec<String>,
         ts: i64,
     },
-    /// The turn carried photos the run's own model cannot see, and this
-    /// pair described them on its behalf before the turn went out
-    /// (`agent::sight`). Follows `RunStarted`; `images` is how many were
-    /// described. The described attachments themselves carry `seen_by`, so
-    /// a replayed thread knows which pictures the model read as prose.
+    /// The turn carries photos the run's own model cannot see, and this pair
+    /// is about to describe them (`agent::sight`). Follows `RunStarted`;
+    /// `paths` names the photos. The panel draws it as a running
+    /// `look_at_image` step under the message until `SightResolved` lands.
+    SightStarted {
+        run_id: String,
+        provider: String,
+        model: String,
+        paths: Vec<String>,
+        ts: i64,
+    },
+    /// What the eyes read. One entry per photo described, the description
+    /// verbatim — the same text the blind model receives — and one per photo
+    /// they could not read. The described attachments on the following
+    /// `UserMessage` carry `seen_by` too, so a replayed thread knows which
+    /// pictures the model read as prose.
     SightResolved {
         run_id: String,
         provider: String,
         model: String,
-        images: usize,
+        described: Vec<SightDescription>,
+        dropped: Vec<SightDrop>,
         ts: i64,
     },
     /// The model called `userAnswerQuestion` and is paused waiting for the
