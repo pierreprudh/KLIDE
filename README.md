@@ -64,10 +64,14 @@ Coding agents work well in terminals, but their sessions, diffs, and evidence sp
 
 ## How work moves through Klide
 
-1. Start a Klide run or open a delegate CLI
-2. Follow its status, tool calls, terminal output, and changed files
-3. Review edits and commands before they cross the workspace trust boundary
-4. Validate the result, send feedback, resume later, or hand the work to another agent
+```mermaid
+flowchart LR
+    Start[Start or resume] --> Run[Run and follow progress]
+    Run --> Review[Review tools and changes]
+    Review --> Check[Validate results]
+    Check --> Next[Resume or hand off]
+    Next --> Run
+```
 
 Klide has three capability modes:
 
@@ -153,6 +157,88 @@ ollama pull pierreprudh/klide-8b
 
 The model appears in Klide's Ollama picker after the download finishes.
 
+## Local inference
+
+### Providers
+
+| Provider | Setup | Endpoint | Managed by |
+| --- | --- | --- | --- |
+| Ollama | Install Ollama; select a downloaded model in Klide | `localhost:11434` | Klide can start and stop the server |
+| MLX | Install `mlx-lm`; start from Local Servers settings | `localhost:8080` | Klide can start and stop the server |
+| llama.cpp | Choose a model in Local Servers settings; install and start in one action | `localhost:8081` | Klide |
+| [Llama app](https://llama.app) | **Get Llama** in Local Servers settings; choose a model in Llama, then select it in Klide | `localhost:9931/v1` | Llama app; Klide discovers its models |
+| LM Studio | Start its local server; select LM Studio in Klide | `localhost:1234/v1` | LM Studio |
+
+Llama app configuration tests pass; live inference through that provider is not yet verified.
+
+### Connection flow
+
+```mermaid
+flowchart LR
+    UI[Klide chat and Focus] --> Adapter[Klide provider adapters]
+    Adapter --> Ollama[Ollama API]
+    Adapter --> OpenAI[OpenAI-compatible API]
+    OpenAI --> MLX[MLX]
+    OpenAI --> CPP[llama.cpp]
+    OpenAI --> Llama[Llama app]
+    OpenAI --> Studio[LM Studio]
+```
+
+Choose the provider in Klide, then choose a model available through that server.
+
+### llama.cpp models
+
+| Model | Quantization | Download | Estimated memory at 8k context |
+| --- | --- | ---: | ---: |
+| [Klide 8B](https://ollama.com/pierreprudh/klide-8b) | Q8_0 | 9.01 GB | 12 GB |
+| [Qwen3 8B](https://huggingface.co/Qwen/Qwen3-8B-GGUF) | Q4_K_M | 5 GB | 7.5 GB |
+| [Llama 3.2 3B](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) | Q4_K_M | 2.02 GB | 3.5 GB |
+| [Ministral 3 3B](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF) | Q4_K_M | 2.15 GB | 4 GB |
+
+Klide detects the chip, RAM and CPU cores to recommend a model, favouring smaller
+models on CPU. Memory figures estimate fit, not speed; other apps reduce available memory.
+
+| Setup detail | Behavior |
+| --- | --- |
+| Installation | Download only llama.cpp, or install and start the selected model in one action; no Homebrew or administrator password needed |
+| Runtime | Official release with verified checksum in `~/.klide/runtimes/llamacpp`; an existing `llama-server` on PATH is reused |
+| Models | Cached after download; Klide's Q8 GGUF comes from its Ollama registry layer with a pinned SHA-256 check |
+| Selection | Saved in `~/.klide/llamacpp.json`, shared by chat and Focus; stop before changing models |
+| Server ownership | Stop terminates Klide-launched servers; external servers must be stopped externally |
+| Platforms | Automatic runtime installation supports macOS; other platforms need an installed `llama-server` |
+
+### Provider benchmark
+
+**No clear performance advantage from switching engines was demonstrated.**
+
+| Measurement setup | Value |
+| --- | --- |
+| Date and machine | 2026-10-06; Apple M5, 16 GB RAM, Metal |
+| Model | Identical Klide 8.5B Q8_0 GGUF |
+| Settings | Context 8,192; output cap 256; temperature 0; seed 42; thinking disabled |
+| Method | Median of three warm trials through Klide's streaming adapters; one engine loaded at a time; loading excluded |
+
+| Task | Ollama 0.35.1 | llama.cpp 8950 | Result |
+| --- | ---: | ---: | --- |
+| Requested `read_file` call | 282 ms | 299 ms | Correct tool and path in 3/3 trials for each |
+| Short explanation | 338 ms | 323 ms | Both produced an unwanted tool call |
+| Long project summary | 289 ms | 271 ms | Both produced an unwanted tool call |
+
+| Interpretation | Limit |
+| --- | --- |
+| Tool latency | llama.cpp was about 6% slower in this small sample; insufficient to rank engines generally |
+| Failed text tasks | Timings do not represent useful text generation; model/prompt behavior needs investigation |
+| Tool parsing without supplied tools | llama.cpp exposed tool syntax as text; Ollama parsed it as a tool call |
+| Scope | Adapter benchmark; no full coding-agent workflow or workspace tool execution |
+| Comparability | Repeated prompts benefit from caching; tool templates yield different token counts; results depend on hardware and settings |
+| Unmeasured providers | MLX, LM Studio and Llama app |
+
+| Evidence | Link |
+| --- | --- |
+| Full report | [Method and limitations](scripts/local-inference/results/REPORT.md) |
+| Raw trials | [Ollama](scripts/local-inference/results/ollama.json) · [llama.cpp](scripts/local-inference/results/llamacpp.json) |
+| Reproduction | [Commands and prerequisites](scripts/local-inference/README.md) |
+
 ## Trust and architecture
 
 Klide separates the interface from the durable execution layer:
@@ -223,72 +309,8 @@ Issues and pull requests are welcome. Keep changes focused, preserve the workspa
 
 ## Acknowledgments
 
-Klide is built with [Tauri](https://v2.tauri.app), [Monaco](https://microsoft.github.io/monaco-editor/), and [xterm.js](https://xtermjs.org). Its product influences include Sinew, Ara, Cursor, Cline, Linear, and the open coding-agent ecosystem.
+Klide is built with [Tauri](https://v2.tauri.app), [Monaco](https://microsoft.github.io/monaco-editor/), and [xterm.js](https://xtermjs.org). Its product influences include Ara, Cursor, Cline, Linear, and the open coding-agent ecosystem.
 
 ## License
 
 Klide is available under the [MIT License](./LICENSE).
-
-### llama.cpp setup for your machine
-
-Settings → llama.cpp detects your Mac's chip, RAM and CPU cores and recommends
-a model with room left for the OS and other apps. Choose from four compact model cards: Klide 8B, Qwen3 8B, Meta Llama 3.2 3B,
-and Mistral Ministral 3 3B. Each shows the model link, quantization, download
-size and estimated memory use. Recommendations favour smaller models for CPU inference and use
-larger models when Apple Silicon unified memory allows it. These are hardware
-fit estimates, not measured speed benchmarks; other active workloads can reduce
-available memory.
-
-Click **Download llama.cpp** to install only the engine, or **Install & start
-selected model** to install both in one action. Klide downloads an official
-runtime into `~/.klide/runtimes/llamacpp`, verifies its release checksum, and
-launches the model you chose. No Homebrew or administrator password is needed.
-The first model download can take several minutes; later starts reuse cached
-files. Klide's published Q8 GGUF is downloaded directly from its Ollama registry
-layer and verified against its pinned SHA-256 digest. The choice is saved in `~/.klide/llamacpp.json` and appears in the chat
-and Focus model pickers. Stop the server before choosing a different model.
-
-The server listens on `127.0.0.1:8081`. Stop terminates servers launched by
-Klide; externally launched servers must be stopped externally. An existing
-`llama-server` on PATH is reused. Automatic runtime installation currently
-supports macOS; other platforms require an installed llama-server.
-
-### Llama app
-
-[Llama app](https://llama.app) is available as a separate local provider.
-Install it from **Settings → Local Servers → Get Llama**, choose a model in
-Llama, then select **Llama app** in Klide's AI panel. Klide discovers models
-through its OpenAI-compatible API at `http://127.0.0.1:9931/v1`.
-Llama manages its own server and model downloads. This integration has passed
-provider configuration tests; live inference through Llama app is not yet verified.
-
-### Local provider benchmark
-
-Measured on **2026-10-06**, using an **Apple M5 with 16 GB RAM** and Metal.
-Both engines used the identical Klide 8.5B Q8_0 GGUF, an 8,192-token context,
-temperature 0, seed 42, a 256-token output cap, and disabled thinking.
-Only one engine was loaded at a time. Results are medians of three warm trials
-through Klide's actual streaming adapters, excluding model loading.
-
-| Task | Ollama 0.35.1 | llama.cpp 8950 | Result |
-| --- | ---: | ---: | --- |
-| Requested `read_file` call | 282 ms | 299 ms | Correct tool and path in 3/3 trials for each |
-| Short explanation | 338 ms | 323 ms | Both produced an unwanted tool call |
-| Long project summary | 289 ms | 271 ms | Both produced an unwanted tool call |
-
-**These measurements show no clear performance advantage from switching engines.**
-The explanation and summary tasks failed, so their timings do not represent
-useful text-generation speed. The requested tool call was about 6% slower with
-llama.cpp in this small sample; this is insufficient to rank the engines generally.
-With no tools supplied, llama.cpp exposed tool syntax as text, while Ollama
-parsed it as a tool call. Model/prompt behavior needs investigation before a
-meaningful prose or coding-quality comparison.
-
-This is an adapter benchmark, not an end-to-end coding-agent benchmark.
-Repeated prompts benefit from prefix caching, tool templates produce slightly
-different token counts, and no workspace tools execute. MLX, LM Studio and
-Llama app were not measured. Results depend on hardware, model and settings.
-See the [full report](scripts/local-inference/results/REPORT.md),
-[raw Ollama results](scripts/local-inference/results/ollama.json),
-[raw llama.cpp results](scripts/local-inference/results/llamacpp.json), and
-[reproduction instructions](scripts/local-inference/README.md).
