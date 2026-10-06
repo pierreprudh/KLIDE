@@ -22,6 +22,9 @@ type Props = {
   worker?: ProviderId;
   detail?: string;
   externalPaths?: string[];
+  /** The Python a command would start, resolved by Rust with the exact PATH
+   *  the command gets (command_env.rs). Shown on a script's card. */
+  interpreter?: CommandInterpreter;
   onReject: () => void;
   onApproveOnce: () => void;
   /** Approve this exact command for the rest of the run (allowlist, session). */
@@ -37,6 +40,21 @@ type Props = {
    *  leave it.) Only one card on screen may hold this. */
   hotkeys?: boolean;
 };
+
+/** Mirrors Rust `command_env::Interpreter`. */
+export type CommandInterpreter = {
+  path: string;
+  version?: string | null;
+  /** The venv folder it belongs to, relative to the command's folder. */
+  venv?: string | null;
+};
+
+/** `3.12.4 · .venv`, or `3.9.6 · /usr/bin` outside a venv. */
+export function interpreterLabel(interpreter: CommandInterpreter): string {
+  const where = interpreter.venv
+    ?? interpreter.path.replace(/\/[^/]+$/, "").replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+  return [interpreter.version, where].filter(Boolean).join(" · ");
+}
 
 /** Is this key event already owned by a text field? Then the card stays out. */
 function targetIsEditable(e: KeyboardEvent): boolean {
@@ -191,6 +209,7 @@ export function InlineCommandReview({
   connector,
   detail,
   externalPaths = [],
+  interpreter,
   onReject,
   onApproveOnce,
   onApproveForRun,
@@ -277,7 +296,7 @@ export function InlineCommandReview({
         >
           {kind === "command" && !script && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
           {script && (
-            <span title="Python" style={{ display: "inline-flex", verticalAlign: "-2px", marginRight: 7 }}>
+            <span title={interpreter?.path ?? "Python"} style={{ display: "inline-flex", verticalAlign: "-2px", marginRight: 7 }}>
               <PythonMark size={13} />
             </span>
           )}
@@ -297,6 +316,16 @@ export function InlineCommandReview({
             </span>
           )}{kind === "worker" && peer && " "}
           {script ? script.head : command}
+          {script && interpreter && (
+            // Which Python this is — the version and where it lives — so the
+            // environment is answered before Run, not discovered after.
+            <span
+              title={interpreter.path}
+              style={{ marginLeft: 8, fontFamily: "var(--font-ui)", fontSize: 11, color: "var(--fg-dim)" }}
+            >
+              {interpreterLabel(interpreter)}
+            </span>
+          )}
         </span>
         {(detail || externalPaths.length > 0 || (script && script.writes.length > 0)) && (
           <span

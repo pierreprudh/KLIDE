@@ -182,6 +182,10 @@ pub fn spawn(spec: SpawnSpec<'_>) -> Result<ProcessHandle, String> {
         .arg("-c")
         .arg(spec.command)
         .current_dir(spec.cwd)
+        // The login shell's environment, the project's .venv first, no
+        // secret-named variables — command_env.rs says why.
+        .env_clear()
+        .envs(super::command_env::env_for(spec.cwd))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
