@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { FolderIcon, GitIcon, NewTaskIcon, SettingsIcon } from "../icons";
+import { FolderIcon } from "../icons";
 import { PixelNature } from "./PixelNature";
 
 type Props = {
@@ -103,79 +103,50 @@ export function WelcomeScreen({
   }, [composer]);
 
   return (
-    <div className="klide-welcome klide-welcome--split">
-      {/* ── Left pane: content ─────────────────────────────────────────── */}
-      <div className="klide-welcome-pane">
-        <div className="klide-welcome-content">
-          {/* Wordmark */}
-          <div className="klide-welcome-rise klide-welcome-wordmark" style={rise(0)}>
-            Klide
-          </div>
+    <div className="klide-welcome klide-welcome--editorial">
+      {/* ── Page: a typeset column — one solid action, the rest quiet ───── */}
+      <div className="klide-welcome-page">
+        <div className="klide-welcome-rise klide-welcome-wordmark" style={rise(0)}>
+          Klide
+        </div>
 
-          {/* Heading */}
-          <div className="klide-welcome-rise" style={{ ...rise(60), marginTop: 30 }}>
-            <h1 className="klide-welcome-title">Welcome back</h1>
-          </div>
+        <div className="klide-welcome-body">
+          <h1 className="klide-welcome-rise klide-welcome-title" style={rise(60)}>
+            {recents.length > 0 ? "Welcome back." : "Welcome to Klide."}
+          </h1>
+          <p className="klide-welcome-rise klide-welcome-sub" style={rise(100)}>
+            {recents.length > 0
+              ? "Open a project to start a conversation with Kit, or pick up where you left off."
+              : "Open a folder to start a conversation with Kit about your code."}
+          </p>
 
-          {/* Actions — one clear primary, then quieter options; even 2×2 grid */}
-          <div
-            className="klide-welcome-rise"
-            style={{
-              ...rise(120),
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 10,
-              marginTop: 28,
-            }}
-          >
-            <button
-              type="button"
-              onClick={onOpenFolder}
-              className="klide-welcome-glass-btn"
-              data-primary="true"
-              style={{ width: "100%", justifyContent: "flex-start" }}
-            >
+          <div className="klide-welcome-rise klide-welcome-actions" style={rise(140)}>
+            <button type="button" onClick={onOpenFolder} className="klide-welcome-primary">
               <FolderIcon size={15} />
               Open folder
-              <kbd className="klide-welcome-kbd" style={{ marginLeft: "auto" }}>⌘O</kbd>
+              <kbd>⌘O</kbd>
             </button>
             <button
               type="button"
               onClick={() => openComposer("new")}
-              className="klide-welcome-glass-btn"
+              className="klide-welcome-text"
               data-active={composer === "new" ? "true" : undefined}
-              style={{ width: "100%", justifyContent: "flex-start" }}
             >
-              <NewTaskIcon size={15} />
               New project
-              <kbd className="klide-welcome-kbd" style={{ marginLeft: "auto" }}>⌘N</kbd>
             </button>
             <button
               type="button"
               onClick={() => openComposer("clone")}
-              className="klide-welcome-glass-btn"
+              className="klide-welcome-text"
               data-active={composer === "clone" ? "true" : undefined}
-              style={{ width: "100%", justifyContent: "flex-start" }}
             >
-              <GitIcon size={15} />
               Clone
-              <kbd className="klide-welcome-kbd" style={{ marginLeft: "auto" }}>⌘⇧N</kbd>
-            </button>
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="klide-welcome-glass-btn"
-              data-quiet="true"
-              style={{ width: "100%", justifyContent: "flex-start" }}
-            >
-              <SettingsIcon size={14} />
-              Settings
             </button>
           </div>
 
           {/* Inline composer for New project / Clone */}
           {composer && (
-            <div className="klide-welcome-composer" style={{ marginTop: 14 }}>
+            <div className="klide-welcome-composer">
               <div className="klide-welcome-composer-row">
                 <input
                   ref={composerInputRef}
@@ -204,8 +175,7 @@ export function WelcomeScreen({
                 />
                 <button
                   type="button"
-                  className="klide-welcome-glass-btn"
-                  data-primary="true"
+                  className="klide-welcome-primary"
                   disabled={composerBusy || !composerValue.trim()}
                   onClick={submitComposer}
                 >
@@ -219,8 +189,7 @@ export function WelcomeScreen({
                 </button>
                 <button
                   type="button"
-                  className="klide-welcome-glass-btn"
-                  data-quiet="true"
+                  className="klide-welcome-text"
                   disabled={composerBusy}
                   onClick={() => setComposer(null)}
                 >
@@ -239,44 +208,24 @@ export function WelcomeScreen({
             </div>
           )}
 
-          {/* Recent */}
-          <section className="klide-welcome-rise" style={{ ...rise(180), marginTop: 44 }}>
-            <div className="klide-welcome-rlabel">
-              Recent
-              <span className="line" />
-            </div>
-
-            {recents.length === 0 ? (
-              <div aria-hidden style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {Array.from({ length: 3 }, (_, i) => (
-                  <div key={i} className="klide-welcome-rrow is-placeholder" />
-                ))}
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Recent — hairline rows; shortcut and remove revealed on hover */}
+          {recents.length > 0 && (
+            <section className="klide-welcome-rise" style={rise(180)}>
+              <div className="klide-welcome-rlabel">Recent</div>
+              <div className="klide-welcome-list">
                 {recents.map((path, i) => (
                   <div key={path} className="klide-welcome-rrow">
                     <button
                       type="button"
+                      className="klide-welcome-rrow-open"
                       onClick={() => onOpenRecent(path)}
                       title={path}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 13,
-                        background: "transparent",
-                        border: "none",
-                        padding: 0,
-                        cursor: "pointer",
-                        textAlign: "left",
-                        color: "inherit",
-                      }}
                     >
-                      <span className="klide-welcome-rrow-index">{String(i + 1).padStart(2, "0")}</span>
-                      <span className="klide-welcome-rrow-name">{folderName(path)}</span>
-                      <span className="klide-welcome-rrow-path">{parentPath(path)}</span>
+                      <span className="klide-welcome-rrow-text">
+                        <span className="klide-welcome-rrow-name">{folderName(path)}</span>
+                        <span className="klide-welcome-rrow-path">{parentPath(path)}</span>
+                      </span>
+                      <kbd className="klide-welcome-rrow-key">⌘{i + 1}</kbd>
                     </button>
                     <button
                       type="button"
@@ -290,35 +239,27 @@ export function WelcomeScreen({
                   </div>
                 ))}
               </div>
-            )}
-          </section>
-
-          {recents.length > 0 && (
-            <div
-              className="klide-welcome-rise klide-welcome-keys"
-              style={{ ...rise(240), marginTop: 26 }}
-            >
-              <span>
-                <b>⌘1</b>–<b>⌘{Math.min(recents.length, MAX_RECENTS)}</b> open a recent folder
-              </span>
-            </div>
+            </section>
           )}
+        </div>
+
+        <div className="klide-welcome-rise klide-welcome-foot" style={rise(240)}>
+          <button type="button" onClick={onOpenSettings}>
+            Settings
+          </button>
+          <span>
+            <b>⌘N</b> new · <b>⌘⇧N</b> clone
+          </span>
         </div>
       </div>
 
-      {/* ── Right pane: big-pixel nature film ──────────────────────────── */}
-      <div className="klide-welcome-stage">
-        <div className="klide-welcome-card is-nature klide-welcome-rise" style={rise(90)}>
-          <PixelNature className="klide-nature-canvas" />
-        </div>
+      {/* ── Film: a full-bleed picture plane, not a floating card ───────── */}
+      <div className="klide-welcome-film">
+        <PixelNature className="klide-nature-canvas" />
       </div>
     </div>
   );
 }
-
-
-
-
 
 function CloseIcon() {
   return (
