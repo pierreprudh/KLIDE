@@ -22,6 +22,9 @@ type Props = {
   worker?: ProviderId;
   detail?: string;
   externalPaths?: string[];
+  /** The Python a command would start, resolved by Rust with the exact PATH
+   *  the command gets (command_env.rs). Shown on a script's card. */
+  interpreter?: CommandInterpreter;
   onReject: () => void;
   onApproveOnce: () => void;
   /** Approve this exact command for the rest of the run (allowlist, session). */
@@ -37,6 +40,85 @@ type Props = {
    *  leave it.) Only one card on screen may hold this. */
   hotkeys?: boolean;
 };
+
+/** Mirrors Rust `command_env::Interpreter`. */
+export type CommandInterpreter = {
+  path: string;
+  version?: string | null;
+  /** The venv folder it belongs to, relative to the command's folder. */
+  venv?: string | null;
+};
+
+/** Where an interpreter lives: its venv (`.venv`), else its folder with the
+ *  home directory shortened (`~/.pyenv/shims`, `/usr/bin`). */
+export function interpreterPlace(interpreter: CommandInterpreter): string {
+  return interpreter.venv
+    ?? interpreter.path.replace(/\/[^/]+$/, "").replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+}
+
+const REDUCED_MOTION = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** The Python mark and `python3`; hovering them slides out, from behind the
+ *  name, which Python it is — version, then where it lives. Hidden at rest so
+ *  the card stays one quiet line. */
+function ScriptInterpreter({ head, interpreter }: { head: string; interpreter?: CommandInterpreter }) {
+  const [shown, setShown] = useState(false);
+  // The label's own width: the clip opens to exactly this, so the whole
+  // duration is spent on visible travel (a generous max-width finishes the
+  // visible part in a fraction of it and reads as a snap).
+  const [width, setWidth] = useState(0);
+  const measure = (node: HTMLSpanElement | null) => {
+    if (node && node.scrollWidth !== width) setWidth(node.scrollWidth);
+  };
+  // Opening takes its time; closing gets out of the way a little faster.
+  const timing = shown ? "600ms var(--ease-soft)" : "400ms var(--ease-soft)";
+  return (
+    <span
+      onMouseEnter={() => setShown(true)}
+      onMouseLeave={() => setShown(false)}
+      style={{ display: "inline-flex", alignItems: "baseline", maxWidth: "100%", verticalAlign: "bottom" }}
+    >
+      <span style={{ display: "inline-flex", alignSelf: "center", marginRight: 7 }}>
+        <PythonMark size={13} />
+      </span>
+      {/* The reveal clips at the name's right edge, so the label slides out
+          from behind it rather than fading in beside it. */}
+      <span>{head}</span>
+      {interpreter && (
+        <span
+          aria-label={`${interpreter.version ? `Python ${interpreter.version}, ` : ""}${interpreter.path}`}
+          style={{
+            display: "inline-block",
+            overflow: "hidden",
+            minWidth: 0,
+            width: shown ? width : 0,
+            transition: REDUCED_MOTION ? undefined : `width ${timing}`,
+          }}
+        >
+          <span
+            ref={measure}
+            style={{
+              display: "inline-flex",
+              gap: 8,
+              paddingLeft: 10,
+              whiteSpace: "nowrap",
+              fontFamily: "var(--font-ui)",
+              fontSize: 11,
+              color: "var(--fg-dim)",
+              opacity: shown ? 1 : 0,
+              transform: shown || REDUCED_MOTION ? "none" : "translateX(-40%)",
+              willChange: "transform, opacity",
+              transition: REDUCED_MOTION ? `opacity ${timing}` : `transform ${timing}, opacity ${timing}`,
+            }}
+          >
+            {interpreter.version && <span>{interpreter.version}</span>}
+            <span>{interpreterPlace(interpreter)}</span>
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
 
 /** Is this key event already owned by a text field? Then the card stays out. */
 function targetIsEditable(e: KeyboardEvent): boolean {
@@ -191,6 +273,7 @@ export function InlineCommandReview({
   connector,
   detail,
   externalPaths = [],
+  interpreter,
   onReject,
   onApproveOnce,
   onApproveForRun,
@@ -273,14 +356,9 @@ export function InlineCommandReview({
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
-          title={command}
+          title={script ? undefined : command}
         >
           {kind === "command" && !script && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
-          {script && (
-            <span title="Python" style={{ display: "inline-flex", verticalAlign: "-2px", marginRight: 7 }}>
-              <PythonMark size={13} />
-            </span>
-          )}
           {kind === "connector" && connector && (
             // The mark, then — for anything but GitHub, whose mark says it — the
             // connector's name, set apart from the tool by space, not a dot.
@@ -296,7 +374,7 @@ export function InlineCommandReview({
               <span>{peer} →</span>
             </span>
           )}{kind === "worker" && peer && " "}
-          {script ? script.head : command}
+          {script ? <ScriptInterpreter head={script.head} interpreter={interpreter} /> : command}
         </span>
         {(detail || externalPaths.length > 0 || (script && script.writes.length > 0)) && (
           <span

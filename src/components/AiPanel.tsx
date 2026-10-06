@@ -44,7 +44,7 @@ import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
 import { errMessage, providerFailureMessage } from "../errors";
 import { InlineDiffReview } from "./InlineDiffReview";
-import { InlineCommandReview } from "./InlineCommandReview";
+import { InlineCommandReview, type CommandInterpreter } from "./InlineCommandReview";
 import { conversationToConvo, deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   lensItemsForPrompt,
@@ -3080,7 +3080,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // sends {command, cwd, externalPaths, matchedAllowRule}, a network
     // capability sends whatever it declared. Everything else is typed, and the
     // Rust `frontend_mirror_matches_agent_wire` test keeps it that way.
-    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
+    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; interpreter?: CommandInterpreter | null; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
     const isCommand = !!input.command;
     // An incoming-message gate carries the sender and the text; the card shows
     // the text where the command would be and names the peer as the chat does.
@@ -3113,6 +3113,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       summary: req.summary ?? command,
       reason: req.reason ?? "",
       externalPaths: Array.isArray(input.externalPaths) ? input.externalPaths : [],
+      interpreter: isCommand ? input.interpreter ?? undefined : undefined,
       suggestedPattern: isCommand ? suggestCommandPattern(command) : undefined,
     };
   }
@@ -4709,6 +4710,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             kind={pendingPermission.kind}
             detail={pendingPermission.reason}
             externalPaths={pendingPermission.externalPaths}
+            interpreter={pendingPermission.interpreter}
             onReject={rejectCommand}
             onApproveOnce={() => approveCommand("once")}
             peer={pendingPermission.peer}

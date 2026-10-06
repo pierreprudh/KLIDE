@@ -921,6 +921,10 @@ pub fn run() {
                 }
             }
 
+            // The login shell's environment for agent commands, captured now
+            // so the first command of the session doesn't wait for it.
+            agent::command_env::warm();
+
             // Persistent delegate sessions: reconnect to (or start) the ptyd
             // daemon when the toggle was left on last session. Skipped during
             // the smoke boot so a release check never touches live sessions.

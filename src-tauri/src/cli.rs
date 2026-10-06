@@ -26,7 +26,7 @@ pub(crate) fn shell_one_line(cmd: &str, arg: &str) -> Option<String> {
     }
 }
 
-fn is_executable_file(path: &std::path::Path) -> bool {
+pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };

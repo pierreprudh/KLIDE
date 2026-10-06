@@ -47,6 +47,7 @@ function App() {
         command={"python3 - <<'PY'\nfrom pathlib import Path\np=Path('src-tauri/src/local_inference_bench.rs');s=p.read_text().replace('\"ollama\" | \"llamacpp\"','\"ollama\" | \"llamacpp\" | \"mlx\"');p.write_text(s)\nPY"}
         detail="The agent wants to run a shell command in the workspace."
         pattern="python3 *"
+        interpreter={{ path: "/Users/pierre/Documents/Private/KIDE/.venv/bin/python3", version: "3.12.4", venv: ".venv" }}
         onReject={say("denied")}
         onApproveOnce={say("ran once")}
         onApproveForRun={say("approved for run")}

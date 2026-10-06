@@ -5,6 +5,7 @@ mod stream_log;
 mod artifacts;
 mod background;
 mod process;
+pub(crate) mod command_env;
 mod observers;
 mod command_allowlist;
 mod connector_tools;
