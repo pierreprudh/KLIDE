@@ -5,8 +5,6 @@
 // composers (the AI panel's and Focus's start stage) need to agree on: when a
 // drop is still allowed, what the hint says, and how the eyes are named in
 // the UI. Kept free of React and Tauri so the rule stays one and testable.
-import { SIGHT_TOOL } from "../../agent/foldEvents";
-
 /** The pair Rust resolved as the eyes for a blind model. Mirrors `sight::Eyes`. */
 export type Eyes = {
   provider: string;
@@ -36,24 +34,24 @@ export function eyesName(eyes: Pick<Eyes, "model"> | string): string {
   return slash >= 0 ? model.slice(slash + 1) : model;
 }
 
-/** The eyes a conversation borrowed, from its `look_at_image` steps — one
- *  entry per distinct pair, with how many photos it read. Transcript
- *  evidence for the participants strip: the eyes are a participant the way a
- *  worker is, and they wear their own maker's mark. */
+/** The eyes a conversation borrowed — one entry per distinct pair, with how
+ *  many photos it read. Read off the described photos themselves (`seenBy`
+ *  on a user message's attachments): every described photo carries it, on
+ *  every transcript since the feature shipped, which the step rows cannot
+ *  say. Transcript evidence for the participants strip: the eyes are a
+ *  participant the way a worker is, and they wear their own maker's mark. */
 export function eyesOf(
-  msgs: readonly { role: string; toolCalls?: readonly { name: string; args?: unknown }[] }[],
+  msgs: readonly { role: string; attachments?: readonly { seenBy?: string; path?: string }[] }[],
 ): { provider: string; model: string; images: number }[] {
   const seen = new Map<string, { provider: string; model: string; images: number }>();
   for (const msg of msgs) {
-    if (msg.role !== "assistant") continue;
-    for (const call of msg.toolCalls ?? []) {
-      if (call.name !== SIGHT_TOOL) continue;
-      const eyes = (call.args as { eyes?: unknown } | undefined)?.eyes;
-      if (typeof eyes !== "string" || !eyes) continue;
+    if (msg.role !== "user") continue;
+    for (const attachment of msg.attachments ?? []) {
+      const eyes = attachment.seenBy;
+      if (!eyes) continue;
       const slash = eyes.indexOf("/");
       const provider = slash >= 0 ? eyes.slice(0, slash) : "";
-      const model = seenByModel(eyes);
-      const entry = seen.get(eyes) ?? { provider, model, images: 0 };
+      const entry = seen.get(eyes) ?? { provider, model: seenByModel(eyes), images: 0 };
       entry.images += 1;
       seen.set(eyes, entry);
     }

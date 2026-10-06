@@ -43,15 +43,15 @@ describe("seen_by labels", () => {
 });
 
 describe("eyesOf", () => {
-  it("lists each pair that read a photo, with how many, from the look_at_image steps", () => {
+  it("lists each pair that read a photo, with how many, from the described photos", () => {
     const msgs = [
-      { role: "user" },
-      { role: "assistant", toolCalls: [
-        { name: "look_at_image", args: { path: "a.png", eyes: "anthropic/claude-sonnet-4-6" } },
-        { name: "look_at_image", args: { path: "b.png", eyes: "anthropic/claude-sonnet-4-6" } },
-        { name: "read_file", args: { path: "x" } },
+      { role: "user", attachments: [
+        { seenBy: "anthropic/claude-sonnet-4-6" },
+        { seenBy: "anthropic/claude-sonnet-4-6" },
+        { path: "notes.md" },
       ] },
-      { role: "assistant", toolCalls: [{ name: "look_at_image", args: { path: "c.png", eyes: "ollama/gemma4:12b" } }] },
+      { role: "assistant" },
+      { role: "user", attachments: [{ seenBy: "ollama/gemma4:12b" }] },
     ];
     expect(eyesOf(msgs)).toEqual([
       { provider: "anthropic", model: "claude-sonnet-4-6", images: 2 },
@@ -60,7 +60,7 @@ describe("eyesOf", () => {
   });
 
   it("is empty for a conversation that borrowed no eyes", () => {
-    expect(eyesOf([{ role: "assistant", toolCalls: [{ name: "read_file", args: {} }] }])).toEqual([]);
+    expect(eyesOf([{ role: "user", attachments: [{ path: "shot.png" }] }, { role: "assistant" }])).toEqual([]);
   });
 });
 

@@ -498,6 +498,30 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
         viewBehind.reason = "generation-retired";
         return;
       }
+      // The eyes finished reading this turn's photos (Rust `agent::sight`).
+      // The user bubble was drawn from what the composer staged, before any
+      // model looked; the transcript's copy now says who did and what they
+      // read. Bring the bubble up to date here, so the "Described by" caption
+      // and the eyes' place in the participants strip appear live rather
+      // than on the next reload. The step row itself is the driver's.
+      if (event.type === "sight_resolved") {
+        const next = [...transcript.read()];
+        const user = next[userIndex];
+        if (user?.role === "user" && user.attachments?.length) {
+          const eyes = `${event.provider}/${event.model}`;
+          const described = new Map((event.described ?? []).map((d) => [d.path, d.description]));
+          const dropped = new Set((event.dropped ?? []).map((d) => d.path));
+          next[userIndex] = {
+            ...user,
+            attachments: user.attachments
+              .filter((a) => !(a.dataUri && dropped.has(a.path)))
+              .map((a) => a.dataUri && !a.seenBy && described.has(a.path)
+                ? { ...a, seenBy: eyes, content: described.get(a.path) ?? a.content }
+                : a),
+          };
+          commit(next);
+        }
+      }
       // Transcript events (deltas, finalized messages, tool cards) belong to
       // the turn driver; everything below is panel behaviour.
       if (driver.handleEvent(event)) return;

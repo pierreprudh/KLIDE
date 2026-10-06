@@ -399,8 +399,11 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         if (open || turnOpen) changed.push(...placeSight([call]));
         else pendingSight.push(call);
       };
-      for (const d of event.described) settle(d.path, { content: d.description, ok: true });
-      for (const d of event.dropped) settle(d.path, { content: d.reason, ok: false });
+      // A transcript from before the event carried its descriptions has
+      // neither list; the described attachments on its user message still say
+      // who looked.
+      for (const d of event.described ?? []) settle(d.path, { content: d.description, ok: true });
+      for (const d of event.dropped ?? []) settle(d.path, { content: d.reason, ok: false });
       return { changed: [...new Set(changed)] };
     }
 
