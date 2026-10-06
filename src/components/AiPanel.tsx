@@ -4817,7 +4817,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             attachments={pendingAttachments}
             onRemove={(i) => setPendingAttachments((prev) => prev.filter((_, j) => j !== i))}
             onOpenPhoto={(dataUri) => setLightboxImage(dataUri)}
-            photoNote={gate.stagedNote}
+            eyes={modelSupportsVision ? null : eyes}
           />
           <div style={{ position: "relative" }}>
           {skillToken && (

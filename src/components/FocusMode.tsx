@@ -2067,7 +2067,7 @@ function FocusComposer({
           attachments={attachments}
           onRemove={(i) => setAttachments((prev) => prev.filter((_, j) => j !== i))}
           padding="12px 14px 0"
-          photoNote={gate.stagedNote}
+          eyes={supportsVision ? null : eyes}
         />
         {dropping && attachments.length === 0 && (
           <div className="klide-focus-composer-drop-hint" aria-hidden="true">

@@ -9,7 +9,10 @@
 import { useState } from "react";
 import type { AgentAttachment as Attachment } from "../../agent/types";
 import { FileTypeIcon } from "../fileMarks";
+import { conversationMark } from "../../modelIdentity";
+import type { ProviderId } from "../../agent/types";
 import { isPhotoAttachment } from "./attachments";
+import { eyesName, type Eyes } from "./sight";
 
 const TILE = 52;
 
@@ -18,34 +21,38 @@ export function AttachmentTray({
   onRemove,
   onOpenPhoto,
   padding = "10px 12px 2px",
-  photoNote = null,
+  eyes = null,
 }: {
   attachments: readonly Attachment[];
   onRemove: (index: number) => void;
   /** Click-through on a photo — the composer's lightbox, where there is one. */
   onOpenPhoto?: (dataUri: string) => void;
   padding?: string;
-  /** What will happen to the staged photos that the person should know —
-   *  "Described by gemma3" when the model cannot see and other eyes will
-   *  read the picture for it (see ./sight.ts). Null when the model sees. */
-  photoNote?: string | null;
+  /** The model that will read the staged photos because the chosen one
+   *  cannot (see ./sight.ts): named beside the tiles, behind its maker's
+   *  mark, so the person knows who looks before they send. Null when the
+   *  chosen model sees for itself. */
+  eyes?: Eyes | null;
 }) {
   if (attachments.length === 0) return null;
   const hasPhoto = attachments.some(isPhotoAttachment);
+  const note = eyes ? `Described by ${eyesName(eyes)}` : null;
+  const mark = eyes ? conversationMark(eyes.model, eyes.provider as ProviderId, 14)?.node : null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding, alignItems: "flex-end" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding, alignItems: "center" }}>
       {attachments.map((a, i) => (
         <AttachmentTile
           key={`${a.path}-${i}`}
           attachment={a}
           onRemove={() => onRemove(i)}
           onOpen={a.dataUri && onOpenPhoto ? () => onOpenPhoto(a.dataUri as string) : undefined}
-          title={isPhotoAttachment(a) && photoNote ? photoNote : undefined}
+          title={isPhotoAttachment(a) && note ? note : undefined}
         />
       ))}
-      {hasPhoto && photoNote && (
-        <span style={{ fontSize: 11, color: "var(--fg-dim)", letterSpacing: "0.01em", userSelect: "none", paddingBottom: 2 }}>
-          {photoNote}
+      {hasPhoto && note && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--fg-dim)", letterSpacing: "0.01em", userSelect: "none", textAlign: "left" }}>
+          {mark && <span aria-hidden style={{ display: "grid", placeItems: "center", flexShrink: 0 }}>{mark}</span>}
+          {note}
         </span>
       )}
     </div>
