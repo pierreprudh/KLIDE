@@ -169,7 +169,11 @@ The model appears in Klide's Ollama picker after the download finishes.
 | [Llama app](https://llama.app) | **Llama → Llama app → Get Llama** in Local Servers settings; choose a model in Llama, then select it in Klide | `localhost:9931/v1` | Llama app; Klide discovers its models |
 | LM Studio | Start its local server; select LM Studio in Klide | `localhost:1234/v1` | LM Studio |
 
-Llama app configuration tests pass; live inference through that provider is not yet verified.
+Llama app discovers the shared GGUF cache. Set its model context to at least **16k**
+for Klide’s tool prompts; its automatic 4k choice for the tested 3B model was too small.
+Klide-managed llama.cpp starts with 16k context.
+See the [live setup and tool smoke test](scripts/local-inference/results/SMOKE.md)
+for verified behavior and the tested small model’s limitations.
 
 Local Servers groups both llama.cpp setups under **Llama**, with a **Klide / Llama app**
 switch. It remembers the selection and shows only that Llama setup in the AI and Focus provider selectors.
@@ -192,12 +196,12 @@ Choose the provider in Klide, then choose a model available through that server.
 
 ### llama.cpp models
 
-| Model | Quantization | Download | Estimated memory at 8k context |
+| Model | Quantization | Download | Estimated memory at 16k context |
 | --- | --- | ---: | ---: |
-| [Klide 8B](https://ollama.com/pierreprudh/klide-8b) | Q8_0 | 9.01 GB | 12 GB |
-| [Qwen3 8B](https://huggingface.co/Qwen/Qwen3-8B-GGUF) | Q4_K_M | 5 GB | 7.5 GB |
-| [Llama 3.2 3B](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) | Q4_K_M | 2.02 GB | 3.5 GB |
-| [Ministral 3 3B](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF) | Q4_K_M | 2.15 GB | 4 GB |
+| [Klide 8B](https://ollama.com/pierreprudh/klide-8b) | Q8_0 | 9.01 GB | 12.5 GB |
+| [Qwen3 8B](https://huggingface.co/Qwen/Qwen3-8B-GGUF) | Q4_K_M | 5 GB | 8 GB |
+| [Llama 3.2 3B](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) | Q4_K_M | 2.02 GB | 4 GB |
+| [Ministral 3 3B](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF) | Q4_K_M | 2.15 GB | 4.5 GB |
 
 Klide detects the chip, RAM and CPU cores to recommend a model, favouring smaller
 models on CPU. Memory figures estimate fit, not speed; other apps reduce available memory.

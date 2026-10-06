@@ -21,7 +21,7 @@ export function LocalServerRow({ provider }: { provider: string }) {
   if (provider === "llamaapp") return <Row
     leading={<ProviderLogo id="llamaapp" size={24} />}
     title="Llama app"
-    description="Install Llama, choose a model, then select Llama app in the AI panel. Connects on localhost:9931."
+    description="Install Llama, choose a model, then select Llama app in the AI panel. Use at least 16k model context for tools. Connects on localhost:9931."
     control={<LinkButton onClick={() => void openUrl("https://llama.app")}>Get Llama</LinkButton>}
   />;
   return provider === "llamacpp" ? <LlamaLocalSetup /> : <ManagedLocalServerRow provider={provider} />;

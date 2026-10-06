@@ -2,6 +2,8 @@
 
 ## 0.6.7 (2026-10-06)
 
+- Live local inference testing exposed a context mismatch: Klide’s tool prompt exceeded the managed llama.cpp server’s 8k limit. Managed servers now use 16k, with matching provider metadata and more conservative memory estimates. Llama app setup guidance calls out the same context requirement.
+
 - Added Llama app as a local provider with the Llama logo, model discovery on port 9931, and a download link in Local Servers settings. Llama manages its own server and models.
 - Documented the Klide Q8 model comparison between Ollama and llama.cpp on Apple M5, including per-task latency, tool-call correctness, raw results and reproduction commands. The small sample shows no clear engine advantage; failed plain-text tasks are identified explicitly.
 - Added an opt-in live benchmark through Klide’s streaming adapters. It does not execute workspace tools or run the full agent harness.
