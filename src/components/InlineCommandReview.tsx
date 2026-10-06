@@ -49,11 +49,75 @@ export type CommandInterpreter = {
   venv?: string | null;
 };
 
-/** `3.12.4 · .venv`, or `3.9.6 · /usr/bin` outside a venv. */
-export function interpreterLabel(interpreter: CommandInterpreter): string {
-  const where = interpreter.venv
+/** Where an interpreter lives: its venv (`.venv`), else its folder with the
+ *  home directory shortened (`~/.pyenv/shims`, `/usr/bin`). */
+export function interpreterPlace(interpreter: CommandInterpreter): string {
+  return interpreter.venv
     ?? interpreter.path.replace(/\/[^/]+$/, "").replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
-  return [interpreter.version, where].filter(Boolean).join(" · ");
+}
+
+const REDUCED_MOTION = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** The Python mark and `python3`; hovering them slides out, from behind the
+ *  name, which Python it is — version, then where it lives. Hidden at rest so
+ *  the card stays one quiet line. */
+function ScriptInterpreter({ head, interpreter }: { head: string; interpreter?: CommandInterpreter }) {
+  const [shown, setShown] = useState(false);
+  // The label's own width: the clip opens to exactly this, so the whole
+  // duration is spent on visible travel (a generous max-width finishes the
+  // visible part in a fraction of it and reads as a snap).
+  const [width, setWidth] = useState(0);
+  const measure = (node: HTMLSpanElement | null) => {
+    if (node && node.scrollWidth !== width) setWidth(node.scrollWidth);
+  };
+  // Opening takes its time; closing gets out of the way a little faster.
+  const timing = shown ? "600ms var(--ease-soft)" : "400ms var(--ease-soft)";
+  return (
+    <span
+      onMouseEnter={() => setShown(true)}
+      onMouseLeave={() => setShown(false)}
+      style={{ display: "inline-flex", alignItems: "baseline", maxWidth: "100%", verticalAlign: "bottom" }}
+    >
+      <span style={{ display: "inline-flex", alignSelf: "center", marginRight: 7 }}>
+        <PythonMark size={13} />
+      </span>
+      {/* The reveal clips at the name's right edge, so the label slides out
+          from behind it rather than fading in beside it. */}
+      <span>{head}</span>
+      {interpreter && (
+        <span
+          aria-label={`${interpreter.version ? `Python ${interpreter.version}, ` : ""}${interpreter.path}`}
+          style={{
+            display: "inline-block",
+            overflow: "hidden",
+            minWidth: 0,
+            width: shown ? width : 0,
+            transition: REDUCED_MOTION ? undefined : `width ${timing}`,
+          }}
+        >
+          <span
+            ref={measure}
+            style={{
+              display: "inline-flex",
+              gap: 8,
+              paddingLeft: 10,
+              whiteSpace: "nowrap",
+              fontFamily: "var(--font-ui)",
+              fontSize: 11,
+              color: "var(--fg-dim)",
+              opacity: shown ? 1 : 0,
+              transform: shown || REDUCED_MOTION ? "none" : "translateX(-40%)",
+              willChange: "transform, opacity",
+              transition: REDUCED_MOTION ? `opacity ${timing}` : `transform ${timing}, opacity ${timing}`,
+            }}
+          >
+            {interpreter.version && <span>{interpreter.version}</span>}
+            <span>{interpreterPlace(interpreter)}</span>
+          </span>
+        </span>
+      )}
+    </span>
+  );
 }
 
 /** Is this key event already owned by a text field? Then the card stays out. */
@@ -292,14 +356,9 @@ export function InlineCommandReview({
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
-          title={command}
+          title={script ? undefined : command}
         >
           {kind === "command" && !script && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
-          {script && (
-            <span title={interpreter?.path ?? "Python"} style={{ display: "inline-flex", verticalAlign: "-2px", marginRight: 7 }}>
-              <PythonMark size={13} />
-            </span>
-          )}
           {kind === "connector" && connector && (
             // The mark, then — for anything but GitHub, whose mark says it — the
             // connector's name, set apart from the tool by space, not a dot.
@@ -315,17 +374,7 @@ export function InlineCommandReview({
               <span>{peer} →</span>
             </span>
           )}{kind === "worker" && peer && " "}
-          {script ? script.head : command}
-          {script && interpreter && (
-            // Which Python this is — the version and where it lives — so the
-            // environment is answered before Run, not discovered after.
-            <span
-              title={interpreter.path}
-              style={{ marginLeft: 8, fontFamily: "var(--font-ui)", fontSize: 11, color: "var(--fg-dim)" }}
-            >
-              {interpreterLabel(interpreter)}
-            </span>
-          )}
+          {script ? <ScriptInterpreter head={script.head} interpreter={interpreter} /> : command}
         </span>
         {(detail || externalPaths.length > 0 || (script && script.writes.length > 0)) && (
           <span
