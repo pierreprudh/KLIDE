@@ -44,6 +44,16 @@ function App() {
         onApprovePattern={(p) => setSaid(`pattern ${p}`)}
       />
       <InlineCommandReview
+        command={"python3 - <<'PY'\nfrom pathlib import Path\np=Path('src-tauri/src/local_inference_bench.rs');s=p.read_text().replace('\"ollama\" | \"llamacpp\"','\"ollama\" | \"llamacpp\" | \"mlx\"');p.write_text(s)\nPY"}
+        detail="The agent wants to run a shell command in the workspace."
+        pattern="python3 *"
+        onReject={say("denied")}
+        onApproveOnce={say("ran once")}
+        onApproveForRun={say("approved for run")}
+        onApproveForProject={say("approved for project")}
+        onApprovePattern={(p) => setSaid(`pattern ${p}`)}
+      />
+      <InlineCommandReview
         kind="network"
         command="https://api.github.com"
         detail="The agent wants to reach a network target."
