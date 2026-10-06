@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A shell command that is really a Python script (`python3 - <<'PY'` or `python3 -c`) now shows as one on the approval card: the Python mark where `$` would be, the files it writes named in the reason line, and the program as highlighted code, one statement per line, first three lines until expanded. A command with anything chained after the script keeps the plain shell line, and no `python3 *` pattern is offered.
 - The Welcome card now plays a big-pixel nature film (dawn, forest, lake, meadow) on one canvas in place of the ASCII globe. The film runs at a calm 0.6× pace; scenes change through a wave of code glyphs that resolves into the next landscape. Cells stay integer-sized for crisp Retina pixels, the film pauses while the window is hidden, and Reduce motion shows a still meadow.
 
 ## 0.6.7 (2026-10-06)
