@@ -5,6 +5,8 @@
 // composers (the AI panel's and Focus's start stage) need to agree on: when a
 // drop is still allowed, what the hint says, and how the eyes are named in
 // the UI. Kept free of React and Tauri so the rule stays one and testable.
+import { SIGHT_TOOL } from "../../agent/foldEvents";
+
 /** The pair Rust resolved as the eyes for a blind model. Mirrors `sight::Eyes`. */
 export type Eyes = {
   provider: string;
@@ -32,6 +34,31 @@ export function eyesName(eyes: Pick<Eyes, "model"> | string): string {
   const model = typeof eyes === "string" ? seenByModel(eyes) : eyes.model;
   const slash = model.lastIndexOf("/");
   return slash >= 0 ? model.slice(slash + 1) : model;
+}
+
+/** The eyes a conversation borrowed, from its `look_at_image` steps — one
+ *  entry per distinct pair, with how many photos it read. Transcript
+ *  evidence for the participants strip: the eyes are a participant the way a
+ *  worker is, and they wear their own maker's mark. */
+export function eyesOf(
+  msgs: readonly { role: string; toolCalls?: readonly { name: string; args?: unknown }[] }[],
+): { provider: string; model: string; images: number }[] {
+  const seen = new Map<string, { provider: string; model: string; images: number }>();
+  for (const msg of msgs) {
+    if (msg.role !== "assistant") continue;
+    for (const call of msg.toolCalls ?? []) {
+      if (call.name !== SIGHT_TOOL) continue;
+      const eyes = (call.args as { eyes?: unknown } | undefined)?.eyes;
+      if (typeof eyes !== "string" || !eyes) continue;
+      const slash = eyes.indexOf("/");
+      const provider = slash >= 0 ? eyes.slice(0, slash) : "";
+      const model = seenByModel(eyes);
+      const entry = seen.get(eyes) ?? { provider, model, images: 0 };
+      entry.images += 1;
+      seen.set(eyes, entry);
+    }
+  }
+  return [...seen.values()];
 }
 
 /** The model half of a `seen_by` label (`provider/model`). Provider ids carry

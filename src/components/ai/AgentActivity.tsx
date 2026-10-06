@@ -5,6 +5,7 @@ import { conversationMark } from "../../modelIdentity";
 import type { PeerLink } from "./PeerLink";
 import { peerName, workerChildrenOf } from "./coordinationPeers";
 import { shellAgentsOf } from "./shellAgentEvidence";
+import { eyesName, eyesOf } from "./sight";
 import type { Conversation, Msg } from "./types";
 import type { ProviderId } from "../../agent/types";
 import { createPortal } from "react-dom";
@@ -95,6 +96,9 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
   const runs = children.key === key ? children.runs : [];
   const peers = [...new Set([...props.peers, ...runs.map((r) => r.registration.runId)])].filter((id) => id !== selfId);
   const shellAgents = useMemo(() => shellAgentsOf(msgs), [msgs]);
+  // The eyes that read a photo for this conversation's model (Rust
+  // `agent::sight`) took part in it too, and wear their maker's mark.
+  const eyes = useMemo(() => eyesOf(msgs), [msgs]);
   const index = new Map(props.index);
   // A worker child has no stored conversation of its own, so the index knows
   // nothing about it; the spawn call in this transcript says which Delegate
@@ -110,7 +114,7 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
       model: origin?.model ?? record?.model ?? worker?.model ?? null,
     });
   }
-  if (!peers.length && !shellAgents.length) return null;
+  if (!peers.length && !shellAgents.length && !eyes.length) return null;
   return <div className="ai-agent-activity" key={key} role="group" aria-label="Agents in this conversation">
     {peers.map((id) => {
       const child = runs.some((r) => r.registration.runId === id);
@@ -136,5 +140,8 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
         const count = msgs.reduce((total, msg) => total + (msg.role === "assistant" ? (msg.toolCalls ?? []).filter((call) => shellAgentsOf([{ role: "assistant", content: "", toolCalls: [call] }]).includes(name)).length : 0), 0);
         return `${count} ${count === 1 ? "request" : "requests"} · Usage unavailable`;
       }} />)}
+    {eyes.map((e) => <Participant key={`eyes:${e.provider}/${e.model}`} name={eyesName(e)}
+      mark={conversationMark(e.model, (e.provider || null) as ProviderId | null, 16)?.node ?? <AgentMark size={16} />}
+      status="Eyes" stats={() => `${e.images} ${e.images === 1 ? "image" : "images"} described · Usage unavailable`} />)}
   </div>;
 }

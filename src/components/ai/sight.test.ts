@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eyesName, eyesSettingOf, photoGate, seenByModel, type Eyes } from "./sight";
+import { eyesName, eyesOf, eyesSettingOf, photoGate, seenByModel, type Eyes } from "./sight";
 
 const local: Eyes = { provider: "ollama", model: "gemma3:12b", source: "local" };
 
@@ -39,6 +39,28 @@ describe("seen_by labels", () => {
     expect(eyesName("anthropic/claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
     expect(eyesName("openrouter/google/gemma-3-27b-it")).toBe("gemma-3-27b-it");
     expect(eyesName({ model: "gemma3:12b" })).toBe("gemma3:12b");
+  });
+});
+
+describe("eyesOf", () => {
+  it("lists each pair that read a photo, with how many, from the look_at_image steps", () => {
+    const msgs = [
+      { role: "user" },
+      { role: "assistant", toolCalls: [
+        { name: "look_at_image", args: { path: "a.png", eyes: "anthropic/claude-sonnet-4-6" } },
+        { name: "look_at_image", args: { path: "b.png", eyes: "anthropic/claude-sonnet-4-6" } },
+        { name: "read_file", args: { path: "x" } },
+      ] },
+      { role: "assistant", toolCalls: [{ name: "look_at_image", args: { path: "c.png", eyes: "ollama/gemma4:12b" } }] },
+    ];
+    expect(eyesOf(msgs)).toEqual([
+      { provider: "anthropic", model: "claude-sonnet-4-6", images: 2 },
+      { provider: "ollama", model: "gemma4:12b", images: 1 },
+    ]);
+  });
+
+  it("is empty for a conversation that borrowed no eyes", () => {
+    expect(eyesOf([{ role: "assistant", toolCalls: [{ name: "read_file", args: {} }] }])).toEqual([]);
   });
 });
 
