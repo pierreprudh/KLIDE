@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The Welcome card now plays a big-pixel nature film (dawn, forest, lake, meadow) on one canvas in place of the ASCII globe. The film runs at a calm 0.6× pace; scenes change through a wave of code glyphs that resolves into the next landscape. Cells stay integer-sized for crisp Retina pixels, the film pauses while the window is hidden, and Reduce motion shows a still meadow.
+
 ## 0.6.7 (2026-10-06)
 
 - Live local inference testing exposed a context mismatch: Klide’s tool prompt exceeded the managed llama.cpp server’s 8k limit. Managed servers now use 16k, with matching provider metadata and more conservative memory estimates. Llama app setup guidance calls out the same context requirement.
