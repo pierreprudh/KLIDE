@@ -397,6 +397,32 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         caps: HOSTED_CAPS,
         context_window: None,
     },
+    ProviderEntry {
+        id: "llamaapp",
+        label: "Llama app",
+        short_label: None,
+        group: ProviderGroup::Local,
+        wire: WireFormat::OpenAi(OpenAiConfig {
+            chat_url: "http://127.0.0.1:9931/v1/chat/completions",
+            models_url: "http://127.0.0.1:9931/v1/models",
+            include_tools: true,
+            include_usage_in_stream: true,
+            supports_reasoning_effort: false,
+            include_cost_accounting: false,
+            send_attribution: false,
+        }),
+        key: KeySource::Local,
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("local-model"),
+        presets: NO_PRESETS,
+        brand: "llamacpp",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
     // ── Hosted APIs: key required ──────────────────────────────────────
     ProviderEntry {
         id: "anthropic",
@@ -2038,6 +2064,23 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
             "mlx models should be static presets, got {:?}",
             entry.models
         );
+    }
+
+    #[test]
+    fn llama_app_uses_external_openai_server_and_model_discovery() {
+        let entry = lookup("llamaapp").expect("Llama app provider");
+        assert!(matches!(entry.key, KeySource::Local));
+        assert!(matches!(entry.models, ModelsHandler::OpenAiModels));
+        assert!(!entry.is_local_server);
+        assert_eq!(entry.default_model, Some("local-model"));
+        match entry.wire {
+            WireFormat::OpenAi(config) => {
+                assert_eq!(config.chat_url, "http://127.0.0.1:9931/v1/chat/completions");
+                assert_eq!(config.models_url, "http://127.0.0.1:9931/v1/models");
+                assert!(config.include_tools && config.include_usage_in_stream);
+            }
+            _ => panic!("Llama app must use OpenAI wire"),
+        }
     }
 
     #[test]

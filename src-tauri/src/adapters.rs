@@ -2293,3 +2293,7 @@ mod tests {
         assert!(response.tool_calls.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "local_inference_bench.rs"]
+mod local_inference_bench;

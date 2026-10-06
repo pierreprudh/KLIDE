@@ -1,6 +1,7 @@
 // Local AI servers — start/stop/status row for Ollama and MLX. Extracted
 // from SettingsPanel.tsx.
 
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { LlamaServerSetup } from "./llamaServerSetup";
 import { useEffect, useState } from "react";
 import {
@@ -8,7 +9,7 @@ import {
   startLocalProvider,
   stopLocalProvider,
 } from "../../ipc/aiProviders";
-import { Row, StatusText } from "./controls";
+import { LinkButton, Row, StatusText } from "./controls";
 import { ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import { providerDefaultModel, providerLabel } from "../../agent/providerCatalog";
@@ -16,6 +17,12 @@ import { providerDefaultModel, providerLabel } from "../../agent/providerCatalog
 /** One managed local server (`isLocalServer` on its registry row). Its name
  *  and the model it warms up with are the row's, not props. */
 export function LocalServerRow({ provider }: { provider: string }) {
+  if (provider === "llamaapp") return <Row
+    leading={<ProviderLogo id="llamaapp" size={24} />}
+    title="Llama app"
+    description="Install Llama, choose a model, then select Llama app in the AI panel. Connects on localhost:9931."
+    control={<LinkButton onClick={() => void openUrl("https://llama.app")}>Get Llama</LinkButton>}
+  />;
   return provider === "llamacpp" ? <LlamaServerSetup /> : <ManagedLocalServerRow provider={provider} />;
 }
 function ManagedLocalServerRow({ provider }: { provider: string }) {

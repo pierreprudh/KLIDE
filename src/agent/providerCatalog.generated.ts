@@ -104,6 +104,28 @@ export const PROVIDER_ROWS = [
     "contextWindow": null
   },
   {
+    "id": "llamaapp",
+    "label": "Llama app",
+    "shortLabel": null,
+    "group": "local",
+    "wire": "openai",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": "local-model",
+    "presets": [],
+    "brand": "llamacpp",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false,
+      "appendTodoUpdates": false
+    },
+    "contextWindow": null
+  },
+  {
     "id": "anthropic",
     "label": "Anthropic",
     "shortLabel": null,

@@ -1,0 +1,328 @@
+{
+  "context": 8192,
+  "maxTokens": 256,
+  "provider": "ollama",
+  "rows": [
+    {
+      "completionTokens": 3,
+      "repeat": 0,
+      "response": {
+        "content": "Ready.",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 3,
+          "contextWindow": 8192,
+          "evalDurationMs": 43,
+          "promptEvalDurationMs": 387,
+          "promptTokens": 48
+        }
+      },
+      "scenario": "warmup",
+      "seconds": 19.848762333,
+      "streamTokensPerSecond": 826.0860346574634,
+      "toolCorrect": false,
+      "ttftSeconds": 19.84513075
+    },
+    {
+      "completionTokens": 17,
+      "repeat": 0,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/components/AiPanel.tsx"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_3uzj62ke"
+          }
+        ],
+        "usage": {
+          "completionTokens": 17,
+          "contextWindow": 8192,
+          "evalDurationMs": 291,
+          "promptEvalDurationMs": 145,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 0.4636955,
+      "streamTokensPerSecond": null,
+      "toolCorrect": false,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 17,
+      "repeat": 1,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/components/AiPanel.tsx"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_7kpx40li"
+          }
+        ],
+        "usage": {
+          "completionTokens": 17,
+          "contextWindow": 8192,
+          "evalDurationMs": 286,
+          "promptEvalDurationMs": 36,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 0.328777,
+      "streamTokensPerSecond": null,
+      "toolCorrect": false,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 17,
+      "repeat": 2,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/components/AiPanel.tsx"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_0lfr56rv"
+          }
+        ],
+        "usage": {
+          "completionTokens": 17,
+          "contextWindow": 8192,
+          "evalDurationMs": 289,
+          "promptEvalDurationMs": 38,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 0.337752042,
+      "streamTokensPerSecond": null,
+      "toolCorrect": false,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 0,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/utils.ts"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_iea7umi6"
+          }
+        ],
+        "usage": {
+          "completionTokens": 13,
+          "contextWindow": 8192,
+          "evalDurationMs": 250,
+          "promptEvalDurationMs": 1566,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 1.851004667,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 1,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/utils.ts"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_w5t1e1sc"
+          }
+        ],
+        "usage": {
+          "completionTokens": 13,
+          "contextWindow": 8192,
+          "evalDurationMs": 232,
+          "promptEvalDurationMs": 37,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 0.289448167,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 2,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/utils.ts"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_tr8585lq"
+          }
+        ],
+        "usage": {
+          "completionTokens": 13,
+          "contextWindow": 8192,
+          "evalDurationMs": 220,
+          "promptEvalDurationMs": 36,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 0.268725917,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 0,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/utils.ts"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_fw7fw4zo"
+          }
+        ],
+        "usage": {
+          "completionTokens": 13,
+          "contextWindow": 8192,
+          "evalDurationMs": 228,
+          "promptEvalDurationMs": 162,
+          "promptTokens": 110
+        }
+      },
+      "scenario": "tool",
+      "seconds": 0.412054459,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 1,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/utils.ts"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_5csi1edk"
+          }
+        ],
+        "usage": {
+          "completionTokens": 13,
+          "contextWindow": 8192,
+          "evalDurationMs": 225,
+          "promptEvalDurationMs": 35,
+          "promptTokens": 110
+        }
+      },
+      "scenario": "tool",
+      "seconds": 0.264082042,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 2,
+      "response": {
+        "content": "",
+        "stopReason": "stop",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": {
+                "path": "src/utils.ts"
+              },
+              "index": 0,
+              "name": "read_file"
+            },
+            "id": "call_nbnzhd74"
+          }
+        ],
+        "usage": {
+          "completionTokens": 13,
+          "contextWindow": 8192,
+          "evalDurationMs": 237,
+          "promptEvalDurationMs": 36,
+          "promptTokens": 110
+        }
+      },
+      "scenario": "tool",
+      "seconds": 0.281702125,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    }
+  ],
+  "seed": 42,
+  "temperature": 0
+}

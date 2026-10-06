@@ -8,7 +8,7 @@ A local-first coding workspace for running local models and subscription coding 
 
 <br/>
 
-![Version](https://img.shields.io/badge/version-0.6.5-7A9F4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.7-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
 [![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
 
@@ -198,7 +198,7 @@ The v0.6 orchestration milestone itself — Missions as outcomes, budget and cap
 
 Current priorities:
 
-- Next cut: dogfood the unreleased work above, then tag v0.6.6
+- Next cut: dogfood the unreleased work above, then tag v0.6.7
 - v0.5.1: dogfood the full race/restart/permission/merge/cleanup path
 - v0.5.1: publish a signed/notarized macOS build, then validate Windows and Linux
 - v0.6: make Missions, budgets, capacity, routing, and validation contracts one dependable orchestration layer
@@ -252,3 +252,43 @@ The server listens on `127.0.0.1:8081`. Stop terminates servers launched by
 Klide; externally launched servers must be stopped externally. An existing
 `llama-server` on PATH is reused. Automatic runtime installation currently
 supports macOS; other platforms require an installed llama-server.
+
+### Llama app
+
+[Llama app](https://llama.app) is available as a separate local provider.
+Install it from **Settings → Local Servers → Get Llama**, choose a model in
+Llama, then select **Llama app** in Klide's AI panel. Klide discovers models
+through its OpenAI-compatible API at `http://127.0.0.1:9931/v1`.
+Llama manages its own server and model downloads. This integration has passed
+provider configuration tests; live inference through Llama app is not yet verified.
+
+### Local provider benchmark
+
+Measured on **2026-10-06**, using an **Apple M5 with 16 GB RAM** and Metal.
+Both engines used the identical Klide 8.5B Q8_0 GGUF, an 8,192-token context,
+temperature 0, seed 42, a 256-token output cap, and disabled thinking.
+Only one engine was loaded at a time. Results are medians of three warm trials
+through Klide's actual streaming adapters, excluding model loading.
+
+| Task | Ollama 0.35.1 | llama.cpp 8950 | Result |
+| --- | ---: | ---: | --- |
+| Requested `read_file` call | 282 ms | 299 ms | Correct tool and path in 3/3 trials for each |
+| Short explanation | 338 ms | 323 ms | Both produced an unwanted tool call |
+| Long project summary | 289 ms | 271 ms | Both produced an unwanted tool call |
+
+**These measurements show no clear performance advantage from switching engines.**
+The explanation and summary tasks failed, so their timings do not represent
+useful text-generation speed. The requested tool call was about 6% slower with
+llama.cpp in this small sample; this is insufficient to rank the engines generally.
+With no tools supplied, llama.cpp exposed tool syntax as text, while Ollama
+parsed it as a tool call. Model/prompt behavior needs investigation before a
+meaningful prose or coding-quality comparison.
+
+This is an adapter benchmark, not an end-to-end coding-agent benchmark.
+Repeated prompts benefit from prefix caching, tool templates produce slightly
+different token counts, and no workspace tools execute. MLX, LM Studio and
+Llama app were not measured. Results depend on hardware, model and settings.
+See the [full report](scripts/local-inference/results/REPORT.md),
+[raw Ollama results](scripts/local-inference/results/ollama.json),
+[raw llama.cpp results](scripts/local-inference/results/llamacpp.json), and
+[reproduction instructions](scripts/local-inference/README.md).
