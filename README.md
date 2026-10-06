@@ -164,7 +164,7 @@ The model appears in Klide's Ollama picker after the download finishes.
 | Provider | Setup | Endpoint | Managed by |
 | --- | --- | --- | --- |
 | Ollama | Install Ollama; select a downloaded model in Klide | `localhost:11434` | Klide can start and stop the server |
-| MLX | Install `mlx-lm`; start from Local Servers settings | `localhost:8080` | Klide can start and stop the server |
+| MLX-LM 0.31.3¹ | Install `mlx-lm`; start from Local Servers settings | `localhost:8080` | Klide can start and stop the server |
 | llama.cpp | Choose a model in Local Servers settings; install and start in one action | `localhost:8081` | Klide |
 | [Llama app](https://llama.app) | **Get Llama** in Local Servers settings; choose a model in Llama, then select it in Klide | `localhost:9931/v1` | Llama app; Klide discovers its models |
 | LM Studio | Start its local server; select LM Studio in Klide | `localhost:1234/v1` | LM Studio |
@@ -216,13 +216,22 @@ models on CPU. Memory figures estimate fit, not speed; other apps reduce availab
 | Date and machine | 2026-10-06; Apple M5, 16 GB RAM, Metal |
 | Model | Identical Klide 8.5B Q8_0 GGUF |
 | Settings | Context 8,192; output cap 256; temperature 0; seed 42; thinking disabled |
-| Method | Median of three warm trials through Klide's streaming adapters; one engine loaded at a time; loading excluded |
+| Method | Median of three post-warmup trials through Klide's streaming adapters; one engine loaded at a time; loading excluded |
 
-| Task | Ollama 0.35.1 | llama.cpp 8950 | Result |
-| --- | ---: | ---: | --- |
-| Requested `read_file` call | 282 ms | 299 ms | Correct tool and path in 3/3 trials for each |
-| Short explanation | 338 ms | 323 ms | Both produced an unwanted tool call |
-| Long project summary | 289 ms | 271 ms | Both produced an unwanted tool call |
+| Task | Ollama 0.35.1 | llama.cpp 8950 | MLX-LM 0.31.3¹ | Result |
+| --- | ---: | ---: | --- | --- |
+| Requested `read_file` call | 282 ms | 299 ms | 2,477 ms | Ollama/llama.cpp: 3/3 structured calls; MLX: correct call as text, 0/3 structured calls |
+| Short explanation | 338 ms | 323 ms | 5,387 ms | Ollama/llama.cpp: unwanted tool call; MLX: reasoning only at token cap |
+| Long project summary | 289 ms | 271 ms | 5,947 ms | Ollama/llama.cpp: unwanted tool call; MLX: reasoning only at token cap |
+
+¹ MLX used **LFM2.5-8B-A1B MLX 8-bit + the local Klide checkpoint 1400 LoRA**,
+not the merged Q8_0 GGUF. It emitted reasoning despite the thinking-disable request.
+These are observed request timings, **not a controlled three-engine speed ranking**.
+All MLX trials completed without HTTP errors; plain-text tasks produced no final
+answer within 256 tokens. The tool task emitted the correct pythonic call as text,
+not a structured `toolCalls` entry. This test does not establish full-harness tool failure.
+MLX had no enforced 8k context cap; the largest prompt used 2,859 tokens.
+The benchmark requested streamed usage for accounting; normal Klide MLX settings leave it off.
 
 | Interpretation | Limit |
 | --- | --- |
@@ -231,12 +240,13 @@ models on CPU. Memory figures estimate fit, not speed; other apps reduce availab
 | Tool parsing without supplied tools | llama.cpp exposed tool syntax as text; Ollama parsed it as a tool call |
 | Scope | Adapter benchmark; no full coding-agent workflow or workspace tool execution |
 | Comparability | Repeated prompts benefit from caching; tool templates yield different token counts; results depend on hardware and settings |
-| Unmeasured providers | MLX, LM Studio and Llama app |
+| MLX comparison | Measured with cached LFM2.5-8B-A1B MLX 8-bit weights plus local Klide checkpoint 1400; published GGUF equivalence unverified |
+| Other unmeasured providers | LM Studio and Llama app |
 
 | Evidence | Link |
 | --- | --- |
 | Full report | [Method and limitations](scripts/local-inference/results/REPORT.md) |
-| Raw trials | [Ollama](scripts/local-inference/results/ollama.json) · [llama.cpp](scripts/local-inference/results/llamacpp.json) |
+| Raw trials | [Ollama](scripts/local-inference/results/ollama.json) · [llama.cpp](scripts/local-inference/results/llamacpp.json) · [MLX](scripts/local-inference/results/mlx.json) |
 | Reproduction | [Commands and prerequisites](scripts/local-inference/README.md) |
 
 ## Trust and architecture

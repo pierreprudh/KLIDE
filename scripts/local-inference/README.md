@@ -14,7 +14,7 @@ An opt-in Rust test compares the Klide model through its real streaming adapters
 
 | Parameter | Required value |
 | --- | --- |
-| Model | Same Klide Q8 GGUF in both engines |
+| Model | Same Klide Q8 GGUF for Ollama/llama.cpp; MLX needs equivalent base weights and adapter (format/quantization differences must be reported) |
 | Memory | Run only one engine/model at a time |
 | Context | 8,192 tokens |
 | Output cap | 256 tokens |
@@ -23,6 +23,7 @@ An opt-in Rust test compares the Klide model through its real streaming adapters
 | Thinking | Disabled |
 | Ollama | Model `pierreprudh/klide-8b:latest` on port 11434 |
 | llama.cpp | Alias `pierreprudh/klide-8b` on port 8081; Jinja enabled; context 8192; one parallel slot |
+| MLX | MLX-format weights plus Klide adapter on port 8080; set `KLIDE_BENCH_MODEL` to the server model path or ID |
 
 ## Measurement flow
 
@@ -51,6 +52,22 @@ KLIDE_BENCH_OUTPUT=/tmp/klide-llamacpp.json \
 cargo test --manifest-path src-tauri/Cargo.toml \
   compare_klide_model_live -- --ignored --nocapture
 ```
+
+For MLX, launch `mlx_lm.server` with `--model <base-path>` and
+`--adapter-path <klide-adapter-path>` on port 8080, then run:
+
+```bash
+KLIDE_BENCH_PROVIDER=mlx \
+KLIDE_BENCH_MODEL=<base-path> \
+KLIDE_BENCH_OUTPUT=/tmp/klide-mlx.json \
+cargo test --manifest-path src-tauri/Cargo.toml \
+  compare_klide_model_live -- --ignored --nocapture
+```
+
+Thinking control may be ignored by the model/template. Inspect the output and
+record that difference before comparing latency. MLX does not enforce the same
+hard context cap in this launcher. The benchmark enables streamed usage for token
+accounting, whereas the normal Klide MLX adapter configuration leaves it disabled.
 
 ## Read the results
 

@@ -25,11 +25,20 @@ c3c0bfb58561fba0d703d7dee5836c9c019a63f48d0980723c40e28a7a97d7b8
 
 ## Results
 
-| Task | Ollama | llama.cpp | Behavior |
-| --- | ---: | ---: | --- |
-| Requested `read_file` | 282 ms | 299 ms | Correct tool and path in 3/3 trials for each engine |
-| Short explanation | 338 ms | 323 ms | Both emitted an unsolicited file tool call |
-| Long project summary | 289 ms | 271 ms | Both emitted an unsolicited file tool call |
+| Task | Ollama | llama.cpp | MLX-LM 0.31.3¹ | Behavior |
+| --- | ---: | ---: | --- | --- |
+| Requested `read_file` | 282 ms | 299 ms | 2,477 ms | Ollama/llama.cpp: 3/3 structured calls; MLX: correct call as text, 0/3 structured calls |
+| Short explanation | 338 ms | 323 ms | 5,387 ms | Ollama/llama.cpp: unwanted tool call; MLX: reasoning only at token cap |
+| Long project summary | 289 ms | 271 ms | 5,947 ms | Ollama/llama.cpp: unwanted tool call; MLX: reasoning only at token cap |
+
+¹ MLX used **LFM2.5-8B-A1B MLX 8-bit + the local Klide checkpoint 1400 LoRA**,
+not the merged Q8_0 GGUF. It emitted reasoning despite the thinking-disable request.
+These are observed request timings, **not a controlled three-engine speed ranking**.
+All MLX trials completed without HTTP errors; plain-text tasks produced no final
+answer within 256 tokens. The tool task emitted the correct pythonic call as text,
+not a structured `toolCalls` entry. This test does not establish full-harness tool failure.
+MLX had no enforced 8k context cap; the largest prompt used 2,859 tokens.
+The benchmark requested streamed usage for accounting; normal Klide MLX settings leave it off.
 
 ## Interpretation and limitations
 
@@ -45,7 +54,8 @@ c3c0bfb58561fba0d703d7dee5836c9c019a63f48d0980723c40e28a7a97d7b8
 | First-text latency | Absent for structured tool-only responses |
 | Stream throughput | Includes stream delivery overhead; not an isolated engine decode metric; not used to rank runs |
 | Loading | Excluded; startup methods differ, so warmup times are not comparable |
-| Other providers | MLX, LM Studio and Llama app were not measured |
+| MLX comparison | Measured with MLX 8-bit base plus local Klide checkpoint 1400; equivalence to published GGUF unverified |
+| Other providers | LM Studio and Llama app were not measured |
 | Cleanup | Benchmark-owned llama.cpp server stopped after measurement |
 
 ## Evidence
@@ -55,3 +65,11 @@ c3c0bfb58561fba0d703d7dee5836c9c019a63f48d0980723c40e28a7a97d7b8
 | [Reproduction instructions](../README.md) | Settings, prerequisites and commands |
 | [Ollama trials](ollama.json) | Full responses, token counts and per-trial timing |
 | [llama.cpp trials](llamacpp.json) | Full responses, token counts and per-trial timing |
+
+| MLX evidence | Value |
+| --- | --- |
+| Runtime | MLX-LM 0.31.3; MLX 0.31.2 |
+| Base revision | `947f12d8e575108151ff85561724255b43f44cac` |
+| Adapter | Local `klide-adapter-ckpt1400` |
+| Raw trials | [MLX results](mlx.json) |
+| Cleanup | Benchmark-owned MLX server stopped |
