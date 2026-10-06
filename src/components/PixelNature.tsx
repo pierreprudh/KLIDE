@@ -4,14 +4,14 @@ import { createPixelNature, type PixelNatureOptions } from "./pixelNatureEngine"
 type Props = PixelNatureOptions & { className?: string };
 
 /** The Welcome card's big-pixel nature film. Decorative: hidden from AT. */
-export function PixelNature({ className, cell, sceneSeconds, transitionSeconds }: Props) {
+export function PixelNature({ className, cell, sceneSeconds, transitionSeconds, speed }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const film = createPixelNature(canvas, { cell, sceneSeconds, transitionSeconds, still: mq.matches });
+    const film = createPixelNature(canvas, { cell, sceneSeconds, transitionSeconds, speed, still: mq.matches });
     film.start();
     const sync = () => film.setStill(mq.matches);
     mq.addEventListener("change", sync);
@@ -23,7 +23,7 @@ export function PixelNature({ className, cell, sceneSeconds, transitionSeconds }
       document.removeEventListener("visibilitychange", vis);
       film.destroy();
     };
-  }, [cell, sceneSeconds, transitionSeconds]);
+  }, [cell, sceneSeconds, transitionSeconds, speed]);
 
   return <canvas ref={canvasRef} className={className} aria-hidden />;
 }

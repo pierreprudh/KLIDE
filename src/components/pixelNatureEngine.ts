@@ -485,6 +485,8 @@ export type PixelNatureOptions = {
   transitionSeconds?: number;
   /** Render one still frame and stop (prefers-reduced-motion). */
   still?: boolean;
+  /** Film clock rate: 1 = real time. Slows holds, cuts and motion alike. */
+  speed?: number;
 };
 
 const GLYPHS = "{}[]<>()/=+*;:#01fnletmutpub&|~$";
@@ -496,6 +498,7 @@ export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOp
   const HOLD = opts.sceneSeconds ?? 7.5;
   const TRANS = opts.transitionSeconds ?? 1.7;
   const cellCss = opts.cell ?? 13;
+  const SPEED = opts.speed ?? 0.6;
 
   let cols = 0;
   let rows = 0;
@@ -598,7 +601,7 @@ export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOp
     last = ts;
     acc += dt;
     if (acc < FRAME_MS) return;
-    clock += acc / 1000;
+    clock += (acc / 1000) * SPEED;
     acc = 0;
     px += (pxTarget - px) * 0.08;
     draw();
