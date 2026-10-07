@@ -4,6 +4,7 @@ import {
   currentModeText,
   filterSlashCommands,
   goalDirectiveOf,
+  missionDirectiveOf,
   replaceSlashWord,
   skillSlashCommands,
   skillSlashName,
@@ -168,5 +169,18 @@ describe("goalDirectiveOf", () => {
     expect(goalDirectiveOf("my /goal is speed")).toBeNull();
     expect(goalDirectiveOf("/goals for Q4")).toBeNull();
     expect(goalDirectiveOf("/plan the release")).toBeNull();
+  });
+});
+
+describe("missionDirectiveOf", () => {
+  it("reads the objective after /mission", () => {
+    expect(missionDirectiveOf("/mission ship the flow card")).toEqual({ objective: "ship the flow card" });
+    expect(missionDirectiveOf("/mission")).toEqual({ objective: "" });
+  });
+  it("is not /goal and not a word in a sentence", () => {
+    expect(missionDirectiveOf("/goal ship it")).toBeNull();
+    expect(goalDirectiveOf("/mission ship it")).toBeNull();
+    expect(missionDirectiveOf("our /mission is speed")).toBeNull();
+    expect(missionDirectiveOf("/missions for Q4")).toBeNull();
   });
 });

@@ -4,6 +4,21 @@ A Goal Harness Run or a Delegate MCP client can use `mission_orchestrate` to
 find approved tasks, dispatch a worker, and inspect its exact attempt. Both
 adapters call the existing Rust Mission supervisor. No renderer must stay mounted.
 
+## Planning from a conversation
+
+`/mission <objective>` in a Work conversation asks Kit for a plan, not for the
+work. The Run calls the native Tool `plan_mission` once — title, intent, and
+3–8 tasks with ids, phases and `dependsOn` — and Rust writes the draft beside
+the Run (`.klide/missions/<id>/`, every task `dispatch: None`). The receipt
+names the Mission and the route this Run would give it (its own resolved
+provider and model, as a Delegate worker when the provider is a CLI). The
+conversation draws the draft as a card; **Approve and run** on that card is
+the operator's `mission_approve` with `autoStart`, which freezes the route
+into every task and hands the Mission to the supervisor. The card then follows
+the durable events until the Mission completes or parks, and offers the
+Accept / Reject verdict for a Delegate attempt in review. Nothing in the Tool
+can approve, route, dispatch or accept; a worker inside a Mission cannot plan.
+
 ## Workflow
 
 The operator creates and approves the Mission in Mission Control, freezing each

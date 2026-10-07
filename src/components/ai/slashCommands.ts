@@ -111,6 +111,7 @@ export const SLASH_DESC = {
   plan: "Switch to Plan mode (read-only, proposes a plan)",
   work: "Switch to Work mode (edits and commands)",
   goal: "Set a goal — the run works at it until it's done",
+  mission: "Plan a Mission — tasks you approve here, run by workers",
   mode: "Show the current mode",
   autoMode: "Auto-accept edits — apply without a prompt",
   reviewMode: "Review every edit before it applies (default)",
@@ -151,6 +152,18 @@ export type GoalDirective = { objective: string };
 
 export function goalDirectiveOf(text: string): GoalDirective | null {
   const m = text.match(/^\s*\/goal(?:\s+([\s\S]*))?$/);
+  if (m === null) return null;
+  return { objective: (m[1] ?? "").trim() };
+}
+
+/** `/mission <objective>` asks Kit for a plan, not for the work: one
+ *  `plan_mission` call writes a draft Mission the operator approves on the
+ *  card it returns. It rides in Work like `/goal`, because the Tool is
+ *  Goal-only; the text goes out as typed and the system prompt names the ask. */
+export const MISSION_PREFIX = "/mission ";
+
+export function missionDirectiveOf(text: string): GoalDirective | null {
+  const m = text.match(/^\s*\/mission(?:\s+([\s\S]*))?$/);
   if (m === null) return null;
   return { objective: (m[1] ?? "").trim() };
 }

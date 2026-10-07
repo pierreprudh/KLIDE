@@ -15,6 +15,10 @@ import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { formatElapsed, useElapsed } from "./WorkingRow";
+import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
+
+/** Mirrors `PLAN_MISSION_TOOL` in src-tauri/src/agent/tools.rs. */
+const PLAN_MISSION_TOOL = "plan_mission";
 import { MIN_STACKED_CALLS, toolCallKey, toolRunLabel } from "./toolRuns";
 import { SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
 import { isWatchable } from "./subagentWatch";
@@ -441,7 +445,19 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
   );
 }
 
-function ToolCallRow({ name, args, count = 1, result, childRunId }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string }) {
+function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null }) {
+  // A planned Mission is drawn, not printed: the card reads the draft the
+  // receipt names and carries the operator's approval. Until the receipt
+  // lands, or if the call failed, the row is an ordinary tool call.
+  const receipt = name === PLAN_MISSION_TOOL && result && !result.active ? parsePlanMissionReceipt(result.msg.content) : null;
+  if (receipt) {
+    return (
+      <>
+        <ToolCallDisclosure name={name} args={args} />
+        <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} />
+      </>
+    );
+  }
   const call =
     name === "spawn_subagent" ? (
       // The child is still going until a *real* report lands. The pending
@@ -1473,7 +1489,7 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
             calls.map((tc, index) => ({ tc, key: toolCallKey(tc, index) })),
             ({ tc }) => (COORDINATION_TOOL_NAMES.has(tc.name) ? `${tc.name}\n${JSON.stringify(tc.args ?? null)}` : null),
           ).map(({ item: { tc, key }, count }) => (
-            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} />
+            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} />
           ));
           if (!visibleContent || calls.length < MIN_STACKED_CALLS) return rows;
           const names: string[] = [];

@@ -154,7 +154,7 @@ import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
-import { EXPLAIN_PREFIX, GOAL_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, goalDirectiveOf, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
+import { EXPLAIN_PREFIX, GOAL_PREFIX, MISSION_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, goalDirectiveOf, missionDirectiveOf, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryLessons, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { listMemory } from "../memory";
@@ -1513,6 +1513,7 @@ export function AiPanel({
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectMode("plan"); setInput(""); } },
     { name: "work", desc: SLASH_DESC.work, run: () => { selectMode(goalOrPlan()); setInput(""); } },
     { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
+    { name: "mission", desc: SLASH_DESC.mission, run: () => insertSlashPrefix(MISSION_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
     { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
     { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
@@ -3350,6 +3351,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     // Nor is `/goal` with no objective after it.
     const goal = goalDirectiveOf(text);
     if (goal && !goal.objective && stagedFiles.length === 0) return;
+    // Nor is `/mission` with nothing to plan.
+    const mission = missionDirectiveOf(text);
+    if (mission && !mission.objective && stagedFiles.length === 0) return;
     // Delegate TUIs do not accept image-only turns.
     if (delegateSession && !text.trim()) return;
     if (delegateSession) {
@@ -3392,7 +3396,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // names what the lede asks (`buildSystemPrompt`).
     const requestedMode = directive
       ? directive.subagent.mode
-      : goal
+      : goal || mission
         ? "goal"
         : opts?.mode ?? nextSendMode ?? agentModeRef.current;
     const availableMode: AgentMode =
@@ -4325,7 +4329,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults, workspaceRoot })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
