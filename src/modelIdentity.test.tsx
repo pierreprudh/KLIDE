@@ -175,3 +175,36 @@ describe("makerMark", () => {
     expect(makerMark("mystery-model-9", "openrouter")).toBeNull();
   });
 });
+
+describe("Mistral family icons", () => {
+  const icon = (model: string) => {
+    const identity = modelIdentity(model);
+    if (!identity) throw new Error("no identity");
+    const Logo = identity.Logo;
+    return renderToStaticMarkup(<Logo size={14} />);
+  };
+
+  it.each([
+    ["mistral-large-4", "/mistral-models/large.svg"],
+    ["mistral-medium-latest", "/mistral-models/medium.svg"],
+    ["mistral-small-2603", "/mistral-models/small.svg"],
+    ["devstral-latest", "/mistral-models/devstral.svg"],
+    ["codestral-embed", "/mistral-models/codestral-embed.svg"],
+    ["codestral-latest", "/mistral-models/codestral.svg"],
+    ["magistral-medium-latest", "/mistral-models/magistral.svg"],
+    ["ministral-8b-latest", "/mistral-models/ministral.svg"],
+    ["mistralai/pixtral-large", "/mistral-models/pixtral.svg"],
+    ["mistral-ocr-latest", "/mistral-models/ocr.svg"],
+    ["mistral-embed", "/mistral-models/embed.svg"],
+  ])("%s wears its family icon", (model, src) => {
+    expect(icon(model)).toContain(src);
+  });
+
+  it("falls back to the M for a family with no icon", () => {
+    expect(icon("mixtral-8x22b")).toContain("/mistral-logo.png");
+  });
+
+  it("hands back one component per family, so a re-render does not remount", () => {
+    expect(modelIdentity("mistral-large-4")?.Logo).toBe(modelIdentity("mistral-large-latest")?.Logo);
+  });
+});
