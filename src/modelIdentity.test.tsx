@@ -208,3 +208,26 @@ describe("Mistral family icons", () => {
     expect(modelIdentity("mistral-large-4")?.Logo).toBe(modelIdentity("mistral-large-latest")?.Logo);
   });
 });
+
+describe("product marks", () => {
+  const markup = (model: string) => {
+    const Logo = modelIdentity(model)?.Logo;
+    if (!Logo) throw new Error("no identity");
+    return renderToStaticMarkup(<Logo size={14} />);
+  };
+
+  it.each([
+    ["gemma-3-27b", "/gemma-logo.svg", "Google"],
+    ["gemma4-12b-mtp", "/gemma-logo.svg", "Google"],
+    ["google/gemma-4-31b-it", "/gemma-logo.svg", "Google"],
+    ["grok-4.7", "/grok-logo.svg", "xAI"],
+    ["opencode-go/grok-4.6", "/grok-logo.svg", "xAI"],
+  ])("%s wears its product mark", (model, src, maker) => {
+    expect(markup(model)).toContain(src);
+    expect(modelIdentity(model)?.name).toBe(maker);
+  });
+
+  it("leaves Gemini on Google's own mark", () => {
+    expect(markup("gemini-3-pro")).not.toContain("/gemma-logo.svg");
+  });
+});
