@@ -1684,6 +1684,21 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
+/* The page is hidden as far as WebKit knows, so its animation clock is
+   stopped (main.tsx sets the attribute). A zero-length animation is already
+   past its end at time 0, so every `both`-filled entrance shows its final
+   frame instead of holding at opacity 0, and a transition lands at once
+   instead of hanging at its first value. Lifted the moment the page is
+   visible again; nothing moves while it is set, which it couldn't anyway. */
+:root[data-motion-still] *,
+:root[data-motion-still] *::before,
+:root[data-motion-still] *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
 /* Settings slider. A native <input type="range"> rather than a component
    library's: one element, real keyboard and click-on-track behaviour from the
    browser, and nothing to keep in sync. What it does not give for free is the

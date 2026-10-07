@@ -964,6 +964,12 @@ pub fn run() {
                 // on_page_load) without the window ever being shown.
                 if !smoke_test_mode() {
                     let _ = window.show();
+                    // Showing is not activating. A window shown while Klide is
+                    // not the active app can leave WebKit thinking the page is
+                    // hidden, which freezes its animation timeline at frame 0 —
+                    // the Welcome fade-ins hold at opacity 0 and the window
+                    // paints blank until something brings it to the front.
+                    let _ = window.set_focus();
                 }
             }
 
