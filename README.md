@@ -8,7 +8,7 @@ A local-first coding workspace for running local models and subscription coding 
 
 <br/>
 
-![Version](https://img.shields.io/badge/version-0.6.7-7A9F4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.8-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
 [![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
 
@@ -292,7 +292,7 @@ Since v0.6.5, main has gained the following, each under the name it shipped with
 
 Underneath, the September architecture review landed as nine merged pull requests: **one Gate subject** every permission check reads, **a Run lease** that releases everything it holds however the loop ends, **one fenced delivery** for everything the operator did not type, **a per-session bridge secret** for Delegate CLIs, **a real CSS tokenizer** in the visual sanitizer, **Rust deciding Open / Reveal / Refuse** for documents, **one process module** for every command a Run starts, **the Mission supervisor as the only dispatcher**, and **a coordination journal store that is safe across processes**.
 
-v0.6.5 — Shells, Watchers, Links is the latest tagged release (2026-09-23). A Run can start a command in the background and keep working — read what it wrote since last time, stop it, or be woken when it exits — instead of sitting on a deploy until a timer kills it. A delegated subagent is watched live in the parent conversation, and a worker that failed comes back as a failure with its checkout as Git saw it. And what an answer names is something you can open: a URL under its name in the browser, a rooted path in Finder, a file of the open project in an editor tab.
+v0.6.8 — Sight and Recovery (2026-10-07) adds image descriptions for models without vision, shared run management and crash cleanup, a calmer Memory window, terminal environment-aware agent commands, and local inference improvements.
 
 v0.6.4 — Workers, Connectors, Visuals (2026-09-20) precedes it. A Harness Run can hand a task to another CLI agent as a worker — a dispatch the operator approves, an isolated worktree, a Run of its own — instead of shelling out to `claude -p`. Klide connects to the MCP servers already configured in the tools you use. And an answer can draw: an `html` or `svg` fence renders as a sanitized, themed picture in the conversation.
 
@@ -302,7 +302,7 @@ The v0.6 orchestration milestone itself — Missions as outcomes, budget and cap
 
 Current priorities:
 
-- Next cut: dogfood the unreleased work above, then tag v0.6.7
+- Next cut: dogfood Sight image drops and background run recovery; continue the v0.6 patch line.
 - v0.5.1: dogfood the full race/restart/permission/merge/cleanup path
 - v0.5.1: publish a signed/notarized macOS build, then validate Windows and Linux
 - v0.6: make Missions, budgets, capacity, routing, and validation contracts one dependable orchestration layer
