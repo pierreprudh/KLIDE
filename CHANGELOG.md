@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.6.8 (2026-10-07)
+
+- Sight lets a model without image support borrow another model's vision. Settings can select the Eyes model; automatic selection prefers an installed local vision model. Descriptions, attribution, and usage are retained in the conversation.
+- App and background agent runs now share admission, placement, controls, and crash recovery. Panic recovery finishes the transcript and error summary before a retry can start, and releases shells and delegate sessions.
+- The Memory window separates proposals to review, saved memories, and the selected document.
+- Mistral model context windows, tools, and image support come from its model metadata. Provider and model marks have been refreshed.
+- Fixed the blank-window startup case and environment-reference defaults in API key settings.
+- Updated source-map-js to its patched version; frontend and Rust CI pass.
+
 - Agent commands now start in the environment a terminal would give them: the login shell's PATH and variables (captured once per launch, so a Finder-opened Klide no longer runs Apple's `/usr/bin/python3`), the project's `.venv` first when there is one, and no variable whose name contains `KEY`, `SECRET` or `TOKEN`. A Python script's approval card names the interpreter it will start — version and venv — before Run.
 - A shell command that is really a Python script (`python3 - <<'PY'` or `python3 -c`) now shows as one on the approval card: the Python mark where `$` would be, the files it writes named in the reason line, and the program as highlighted code, one statement per line, first three lines until expanded. A command with anything chained after the script keeps the plain shell line, and no `python3 *` pattern is offered.
 - The Welcome card now plays a big-pixel nature film in place of the ASCII globe: five scenes (dawn, forest, a lake at night, under the surface, a summer meadow), played at a calm 0.5× pace, with tile seams and a light film grain. Scenes change through a wave of code glyphs that resolves into the next landscape. Cells stay integer-sized for crisp Retina pixels, the film pauses while the window is hidden, and Reduce motion shows a still meadow.
