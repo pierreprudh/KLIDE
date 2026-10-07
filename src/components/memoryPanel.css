@@ -1,0 +1,57 @@
+/* Scoped to Memory: quiet materials, generous reading space, restrained selection. */
+.memory-window { border-radius: 12px !important; background: var(--bg) !important; }
+.memory-window > header { height: 48px !important; padding: 0 22px !important; background: var(--bg); }
+.memory-window > header > span { font-size: 13px !important; letter-spacing: -.025em !important; }
+.memory-panel { min-height: 0; background: var(--bg); color: var(--fg); font-family: var(--font-ui, inherit); }
+.memory-sidebar { background: var(--bg); }
+.memory-sidebar > div:first-child { height: 44px !important; padding: 0 14px 0 20px !important; }
+.memory-sidebar > div:first-child > span { text-transform: none !important; letter-spacing: 0 !important; font-size: 12px !important; }
+.memory-sidebar > div:last-child { padding: 4px 12px 20px !important; }
+.memory-list-item { display: block; width: 100%; text-align: left; font: inherit; padding: 12px 10px; margin: 1px 0; border: none; border-radius: 5px; background: transparent; cursor: pointer; color: var(--fg); transition: background 140ms ease; }
+.memory-list-item:hover { background: var(--bg-hover); }
+.memory-list-item[aria-pressed="true"] { background: var(--bg-hover); }
+.memory-list-item > div:first-child { font-size: 13px !important; font-weight: 500 !important; }
+.memory-list-item > div:last-child { font-family: inherit !important; }
+.memory-sidebar input { box-sizing: border-box; border-radius: 8px !important; padding: 9px 10px !important; }
+.memory-document, .memory-review { box-sizing: border-box; max-width: 760px; margin: 0 auto; padding: 30px 32px; }
+.memory-document h2 { font-size: 21px !important; letter-spacing: -.035em !important; white-space: normal !important; line-height: 1.25; }
+.memory-section > div:first-child { text-transform: none !important; letter-spacing: 0 !important; font-size: 12px !important; font-weight: 500 !important; margin-bottom: 10px !important; }
+.memory-eyebrow { font-size: 12px; font-weight: 500; color: var(--fg-subtle); text-transform: capitalize; }
+.memory-review-heading p { margin: 8px 0 24px; color: var(--fg-subtle); font-size: 13px; }
+.memory-title-input { width: 100%; box-sizing: border-box; border: none; background: transparent; color: var(--fg-strong); font: inherit; font-size: 21px; letter-spacing: -.035em; font-weight: 500; padding: 0 0 16px; }
+.memory-field { display: flex; flex-direction: column; gap: 10px; margin: 16px 0 24px; }
+.memory-field > span, .memory-rationale h3 { font-size: 12px; font-weight: 600; color: var(--fg-subtle); margin: 0; }
+.memory-field textarea { box-sizing: border-box; width: 100%; font: inherit; font-size: 14px; line-height: 1.65; color: var(--fg-strong); background: transparent; border: none; border-radius: 0; padding: 0; resize: vertical; }
+.memory-rationale { margin: 24px 0; }
+.memory-rationale p { font-size: 14px; line-height: 1.65; margin: 10px 0; color: var(--fg); }
+.memory-evidence { border-top: none; padding: 12px 0; font-size: 12px; color: var(--fg-subtle); overflow-wrap: anywhere; }
+.memory-evidence summary { cursor: pointer; font-weight: 500; }
+.memory-evidence blockquote { margin: 18px 0; padding: 0 0 0 16px; border-left: 2px solid var(--border); line-height: 1.65; white-space: pre-wrap; }
+.memory-evidence code { font-size: 11px; }
+.memory-review-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; align-items: center; border-top: none; padding-top: 12px; margin-top: 12px; }
+.memory-review-footer > span { font-size: 11px; color: var(--fg-subtle); max-width: 200px; line-height: 1.5; }
+.memory-review-footer > div { display: flex; gap: 8px; }
+.memory-primary, .memory-secondary { font: inherit; font-size: 12px; font-weight: 500; padding: 6px 10px; border-radius: 5px; cursor: pointer; }
+.memory-primary { background: var(--accent); color: var(--control-primary-fg); border: 1px solid transparent; }
+.memory-secondary { background: transparent; color: var(--fg-subtle); border: none; }
+.memory-panel button:focus-visible, .memory-panel input:focus-visible, .memory-panel textarea:focus-visible, .memory-panel summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.memory-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 720px) { .memory-sidebar { width: 220px !important; } .memory-document, .memory-review { padding: 24px 20px; } .memory-title-input { font-size: 22px; } }
+@media (max-width: 480px) { .memory-sidebar { width: 160px !important; } .memory-document, .memory-review { padding: 20px 14px; } }
+@media (prefers-reduced-motion: reduce) { .memory-list-item { transition: none; } }
+.memory-draft-row { position: relative; }
+.memory-draft-row:hover .memory-draft-meta, .memory-draft-row:focus-within .memory-draft-meta { visibility: hidden; }
+.memory-row-actions { position: absolute; bottom: 10px; right: 10px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.memory-draft-row:hover .memory-row-actions, .memory-draft-row:focus-within .memory-row-actions { opacity: 1; pointer-events: auto; }
+.memory-row-actions button { font: inherit; font-size: 11px; padding: 4px 7px; border: none; border-radius: 4px; background: transparent; color: var(--fg-subtle); cursor: pointer; }
+.memory-row-actions button:first-child { color: var(--accent); }
+.memory-row-actions button:hover { background: var(--bg-hover); color: var(--fg-strong); }
+.memory-panel button:disabled { opacity: .5; cursor: wait; }
+@media (hover: none) { .memory-row-actions { opacity: 1; pointer-events: auto; } .memory-draft-meta { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .memory-row-actions { transition: none; } }
+
+.memory-list-item > div:not(:first-child) { font-size: 11px !important; }
+.memory-document > div:nth-child(2) { display: none !important; }
+
+.memory-group-label { text-transform: none !important; letter-spacing: 0 !important; font-size: 11px !important; color: var(--fg-subtle) !important; font-weight: 400 !important; padding: 12px 10px 6px !important; }
+.memory-sidebar > div:last-child > .memory-list-item > div:last-child { display: none; }
