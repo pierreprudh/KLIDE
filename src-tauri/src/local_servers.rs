@@ -538,7 +538,7 @@ mod llama_tests {
         // Command construction needs no installed runtime when testing arguments.
         let entry = crate::providers::lookup("llamacpp").unwrap();
         assert!(entry.is_local_server);
-        assert_eq!(entry.context_window, Some(8192));
+        assert_eq!(entry.context_window, Some(16384));
         assert!(local_server_start_attempts("llamacpp") >= 1200);
         if let crate::providers::WireFormat::OpenAi(config) = entry.wire {
             assert_eq!(config.chat_url, "http://127.0.0.1:8081/v1/chat/completions");

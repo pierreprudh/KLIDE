@@ -520,6 +520,12 @@ fn new_state(data_dir: PathBuf, token: String) -> Arc<DaemonState> {
         chats.set_operation_sink(Arc::new(move |operation| {
             if let Some(state) = operations.upgrade() { state.broadcast(&Event::ChatOperation { operation }); }
         }));
+        let changes = weak.clone();
+        chats.set_change_sink(Arc::new(move |workspace_root, seq| {
+            if let Some(state) = changes.upgrade() {
+                state.broadcast(&Event::CoordinationChanged { workspace_root: workspace_root.into(), seq });
+            }
+        }));
         DaemonState {
             host: SessionHost::default(),
             chats,
@@ -889,7 +895,10 @@ mod tests {
                     assert!(!outcome.stop_requested);
                     break;
                 }
-                Event::ExternalId { .. } | Event::Chat { .. } | Event::ChatOperation { .. } => {}
+                Event::ExternalId { .. }
+                | Event::Chat { .. }
+                | Event::ChatOperation { .. }
+                | Event::CoordinationChanged { .. } => {}
             }
         }
         assert!(

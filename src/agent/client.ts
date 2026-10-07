@@ -101,14 +101,6 @@ export async function startAgentRun(
   return { runId: response.runId, done };
 }
 
-export async function submitAgentUserTurn(input: {
-  runId: string;
-  text: string;
-  attachments?: StartAgentRunInput["attachments"];
-}): Promise<void> {
-  await invoke("agent_submit_user_turn", { request: input });
-}
-
 export async function stopAgentRun(runId: string): Promise<void> {
   await invoke("agent_abort_run", { runId });
 }
