@@ -10,6 +10,9 @@ import {
 } from "./coordinationPeers";
 import { readCoordinationSnapshot, type CoordinationEnvelope, type CoordinationEnvelopeSnapshot } from "../../agent/coordination";
 import { DotGridLoader, ProviderLogo, ToolIcon } from "./icons";
+import { SIGHT_TOOL } from "../../agent/foldEvents";
+import { eyesName } from "./sight";
+import { formatCost } from "../../runs";
 import { ConnectorMark } from "../linkMark";
 import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
@@ -492,11 +495,26 @@ function repoSummary(args: unknown): string | null {
   return `${o.owner}/${o.repo}${typeof n === "number" || typeof n === "string" ? ` #${n}` : ""}`;
 }
 
+/** The eyes' step reads as who looked and what it cost — `shot.png ·
+ *  claude-sonnet-4-6 · <$0.01` — never as its JSON: the description below
+ *  is the whole point, and the usage block is bookkeeping. */
+function sightRow(name: string, args: unknown): { summary: string } | null {
+  if (name !== SIGHT_TOOL) return null;
+  const o = (args && typeof args === "object" ? args : {}) as { path?: unknown; eyes?: unknown; usage?: { costUsd?: number } };
+  const parts: string[] = [];
+  if (typeof o.path === "string" && o.path) parts.push(o.path);
+  if (typeof o.eyes === "string" && o.eyes) parts.push(eyesName(o.eyes));
+  const cost = formatCost(o.usage?.costUsd);
+  if (cost) parts.push(cost);
+  return { summary: parts.join(" · ") };
+}
+
 function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
   const command = commandArg(name, args);
-  const argsText = command ?? formatJson(args);
+  const sight = sightRow(name, args);
+  const argsText = sight ? null : command ?? formatJson(args);
   const connector = connectorRow(name, args);
-  const summary = connector ? connector.summary : summarizeArgs(args);
+  const summary = sight ? sight.summary : connector ? connector.summary : summarizeArgs(args);
   return (
     <details style={{ margin: "5px 0 -3px" }}>
       <summary

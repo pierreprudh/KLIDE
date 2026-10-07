@@ -254,7 +254,12 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
       case "tool_call_started":
       case "tool_call_finished":
       case "observer_completed":
-      case "steering_injected": {
+      case "steering_injected":
+      // The eyes for a blind model: a running `look_at_image` step while they
+      // describe the photo, then what they read. Drawn live for the same
+      // reason a tool card is — the wait is work, and it should look like it.
+      case "sight_started":
+      case "sight_resolved": {
         drainPending();
         transcript.apply(event);
         projectCommit();

@@ -38,6 +38,13 @@ pub struct AgentAttachment {
     /// attachments leave this `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_uri: Option<String>,
+    /// Set when the run's own model could not see this image and another
+    /// model described it on its behalf (`agent::sight`): `provider/model`
+    /// of those eyes. `content` then holds the description, and the
+    /// attachment rides the wire as text — `data_uri` stays only so the
+    /// thread can still draw the picture the person attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -147,11 +154,39 @@ pub struct StartRunRequest {
     /// (`agent::routing`). Ignored for a concrete Provider.
     #[serde(default)]
     pub preferred_models: Vec<PreferredModel>,
+    /// The pair Settings names as the eyes for a model that cannot see images
+    /// (Harness settings → "Eyes model"). Absent = automatic: an installed
+    /// local vision model first, then a hosted one behind a key. Read only
+    /// when a turn carries a photo the run's own model cannot see
+    /// (`agent::sight`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eyes: Option<PreferredModel>,
     /// Backend-populated: how an `auto` request was routed, so the loop can
     /// record the decision on the Transcript right after `RunStarted`. Renderer
     /// input is ignored — the router is the only writer.
     #[serde(default, skip)]
     pub routed: Option<RouteDecision>,
+}
+
+/// One photo the eyes described, for `SightResolved`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SightDescription {
+    pub path: String,
+    pub description: String,
+    /// What the eyes' turn cost — tokens, and USD when their pair is priced
+    /// (`agent_usage_from`). The run's own totals include it, so a borrowed
+    /// look is billed to the conversation that borrowed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentUsage>,
+}
+
+/// One photo the eyes could not read, for `SightResolved`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SightDrop {
+    pub path: String,
+    pub reason: String,
 }
 
 /// One starred provider + model pair, as the picker records it.
@@ -309,7 +344,7 @@ pub struct ToolResult {
 /// what their wire format exposes; the UI falls back to estimates when
 /// absent. Mirrors `crate::AiUsage` but lives in the agent protocol so the
 /// frontend can decode it without depending on a private provider type.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentUsage {
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -505,7 +540,9 @@ impl AgentEvent {
             | AgentEvent::AdvisorResolved { ts, .. }
             | AgentEvent::ObserverCompleted { ts, .. }
             | AgentEvent::SteeringInjected { ts, .. }
-            | AgentEvent::RouteResolved { ts, .. } => *ts,
+            | AgentEvent::RouteResolved { ts, .. }
+            | AgentEvent::SightStarted { ts, .. }
+            | AgentEvent::SightResolved { ts, .. } => *ts,
         }
     }
 }
@@ -756,6 +793,30 @@ pub enum AgentEvent {
         model: String,
         reason: String,
         skipped: Vec<String>,
+        ts: i64,
+    },
+    /// The turn carries photos the run's own model cannot see, and this pair
+    /// is about to describe them (`agent::sight`). Follows `RunStarted`;
+    /// `paths` names the photos. The panel draws it as a running
+    /// `look_at_image` step under the message until `SightResolved` lands.
+    SightStarted {
+        run_id: String,
+        provider: String,
+        model: String,
+        paths: Vec<String>,
+        ts: i64,
+    },
+    /// What the eyes read. One entry per photo described, the description
+    /// verbatim — the same text the blind model receives — and one per photo
+    /// they could not read. The described attachments on the following
+    /// `UserMessage` carry `seen_by` too, so a replayed thread knows which
+    /// pictures the model read as prose.
+    SightResolved {
+        run_id: String,
+        provider: String,
+        model: String,
+        described: Vec<SightDescription>,
+        dropped: Vec<SightDrop>,
         ts: i64,
     },
     /// The model called `userAnswerQuestion` and is paused waiting for the

@@ -140,8 +140,8 @@ fn clamp_document(
 pub(super) fn append_attachments(content: &mut String, attachments: &[AgentAttachment]) {
     let attached = attachments
         .iter()
-        .filter(|a| a.data_uri.is_none())
-        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
+        .filter(|a| rides_as_text(a))
+        .map(attachment_text_block)
         .collect::<Vec<_>>()
         .join("\n\n");
     if attached.is_empty() {
@@ -165,12 +165,32 @@ pub(super) fn user_provider_message(
     let mut message = serde_json::json!({ "role": "user", "content": content });
     let images: Vec<String> = attachments
         .iter()
+        .filter(|a| !rides_as_text(a))
         .filter_map(|a| a.data_uri.clone())
         .collect();
     if !images.is_empty() {
         message["images"] = serde_json::json!(images);
     }
     message
+}
+
+/// Whether an attachment reaches the model as prose. A document always does;
+/// a photo does only once other eyes have described it (`seen_by`), because
+/// the run's own model cannot take the bytes.
+pub(super) fn rides_as_text(attachment: &AgentAttachment) -> bool {
+    attachment.data_uri.is_none() || attachment.seen_by.is_some()
+}
+
+/// One attachment as the model reads it. A described photo says so up front,
+/// so the model neither claims to have seen the picture nor asks for it.
+fn attachment_text_block(attachment: &AgentAttachment) -> String {
+    match &attachment.seen_by {
+        Some(eyes) => format!(
+            "Image: {}\n(You cannot see images. {} looked at this one for you and described it below. Treat the description as the picture; do not ask for the image.)\n```\n{}\n```",
+            attachment.path, eyes, attachment.content
+        ),
+        None => format!("File: {}\n```\n{}\n```", attachment.path, attachment.content),
+    }
 }
 
 /// The system message that stands in for everything before a compaction
@@ -721,6 +741,7 @@ mod tests {
             content: String::new(),
             mime: Some(mime.to_string()),
             data_uri: Some(format!("data:{mime};base64,{}", "A".repeat(chars))),
+            seen_by: None,
         }
     }
 
@@ -730,7 +751,27 @@ mod tests {
             content: content.to_string(),
             mime: None,
             data_uri: None,
+            seen_by: None,
         }
+    }
+
+    /// A described photo rides the wire as prose, never as bytes: the model
+    /// it is for cannot take them, and the picture stays only for the thread.
+    #[test]
+    fn a_described_photo_rides_as_text_not_as_an_image() {
+        let mut seen = photo("shot.png", "image/png", 40);
+        seen.content = "A red error banner reading 'EADDRINUSE'.".to_string();
+        seen.seen_by = Some("ollama/gemma3:12b".to_string());
+        let message = user_provider_message("why does this fail?", &[seen, photo("raw.png", "image/png", 40)]);
+        let content = message["content"].as_str().unwrap();
+        assert!(content.contains("Image: shot.png"), "{content}");
+        assert!(content.contains("gemma3:12b looked at this one"), "{content}");
+        assert!(content.contains("EADDRINUSE"), "{content}");
+        // Only the photo nobody described still rides the images array.
+        let images = message["images"].as_array().unwrap();
+        assert_eq!(images.len(), 1);
+        assert!(images[0].as_str().unwrap().contains("AAAA"));
+        assert!(!content.contains("raw.png"));
     }
 
     fn reasons(omitted: &[serde_json::Value]) -> Vec<String> {

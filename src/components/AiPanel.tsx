@@ -26,6 +26,7 @@ import {
   LOCAL_MODEL_CHANGED_EVENT,
   listProviderModels,
   readModelCapabilities,
+  resolveEyes,
   readModelPricing,
   readLocalProviderStatus,
   readProviderKeyStatus,
@@ -143,6 +144,7 @@ import { allFavModels, favModelsFor } from "../favModels";
 import { conversationMark } from "../modelIdentity";
 import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
+import { eyesName, eyesSettingOf, photoGate, type Eyes } from "./ai/sight";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
@@ -342,6 +344,8 @@ type AiHarnessSettings = {
   autoMemoryOnRunDone?: boolean;
   advisorProvider?: string;
   advisorModel?: string;
+  eyesProvider?: string;
+  eyesModel?: string;
 };
 
 
@@ -1095,6 +1099,10 @@ export function AiPanel({
   // and an `ultra`), and a level outside it is one the CLI rejects.
   const [modelReflectionLevels, setModelReflectionLevels] = useState<string[]>([]);
   const [modelSupportsVision, setModelSupportsVision] = useState(false);
+  // Who describes a photo when this model cannot see one (Rust `agent::sight`),
+  // or null when nothing can — then a photo is refused as before. Asked only
+  // for a blind model; a model that sees needs no eyes.
+  const [eyes, setEyes] = useState<Eyes | null>(null);
   // A saved transcript is view-only until the user sends again. In particular,
   // don't let Ollama's reflection probe or historical token-count pass load a
   // cold model merely because the user browsed history.
@@ -1737,7 +1745,7 @@ export function AiPanel({
   async function addFiles(files: File[]) {
     if (!canAttachFiles || files.length === 0) return;
     const { attachments, notices } = await stageFiles(files, {
-      allowPhotos: modelSupportsVision,
+      allowPhotos: gate.allowPhotos,
       alreadyStaged: pendingAttachments.length,
       alreadyImageBytes: stagedImageBytes(pendingAttachments),
     });
@@ -2826,12 +2834,38 @@ This user request requires workspace inspection. Before answering, you MUST call
     setModelReflectionLevels(inspection.reflectionLevels);
     setModelSupportsVision(inspection.supportsVision);
     setContextLimit(inspection.contextLimit);
-    // Losing vision (a model switch) invalidates staged photos only. The
-    // documents alongside them are text, and every model still reads those.
-    if (!inspection.supportsVision) {
-      setPendingAttachments((prev) => prev.filter((a) => !isPhotoAttachment(a)));
-    }
+    // Losing vision (a model switch) no longer strands a staged photo by
+    // itself: the eyes effect below re-asks who could describe it, and drops
+    // the photos only when the answer is nobody. Documents are text and
+    // reach every model regardless.
   }
+
+  // Eyes follow the model. A blind pair asks Rust who would describe its
+  // photos — the Settings pair, an installed local vision model, or a hosted
+  // default behind a key — and a staged photo survives only if someone can.
+  const eyesSetting = eyesSettingOf(harnessSettings);
+  const eyesSettingKey = eyesSetting ? `${eyesSetting.provider}/${eyesSetting.model}` : "";
+  useEffect(() => {
+    if (modelSupportsVision || providerDelegatesWork) {
+      setEyes(null);
+      return;
+    }
+    let cancelled = false;
+    resolveEyes(provider, model, eyesSetting, workspaceRoot)
+      .then((found) => {
+        if (cancelled) return;
+        setEyes(found);
+        if (!found) setPendingAttachments((prev) => prev.filter((a) => !isPhotoAttachment(a)));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setEyes(null);
+        setPendingAttachments((prev) => prev.filter((a) => !isPhotoAttachment(a)));
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, model, modelSupportsVision, providerDelegatesWork, eyesSettingKey, workspaceRoot]);
+  const gate = photoGate(modelSupportsVision, eyes);
 
   async function activateModelInspectionForSend(): Promise<ModelInspection> {
     if (!modelActivationDeferred || !isLocalProvider) {
@@ -3178,6 +3212,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       // Stars are the router's strongest preference and live only in this
       // renderer's storage, so an `auto` turn carries them along.
       preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
+      // The Settings pair for a blind model's eyes rides every turn; Rust
+      // reads it only when a photo needs describing.
+      eyes: eyesSettingOf(harnessSettings),
     };
   }
 
@@ -3758,7 +3795,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       }}>
       {fileDragOver && canAttachFiles && (
         <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 45, pointerEvents: "none", display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--accent-soft) 55%, transparent)", border: "2px dashed var(--accent)", borderRadius: "inherit" }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", background: "var(--bg-elevated)", padding: "6px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>{modelSupportsVision ? "Drop an image or document to attach" : "Drop a document to attach"}</div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", background: "var(--bg-elevated)", padding: "6px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>{gate.dropHint}</div>
         </div>
       )}
       {variant !== "focus" ? (
@@ -4058,13 +4095,16 @@ This user request requires workspace inspection. Before answering, you MUST call
                 {asker}
               </div>
             );
+            // A photo the model read as prose, because other eyes described
+            // it (Rust `agent::sight`). Named under the strip, once.
+            const seenBy = imageAtts.find((a) => a.seenBy)?.seenBy;
             const imagesBlock = imageAtts.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end", maxWidth: hasText ? "88%" : "100%", paddingRight: hasText ? askerGutter : 0, marginBottom: hasText || docAtts.length > 0 ? 6 : 0 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end", alignItems: "flex-end", maxWidth: hasText ? "88%" : "100%", paddingRight: hasText ? askerGutter : 0, marginBottom: hasText || docAtts.length > 0 ? 6 : 0 }}>
                 {imageAtts.map((a, gi) => (
                   <button
                     key={gi}
                     type="button"
-                    title="Open image"
+                    title={a.seenBy ? `Open image — described for the model by ${eyesName(a.seenBy)}` : "Open image"}
                     aria-label={`Open ${a.path || "image"}`}
                     onClick={() => setLightboxImage(a.dataUri ?? null)}
                     style={{ padding: 0, width: 92, height: 92, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", background: "var(--bg-elevated)", cursor: "zoom-in", flexShrink: 0, display: "block" }}
@@ -4072,6 +4112,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                     <img src={a.dataUri} alt={a.path || "Attached image"} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                   </button>
                 ))}
+                {seenBy && (
+                  <div style={{ flexBasis: "100%", textAlign: "right", fontSize: 11, color: "var(--fg-dim)", letterSpacing: "0.01em", userSelect: "none", marginTop: -2 }}>
+                    Described by {eyesName(seenBy)}
+                  </div>
+                )}
               </div>
             );
             const omittedBlock = omittedAtts.length > 0 && (
@@ -4778,6 +4823,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             attachments={pendingAttachments}
             onRemove={(i) => setPendingAttachments((prev) => prev.filter((_, j) => j !== i))}
             onOpenPhoto={(dataUri) => setLightboxImage(dataUri)}
+            eyes={modelSupportsVision ? null : eyes}
           />
           <div style={{ position: "relative" }}>
           {skillToken && (
@@ -4901,15 +4947,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                           photo or document from anywhere on disk. */}
                       <button type="button" role="menuitem" disabled={!canAttachFiles}
                         onClick={() => { closeModeMenu(); filePickerRef.current?.click(); }}
-                        title={canAttachFiles
-                          ? modelSupportsVision
-                            ? "Attach a photo or a text document"
-                            : `${model} can't see images — attach a text document`
-                          : "This CLI takes text only"}
+                        title={canAttachFiles ? gate.menuTitle : "This CLI takes text only"}
                         style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", color: canAttachFiles ? "var(--fg)" : "var(--fg-dim)", font: "inherit", fontSize: 13, cursor: canAttachFiles ? "pointer" : "default" }}
                         onMouseEnter={(e) => { if (canAttachFiles) e.currentTarget.style.background = "var(--bg-hover)"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                        <span style={{ flex: 1, textAlign: "left" }}>{modelSupportsVision ? "Photo or document" : "Document"}</span>
+                        <span style={{ flex: 1, textAlign: "left" }}>{gate.menuLabel}</span>
                         <AttachIcon size={14} />
                       </button>
                       <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />

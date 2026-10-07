@@ -9,7 +9,10 @@
 import { useState } from "react";
 import type { AgentAttachment as Attachment } from "../../agent/types";
 import { FileTypeIcon } from "../fileMarks";
+import { conversationMark } from "../../modelIdentity";
+import type { ProviderId } from "../../agent/types";
 import { isPhotoAttachment } from "./attachments";
+import { eyesName, type Eyes } from "./sight";
 
 const TILE = 52;
 
@@ -18,24 +21,40 @@ export function AttachmentTray({
   onRemove,
   onOpenPhoto,
   padding = "10px 12px 2px",
+  eyes = null,
 }: {
   attachments: readonly Attachment[];
   onRemove: (index: number) => void;
   /** Click-through on a photo — the composer's lightbox, where there is one. */
   onOpenPhoto?: (dataUri: string) => void;
   padding?: string;
+  /** The model that will read the staged photos because the chosen one
+   *  cannot (see ./sight.ts): named beside the tiles, behind its maker's
+   *  mark, so the person knows who looks before they send. Null when the
+   *  chosen model sees for itself. */
+  eyes?: Eyes | null;
 }) {
   if (attachments.length === 0) return null;
+  const hasPhoto = attachments.some(isPhotoAttachment);
+  const note = eyes ? `Described by ${eyesName(eyes)}` : null;
+  const mark = eyes ? conversationMark(eyes.model, eyes.provider as ProviderId, 14)?.node : null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding, alignItems: "center" }}>
       {attachments.map((a, i) => (
         <AttachmentTile
           key={`${a.path}-${i}`}
           attachment={a}
           onRemove={() => onRemove(i)}
           onOpen={a.dataUri && onOpenPhoto ? () => onOpenPhoto(a.dataUri as string) : undefined}
+          title={isPhotoAttachment(a) && note ? note : undefined}
         />
       ))}
+      {hasPhoto && note && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--fg-dim)", letterSpacing: "0.01em", userSelect: "none", textAlign: "left" }}>
+          {mark && <span aria-hidden style={{ display: "grid", placeItems: "center", flexShrink: 0 }}>{mark}</span>}
+          {note}
+        </span>
+      )}
     </div>
   );
 }
@@ -44,10 +63,13 @@ function AttachmentTile({
   attachment,
   onRemove,
   onOpen,
+  title,
 }: {
   attachment: Attachment;
   onRemove: () => void;
   onOpen?: () => void;
+  /** Overrides the tile's tooltip — the tray's note on a photo. */
+  title?: string;
 }) {
   const [hover, setHover] = useState(false);
   const photo = isPhotoAttachment(attachment);
@@ -56,7 +78,7 @@ function AttachmentTile({
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={photo ? name : `${name} — sent as text`}
+      title={title ? `${name} — ${title}` : photo ? name : `${name} — sent as text`}
       style={{
         position: "relative",
         height: TILE,

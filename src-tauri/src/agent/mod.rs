@@ -27,6 +27,7 @@ pub(crate) mod permission_relay;
 mod retained;
 pub mod routing;
 mod run_core;
+pub mod sight;
 mod steering;
 pub mod subagents;
 mod tool_handlers;
@@ -714,6 +715,7 @@ async fn run_subagent_to_completion(
         max_parallel_tools: None,
         max_turns: spec.max_turns,
         preferred_models: vec![],
+        eyes: None,
         routed: None,
         command_timeout_secs: spec.command_timeout_secs,
         test_after_edit_command: None,
@@ -1317,7 +1319,7 @@ fn reconstruct_structured_messages(
 /// Map the private provider-side `AiUsage` into the wire-format
 /// `AgentUsage` so the frontend can decode it without depending on a
 /// private type. Cheap (four `Option<u64>`s); done on every turn.
-fn agent_usage_from(usage: Option<AiUsage>, provider: &str, model: &str) -> Option<AgentUsage> {
+pub(super) fn agent_usage_from(usage: Option<AiUsage>, provider: &str, model: &str) -> Option<AgentUsage> {
     let u = usage?;
     if u.is_empty() {
         return None;
@@ -1951,7 +1953,7 @@ async fn loop_body(
     supervisor: Arc<dyn RunSupervisor>,
     runs_dir: PathBuf,
     id: String,
-    request: StartRunRequest,
+    mut request: StartRunRequest,
     on_event: Channel<AgentEvent>,
     cancel: CancellationToken,
     provider_caller: impl AgentProviderCaller,
@@ -2057,6 +2059,55 @@ async fn loop_body(
                 ts: now_ms(),
             })?;
         }
+    }
+    // A photo the run's own model cannot see is described by other eyes
+    // before the turn is recorded, so the transcript and every replay carry
+    // the prose the model actually read (`agent::sight`). It happens on
+    // every turn with such a photo, first or not, between `RunStarted` and
+    // the user message: the panel draws the wait as a running
+    // `look_at_image` step and the result as what the eyes read. Nothing
+    // here runs for a turn without photos or a model that sees.
+    let blind_photos = sight::blind_photos(&request).await;
+    if !blind_photos.is_empty() {
+        let eyes = sight::eyes_for(&request).await;
+        if let Some(eyes) = &eyes {
+            emit(AgentEvent::SightStarted {
+                run_id: id.clone(),
+                provider: eyes.provider.clone(),
+                model: eyes.model.clone(),
+                paths: blind_photos.clone(),
+                ts: now_ms(),
+            })?;
+        }
+        let sighted = sight::lend(&mut request, eyes.clone(), &sight::LiveEyes).await;
+        sight::record(&mut request, &sighted);
+        // The look was on this conversation's behalf, so its tokens and cost
+        // join the run's totals — Mission Control and Stats bill the eyes to
+        // the thread that borrowed them, not to nowhere.
+        for description in &sighted.described {
+            if let Some(u) = &description.usage {
+                summary.input_tokens = summary.input_tokens.saturating_add(u.prompt_tokens.unwrap_or(0) as i64);
+                summary.output_tokens = summary.output_tokens.saturating_add(u.completion_tokens.unwrap_or(0) as i64);
+                if let Some(c) = u.cost_usd {
+                    summary.cost_usd = Some(summary.cost_usd.unwrap_or(0.0) + c);
+                }
+            }
+        }
+        if !sighted.described.is_empty() {
+            write_summary(&runs_dir, &summary)?;
+        }
+        if let Some(eyes) = &eyes {
+            emit(AgentEvent::SightResolved {
+                run_id: id.clone(),
+                provider: eyes.provider.clone(),
+                model: eyes.model.clone(),
+                described: sighted.described.clone(),
+                dropped: sighted.dropped.clone(),
+                ts: now_ms(),
+            })?;
+        }
+    }
+    if !resuming {
         emit(AgentEvent::ContextSnapshot {
             run_id: id.clone(),
             snapshot: {

@@ -36,6 +36,8 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+- A photo dropped on a model that can't see images is no longer refused. Another model describes it first — an installed local vision model when there is one (the picture stays on the machine), else a hosted model you have a key for, or the pair chosen under Settings → AI → Eyes model — and the blind model reads the description where the picture would have been. The thread still shows the picture, and the describing itself appears under the message as a `look_at_image` step — running while the eyes look, then holding what they read, like any tool call. The described attachment is recorded on the transcript so a reopened conversation replays the same prose and the same step. Subscription CLIs can't be eyes yet, and a photo is still refused when nothing can see it.
+
 ### Plan or Work, and a `/goal` to reach
 
 - **Two rows.** The Mode menu offers Plan and Work — Work is the `goal` tier

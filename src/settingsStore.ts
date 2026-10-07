@@ -35,6 +35,12 @@ export type HarnessSettings = {
    *  Opus). See src/agent/advisor.ts. */
   advisorProvider?: string;
   advisorModel?: string;
+  /** Eyes for a blind model: which provider/model describes a photo when the
+   *  run's own model cannot see images. Absent → automatic (an installed local
+   *  vision model first, then a hosted one behind a key). See
+   *  src/components/ai/sight.ts and Rust `agent::sight`. */
+  eyesProvider?: string;
+  eyesModel?: string;
   /** Max tool turns per run before handing back to the user. Absent → harness
    *  default (50). A runaway-loop guard; raise it for big multi-file / multi-
    *  agent tasks. The conversation can always be continued past the cap. */
@@ -397,6 +403,7 @@ export const SETTINGS = {
       { label: "Command timeout", section: "ai", keywords: "command timeout shell run seconds" },
       { label: "Test after edit", section: "ai", keywords: "test verify after edit syntax check command" },
       { label: "Auto-draft memory on run done", section: "ai", keywords: "memory draft auto note handoff summarize pending review" },
+      { label: "Eyes model", section: "ai", keywords: "eyes vision image photo screenshot describe blind model" },
     ],
   } as SettingDef<HarnessSettings>,
 } as const;

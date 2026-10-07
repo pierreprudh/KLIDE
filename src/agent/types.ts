@@ -38,6 +38,11 @@ export type AgentAttachment = {
    *  attachment is an image — the harness sends it to vision-capable models and
    *  the chat renders it, rather than folding it into the message text. */
   dataUri?: string;
+  /** Set when the run's own model could not see this image and another model
+   *  described it on its behalf (Rust `agent::sight`): `provider/model` of
+   *  those eyes. `content` then holds the description and the attachment
+   *  reaches the model as text; `dataUri` stays so the thread still draws it. */
+  seenBy?: string;
 };
 
 export type AgentContextPayload = {
@@ -303,7 +308,25 @@ export type AgentEvent =
   /** An `auto` request settled on this pair. Follows `run_started` (which
    *  already carries the resolved provider/model); `skipped` names each
    *  candidate ranked above the pick and why it was ruled out. */
-  | { type: "route_resolved"; runId: string; provider: ProviderId; model: string; reason: string; skipped: string[]; ts: number };
+  | { type: "route_resolved"; runId: string; provider: ProviderId; model: string; reason: string; skipped: string[]; ts: number }
+  /** The turn carries photos the run's own model cannot see, and this pair is
+   *  about to describe them (Rust `agent::sight`). The fold draws a running
+   *  `look_at_image` step per path until `sight_resolved` lands. */
+  | { type: "sight_started"; runId: string; provider: ProviderId; model: string; paths: string[]; ts: number }
+  /** What the eyes read: one description per photo, verbatim — the same text
+   *  the blind model receives — and one reason per photo they could not read. */
+  | {
+      type: "sight_resolved";
+      runId: string;
+      provider: ProviderId;
+      model: string;
+      /** `usage` is what the eyes' own turn cost — tokens, and USD when their
+       *  pair is priced. Billed to this conversation: the turn footer and the
+       *  Eyes participant's card both add it in. */
+      described: { path: string; description: string; usage?: AgentUsage }[];
+      dropped: { path: string; reason: string }[];
+      ts: number;
+    };
 
 export type AgentMessageView = {
   id: string;
@@ -398,6 +421,11 @@ export type StartAgentRunInput = {
    *  router can prefer them. Stars live in this renderer's storage
    *  (favModels.ts); the policy that reads them lives in Rust. */
   preferredModels?: { provider: string; model: string }[];
+  /** The pair Harness settings names as the eyes for a model that cannot see
+   *  images. Absent = automatic (an installed local vision model, then a hosted
+   *  one behind a key). Rust reads it only when a turn carries a photo the
+   *  run's model cannot see (`agent::sight`). */
+  eyes?: { provider: string; model: string };
   /** Optional durable Mission attempt linkage. Task id and Run id stay distinct. */
   missionId?: string;
   missionTaskId?: string;

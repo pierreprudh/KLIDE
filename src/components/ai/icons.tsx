@@ -626,6 +626,14 @@ const CONNECTOR_PLUG = (
 );
 TOOL_ICON_PATHS.connector_call = CONNECTOR_PLUG;
 TOOL_ICON_PATHS.connector_tools = CONNECTOR_PLUG;
+// The eyes for a blind model (Rust `agent::sight`): the step another model
+// took to read a photo on this model's behalf.
+TOOL_ICON_PATHS.look_at_image = (
+  <>
+    <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </>
+);
 
 const TOOL_ICON_FALLBACK = (
   <path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6l-2.8 2.8-2.5-.5-.5-2.5z" />
