@@ -113,12 +113,17 @@ export function ApiKeyRow({
     void refresh();
   }, [refresh]);
 
+  // In "Env ref" the field's placeholder is the conventional reference, so an
+  // empty Save takes it rather than doing nothing.
+  const suggestedRef = `\${${envVar}}`;
+
   async function save() {
-    if (!value.trim() || busy) return;
+    const submitted = value.trim() || (method === "ref" ? suggestedRef : "");
+    if (!submitted || busy) return;
     // A key pasted while the toggle sits on "Env ref" is the common slip when
     // a stale reference pre-selected that segment; name the way out instead
     // of relaying the Rust rejection.
-    if (method === "ref" && !value.trim().startsWith("$")) {
+    if (method === "ref" && !submitted.startsWith("$")) {
       setError(`That looks like a key, not a \${VAR} reference — switch to Paste to store it in the Keychain.`);
       return;
     }
@@ -126,9 +131,9 @@ export function ApiKeyRow({
     setError(null);
     try {
       if (method === "ref") {
-        await invoke("ai_set_provider_key_reference", { provider: id, reference: value });
+        await invoke("ai_set_provider_key_reference", { provider: id, reference: submitted });
       } else {
-        await invoke("ai_set_provider_key", { provider: id, key: value });
+        await invoke("ai_set_provider_key", { provider: id, key: submitted });
       }
       setValue("");
       await refresh();
@@ -225,7 +230,7 @@ export function ApiKeyRow({
           <input
             type={method === "ref" ? "text" : "password"}
             value={value}
-            placeholder={method === "ref" ? `\${${envVar}}` : placeholder}
+            placeholder={method === "ref" ? suggestedRef : placeholder}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void save();
