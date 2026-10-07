@@ -1,3 +1,4 @@
+import "./memoryPanel.css";
 import {
   useEffect,
   useMemo,
@@ -240,6 +241,7 @@ export function MemoryPanel({
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [rawView, setRawView] = useState(false);
+  const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
 
   // Pending memory drafts (from finished runs) awaiting accept / edit / skip.
@@ -255,7 +257,8 @@ export function MemoryPanel({
   // Accept a draft: write it to durable memory, drop the draft, refresh, and
   // select the new entry. Skip just drops the draft.
   async function acceptDraft(draft: MemoryDraft) {
-    if (!workspaceRoot) return;
+    if (!workspaceRoot || savingDraftId) return;
+    setSavingDraftId(draft.draftId);
     try {
       const { draftId, createdAtMs, workspaceRoot: _ws, automatic: _auto, why: _why, evidence: _evidence, ...input } = draft;
       const entry = await writeMemory(workspaceRoot, input);
@@ -265,6 +268,8 @@ export function MemoryPanel({
       setSelectedId(entry.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingDraftId(null);
     }
   }
 
@@ -347,7 +352,7 @@ export function MemoryPanel({
 
   return (
     <aside
-      className="floating-panel"
+      className="memory-panel"
       style={{
         width: fill ? "100%" : _width,
         height: fill ? "100%" : undefined,
@@ -361,8 +366,9 @@ export function MemoryPanel({
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
         {/* -------- list -------- */}
         <div
+          className="memory-sidebar"
           style={{
-            width: 270,
+            width: 292,
             flexShrink: 0,
             borderRight: "1px solid var(--border)",
             display: "flex",
@@ -394,7 +400,7 @@ export function MemoryPanel({
               }}
             >
               <BookmarkIcon />
-              {entries.length} {entries.length === 1 ? "entry" : "entries"}
+              Saved memories
             </span>
             <button
               onClick={() => setSearchOpen((o) => !o)}
@@ -432,7 +438,8 @@ export function MemoryPanel({
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search — file:pty.rs · run:ses_… · decision:…"
+                aria-label="Search memories"
+                placeholder="Search memories"
                 style={{
                   width: "100%",
                   fontSize: 12,
@@ -457,6 +464,7 @@ export function MemoryPanel({
             {drafts.length > 0 && (
               <>
                 <div
+                  className="memory-group-label"
                   style={{
                     padding: "4px 4px 6px",
                     fontSize: 10,
@@ -469,34 +477,19 @@ export function MemoryPanel({
                     gap: 6,
                   }}
                 >
-                  Pending review
-                  <span style={{ opacity: 0.7 }}>{drafts.length}</span>
+                  For review
                 </div>
                 {drafts.map((d) => {
                   const active = d.draftId === selectedDraftId;
                   return (
-                    <div
-                      key={d.draftId}
+                    <div className="memory-draft-row" key={d.draftId}>
+                    <button
+                      type="button"
+                      className="memory-list-item"
+                      aria-pressed={active}
                       onClick={() => {
                         setSelectedDraftId(d.draftId);
                         setSelectedId(null);
-                      }}
-                      style={{
-                        padding: "10px 11px",
-                        marginBottom: 5,
-                        cursor: "pointer",
-                        borderRadius: "var(--radius-md)",
-                        border: `1px solid ${active ? "var(--accent)" : "var(--accent-soft, var(--border))"}`,
-                        background: active ? "var(--accent-soft)" : "var(--bg)",
-                        borderLeft: "2px solid var(--accent)",
-                        transition:
-                          "border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
-                      }}
-                      onMouseEnter={(ev) => {
-                        if (!active) ev.currentTarget.style.background = "var(--bg-hover)";
-                      }}
-                      onMouseLeave={(ev) => {
-                        if (!active) ev.currentTarget.style.background = "var(--bg)";
                       }}
                     >
                       <div
@@ -512,6 +505,7 @@ export function MemoryPanel({
                         {d.title}
                       </div>
                       <div
+                        className="memory-draft-meta"
                         style={{
                           marginTop: 6,
                           fontSize: 10.5,
@@ -522,23 +516,20 @@ export function MemoryPanel({
                           gap: 6,
                         }}
                       >
-                        <span style={{ color: "var(--fg-dim)" }}>draft</span>
-                        {d.model && (
-                          <span
-                            style={{
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              maxWidth: 120,
-                            }}
-                          >
-                            {d.model}
-                          </span>
-                        )}
                         <span style={{ marginLeft: "auto" }}>
                           {relativeMemoryTime(d.createdAtMs)}
                         </span>
                       </div>
+                    </button>
+                    <div className="memory-row-actions">
+                      <button type="button" disabled={savingDraftId !== null} aria-label={`Keep memory: ${d.title}`} onClick={() => void acceptDraft(d)}>
+                        {savingDraftId === d.draftId ? "Keeping…" : "Keep"}
+                      </button>
+                      <button type="button" disabled={savingDraftId !== null} aria-label={`Dismiss memory: ${d.title}`} onClick={() => {
+                        dismissMemoryDraft(d);
+                        if (selectedDraftId === d.draftId) setSelectedDraftId(null);
+                      }}>Dismiss</button>
+                    </div>
                     </div>
                   );
                 })}
@@ -585,7 +576,7 @@ export function MemoryPanel({
                 }}
               >
                 {entries.length === 0
-                  ? "No memory yet. Click Summarize in the AI panel to write the first handoff note."
+                  ? "Useful lessons will appear here as you work. You choose what stays."
                   : "No entries match this filter."}
               </div>
             )}
@@ -595,29 +586,16 @@ export function MemoryPanel({
               // (a hit in files touched / decisions / run id).
               const matchNote = query.trim() ? memoryMatchNote(e, parsedQuery) : null;
               return (
-                <div
-                  key={e.id}
-                  onClick={() => {
+                    <button
+                      type="button"
+                      className="memory-list-item"
+                      aria-pressed={active}
+                      key={e.id}
+                      onClick={() => {
                     setSelectedId(e.id);
                     setSelectedDraftId(null);
                   }}
-                  style={{
-                    padding: "10px 11px",
-                    marginBottom: 5,
-                    cursor: "pointer",
-                    borderRadius: "var(--radius-md)",
-                    border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
-                    background: active ? "var(--accent-soft)" : "var(--bg)",
-                    transition:
-                      "border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
-                  }}
-                  onMouseEnter={(ev) => {
-                    if (!active) ev.currentTarget.style.background = "var(--bg-hover)";
-                  }}
-                  onMouseLeave={(ev) => {
-                    if (!active) ev.currentTarget.style.background = "var(--bg)";
-                  }}
-                >
+                    >
                   <div
                     style={{
                       fontSize: 13,
@@ -722,18 +700,19 @@ export function MemoryPanel({
                       {relativeMemoryTime(e.createdAtMs)}
                     </span>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
         </div>
 
         {/* -------- detail -------- */}
-        <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+        <div className="memory-detail" style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
           {selectedDraft ? (
             <DraftReview
               key={selectedDraft.draftId}
               draft={selectedDraft}
+              saving={savingDraftId !== null}
               onAccept={(edited) => void acceptDraft(edited)}
               onSkip={() => {
                 dismissMemoryDraft(selectedDraft);
@@ -783,7 +762,7 @@ function MemoryDetail({
   onSearchRun?: (runId: string) => void;
 }) {
   return (
-    <div style={{ padding: "22px 26px", maxWidth: 760 }}>
+    <div className="memory-document">
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <h2
           style={{
@@ -1088,7 +1067,7 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <div>
+    <div className="memory-section">
       <div
         style={{
           fontSize: 10.5,
@@ -1163,10 +1142,12 @@ function FileChip({
 // Skip discards. Files-touched stays read-only — it's extracted, not authored.
 function DraftReview({
   draft,
+  saving,
   onAccept,
   onSkip,
 }: {
   draft: MemoryDraft;
+  saving: boolean;
   onAccept: (edited: MemoryDraft) => void;
   onSkip: () => void;
 }) {
@@ -1174,21 +1155,6 @@ function DraftReview({
   const [goal, setGoal] = useState(draft.goal);
   const [notes, setNotes] = useState(draft.notes);
   const [decisionsText, setDecisionsText] = useState(draft.decisions.join("\n"));
-
-  const fieldStyle: React.CSSProperties = {
-    width: "100%",
-    boxSizing: "border-box",
-    fontSize: 12.5,
-    fontFamily: "inherit",
-    lineHeight: 1.5,
-    padding: "7px 9px",
-    border: "1px solid var(--border)",
-    borderRadius: "var(--radius-sm)",
-    background: "var(--bg)",
-    color: "var(--fg-strong)",
-    outline: "none",
-    resize: "vertical",
-  };
 
   function accept() {
     onAccept({
@@ -1204,99 +1170,29 @@ function DraftReview({
   }
 
   return (
-    <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span
-          style={{
-            fontSize: 10,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            color: "var(--accent)",
-            fontWeight: 600,
-          }}
-        >
-          Review draft
-        </span>
-        <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button onClick={onSkip} style={ghostBtnStyle()}>
-            Dismiss
-          </button>
-          <button onClick={accept} style={primaryBtnStyle()}>
-            Keep memory
-          </button>
-        </span>
-      </div>
-
-      {draft.why && <Section title="Why keep this"><p>{draft.why}</p></Section>}
-      {draft.evidence && <Section title="Supporting evidence"><blockquote style={{ margin: 0, whiteSpace: "pre-wrap" }}>{draft.evidence}</blockquote></Section>}
-      {draft.sourceRefs.length > 0 && <Section title="Source">{draft.sourceRefs.map((ref) => <div key={ref.id}>{ref.label ?? ref.sourceType}: {ref.id}</div>)}</Section>}
-      <Section title="Title">
-        <input value={title} onChange={(e) => setTitle(e.target.value)} style={fieldStyle} />
-      </Section>
-
-      <Section title="Goal">
-        <textarea
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          rows={2}
-          style={fieldStyle}
-        />
-      </Section>
-
-      <Section title="Notes">
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          rows={4}
-          style={fieldStyle}
-        />
-      </Section>
-
-      <Section title="Decisions (one per line)">
-        <textarea
-          value={decisionsText}
-          onChange={(e) => setDecisionsText(e.target.value)}
-          rows={4}
-          style={fieldStyle}
-        />
-      </Section>
-
-      {draft.filesTouched.length > 0 && (
-        <Section title="Files touched">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {draft.filesTouched.map((p) => (
-              <FileChip key={p} path={p} />
-            ))}
-          </div>
-        </Section>
-      )}
-    </div>
+    <article className="memory-review">
+      <label className="memory-title-label">
+        <span className="memory-sr-only">Memory title</span>
+        <input className="memory-title-input" value={title} onChange={(e) => setTitle(e.target.value)} />
+      </label>
+      <label className="memory-field">
+        <span className="memory-sr-only">What to remember</span>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} />
+      </label>
+      <details className="memory-evidence">
+        <summary>Details</summary>
+        {draft.why && <p>{draft.why}</p>}
+        {draft.evidence && <blockquote>{draft.evidence}</blockquote>}
+        {draft.sourceRefs.map((ref) => <p key={ref.id}>{ref.label ?? ref.sourceType}: <code>{ref.id}</code></p>)}
+        <label className="memory-field"><span>Goal</span><textarea value={goal} onChange={(e) => setGoal(e.target.value)} rows={2} /></label>
+        <label className="memory-field"><span>Decisions · one per line</span><textarea value={decisionsText} onChange={(e) => setDecisionsText(e.target.value)} rows={3} /></label>
+        {draft.filesTouched.length > 0 && <Section title="Files touched"><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{draft.filesTouched.map((path) => <FileChip key={path} path={path} />)}</div></Section>}
+      </details>
+      <footer className="memory-review-footer">
+        <div><button className="memory-secondary" disabled={saving} onClick={onSkip}>Dismiss</button><button className="memory-primary" disabled={saving} onClick={accept}>{saving ? "Keeping…" : "Keep"}</button></div>
+      </footer>
+    </article>
   );
-}
-
-function ghostBtnStyle(): React.CSSProperties {
-  return {
-    fontSize: 12,
-    padding: "5px 12px",
-    borderRadius: "var(--radius-sm)",
-    border: "1px solid var(--border)",
-    background: "transparent",
-    color: "var(--fg-subtle)",
-    cursor: "pointer",
-  };
-}
-
-function primaryBtnStyle(): React.CSSProperties {
-  return {
-    fontSize: 12,
-    padding: "5px 12px",
-    borderRadius: "var(--radius-sm)",
-    border: "1px solid var(--accent)",
-    background: "var(--accent)",
-    color: "var(--control-primary-fg)",
-    cursor: "pointer",
-    fontWeight: 500,
-  };
 }
 
 function EmptyDetail() {
@@ -1316,16 +1212,15 @@ function EmptyDetail() {
           style={{
             color: "var(--fg)",
             marginBottom: 8,
-            fontSize: 14,
+            fontSize: 21,
+            letterSpacing: "-0.025em",
             fontWeight: 500,
           }}
         >
-          No memory selected
+          Select a memory
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.55, maxWidth: 280 }}>
-          Pick an entry on the left to read its handoff note. Each entry is
-          one markdown file in <code>.klide/memory/</code> — a future agent
-          can pick up where the last session stopped.
+          Review a draft or browse saved memories.
         </div>
       </div>
     </div>
