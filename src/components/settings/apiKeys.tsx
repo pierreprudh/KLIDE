@@ -226,7 +226,16 @@ export function ApiKeyRow({
       control={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {statusText}
-          <MethodToggle method={method} onChange={setMethod} />
+          <MethodToggle
+            method={method}
+            onChange={(next) => {
+              setMethod(next);
+              // Switching to Env ref writes the conventional reference into the
+              // field, ready to Save or edit; switching back clears it untouched.
+              if (next === "ref" && !value.trim()) setValue(suggestedRef);
+              else if (next === "paste" && value === suggestedRef) setValue("");
+            }}
+          />
           <input
             type={method === "ref" ? "text" : "password"}
             value={value}
