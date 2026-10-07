@@ -819,9 +819,10 @@ async fn resolve_uncached(
     let (supports_vision, reasons) = match entry.map(|e| (e.id, e.wire)) {
         Some(("mlx", _)) => (false, false),
         Some((_, providers::WireFormat::Anthropic)) => (listing.as_ref().and_then(|m| m.supports_vision).unwrap_or(names.vision), listing.as_ref().and_then(|m| m.reasoning_levels.as_ref()).is_some_and(|v| !v.is_empty()) || names.reasoning),
-        Some((_, providers::WireFormat::OpenAi(cfg))) => {
-            (names.vision, cfg.supports_reasoning_effort && names.reasoning)
-        }
+        Some((_, providers::WireFormat::OpenAi(cfg))) => (
+            listing.as_ref().and_then(|m| m.supports_vision).unwrap_or(names.vision),
+            cfg.supports_reasoning_effort && names.reasoning,
+        ),
         // A self-hosted OpenAI-wire endpoint: the name is all there is to go
         // on for vision; no reflection dial, since nothing proves the server
         // honours `reasoning_effort`.
