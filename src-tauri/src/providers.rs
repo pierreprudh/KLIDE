@@ -363,7 +363,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             minimal_chat_context: true,
             append_todo_updates: true,
         },
-        context_window: Some(8192),
+        context_window: Some(crate::llamacpp_models::LOCAL_CONTEXT),
     },
     // LM Studio is a one-row affair now. Previously it would have meant
     // adding to four match statements + the frontend's PROVIDER_GROUPS

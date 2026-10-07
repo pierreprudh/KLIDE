@@ -214,15 +214,6 @@ pub struct StartRunResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SubmitUserTurnRequest {
-    pub run_id: String,
-    pub text: String,
-    #[serde(default)]
-    pub attachments: Vec<AgentAttachment>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PermissionDecisionRequest {
     pub run_id: String,
     pub request_id: String,
@@ -488,14 +479,29 @@ impl PermissionRequest {
 /// `frontend_mirror_matches_agent_wire` fails the build if it drifts.
 pub mod error_code {
     pub const ABORTED: &str = "aborted";
+    pub const GOAL_CHECK_FAILED: &str = "goal_check_failed";
     pub const MAX_TURNS: &str = "max_turns";
     pub const PROVIDER_UNAVAILABLE: &str = "provider_unavailable";
     pub const STEERING_GAVE_UP: &str = "steering_gave_up";
+    /// The loop left without settling — a failed Transcript write, a panic —
+    /// and its host wrote this one terminal line in its place.
+    pub const RUN_HOST_FAILED: &str = "run_host_failed";
+    /// The app lost its socket to the background host mid-turn and could not
+    /// reconnect. Never on disk: the Run may well still be running there.
+    pub const RUN_HOST_DISCONNECTED: &str = "run_host_disconnected";
 
     /// The set the drift test compares against the frontend mirror. Nothing in
     /// the running app iterates it — it exists so the contract has one home.
     #[allow(dead_code)]
-    pub const ALL: [&str; 4] = [ABORTED, MAX_TURNS, PROVIDER_UNAVAILABLE, STEERING_GAVE_UP];
+    pub const ALL: [&str; 7] = [
+        ABORTED,
+        MAX_TURNS,
+        GOAL_CHECK_FAILED,
+        PROVIDER_UNAVAILABLE,
+        STEERING_GAVE_UP,
+        RUN_HOST_FAILED,
+        RUN_HOST_DISCONNECTED,
+    ];
 }
 
 impl AgentEvent {
@@ -1162,6 +1168,57 @@ src/agent/types.ts — update both"
             backend, frontend,
             "AgentError.code drifted between error_code::ALL and \
 src/agent/types.ts — update both"
+        );
+    }
+
+    /// Byte offset of the first `#[cfg(test)]` that opens an inline module.
+    fn first_test_module(src: &str) -> Option<usize> {
+        src.match_indices("#[cfg(test)]\n")
+            .find(|(at, marker)| {
+                let line = src[at + marker.len()..].lines().next().unwrap_or("");
+                line.starts_with("mod ") && line.trim_end().ends_with('{')
+            })
+            .map(|(at, _)| at)
+    }
+
+    /// `ALL` is only a contract if every emit site draws from it. Two hosts
+    /// once invented codes of their own (`background_run_failed`,
+    /// `background_disconnected`) that the mirror test never saw, because it
+    /// compared the list, not the code. So: every `code: "..."` literal in
+    /// the Harness's non-test source names a declared code.
+    #[test]
+    fn every_emit_site_uses_a_declared_error_code() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent");
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("src/agent") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            // Everything before the first inline test module: the running
+            // code. (A `#[cfg(test)] mod eval;` file declaration is not one.)
+            let live = &src[..first_test_module(&src).unwrap_or(src.len())];
+            if path.ends_with("mod.rs") {
+                assert!(live.contains("fn settle_run"), "the cut left the loop out");
+            }
+            for (line_no, line) in live.lines().enumerate() {
+                let Some(rest) = line.trim_start().strip_prefix("code: \"") else {
+                    continue;
+                };
+                let Some(code) = rest.split('"').next() else { continue };
+                if !error_code::ALL.contains(&code) {
+                    offenders.push(format!(
+                        "{}:{}: {code}",
+                        path.file_name().unwrap().to_string_lossy(),
+                        line_no + 1
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "AgentError codes outside error_code::ALL: {offenders:?}"
         );
     }
 }

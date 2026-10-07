@@ -173,6 +173,8 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   deepseek: "color-logo-img",
   // Gemini's 2025 star carries its own red→blue→green gradient.
   gemini: "color-logo-img",
+  // Mistral's pixel M is a yellow→red gradient; inverting it would ruin it.
+  mistral: "color-logo-img",
 };
 
 /** The mark for a Provider id or a bare brand key. A registry row's `brand`

@@ -1,3 +1,4 @@
+import "./memoryPanel.css";
 import { useEffect } from "react";
 import { MemoryPanel } from "./MemoryPanel";
 import { Z } from "../zLayers";
@@ -27,23 +28,6 @@ function CloseIcon() {
       strokeLinejoin="round"
     >
       <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
-  );
-}
-
-function BookmarkIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
     </svg>
   );
 }
@@ -82,17 +66,17 @@ export function MemoryModal({
         zIndex: Z.modal,
         display: "grid",
         placeItems: "center",
-        background: "rgba(0,0,0,0.30)",
-        backdropFilter: "blur(3px)",
-        WebkitBackdropFilter: "blur(3px)",
+        background: "rgba(0,0,0,0.16)",
+        backdropFilter: "blur(2px)",
+        WebkitBackdropFilter: "blur(2px)",
       }}
     >
       <div
-        className="floating-panel"
+        className="floating-panel memory-window"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: "min(1080px, calc(100vw - 96px))",
-          height: "min(680px, calc(100vh - 96px))",
+          width: "min(1080px, calc(100vw - 32px))",
+          height: "min(680px, calc(100vh - 32px))",
           borderRadius: "var(--radius-lg)",
           display: "flex",
           flexDirection: "column",
@@ -121,21 +105,7 @@ export function MemoryModal({
               letterSpacing: "-0.005em",
             }}
           >
-            <span
-              style={{
-                width: 26,
-                height: 26,
-                display: "grid",
-                placeItems: "center",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--accent)",
-                background: "color-mix(in srgb, var(--accent-soft) 70%, transparent)",
-                border: "1px solid var(--panel-border)",
-              }}
-            >
-              <BookmarkIcon />
-            </span>
-            Project Memory
+            Memory
           </span>
           <div style={{ flex: 1 }} />
           <button

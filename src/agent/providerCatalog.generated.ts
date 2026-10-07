@@ -79,7 +79,7 @@ export const PROVIDER_ROWS = [
       "minimalChatContext": true,
       "appendTodoUpdates": true
     },
-    "contextWindow": 8192
+    "contextWindow": 16384
   },
   {
     "id": "lmstudio",

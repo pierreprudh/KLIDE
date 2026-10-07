@@ -14,7 +14,8 @@ pub struct ModelChoice {
     pub download_gb: f64,
     pub memory_gb: f64,
 }
-// Runtime estimates include weights, an 8k KV cache and working buffers.
+// Runtime estimates include weights, a 16k KV cache and working buffers.
+pub const LOCAL_CONTEXT: usize = 16_384;
 pub const KLIDE_MODEL: &str = "pierreprudh/klide-8b";
 const KLIDE_DIGEST: &str = "c3c0bfb58561fba0d703d7dee5836c9c019a63f48d0980723c40e28a7a97d7b8";
 const MODELS: &[ModelChoice] = &[
@@ -26,7 +27,7 @@ const MODELS: &[ModelChoice] = &[
         url: "https://ollama.com/pierreprudh/klide-8b",
         quantization: "Q8_0",
         download_gb: 9.01,
-        memory_gb: 12.0,
+        memory_gb: 12.5,
     },
     ModelChoice {
         id: "Qwen/Qwen3-8B-GGUF:Q4_K_M",
@@ -36,7 +37,7 @@ const MODELS: &[ModelChoice] = &[
         url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
         quantization: "Q4_K_M",
         download_gb: 5.0,
-        memory_gb: 7.5,
+        memory_gb: 8.0,
     },
     ModelChoice {
         id: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M",
@@ -46,7 +47,7 @@ const MODELS: &[ModelChoice] = &[
         url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF",
         quantization: "Q4_K_M",
         download_gb: 2.02,
-        memory_gb: 3.5,
+        memory_gb: 4.0,
     },
     ModelChoice {
         id: "mistralai/Ministral-3-3B-Instruct-2512-GGUF:Q4_K_M",
@@ -56,7 +57,7 @@ const MODELS: &[ModelChoice] = &[
         url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF",
         quantization: "Q4_K_M",
         download_gb: 2.15,
-        memory_gb: 4.0,
+        memory_gb: 4.5,
     },
 ];
 
@@ -175,7 +176,7 @@ pub(crate) fn launch_args(model: &str) -> Vec<String> {
         "8081".into(),
         "--jinja".into(),
         "--ctx-size".into(),
-        "8192".into(),
+        LOCAL_CONTEXT.to_string(),
     ]);
     args
 }
@@ -293,8 +294,22 @@ mod tests {
         }
     }
     #[test]
+    fn launched_context_has_room_for_klide_tool_prompt() {
+        let args = launch_args(MODELS[2].id);
+        let index = args.iter().position(|arg| arg == "--ctx-size").unwrap();
+        let context: usize = args[index + 1].parse().unwrap();
+        assert!(
+            context >= 10_667 + 4096,
+            "Live Klide tool prompt must leave output room"
+        );
+        assert_eq!(
+            crate::providers::lookup("llamacpp").unwrap().context_window,
+            Some(context)
+        );
+    }
+    #[test]
     fn recommendations_reserve_memory_for_other_apps() {
-        assert_eq!(recommend(&mac(8.0)), Some(MODELS[3].id));
+        assert_eq!(recommend(&mac(8.0)), Some(MODELS[2].id));
         assert_eq!(recommend(&mac(16.0)), Some(MODELS[1].id));
         assert_eq!(recommend(&mac(24.0)), Some(MODELS[0].id));
         assert_eq!(recommend(&mac(64.0)), Some(MODELS[0].id));

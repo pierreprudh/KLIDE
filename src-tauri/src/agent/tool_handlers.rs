@@ -11,9 +11,6 @@ use super::*;
 use super::types::QuestionChoices;
 use crate::coordination::ops;
 
-/// Pause tool (`userAnswerQuestion`): ask the user a typed question and feed
-/// their verbatim answer back to the model. "(skipped)" is the sentinel the
-/// user can send to decline. Cancelling during the wait bubbles up as
 /// The ceremony every Pause tool performs.
 ///
 /// All four of them — question, subagent, advisor, and the advisor escalation the
@@ -1299,6 +1296,13 @@ fn start_background_command(ctx: &ToolCtx<'_>, root: &str, cwd: &str, command: &
     if notify && ctx.request.workspace_root.as_deref().is_some_and(is_race_worktree) {
         return ToolResult { ok: false, content: "A persistent observer cannot be started in a race worktree: merging the race removes the checkout it would watch.".into(), metadata: None };
     }
+    // A host that cannot wake this conversation says so now, before a shell
+    // is started that nobody would answer.
+    if notify {
+        if let Err(message) = ctx.sup.observer_support() {
+            return ToolResult { ok: false, content: message, metadata: None };
+        }
+    }
     // The same cwd rule the foreground path applies — `workspace`, `.` and a
     // relative directory mean what they mean there, and a missing one fails
     // with the same words instead of a raw spawn error.
@@ -1510,6 +1514,16 @@ where
             .collect()
     };
 
+    // The Python a script would start, with the exact PATH it gets — the card
+    // shows it so "which env does this run in?" is answered before Run.
+    let interpreter = {
+        let dir = tools::resolve_command_dir(root_value, &cwd).ok();
+        let command = command.clone();
+        crate::blocking::run_infallible(move || {
+            dir.and_then(|dir| super::command_env::interpreter_for(&dir, &command))
+        })
+        .await
+    };
     let perm = PermissionRequest {
         id: permission::request_id(ctx, call),
         run_id: ctx.id.to_string(),
@@ -1518,6 +1532,7 @@ where
         input: serde_json::json!({
             "command": command,
             "cwd": cwd,
+            "interpreter": interpreter,
             "externalPaths": external_paths,
             "matchedAllowRule": matched_rule.as_ref().map(|rule| rule.pattern.clone())
         }),

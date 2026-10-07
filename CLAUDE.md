@@ -309,6 +309,7 @@ Klide/
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) — each owns its home (config/data dirs honouring CODEX_HOME / CLAUDE_CONFIG_DIR / XDG), label, login, accounts flag + home.rs the Env seam + source scan + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
+    │       ├── run_host.rs        The one Run host door — placement (app vs ptyd), admission, spawn + backstop, card answers, the one "active" rule
     │       ├── daemon.rs          Background subscription chats — the Harness loop hosted in `klide ptyd`, survives app exit
     │       ├── remote.rs          App-side proxy to those runs — start, reconnect, replay the durable gap, route Stop/approvals
     │       ├── stream_log.rs      Streamed output of a background turn — deltas merged per 150 ms, written without a disk wait

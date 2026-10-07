@@ -52,6 +52,17 @@ if (import.meta.env.DEV) {
     });
 }
 
+// WebKit stops the animation clock while it believes the page is hidden — and
+// macOS can say so for a window you are looking at (shown without activation,
+// or under a transparent overlay). Every entrance animation starts at opacity 0
+// with `both` fill, so a frozen clock paints a blank app. While hidden, run
+// animations and transitions at zero length so they sit at their end state
+// (tokens.css).
+const syncMotion = () =>
+  document.documentElement.toggleAttribute("data-motion-still", document.visibilityState !== "visible");
+syncMotion();
+document.addEventListener("visibilitychange", syncMotion);
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

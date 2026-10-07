@@ -84,7 +84,7 @@ const CODE_KEYWORDS = new Set([
 const CODE_TOKEN_RE =
   /(\/\/[^\n]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_$][A-Za-z0-9_$]*)/g;
 
-function highlightCode(code: string): MdNode[] {
+export function highlightCode(code: string): MdNode[] {
   const out: MdNode[] = [];
   let last = 0;
   let key = 0;

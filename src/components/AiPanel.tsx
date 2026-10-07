@@ -1,3 +1,4 @@
+import { useLlamaSetupMode, isSelectedLlamaProvider } from "../hooks/useLlamaSetupMode";
 import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
@@ -44,7 +45,7 @@ import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
 import { errMessage, providerFailureMessage } from "../errors";
 import { InlineDiffReview } from "./InlineDiffReview";
-import { InlineCommandReview } from "./InlineCommandReview";
+import { InlineCommandReview, type CommandInterpreter } from "./InlineCommandReview";
 import { conversationToConvo, deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   lensItemsForPrompt,
@@ -1426,9 +1427,12 @@ export function AiPanel({
   useEffect(() => {
     void refreshCustomCli().then(setCustomCli).catch(() => {});
   }, []);
+  const llamaSetupMode = useLlamaSetupMode();
   const providerGroups = useMemo(
-    () => providerGroupsWithCustom(customProviders, customCli),
-    [customProviders, customCli]
+    () => providerGroupsWithCustom(customProviders, customCli).map(group => ({
+      ...group, items: group.items.filter(item => isSelectedLlamaProvider(item.id, llamaSetupMode)),
+    })),
+    [customProviders, customCli, llamaSetupMode]
   );
   // Focus offers the same stacks the workbench does, delegates included: the
   // canvas hosts their session the same way a panel does, and they are the one
@@ -3110,7 +3114,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // sends {command, cwd, externalPaths, matchedAllowRule}, a network
     // capability sends whatever it declared. Everything else is typed, and the
     // Rust `frontend_mirror_matches_agent_wire` test keeps it that way.
-    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
+    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; interpreter?: CommandInterpreter | null; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
     const isCommand = !!input.command;
     // An incoming-message gate carries the sender and the text; the card shows
     // the text where the command would be and names the peer as the chat does.
@@ -3143,6 +3147,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       summary: req.summary ?? command,
       reason: req.reason ?? "",
       externalPaths: Array.isArray(input.externalPaths) ? input.externalPaths : [],
+      interpreter: isCommand ? input.interpreter ?? undefined : undefined,
       suggestedPattern: isCommand ? suggestCommandPattern(command) : undefined,
     };
   }
@@ -4750,6 +4755,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             kind={pendingPermission.kind}
             detail={pendingPermission.reason}
             externalPaths={pendingPermission.externalPaths}
+            interpreter={pendingPermission.interpreter}
             onReject={rejectCommand}
             onApproveOnce={() => approveCommand("once")}
             peer={pendingPermission.peer}

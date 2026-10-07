@@ -1,6 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Agent commands now start in the environment a terminal would give them: the login shell's PATH and variables (captured once per launch, so a Finder-opened Klide no longer runs Apple's `/usr/bin/python3`), the project's `.venv` first when there is one, and no variable whose name contains `KEY`, `SECRET` or `TOKEN`. A Python script's approval card names the interpreter it will start — version and venv — before Run.
+- A shell command that is really a Python script (`python3 - <<'PY'` or `python3 -c`) now shows as one on the approval card: the Python mark where `$` would be, the files it writes named in the reason line, and the program as highlighted code, one statement per line, first three lines until expanded. A command with anything chained after the script keeps the plain shell line, and no `python3 *` pattern is offered.
+- The Welcome card now plays a big-pixel nature film in place of the ASCII globe: five scenes (dawn, forest, a lake at night, under the surface, a summer meadow), played at a calm 0.5× pace, with tile seams and a light film grain. Scenes change through a wave of code glyphs that resolves into the next landscape. Cells stay integer-sized for crisp Retina pixels, the film pauses while the window is hidden, and Reduce motion shows a still meadow.
+
 ## 0.6.7 (2026-10-06)
+
+- Live local inference testing exposed a context mismatch: Klide’s tool prompt exceeded the managed llama.cpp server’s 8k limit. Managed servers now use 16k, with matching provider metadata and more conservative memory estimates. Llama app setup guidance calls out the same context requirement.
 
 - Added Llama app as a local provider with the Llama logo, model discovery on port 9931, and a download link in Local Servers settings. Llama manages its own server and models.
 - Documented the Klide Q8 model comparison between Ollama and llama.cpp on Apple M5, including per-task latency, tool-call correctness, raw results and reproduction commands. The small sample shows no clear engine advantage; failed plain-text tasks are identified explicitly.

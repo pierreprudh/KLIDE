@@ -1064,7 +1064,7 @@ function App() {
     {
       id: "memory",
       label: "Memory",
-      icon: <MemoryInboxIcon workspaceRoot={workspaceRoot} />,
+      icon: <MemoryInboxIcon />,
       active: activityState.memory,
       onClick: () => togglePanel("memory"),
     },
@@ -1133,7 +1133,7 @@ function App() {
     {
       id: "memory",
       label: "Memory",
-      icon: <MemoryInboxIcon workspaceRoot={workspaceRoot} />,
+      icon: <MemoryInboxIcon />,
       active: activityState.memory,
       onClick: () => togglePanel("memory"),
     },

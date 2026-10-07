@@ -134,7 +134,7 @@ fn start_daemon_subscriber(app: tauri::AppHandle) {
                             session_id,
                             external_id,
                         }) => sink.external_id(&session_id, &external_id),
-                        Ok(DaemonEvent::Chat { .. } | DaemonEvent::ChatOperation { .. }) => {},
+                        Ok(DaemonEvent::Chat { .. } | DaemonEvent::ChatOperation { .. } | DaemonEvent::CoordinationChanged { .. }) => {},
                         Err(_) => {}
                     }
                 }

@@ -24,6 +24,17 @@ _Avoid_: job, session, execution
 The Rust loop that drives a Klide-native run: provider streaming, tool dispatch, transcript writes, cancellation. There is exactly one; UI surfaces observe it, they don't reimplement it.
 _Avoid_: agent loop, runner, executor
 
+**Run host**:
+The one door a Run passes through to be admitted, placed, controlled and
+listed, whichever process runs its loop — the app, or `klide ptyd` for a
+background subscription conversation. It decides the host once (`placement`),
+claims the conversation under one lock, spawns the Harness loop, writes the one
+terminal event for a loop that left without settling, answers a card, and holds
+the one definition of "active". The app is the only dispatcher, so its failure
+budget is the one judgement for a conversation whatever host runs it. The
+hosts (`TauriSupervisor`, `daemon::RunHost`) are adapters around it.
+_Avoid_: second supervisor, per-host admission, remote fallback, background runner
+
 **Harness contract**:
 The written interface of the Harness: modes, tool capabilities, permission
 rules, diff review, dynamic tools, transcript evidence, and anti-slop

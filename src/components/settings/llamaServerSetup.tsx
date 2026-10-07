@@ -77,7 +77,7 @@ export function LlamaServerSetup() {
         <div>
           {info.machine.cpuCores} CPU cores · {info.machine.acceleration}.
           {info.memoryBudgetGb != null && ` Estimated model budget: ${info.memoryBudgetGb.toFixed(1)} GB, with room left for other apps.`}
-          {" Memory estimates use an 8k context. Smaller models favour speed; larger models favour quality. Actual speed depends on your workload and has not been benchmarked."}
+          {" Memory estimates use a 16k context. Smaller models favour speed; larger models favour quality. Actual speed depends on your workload and has not been benchmarked."}
         </div>
       </details>
       {!info.runtimeInstalled && <button className="klide-button klide-button-subtle klide-llama-engine"
