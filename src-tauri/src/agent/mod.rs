@@ -6,12 +6,15 @@ mod stream_log;
 mod artifacts;
 mod background;
 mod process;
+pub(crate) mod command_env;
 mod observers;
 mod command_allowlist;
 mod connector_tools;
 mod conversation_search;
+mod memory_recall;
 pub(crate) mod delivery;
 mod glob_match;
+pub mod goal;
 #[cfg(test)]
 mod eval;
 #[cfg(test)]
@@ -20,6 +23,7 @@ pub mod evidence;
 pub mod failure_budget;
 mod network_allowlist;
 mod permission;
+pub(crate) mod permission_relay;
 mod retained;
 pub mod routing;
 mod run_core;
@@ -120,6 +124,11 @@ pub struct AgentRunHandle {
     /// What every gate reads about this Run — Mode, disabled Tools, lineage,
     /// the full-auto request. Fixed at start.
     pub subject: permission::GateSubject,
+    /// While a Delegate turn is in flight: the way a gate raised from outside
+    /// the loop (a CLI's permission prompt, relayed over the bridge) writes to
+    /// this Run as the loop would. `None` between turns and for every
+    /// provider whose tools Klide dispatches itself.
+    pub out_of_band: std::sync::Mutex<Option<permission_relay::OutOfBandPort>>,
 }
 
 pub struct AgentSupervisorState {
@@ -239,7 +248,7 @@ impl AgentProviderCaller for RealProviderCaller {
 /// into `AgentSupervisorState`. `TauriSupervisor` implements it over the live
 /// state in production; `FakeSupervisor` (tests) implements it over a plain map
 /// — so the whole run loop can be driven headlessly, off the Tauri app.
-trait RunSupervisor: Send + Sync {
+pub(crate) trait RunSupervisor: Send + Sync {
     /// Best-effort: set a run's status. No-op if the lock/run is unavailable.
     fn set_status(&self, run_id: &str, status: AgentRunStatus);
     /// Run `f` against a run's handle under the supervisor lock. Returns false
@@ -379,6 +388,19 @@ impl TauriSupervisor {
     fn new(app: tauri::AppHandle) -> Self {
         Self { app }
     }
+}
+
+/// The app host's door for a Delegate's relayed permission prompt (see
+/// `permission_relay`): answer it as the Run the bridge bound. Blocks the
+/// calling bridge thread until the operator answers.
+pub(crate) fn relay_delegate_permission(
+    app: &tauri::AppHandle,
+    run_id: &str,
+    workspace_root: &str,
+    ask: permission_relay::DelegatePermissionAsk,
+) -> Result<serde_json::Value, String> {
+    let sup = TauriSupervisor::new(app.clone());
+    permission_relay::answer(&sup, run_id, workspace_root, ask)
 }
 
 /// Journal calls are file IO behind a cross-process lock, reached from the
@@ -672,6 +694,7 @@ async fn run_subagent_to_completion(
         initial_text: spec.task.clone(),
         attachments: vec![],
         context: Some(AgentContextSnapshot {
+            memory: None,
             workspace_root: spec.workspace_root.clone(),
             attachments: vec![],
             lens_items: vec![],
@@ -694,6 +717,7 @@ async fn run_subagent_to_completion(
         routed: None,
         command_timeout_secs: spec.command_timeout_secs,
         test_after_edit_command: None,
+        goal: None,
         command_allowlist: vec![],
         require_diff_review: spec.require_diff_review,
         // Never inherited from the parent: the parent conversation's operator
@@ -828,6 +852,10 @@ impl Drop for RunLease {
         if !self.backstopped {
             // A panic is recovered by `spawn_loop`; keep admission held until
             // that task appends the terminal event and retires the handle.
+            background::settle_shells(&self.id, false);
+            if let Some(provider) = self.delegate_provider.take() {
+                self.sup.release_delegate_session(&self.id, &provider);
+            }
             return;
         }
         // The loop left without settling. Say so where a reattach looks —
@@ -1015,6 +1043,7 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
         .context
         .clone()
         .unwrap_or_else(|| AgentContextSnapshot {
+            memory: None,
             workspace_root: request.workspace_root.clone(),
             attachments: request.attachments.clone(),
             lens_items: Vec::new(),
@@ -1363,6 +1392,32 @@ async fn run_test_after_edit(
     }
 }
 
+/// The `/goal` gate's check: the configured post-edit command, run once more
+/// when the model claims the goal is reached. `None` when no command is set —
+/// the gate then finishes without verifying, and says so. A cancelled check
+/// reports as failed; the loop settles the cancellation right after.
+async fn run_goal_check(
+    root: &str,
+    command: Option<&str>,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Option<goal::CheckOutcome> {
+    let command = command.map(str::trim).filter(|c| !c.is_empty())?;
+    let result = match run_command_capture_in(root, root, command, timeout_secs, cancel).await {
+        tools::CommandRun::Done(result) => result,
+        tools::CommandRun::Cancelled => ToolResult {
+            ok: false,
+            content: "Stopped before it finished: the run was cancelled.".to_string(),
+            metadata: None,
+        },
+    };
+    Some(goal::CheckOutcome {
+        command: command.to_string(),
+        ok: result.ok,
+        output: result.content,
+    })
+}
+
 /// Run read-only tool calls concurrently, capped at `max_parallel` at a time,
 /// and return their results keyed by call id. Each call runs on a blocking
 /// thread (the tools are synchronous filesystem/network ops). A task that
@@ -1667,6 +1722,7 @@ async fn start_run(
     request.attachments = clamped.kept;
     if !clamped.omitted.is_empty() {
         let mut snapshot = request.context.take().unwrap_or_else(|| AgentContextSnapshot {
+            memory: None,
             workspace_root: request.workspace_root.clone(),
             attachments: request.attachments.clone(),
             lens_items: Vec::new(),
@@ -1977,6 +2033,11 @@ async fn loop_body(
     };
     write_summary(&runs_dir, &summary)?;
 
+    let memory_request = request.clone();
+    let memory_prior = prior_events.clone();
+    let memory = crate::blocking::run(move || {
+        Ok(memory_recall::for_conversation(&memory_request, &memory_prior, resuming))
+    }).await?;
     if !resuming {
         emit(AgentEvent::RunStarted {
             run_id: id.clone(),
@@ -1998,7 +2059,12 @@ async fn loop_body(
         }
         emit(AgentEvent::ContextSnapshot {
             run_id: id.clone(),
-            snapshot: snapshot_for(&request),
+            snapshot: {
+                let mut snapshot = snapshot_for(&request);
+                snapshot.memory = memory.clone();
+                snapshot.estimated_tokens += memory.as_ref().map_or(0, |m| m.estimated_tokens);
+                snapshot
+            },
             ts: now_ms(),
         })?;
     }
@@ -2012,7 +2078,11 @@ async fn loop_body(
         })?;
     }
 
-    let system = base_system_prompt(&request);
+    let mut system = base_system_prompt(&request);
+    if let Some(memory) = &memory {
+        system.push_str("\n\n");
+        system.push_str(&memory.prompt);
+    }
     let mut messages = provider_messages(&request, system, &id);
     if wake {
         // provider_messages ended with the (empty) user turn; the inbox
@@ -2107,6 +2177,14 @@ async fn loop_body(
     // Bounded, because a model that does this twice is not going to stop.
     const MAX_RUNAWAY_RESAMPLES: usize = 2;
     let mut runaway_resamples = 0usize;
+    // The `/goal` finish line (`goal.rs`): whether this Run has changed the
+    // workspace — an applied edit or a command — and how many "done" claims
+    // the gate has already sent back. Both stay zero on an ordinary turn.
+    // Delegate CLIs execute outside our tool dispatch. Always check their
+    // goal claims: observed events cannot prove that the workspace is unchanged.
+    let mut goal_work_done = request.goal.is_some()
+        && crate::delegate::lookup(&request.provider).is_some();
+    let mut goal_rounds_used = 0usize;
     // Reduced for the turn after a runaway. `None` means "whatever the request
     // asked for".
     let mut reply_budget_override: Option<usize> = None;
@@ -2435,6 +2513,19 @@ async fn loop_body(
         );
         if mcp.is_some() {
             lease.hold_delegate_session(&request.provider);
+            // The CLI's permission prompts come back through the bridge while
+            // this call is in flight; give that path the loop's own writer.
+            let port = permission_relay::OutOfBandPort {
+                sequence: sequence.clone(),
+                on_event: on_event.clone(),
+                runs_dir: runs_dir.clone(),
+            };
+            let mut port = Some(port);
+            sup.with_handle(&id, &mut |h| {
+                if let (Ok(mut slot), Some(port)) = (h.out_of_band.lock(), port.take()) {
+                    *slot = Some(port);
+                }
+            });
         }
 
         // Race the provider stream against user cancellation so abort takes
@@ -2462,6 +2553,12 @@ async fn loop_body(
             }) => result,
         };
         flush_stream(&stream_failure);
+        // The turn is over; a prompt arriving now has nothing to answer for.
+        sup.with_handle(&id, &mut |h| {
+            if let Ok(mut slot) = h.out_of_band.lock() {
+                *slot = None;
+            }
+        });
         let provider_result = match stream_failure.lock().unwrap().take() {
             Some(error) => Err(format!("Could not save streamed output: {error}")),
             None => provider_result,
@@ -2592,6 +2689,72 @@ async fn loop_body(
                     timing: turn_timing,
                     ts: now_ms(),
                 })?;
+                // A `/goal` turn's "done" is a claim: run the project's check
+                // and let the gate decide whether the Run may end. The
+                // assistant message is already in `messages` (pushed above),
+                // so a retry reads as: the model said done, the user replied
+                // with the failing check.
+                if let Some(spec) = request.goal.as_ref() {
+                    let check = match (request.workspace_root.as_deref(), goal_work_done) {
+                        (Some(root), true) => {
+                            run_goal_check(
+                                root,
+                                request.test_after_edit_command.as_deref(),
+                                request.command_timeout_secs.unwrap_or(180).clamp(1, 1800),
+                                &cancel,
+                            )
+                            .await
+                        }
+                        _ => None,
+                    };
+                    if cancel.is_cancelled() {
+                        finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
+                        return Ok(());
+                    }
+                    match goal::verdict(spec, goal_work_done, check.as_ref(), goal_rounds_used) {
+                        goal::GateVerdict::Retry { marker, message } => {
+                            goal_rounds_used += 1;
+                            emit(AgentEvent::SteeringInjected {
+                                run_id: id.clone(),
+                                reason: marker,
+                                ts: now_ms(),
+                            })?;
+                            messages.push(user_provider_message(&message, &[]));
+                            message_count += 1;
+                            continue;
+                        }
+                        goal::GateVerdict::Finish { marker: Some(marker) } => {
+                            if check.as_ref().is_some_and(|check| !check.ok) {
+                                let message = format!("{marker}\n\n{}", check.as_ref().unwrap().output);
+                                emit(AgentEvent::SteeringInjected {
+                                    run_id: id.clone(), reason: marker, ts: now_ms(),
+                                })?;
+                                emit(AgentEvent::RunResult {
+                                    run_id: id.clone(),
+                                    result: serde_json::json!({ "status": "error", "message": message }),
+                                    ts: now_ms(),
+                                })?;
+                                emit(AgentEvent::RunError {
+                                    run_id: id.clone(),
+                                    error: AgentError {
+                                        code: error_code::GOAL_CHECK_FAILED.into(), message,
+                                        detail: None, retryable: true,
+                                    },
+                                    ts: now_ms(),
+                                })?;
+                                settle_run(&mut lease, &runs_dir, &summary, message_count, AgentRunStatus::Error)?;
+                                completed = true;
+                                break;
+                            }
+                            emit(AgentEvent::SteeringInjected {
+                                run_id: id.clone(),
+                                reason: marker,
+                                ts: now_ms(),
+                            })?;
+                        }
+                        goal::GateVerdict::Finish { marker: None } => {}
+                    }
+                }
                 emit(AgentEvent::RunResult {
                     run_id: id.clone(),
                     result: serde_json::json!({ "status": "done" }),
@@ -2671,7 +2834,14 @@ async fn loop_body(
             })?;
 
             let kind = match plan_tool_step(&subject, &call, kind) {
-                ToolStepPlan::Execute { kind } => kind,
+                ToolStepPlan::Execute { kind } => {
+                    // A write or a command is work the goal gate must check;
+                    // a blocked call did nothing.
+                    if matches!(kind, Some(ToolKind::Write | ToolKind::Command)) {
+                        goal_work_done = true;
+                    }
+                    kind
+                }
                 ToolStepPlan::Blocked { result } => {
                     turn_observations.push(steering::CallObservation {
                         signature: steering::call_signature(&call),
@@ -4585,15 +4755,15 @@ mod provider_caller_tests {
 /// loop-level tests), and the "frontend" halves of the pause ceremonies
 /// (`answer_permission` / `answer_question`).
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use super::*;
     use std::collections::{HashMap, VecDeque};
 
     /// A supervisor backed by a plain map — no Tauri app. This is the second
     /// adapter that makes the seam real: the loop's run-scoped helpers can be
     /// exercised headlessly against it.
-    pub(super) struct FakeSupervisor {
-        pub(super) runs: Mutex<HashMap<String, AgentRunHandle>>,
+    pub(crate) struct FakeSupervisor {
+        pub(crate) runs: Mutex<HashMap<String, AgentRunHandle>>,
         coordination: CoordinationStoreState,
         /// Every child this supervisor was asked to start, in order. The fake
         /// answers each with a canned report, so a handler test can assert on
@@ -4617,7 +4787,7 @@ mod test_support {
             sup
         }
 
-        pub(super) fn with_run(id: &str) -> Self {
+        pub(crate) fn with_run(id: &str) -> Self {
             let mut runs = HashMap::new();
             runs.insert(id.to_string(), make_handle());
             Self {
@@ -4714,6 +4884,7 @@ mod test_support {
             pending_permission: Mutex::new(None),
             trust: permission::TrustMemory::default(),
             subject: permission::GateSubject::for_mode(AgentMode::Goal),
+            out_of_band: Mutex::new(None),
         }
     }
 
@@ -5637,6 +5808,113 @@ mod run_loop_tests {
         .expect("run loop settles without an infrastructure error");
     }
 
+    /// A `/goal` run's "done" is checked. The first claim fails the check
+    /// (the file the check wants is not there), the output goes back as a user
+    /// turn and the model gets another round; the second claim passes and the
+    /// Run ends done with both markers in the Transcript.
+    #[tokio::test]
+    async fn a_goal_claim_that_fails_the_check_buys_another_round() {
+        let (runs_dir, root) = sandbox("goal-gate");
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn(
+                "Writing the note.",
+                vec![scripted_tool_call(
+                    "call_a",
+                    "create_file",
+                    serde_json::json!({ "path": "note.txt", "contents": "draft" }),
+                )],
+            ),
+            scripted_turn("Done — the note is written.", vec![]),
+            scripted_turn(
+                "The check wants ok.txt; creating it.",
+                vec![scripted_tool_call(
+                    "call_b",
+                    "create_file",
+                    serde_json::json!({ "path": "ok.txt", "contents": "ok" }),
+                )],
+            ),
+            scripted_turn("Done, and the check passes now.", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-run"));
+        let mut request = test_request(&root, &[]);
+        request.test_after_edit_command = Some("test -f ok.txt".to_string());
+        request.goal = Some(goal::GoalSpec { objective: "leave a note and an ok marker".into(), max_rounds: None });
+        drive_loop(sup, &runs_dir, "goal-run", request, caller.clone()).await;
+
+        assert_eq!(read_summary(&runs_dir, "goal-run").unwrap().status, "done");
+        let events = read_events(&runs_dir, "goal-run").unwrap();
+        let markers: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::SteeringInjected { reason, .. } if reason.starts_with("Goal") => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            markers,
+            vec![
+                "Goal check `test -f ok.txt` failed — round 1 of 3, going again".to_string(),
+                "Goal reached: `test -f ok.txt` passed after 2 rounds".to_string(),
+            ]
+        );
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::RunResult { .. })).count(), 1);
+        // The third call saw the failing check as the newest user turn.
+        let seen = caller.seen_messages.lock().unwrap();
+        let third_last = seen[2].last().unwrap();
+        assert_eq!(third_last["role"], "user");
+        let text = third_last["content"].as_str().unwrap();
+        assert!(text.contains("round 1 of 3"), "{text}");
+        assert!(text.contains("Goal: leave a note and an ok marker"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_goal_with_exhausted_checks_ends_in_error() {
+        let (runs_dir, root) = sandbox("goal-exhausted");
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Write.", vec![scripted_tool_call("write", "create_file",
+                serde_json::json!({ "path": "note.txt", "contents": "draft" }))]),
+            scripted_turn("Done.", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-exhausted"));
+        let mut request = test_request(&root, &[]);
+        request.test_after_edit_command = Some("false".into());
+        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1) });
+        drive_loop(sup, &runs_dir, "goal-exhausted", request, caller).await;
+        assert_eq!(read_summary(&runs_dir, "goal-exhausted").unwrap().status, "error");
+        let events = read_events(&runs_dir, "goal-exhausted").unwrap();
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::RunResult { result, .. }
+            if result["status"] == "error" && result["message"].as_str().unwrap_or("").contains("Goal not reached"))));
+    }
+
+    #[tokio::test]
+    async fn a_delegate_goal_checks_even_without_dispatched_tools() {
+        let (runs_dir, root) = sandbox("goal-delegate");
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Done.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-delegate"));
+        let mut request = test_request(&root, &[]);
+        request.provider = "claude-code".into();
+        request.test_after_edit_command = Some("false".into());
+        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1) });
+        drive_loop(sup, &runs_dir, "goal-delegate", request, caller).await;
+        assert_eq!(read_summary(&runs_dir, "goal-delegate").unwrap().status, "error");
+    }
+
+    /// Without a change to the workspace there is nothing to check: a `/goal`
+    /// that was answered in words ends like any other turn, no marker.
+    #[tokio::test]
+    async fn a_goal_answered_without_work_ends_quietly() {
+        let (runs_dir, root) = sandbox("goal-nowork");
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Already true.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("goal-nowork"));
+        let mut request = test_request(&root, &[]);
+        request.test_after_edit_command = Some("false".to_string());
+        request.goal = Some(goal::GoalSpec { objective: "confirm the sky is blue".into(), max_rounds: None });
+        drive_loop(sup, &runs_dir, "goal-nowork", request, caller).await;
+        assert_eq!(read_summary(&runs_dir, "goal-nowork").unwrap().status, "done");
+        let events = read_events(&runs_dir, "goal-nowork").unwrap();
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::SteeringInjected { .. })));
+    }
+
     /// Stop during a foreground command ends the Run as cancelled at once —
     /// before, the loop sat on the command until its own timer fired.
     #[tokio::test]
@@ -5745,17 +6023,15 @@ mod run_loop_tests {
         let id = "lease-panic";
         let shell = background::spawn(id, &root, "sleep 30").unwrap();
         let sup = Arc::new(FakeSupervisor::with_run(id));
-        let joined = tokio::spawn(run_agent_loop(
-            sup.clone(),
-            runs_dir.clone(),
-            id.to_string(),
-            test_request(&root, &[]),
-            Channel::new(|_| Ok(())),
-            CancellationToken::new(),
-            PanickingCaller,
-        ))
-        .await;
-        assert!(joined.is_err(), "the panic surfaces as a join error");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        run_host::spawn_loop(
+            sup.clone(), runs_dir.clone(), id.to_string(),
+            test_request(&root, &[]), Channel::new(|_| Ok(())),
+            run_host::Admitted { cancel: CancellationToken::new(), prior_events: vec![] },
+            PanickingCaller, move |result| { let _ = tx.send(result); },
+        );
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx).await.unwrap().unwrap();
+        assert!(result.is_err(), "the host reports the panic");
         assert!(!sup.with_handle(id, &mut |_| {}));
         assert!(background::list(id).iter().all(|s| s.id != shell.id));
         assert_eq!(read_summary(&runs_dir, id).unwrap().status, "error");

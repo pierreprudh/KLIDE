@@ -1,3 +1,4 @@
+import { MemoryInboxIcon } from "./components/MemoryInboxIcon";
 import { registerGitOpener, type GitDestination } from "./gitNavigation";
 import {
   Fragment,
@@ -23,7 +24,6 @@ import {
   TerminalIcon,
   FolderIcon,
   GitIcon,
-  MemoryIcon,
   MissionIcon,
   NewTaskIcon,
   OrchestratorIcon,
@@ -1064,7 +1064,7 @@ function App() {
     {
       id: "memory",
       label: "Memory",
-      icon: <MemoryIcon size={15} />,
+      icon: <MemoryInboxIcon />,
       active: activityState.memory,
       onClick: () => togglePanel("memory"),
     },
@@ -1133,7 +1133,7 @@ function App() {
     {
       id: "memory",
       label: "Memory",
-      icon: <MemoryIcon size={15} />,
+      icon: <MemoryInboxIcon />,
       active: activityState.memory,
       onClick: () => togglePanel("memory"),
     },

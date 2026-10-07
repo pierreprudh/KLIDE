@@ -46,6 +46,8 @@ pub(crate) async fn local_server_is_up(provider: &str) -> bool {
 fn local_server_command(provider: &str, model: &str) -> Result<(String, Vec<String>), String> {
     match provider {
         "ollama" => Ok(("ollama".to_string(), vec!["serve".to_string()])),
+        "llamacpp" => Ok((crate::llamacpp_setup::server_path()?,
+            crate::llamacpp_models::launch_args(&crate::llamacpp_models::launch_model()))),
         "mlx" => {
             let model = canonical_mlx_model(model);
             // Gemma 4 ships the `gemma4_unified` multimodal arch, which mlx_lm
@@ -203,6 +205,9 @@ async fn local_server_ready(provider: &str) -> bool {
             .await
             .map(|res| res.status().is_success())
             .unwrap_or(false),
+        "llamacpp" => reqwest::Client::new().get("http://127.0.0.1:8081/health")
+            .timeout(Duration::from_secs(2)).send().await
+            .map(|res| res.status().is_success()).unwrap_or(false),
         "mlx" => mlx_server_ready().await,
         _ => false,
     }
@@ -211,6 +216,7 @@ async fn local_server_ready(provider: &str) -> bool {
 fn local_server_start_attempts(provider: &str) -> usize {
     match provider {
         // First MLX run can include Hugging Face download + Metal model load.
+        "llamacpp" => 2400,
         "mlx" => 360,
         _ => 40,
     }
@@ -227,9 +233,25 @@ pub(crate) async fn ai_local_server_start(
         return Err(format!("{provider} is not a local server provider"));
     }
 
+    // Serialize setup/start so multiple panels cannot spawn competing downloads.
+    static LLAMA_START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _llama_guard = if provider == "llamacpp" { Some(LLAMA_START.lock().await) } else { None };
+
     // Already running externally or previously started. Still warm the model:
     // the port can be up while the model is unloaded / mid-download.
     if local_server_ready(&provider).await {
+        if provider == "llamacpp" {
+            let expected = tokio::task::spawn_blocking(crate::llamacpp_models::launch_model)
+                .await.map_err(|e| e.to_string())?;
+            let models: serde_json::Value = reqwest::Client::new()
+                .get("http://127.0.0.1:8081/v1/models")
+                .timeout(Duration::from_secs(2)).send().await.map_err(|e| e.to_string())?
+                .error_for_status().map_err(|e| e.to_string())?
+                .json().await.map_err(|e| e.to_string())?;
+            if !models["data"].as_array().is_some_and(|rows| rows.iter().any(|r| r["id"].as_str() == Some(&expected))) {
+                return Err("A different model is already running on the llama.cpp port. Stop that server before starting your selected model.".into());
+            }
+        }
         if provider == "mlx" {
             let _ = warm_mlx_model(&canonical_mlx_model(&model)).await;
         }
@@ -243,6 +265,10 @@ pub(crate) async fn ai_local_server_start(
         }
     }
 
+    if provider == "llamacpp" {
+        crate::llamacpp_setup::ensure_installed().await?;
+        crate::llamacpp_models::ensure_model().await?;
+    }
     let (cmd, args) = local_server_command(&provider, &model)?;
 
     let hf_cache_dir = if provider == "mlx" {
@@ -501,5 +527,22 @@ mod tests {
             mtp_drafter_for("mlx-community/gemma-4-E4B-it-qat-4bit"),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod llama_tests {
+    use super::*;
+    #[test]
+    fn llama_launch_is_local_tool_enabled_and_bounded() {
+        // Command construction needs no installed runtime when testing arguments.
+        let entry = crate::providers::lookup("llamacpp").unwrap();
+        assert!(entry.is_local_server);
+        assert_eq!(entry.context_window, Some(16384));
+        assert!(local_server_start_attempts("llamacpp") >= 1200);
+        if let crate::providers::WireFormat::OpenAi(config) = entry.wire {
+            assert_eq!(config.chat_url, "http://127.0.0.1:8081/v1/chat/completions");
+            assert!(config.include_tools);
+        } else { panic!("llama.cpp must use the OpenAI adapter"); }
     }
 }

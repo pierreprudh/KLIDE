@@ -919,6 +919,7 @@ fn start_request_for(
         initial_text: prompt,
         attachments: vec![],
         context: Some(AgentContextSnapshot {
+            memory: None,
             workspace_root: Some(workspace_root.to_string()),
             attachments: vec![],
             lens_items: vec![],
@@ -942,6 +943,7 @@ fn start_request_for(
         max_turns: None,
         command_timeout_secs: None,
         test_after_edit_command: None,
+        goal: None,
         command_allowlist: vec![],
         require_diff_review: Some(dispatch.require_diff_review),
         // Mission attempts keep the command permission gate: its pauses have

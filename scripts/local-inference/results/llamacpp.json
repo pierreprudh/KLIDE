@@ -1,0 +1,216 @@
+{
+  "context": 8192,
+  "maxTokens": 256,
+  "provider": "llamacpp",
+  "rows": [
+    {
+      "completionTokens": 3,
+      "repeat": 0,
+      "response": {
+        "content": "Ready.",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 3,
+          "promptTokens": 48
+        }
+      },
+      "scenario": "warmup",
+      "seconds": 1.257881667,
+      "streamTokensPerSecond": 191.82403750850528,
+      "toolCorrect": false,
+      "ttftSeconds": 1.242242334
+    },
+    {
+      "completionTokens": 17,
+      "repeat": 0,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/components/AiPanel.tsx')]<|tool_call_end|>",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 17,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 0.428893292,
+      "streamTokensPerSecond": 58.22654772859916,
+      "toolCorrect": false,
+      "ttftSeconds": 0.13693025
+    },
+    {
+      "completionTokens": 17,
+      "repeat": 1,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/components/AiPanel.tsx')]<|tool_call_end|>",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 17,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 0.32304,
+      "streamTokensPerSecond": 59.96960944795375,
+      "toolCorrect": false,
+      "ttftSeconds": 0.039563083
+    },
+    {
+      "completionTokens": 17,
+      "repeat": 2,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/components/AiPanel.tsx')]<|tool_call_end|>",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 17,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 0.320609208,
+      "streamTokensPerSecond": 60.121037936954934,
+      "toolCorrect": false,
+      "ttftSeconds": 0.037846292
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 0,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/utils.ts')]<|tool_call_end|>",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 13,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 1.9860017920000002,
+      "streamTokensPerSecond": 71.37740794568252,
+      "toolCorrect": false,
+      "ttftSeconds": 1.803871334
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 1,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/utils.ts')]<|tool_call_end|>",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 13,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 0.270548334,
+      "streamTokensPerSecond": 57.91247782559066,
+      "toolCorrect": false,
+      "ttftSeconds": 0.046071667
+    },
+    {
+      "completionTokens": 13,
+      "repeat": 2,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/utils.ts')]<|tool_call_end|>",
+        "thinking": null,
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 13,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 0.256233084,
+      "streamTokensPerSecond": 59.444695003833885,
+      "toolCorrect": false,
+      "ttftSeconds": 0.037542417
+    },
+    {
+      "completionTokens": 12,
+      "repeat": 0,
+      "response": {
+        "content": "",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": "{\"path\":\"src/utils.ts\"}",
+              "name": "read_file"
+            },
+            "id": "On6Nvmsg5nQz9106z1nZSTkG93gvcUPD",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "completionTokens": 12,
+          "promptTokens": 116
+        }
+      },
+      "scenario": "tool",
+      "seconds": 0.3695275,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 12,
+      "repeat": 1,
+      "response": {
+        "content": "",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": "{\"path\":\"src/utils.ts\"}",
+              "name": "read_file"
+            },
+            "id": "MTmSwOIKvPhcwhNh4iTJ7iJnXFERsrh6",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "completionTokens": 12,
+          "promptTokens": 116
+        }
+      },
+      "scenario": "tool",
+      "seconds": 0.270925709,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    },
+    {
+      "completionTokens": 12,
+      "repeat": 2,
+      "response": {
+        "content": "",
+        "thinking": null,
+        "toolCalls": [
+          {
+            "function": {
+              "arguments": "{\"path\":\"src/utils.ts\"}",
+              "name": "read_file"
+            },
+            "id": "cEb69V6MfOuqG77yH88bcocffw16My0C",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "completionTokens": 12,
+          "promptTokens": 116
+        }
+      },
+      "scenario": "tool",
+      "seconds": 0.2990285,
+      "streamTokensPerSecond": null,
+      "toolCorrect": true,
+      "ttftSeconds": null
+    }
+  ],
+  "seed": 42,
+  "temperature": 0
+}

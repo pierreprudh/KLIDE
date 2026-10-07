@@ -173,6 +173,14 @@ pub enum BridgeRequest {
         status: String,
         summary: String,
     },
+    /// A Delegate CLI's own permission prompt (`--permission-prompt-tool`),
+    /// to be answered by the bound Run's operator — see `agent/permission_relay.rs`.
+    Permission {
+        tool_name: String,
+        input: serde_json::Value,
+        #[serde(default)]
+        tool_use_id: Option<String>,
+    },
 }
 
 /// The bridge's answer: one JSON value, or one readable error line.
@@ -214,8 +222,17 @@ pub type OrchestrationHook = Box<
         + Sync,
 >;
 
+/// A relayed permission prompt: the bound session and what the CLI asked.
+/// Blocks until answered. `None` in a host with nobody to ask.
+pub type PermissionHook = Box<
+    dyn Fn(&BridgeSession, crate::agent::permission_relay::DelegatePermissionAsk) -> Result<serde_json::Value, String>
+        + Send
+        + Sync,
+>;
+
 pub struct BridgeHooks {
     pub orchestrate: Option<OrchestrationHook>,
+    pub permission: Option<PermissionHook>,
     pub on_change: Box<dyn Fn(&str, &CoordinationCommandOutcome) + Send + Sync>,
     pub is_live: Box<dyn Fn(&str) -> bool + Send + Sync>,
     /// Signal the live cancellation of a Run this process executes, after the
@@ -234,6 +251,7 @@ impl BridgeHooks {
     pub fn silent() -> Self {
         Self {
             orchestrate: None,
+            permission: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
             cancel: None,
@@ -323,6 +341,17 @@ fn execute_inner(
         BridgeRequest::Orchestrate { request } => {
             return hooks.orchestrate.as_ref()
                 .ok_or("Mission orchestration is unavailable in this host.")?(session, request);
+        }
+        BridgeRequest::Permission { tool_name, input, tool_use_id } => {
+            let ask = crate::agent::permission_relay::DelegatePermissionAsk { tool_name, input, tool_use_id };
+            return match hooks.permission.as_ref() {
+                Some(hook) => hook(session, ask),
+                // Said in the CLI's own vocabulary, so a missing host reads as
+                // a refusal to the model rather than a broken tool.
+                None => Ok(serde_json::json!({
+                    "text": serde_json::json!({ "behavior": "deny", "message": "Klide has nobody to ask in this host." }).to_string()
+                })),
+            };
         }
         BridgeRequest::PublishResult { status, summary } => {
             let summary = summary.trim().to_string();
@@ -1209,6 +1238,7 @@ mod tests {
         let (store, _bridge, session) = bound(&root);
         let hooks = BridgeHooks {
             orchestrate: None,
+            permission: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|id| id == "run_kit"),
             cancel: None,
@@ -1233,6 +1263,7 @@ mod tests {
         let counter = changes.clone();
         let hooks = BridgeHooks {
             orchestrate: None,
+            permission: None,
             on_change: Box::new(move |_, _| *counter.lock().unwrap() += 1),
             is_live: Box::new(|_| false),
             cancel: None,
@@ -1506,6 +1537,7 @@ mod tests {
             // journaled, before the bridge starts waiting. No model or sleeps.
             let hooks = BridgeHooks {
                 orchestrate: None,
+                permission: None,
                 on_change: Box::new(move |root, outcome| {
                     let Some(line) = &outcome.appended else {
                         return;
@@ -1792,6 +1824,7 @@ mod tests {
         let counted = asked.clone();
         let hooks = BridgeHooks {
             orchestrate: None,
+            permission: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
             cancel: None,
@@ -1983,6 +2016,7 @@ mod tests {
         let hooks_root = root.clone();
         let hooks = BridgeHooks {
             orchestrate: None,
+            permission: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
             cancel: None,
@@ -2032,6 +2066,7 @@ mod tests {
         let hooks_root = root.clone();
         let hooks = BridgeHooks {
             orchestrate: None,
+            permission: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
             cancel: None,

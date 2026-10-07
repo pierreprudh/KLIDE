@@ -60,6 +60,28 @@ export const PROVIDER_ROWS = [
     "contextWindow": 128000
   },
   {
+    "id": "llamacpp",
+    "label": "llama.cpp",
+    "shortLabel": null,
+    "group": "local",
+    "wire": "openai",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": "pierreprudh/klide-8b",
+    "presets": [],
+    "brand": "llamacpp",
+    "hasCredits": false,
+    "isLocalServer": true,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": true,
+      "appendTodoUpdates": true
+    },
+    "contextWindow": 16384
+  },
+  {
     "id": "lmstudio",
     "label": "LM Studio",
     "shortLabel": null,
@@ -71,6 +93,28 @@ export const PROVIDER_ROWS = [
     "defaultModel": "local-model",
     "presets": [],
     "brand": "lmstudio",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false,
+      "appendTodoUpdates": false
+    },
+    "contextWindow": null
+  },
+  {
+    "id": "llamaapp",
+    "label": "Llama app",
+    "shortLabel": null,
+    "group": "local",
+    "wire": "openai",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": "local-model",
+    "presets": [],
+    "brand": "llamacpp",
     "hasCredits": false,
     "isLocalServer": false,
     "hasNumCtx": false,

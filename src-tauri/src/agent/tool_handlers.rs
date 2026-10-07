@@ -1514,6 +1514,16 @@ where
             .collect()
     };
 
+    // The Python a script would start, with the exact PATH it gets — the card
+    // shows it so "which env does this run in?" is answered before Run.
+    let interpreter = {
+        let dir = tools::resolve_command_dir(root_value, &cwd).ok();
+        let command = command.clone();
+        crate::blocking::run_infallible(move || {
+            dir.and_then(|dir| super::command_env::interpreter_for(&dir, &command))
+        })
+        .await
+    };
     let perm = PermissionRequest {
         id: permission::request_id(ctx, call),
         run_id: ctx.id.to_string(),
@@ -1522,6 +1532,7 @@ where
         input: serde_json::json!({
             "command": command,
             "cwd": cwd,
+            "interpreter": interpreter,
             "externalPaths": external_paths,
             "matchedAllowRule": matched_rule.as_ref().map(|rule| rule.pattern.clone())
         }),

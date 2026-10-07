@@ -1177,12 +1177,10 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Welcome screen — an immersive dark cosmos, independent of the app theme.
-   A procedurally shaded ASCII planet emerges full-width from the bottom
-   edge; glass cards float over a deep-space gradient. Content fades up in
-   one staggered wave on mount, then stillness. The scope sets its own
-   fixed dark palette so glassmorphism reads regardless of the active
-   theme. */
+   Welcome screen — a framed big-pixel nature film beside the actions,
+   independent of the app theme (PixelNature.tsx draws it on one canvas).
+   Content fades up in one staggered wave on mount, then stillness. The
+   scope sets its own fixed dark palette, flipped below for light themes. */
 .klide-welcome {
   --w-fg:          #eef2f8;
   --w-dim:         rgba(238, 242, 248, 0.56);
@@ -1191,9 +1189,7 @@ textarea.klide-diff-comment-input:focus-visible {
   --w-glass:       rgba(255, 255, 255, 0.045);
   --w-glass-hover: rgba(255, 255, 255, 0.085);
   --w-border:      rgba(255, 255, 255, 0.10);
-  /* Blue atmosphere halo behind the blue-ocean planet. Focus/interactive
-     states use brand sage (lightened here to read on the dark card). */
-  --w-atmos:       #6f9bff;
+  /* Focus/interactive states use brand sage (lightened to read on dark). */
   --w-ring:        rgba(122, 160, 100, 0.34);
   --w-ring-solid:  rgba(122, 160, 100, 0.55);
   /* Values that were once hardcoded white/black so the light-theme override
@@ -1207,7 +1203,7 @@ textarea.klide-diff-comment-input:focus-visible {
   /* Gutter follows the active theme's own elevated surface — in every theme,
      light OR dark — so the welcome never drifts from the rest of the app
      (VS Code Dark #252526, Solarized #073642, Klide Light #fcfbf8, …). Colour
-     lives inside the framed cosmos card; the gutter is the calm backdrop it
+     lives inside the framed film card; the gutter is the calm backdrop it
      floats on, and the near-black card always stays the darkest element. */
   background: var(--bg-elevated);
   container-type: size;
@@ -1217,7 +1213,7 @@ textarea.klide-diff-comment-input:focus-visible {
 /* Light themes: the welcome chrome (gutter, text, buttons, recent rows)
    flips to dark-on-light so it follows the app's light/dark — including
    auto-mode, which writes the resolved theme to documentElement.data-theme.
-   The framed cosmos card stays a dark "window into space" in both modes;
+   The framed film card keeps its own palette in both modes;
    here it floats on the theme's own background instead of a dark gutter. */
 :root[data-theme="klide-light"] .klide-welcome,
 :root[data-theme="sage-garden"] .klide-welcome,
@@ -1244,7 +1240,7 @@ textarea.klide-diff-comment-input:focus-visible {
      competitor idiom rather than flat cream or clinical pure white. */
 }
 
-/* Two-pane split: content column on the left, framed cosmos card on the
+/* Two-pane split: content column on the left, framed film card on the
    right (mirrors the reference layout). */
 .klide-welcome--split {
   flex: 1;
@@ -1333,170 +1329,24 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
-/* The cosmos fills the whole surface. A single monochrome earth layer
-   (its form carried by glyph weight + density) plus a separate dim
-   starfield, anchored bottom-centre and cropped so the horizon stays
-   centred at any width. */
-.klide-welcome-cosmos {
+/* Big-pixel nature film. The card is a plain frame: the canvas paints
+   edge to edge, crisp, no vignette. */
+.klide-welcome-card.is-nature {
+  background: #1b140f;
+  border: 1px solid rgba(28, 28, 28, 0.08);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 24px 60px -18px rgba(28, 28, 28, 0.35);
+}
+
+.klide-nature-canvas {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
   pointer-events: none;
-  user-select: none;
-  /* Soft radial vignette so the art dissolves into the card rather than
-     ending at a hard rectangular edge. */
-  -webkit-mask-image: radial-gradient(82% 78% at 50% 46%, #000 52%, transparent 94%);
-  mask-image: radial-gradient(82% 78% at 50% 46%, #000 52%, transparent 94%);
-}
-
-/* Soft backlight behind the planet, centred in the card. */
-.klide-cosmos-glow {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 78%;
-  height: 78%;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(
-    circle at 42% 40%,
-    color-mix(in srgb, var(--w-atmos) 16%, transparent) 0%,
-    color-mix(in srgb, var(--w-atmos) 6%, transparent) 34%,
-    transparent 64%
-  );
-  filter: blur(34px);
-  opacity: 0.5;
-}
-
-/* Each ASCII layer is the full card-sized grid, centred so the generated
-   sphere sits dead-centre in the frame. */
-.klide-cosmos-layer {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  margin: 0;
-  transform: translate(-50%, -50%);
-  font-family: var(--font-mono);
-  font-size: var(--cosmos-font);
-  line-height: 1.0;
-  letter-spacing: 0;
-  white-space: pre;
-}
-
-/* Ocean — the diagonal blue day/night gradient: bright on the lit upper-left,
-   deepening into night toward the lower-right. */
-.klide-cosmos-layer.is-planet-ocean {
-  opacity: 0.94;
-  background-image: linear-gradient(
-    135deg,
-    #e9f5ff 0%,
-    #a9d2ff 22%,
-    #5e96e0 46%,
-    #356bb0 66%,
-    #1d3a6b 84%,
-    #142a4f 100%
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  text-shadow: 0 0 6px rgba(20, 90, 160, 0.16);
-}
-
-/* Continents — brand-leaning green, sharing the ocean's 135deg light
-   direction so land and sea read as one lit sphere. Stacked over the ocean
-   layer; the two masks never overlap, so together they paint the whole globe.
-   Nudged a touch brighter/opaque so the land sits visually above the water. */
-.klide-cosmos-layer.is-planet-land {
-  opacity: 0.96;
-  background-image: linear-gradient(
-    135deg,
-    #e4f3cf 0%,
-    #aad080 22%,
-    #6f9e4f 46%,
-    #4c7838 66%,
-    #2c4d24 84%,
-    #1d331b 100%
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  text-shadow: 0 0 6px rgba(60, 120, 50, 0.20);
-}
-
-.klide-cosmos-layer.is-planet-glow {
-  opacity: 0.85;
-  background-image: linear-gradient(
-    135deg,
-    #f2faff 0%,
-    #9fdcff 40%,
-    #4aa8ff 78%,
-    #2f7fe0 100%
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  text-shadow:
-    0 0 7px rgba(60, 180, 255, 0.5),
-    0 0 18px rgba(0, 140, 255, 0.22);
-}
-
-.klide-cosmos-layer.is-stars {
-  color: rgba(150, 180, 210, 0.6);
-  opacity: 0.5;
-  text-shadow: 0 0 4px rgba(120, 160, 220, 0.16);
-}
-
-.klide-cosmos-layer.is-bright-stars {
-  color: rgba(220, 234, 244, 0.7);
-  opacity: 0.72;
-  text-shadow:
-    0 0 5px rgba(190, 225, 255, 0.3),
-    0 0 13px rgba(80, 160, 255, 0.16);
-}
-
-/* ── Idle motion ─────────────────────────────────────────────────────────
-   The sphere drifts as if suspended — a slow vertical breathe rather than a
-   spin (the lighting is baked into the glyphs, so an actual rotate would drag
-   the lit hemisphere around with it). Stars drift the opposite way a touch
-   slower for parallax depth, the backlight breathes, and bright stars twinkle.
-   Amplitudes stay tiny (≤4px) so it reads as life, not movement. Each keyframe
-   carries the layer's base translate(-50%,-50%) centring through the motion.
-   Disabled wholesale under reduced-motion. */
-@keyframes klide-cosmos-float {
-  0%, 100% { transform: translate(-50%, calc(-50% - 4px)); }
-  50%      { transform: translate(-50%, calc(-50% + 4px)); }
-}
-@keyframes klide-cosmos-drift {
-  0%, 100% { transform: translate(-50%, calc(-50% + 3px)); }
-  50%      { transform: translate(-50%, calc(-50% - 3px)); }
-}
-@keyframes klide-cosmos-breathe {
-  0%, 100% { opacity: 0.46; transform: translate(-50%, -50%) scale(1); }
-  50%      { opacity: 0.62; transform: translate(-50%, -50%) scale(1.04); }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .klide-cosmos-layer.is-planet-ocean,
-  .klide-cosmos-layer.is-planet-land,
-  .klide-cosmos-layer.is-planet-glow {
-    animation: klide-cosmos-float 11s var(--ease-in-out, ease-in-out) infinite;
-    will-change: transform;
-  }
-  .klide-cosmos-layer.is-stars {
-    animation: klide-cosmos-drift 15s var(--ease-in-out, ease-in-out) infinite;
-    will-change: transform;
-  }
-  .klide-cosmos-layer.is-bright-stars {
-    /* Per-star twinkle is rendered in JS (buildStarfield); the layer only
-       drifts for parallax. */
-    animation: klide-cosmos-drift 15s var(--ease-in-out, ease-in-out) infinite;
-    will-change: transform;
-  }
-  .klide-cosmos-glow {
-    animation: klide-cosmos-breathe 11s var(--ease-in-out, ease-in-out) infinite;
-    will-change: transform, opacity;
-  }
 }
 
 /* Glass action button — translucent, blurred, hairline border. */
@@ -1832,6 +1682,21 @@ textarea.klide-diff-comment-input:focus-visible {
   .klide-welcome-rise {
     animation: none;
   }
+}
+
+/* The page is hidden as far as WebKit knows, so its animation clock is
+   stopped (main.tsx sets the attribute). A zero-length animation is already
+   past its end at time 0, so every `both`-filled entrance shows its final
+   frame instead of holding at opacity 0, and a transition lands at once
+   instead of hanging at its first value. Lifted the moment the page is
+   visible again; nothing moves while it is set, which it couldn't anyway. */
+:root[data-motion-still] *,
+:root[data-motion-still] *::before,
+:root[data-motion-still] *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
 }
 
 /* Settings slider. A native <input type="range"> rather than a component
@@ -5971,6 +5836,9 @@ button:focus-visible .menu-leadout {
   color: var(--fg);
   font: inherit;
   text-align: left;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
   opacity: 1;
   visibility: visible;
   backdrop-filter: var(--composer-blur);
@@ -6006,8 +5874,10 @@ button:focus-visible .menu-leadout {
   }
 }
 
-.klide-focus-git-island:hover {
+.klide-focus-git-island:hover,
+.klide-focus-git-island:focus-visible {
   border-color: var(--border-strong);
+  outline: none;
 }
 
 /* Pinged by the branch in the composer strip: the island swells a little and

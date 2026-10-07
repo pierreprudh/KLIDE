@@ -1,0 +1,160 @@
+.klide-llama-body {
+  display: grid;
+  gap: 20px;
+  padding: 24px 18px 28px;
+}
+
+.klide-llama-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-strong);
+}
+
+.klide-llama-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.klide-llama-controls .klide-button {
+  min-height: 36px;
+}
+
+.klide-llama-setup button:disabled,
+.klide-llama-models:disabled .klide-llama-card-choice {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.klide-llama-setup button:disabled:hover {
+  transform: none;
+}
+
+.klide-llama-hint,
+.klide-llama-details {
+  color: var(--fg-subtle);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.klide-llama-details summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  cursor: pointer;
+  list-style: none;
+}
+
+.klide-llama-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.klide-llama-details summary::marker {
+  content: "";
+}
+
+.klide-llama-details summary > span {
+  display: inline-flex;
+  transform: rotate(-90deg);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.klide-llama-details[open] summary > span {
+  transform: rotate(0deg);
+}
+
+.klide-llama-details summary:hover {
+  color: var(--fg-strong);
+}
+
+.klide-llama-details > div {
+  max-width: 60ch;
+  padding-top: 10px;
+}
+
+.klide-llama-engine {
+  justify-self: start;
+  padding-inline: 0;
+}
+
+.klide-llama-error {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 0 18px 24px;
+  color: var(--fg-subtle);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.klide-llama-models {
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 0;
+}
+
+.klide-llama-models legend { margin-bottom: 14px; padding: 0; }
+
+.klide-llama-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 14px;
+  max-width: 960px;
+}
+
+.klide-llama-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out);
+}
+
+.klide-llama-card[data-selected="true"] {
+  border-color: var(--fg-subtle);
+  background: var(--bg-selected);
+}
+
+.klide-llama-card:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+.klide-llama-card-choice { position: relative; cursor: pointer; flex: 1; }
+.klide-llama-models:disabled .klide-llama-card-choice { cursor: default; }
+.klide-llama-card-choice input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.klide-llama-card-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88px;
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg-strong);
+}
+
+.klide-llama-card-content { display: grid; gap: 8px; padding: 14px 8px 8px; }
+.klide-llama-card-badges { display: flex; flex-wrap: wrap; gap: 6px; min-height: 16px; }
+.klide-llama-card-badges span { font-size: 10px; color: var(--fg-subtle); }
+.klide-llama-card-title { color: var(--fg-strong); font-size: 14px; font-weight: 700; }
+.klide-llama-card-description { min-height: 36px; color: var(--fg-subtle); font-size: 12px; line-height: 1.5; }
+.klide-llama-card-stats { display: grid; gap: 6px; margin: 8px 0 0; font-size: 11px; }
+.klide-llama-card-stats > div { display: flex; justify-content: space-between; gap: 8px; }
+.klide-llama-card-stats dt { color: var(--fg-subtle); }
+.klide-llama-card-stats dd { color: var(--fg-strong); margin: 0; }
+.klide-llama-card-fit { color: var(--fg-subtle); font-size: 10px; line-height: 1.5; }
+.klide-llama-card-footer { display: flex; align-items: center; justify-content: space-between; padding: 8px; gap: 8px; }
+.klide-llama-card-footer a { color: var(--fg-subtle); font-size: 11px; text-decoration: none; }
+.klide-llama-card-footer a:hover { color: var(--fg-strong); text-decoration: underline; }
+.klide-llama-card-selected { display: inline-flex; width: 14px; color: var(--fg-strong); }

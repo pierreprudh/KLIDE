@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatClock,
+  formatDayStamp,
   formatHours,
   formatSpan,
   relativeTime,
@@ -75,5 +77,32 @@ describe("formatHours", () => {
 
   it("rounds to the nearest minute", () => {
     expect(formatHours(HOUR + MIN + 30 * SEC)).toBe("1h 02m");
+  });
+});
+
+describe("formatDayStamp", () => {
+  // Pinned zone; the wording is English regardless of locale.
+  const opts = { timeZone: "UTC" };
+  // 2026-10-05 11:29 UTC, a Monday.
+  const now = Date.UTC(2026, 9, 5, 11, 29);
+
+  it("says Today and Yesterday by calendar day, not by 24-hour span", () => {
+    expect(formatDayStamp(now, now, opts)).toBe("Today 11:29 AM");
+    expect(formatDayStamp(Date.UTC(2026, 9, 5, 0, 5), now, opts)).toBe("Today 12:05 AM");
+    expect(formatDayStamp(Date.UTC(2026, 9, 4, 16, 40), now, opts)).toBe("Yesterday 4:40 PM");
+    expect(formatDayStamp(Date.UTC(2026, 9, 4, 23, 59), now, opts)).toBe("Yesterday 11:59 PM");
+  });
+
+  it("names the weekday inside the week, then the date", () => {
+    expect(formatDayStamp(Date.UTC(2026, 9, 2, 9, 0), now, opts)).toBe("Friday 9:00 AM");
+    expect(formatDayStamp(Date.UTC(2026, 8, 20, 9, 0), now, opts)).toBe("Sep 20 9:00 AM");
+  });
+
+  it("adds the year only once it differs", () => {
+    expect(formatDayStamp(Date.UTC(2025, 11, 24, 18, 0), now, opts)).toBe("Dec 24, 2025 6:00 PM");
+  });
+
+  it("formats a bare clock reading", () => {
+    expect(formatClock(now, opts)).toBe("11:29 AM");
   });
 });

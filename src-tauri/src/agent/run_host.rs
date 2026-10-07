@@ -131,6 +131,7 @@ pub(super) fn admit(
             pending_permission: Mutex::new(None),
             trust: permission::TrustMemory::default(),
             subject: permission::GateSubject::from_request(request),
+            out_of_band: Mutex::new(None),
         },
     );
     Ok(Admitted { cancel, prior_events })
@@ -179,7 +180,10 @@ pub(super) fn spawn_loop(
                 let (sup, runs_dir, id, on_event, sequence) = &backstop;
                 let message = "run panicked".to_string();
                 settle_backstop(sup.as_ref(), runs_dir, id, sequence, on_event, &message);
-                sup.retire_run(id);
+                // Finish the summary and cleanup while admission is still held.
+                let mut recovery = RunLease::new(sup.clone(), runs_dir.clone(), id.clone());
+                recovery.backstopped = true;
+                drop(recovery);
                 Err(message)
             }
         };

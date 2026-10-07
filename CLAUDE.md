@@ -325,6 +325,7 @@ Klide/
     │       ├── conversation_search.rs Workspace-scoped search over prior Harness transcripts
     │       ├── glob_match.rs      Shared */? matcher (glob tool + command allowlist)
     │       ├── permission.rs      Permission engine — classify, prompt, remember, persist
+    │       ├── permission_relay.rs A Delegate CLI's own permission prompt (Claude Code `--permission-prompt-tool`), raised on the Harness card of the bound Run — same event, slot, scopes
     │       ├── approval_store.rs  HEAD-fingerprinted persisted project approvals
     │       ├── command_allowlist.rs Per-project run_command approvals + wildcard rules
     │       ├── network_allowlist.rs Per-project network target approvals
@@ -379,7 +380,7 @@ AiPanel (view) → startAgentRun() → Rust run_agent_loop()
          (deltas, tool calls, diffs, results)
 ```
 
-- Chat / Plan / Goal modes all go through the harness
+- Plan / Work modes all go through the harness (Work is the `goal` tier, the default; `chat` is the tool-less collapse; `/goal <objective>` is one Work turn with a finish line)
 - Write tools pause for diff review via `tokio::sync::oneshot` channels
 - Diff approval triggers `agent_resolve_diff` → harness continues
 - Default tool-turn cap 50 (configurable), cancellation via `CancellationToken`, auto-compaction on a recency + token-budget trigger
@@ -761,7 +762,7 @@ npm run tauri dev      # full dev loop (Vite + Rust hot reload)
 ## Working conventions
 
 - **Two halves, two languages.** Frontend = TypeScript/React in `src/`. Backend = Rust in `src-tauri/`. They talk via `invoke()` (request/reply), `Channel<T>` (request-scoped streaming), and `emit`/`listen` (global events).
-- **The Rust harness is the agent run module.** AiPanel starts runs and renders events; it does not run its own tool loop. All modes (Chat, Plan, Goal) go through `startAgentRun()`.
+- **The Rust harness is the agent run module.** AiPanel starts runs and renders events; it does not run its own tool loop. All modes (Plan, Work = `goal`, and the `chat` collapse) go through `startAgentRun()`.
 - **No API keys in the frontend.** Provider keys live in macOS Keychain (`keyring` crate), never in localStorage or React state.
 - **Workspace-rooted file access.** Agent tools verify paths are inside the workspace before reading/writing.
 - **Tools are defined once in Rust.** The `ToolEntry` struct bundles schema, kind, and execution together. Frontend fetches schemas over IPC. The transcript records each call's *capability* at dispatch time — readers never guess trust effects from a tool's name.

@@ -85,7 +85,7 @@ describe("Provider catalog — the one TS door onto the Rust registry", () => {
   });
 
   it("groups rows without re-deriving the group from the wire or the key", () => {
-    expect(providerRowsIn("local").map((r) => r.id)).toEqual(["ollama", "mlx", "lmstudio"]);
+    expect(providerRowsIn("local").map((r) => r.id)).toEqual(["ollama", "mlx", "llamacpp", "lmstudio", "llamaapp"]);
     expect(providerRowsIn("subscription").every((r) => r.keyEnv === null)).toBe(true);
     const hosted = hostedProviderRows();
     expect(hosted.map((r) => r.id)).toEqual(providerRowsIn("hosted").map((r) => r.id));

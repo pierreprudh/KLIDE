@@ -108,9 +108,9 @@ export function slashKeyAction(key: string): SlashKeyAction | null {
 
 /** Descriptions shared word-for-word by both menus. */
 export const SLASH_DESC = {
-  chat: "Switch to Chat mode (no tools)",
   plan: "Switch to Plan mode (read-only, proposes a plan)",
-  goal: "Switch to Goal mode (can propose edits)",
+  work: "Switch to Work mode (edits and commands)",
+  goal: "Set a goal — the run works at it until it's done",
   mode: "Show the current mode",
   autoMode: "Auto-accept edits — apply without a prompt",
   reviewMode: "Review every edit before it applies (default)",
@@ -130,7 +130,7 @@ export function currentModeText(opts: {
   requireDiffReview: boolean;
   autoApproveCommands: boolean;
 }): string {
-  if (opts.effectiveMode === "chat") return "chat mode · no tools";
+  if (opts.effectiveMode === "chat") return "no tools · this model can't call any";
   if (opts.effectiveMode === "plan") return "plan mode · read-only";
   if (opts.requireDiffReview) return "reviewing every edit";
   return opts.autoApproveCommands
@@ -138,9 +138,26 @@ export function currentModeText(opts: {
     : "auto-accept edits on";
 }
 
+/** `/goal <objective>` — the one command that names *what to reach* instead
+ *  of flipping a setting. It stays in the draft as typed, like a Skill's
+ *  command, and the message goes out word for word: the system prompt tells
+ *  the model what a `/goal` lede asks of it (work until done, say what done
+ *  means, verify, report). What the command does change is the turn's Mode —
+ *  a goal rides in Work whatever the picker says, since reaching it takes
+ *  edits. A bare `/goal` with nothing after it is not a turn. */
+export const GOAL_PREFIX = "/goal ";
+
+export type GoalDirective = { objective: string };
+
+export function goalDirectiveOf(text: string): GoalDirective | null {
+  const m = text.match(/^\s*\/goal(?:\s+([\s\S]*))?$/);
+  if (m === null) return null;
+  return { objective: (m[1] ?? "").trim() };
+}
+
 /** One-shot prompts that start a run on their own. The mode each rides in is
  *  part of the command, not the composer's current setting: /init edits, so it
- *  needs Goal; /interview only reads, so Plan keeps it from touching a file. */
+ *  needs Work; /interview only reads, so Plan keeps it from touching a file. */
 export const SLASH_PROMPTS: Record<"init" | "interview", { mode: AgentMode; text: string }> = {
   init: {
     mode: "goal",

@@ -14,13 +14,35 @@ UI surfaces observe the Harness. They do not reimplement the run loop.
 
 ## Modes
 
-Modes are capability tiers:
+Modes are capability tiers. The wire and the Transcript use the ids below;
+the picker shows two of them, Plan and **Work** (the `goal` tier), and opens on
+Work. `chat` is never picked — it is the tier a Work run falls to when the
+model cannot call tools, and the tier a Run without a Workspace gets.
 
-| Mode | Tool surface | Trust rule |
-|---|---|---|
-| `chat` | No tools | The model can only answer from provided context. |
-| `plan` | Built-in read-only tools | The model can inspect the Workspace, Conversation history, and reviewed Project Memory, but cannot write files, run commands, use dynamic tools, or pause for approval. |
-| `goal` | All built-in tools plus dynamic tools | Writes require Diff review; commands and dynamic tools require permission. |
+| Mode | Shown as | Tool surface | Trust rule |
+|---|---|---|---|
+| `chat` | — (collapse only) | No tools | The model can only answer from provided context. |
+| `plan` | Plan | Built-in read-only tools | The model can inspect the Workspace, Conversation history, and reviewed Project Memory, but cannot write files, run commands, use dynamic tools, or pause for approval. |
+| `goal` | Work | All built-in tools plus dynamic tools | Writes require Diff review; commands and dynamic tools require permission. |
+
+A `/goal <objective>` message is not a Mode: it is one turn that rides in
+`goal` whatever the picker says, with the system prompt asking the model to
+work until the objective is met. The Harness sees an ordinary `goal` Run with
+one extra rule at the end, the **goal gate** (`agent/goal.rs`): when the model
+stops calling tools, and the Run changed the workspace (an applied edit or a
+command), the Harness runs the configured post-edit check command once more.
+A failing check does not end the Run — its output goes back to the model as
+the next user turn and the model goes another round, three by default
+(`goal.maxRounds`, ceiling 10). Exhausted failing checks end in `error`,
+with the check output in the result and a `RunError`; they never produce a
+successful completion. Delegate CLI goals always run the configured check,
+because their observed activity cannot prove that the workspace is unchanged.
+A passing check, a native Run that changed nothing,
+or no configured check ends the Run as usual; a `SteeringInjected` marker in
+the Transcript says which (`Goal reached`, `Goal not reached`, `not
+verified`). The gate runs the command outside the permission engine, as the
+post-edit check already does: the operator configured it, the model did not
+propose it. A `/goal` turn also runs under a tool-turn cap of at least 200.
 
 Mode filtering happens twice:
 
@@ -38,9 +60,9 @@ turned off by `disabledTools` on the run request: a Settings toggle arrives as
 Mode. A turned-off Tool is neither advertised nor dispatched — a call to it
 returns a not-ok result.
 
-## Goal Mode vs Mission Supervision
+## Work (`goal`) Mode vs Mission Supervision
 
-`goal` mode is a capability tier: the model may use the full Tool surface, while
+`goal` mode — Work, in the picker — is a capability tier: the model may use the full Tool surface, while
 writes, commands, and pause points stay gated by the Harness.
 
 A supervisor contract sits above one or more Runs. It does not execute tools
@@ -155,6 +177,21 @@ the Run ask again from its next command. The next Run needs none of this: its
 request carries the rung. A Mission attempt or a child Run has no conversation
 rung to follow: `agent_set_command_policy` refuses it, and it keeps what its
 request said at start.
+
+A Delegate's own prompt can reach the same card. A headless Claude Code turn
+(a Focus conversation on that provider) runs with `--permission-prompt-tool`
+naming the `permission` tool on Klide's embedded MCP server; every action the
+CLI's own rules did not already allow becomes a call to that tool, which the
+bridge binds to the conversation's Run and raises as a `PermissionRequested`
+on it — the same card, the same `agent_resolve_permission`, the same scopes.
+`project` writes `.klide/command-allowlist.json`, which the next headless turn
+also carries as `--allowedTools`. The answer is relayed; the CLI then runs the
+call itself under its own sandbox, and the call stays an `ObservedToolCall`.
+The relay reads the Run's state the Harness gate would: the full-auto policy
+answers a command without a card (recorded `via: "full_auto"`), a command
+approved for the run or rejected this run is answered without asking again, and
+a project rule matches even when the flag could not carry it. Only a shell
+command (`Bash`) has the project scope; any other prompt is a plain question.
 
 A worker dispatch has its own gate and its own rule. Without a `worker`,
 `spawn_subagent` may name only read-only roles and the child runs on the

@@ -1,3 +1,4 @@
+import { useLlamaSetupMode, isSelectedLlamaProvider } from "../hooks/useLlamaSetupMode";
 import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
@@ -5,6 +6,7 @@ import { wakeTurnMode } from "./ai/wake";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -21,6 +23,7 @@ import {
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  LOCAL_MODEL_CHANGED_EVENT,
   listProviderModels,
   readModelCapabilities,
   readModelPricing,
@@ -41,7 +44,7 @@ import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
 import { errMessage, providerFailureMessage } from "../errors";
 import { InlineDiffReview } from "./InlineDiffReview";
-import { InlineCommandReview } from "./InlineCommandReview";
+import { InlineCommandReview, type CommandInterpreter } from "./InlineCommandReview";
 import { conversationToConvo, deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   lensItemsForPrompt,
@@ -109,6 +112,8 @@ import type {
 import { enabledSkillsPrompt, type Skill } from "../skills";
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
+import { formatClock, formatDayStamp } from "../time";
+import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
@@ -143,14 +148,18 @@ import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
 import { parseConfigUsage } from "./ai/cliConfig";
 import { SlashMenu } from "./ai/SlashMenu";
+import { MentionMenu } from "./ai/MentionMenu";
+import { mentionKeyAction, mentionQueryAt, type MentionQuery } from "./ai/mentions";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
-import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
+import { EXPLAIN_PREFIX, GOAL_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, goalDirectiveOf, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
-import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
-import { addMemoryDraft } from "../memoryDrafts";
+import { summarizeAndHandoff, generateMemoryLessons, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
+import { listMemory } from "../memory";
+import { memoryFingerprint } from "../memoryLearning";
+import { addMemoryDraft, getMemoryDrafts, MAX_PENDING_MEMORY, MEMORY_DRAFT_TTL } from "../memoryDrafts";
 import { writeMemory } from "../memory";
 import { shouldReadoptConversation } from "./ai/leavingRun";
 import { extractAssistantText } from "../agent/foldEvents";
@@ -182,7 +191,7 @@ import {
 } from "./ai/utils";
 
 import type { Msg, QueuedTurn, Conversation } from "./ai/types";
-import { MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf, nextGoalPolicy } from "./ai/autonomyLadder";
+import { MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf, initialMode as initialAgentMode, nextGoalPolicy } from "./ai/autonomyLadder";
 import {
   canCompactConversation,
   computeContextBudget,
@@ -205,6 +214,11 @@ import { notify } from "../toast";
 import { delegateSessionId, stopDelegatePty, writeDelegatePty } from "../ipc/delegatePty";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
 import { SETTINGS, useSetting } from "../settingsStore";
+
+/** The tool-turn cap a `/goal` turn runs under when Settings asks for less.
+ *  Claude Code and Codex give a goal no practical cap; 200 is a long leash
+ *  that still ends a run stuck in a loop. */
+const GOAL_MIN_TURNS = 200;
 
 function LocalServerStartingRow({ providerLabel, centered = false }: { providerLabel: string; centered?: boolean }) {
   const hairline = (
@@ -1064,9 +1078,14 @@ export function AiPanel({
   // there is no harness run to abort yet, so we flag the pending send to bail
   // once the server is ready instead of launching a turn they backed out of.
   const cancelledWarmupRef = useRef(false);
-  const [serverRefresh] = useState(0);
+  const [serverRefresh, setServerRefresh] = useState(0);
+  useEffect(() => {
+    const refresh = () => setServerRefresh((n) => n + 1);
+    window.addEventListener(LOCAL_MODEL_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(LOCAL_MODEL_CHANGED_EVENT, refresh);
+  }, []);
   const [agentMode, setAgentMode] = useState<AgentMode>(
-    () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
+    () => initialAgentMode(localStorage.getItem("klide.agentMode"))
   );
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
@@ -1150,8 +1169,9 @@ export function AiPanel({
   const toggleMode = () => {
     setNextSendMode(null);
     setAgentMode((m) => {
-      const order: AgentMode[] = modelSupportsTools || providerDelegatesWork ? ["chat", "plan", "goal"] : ["chat", "plan"];
-      const next = order[(order.indexOf(m) + 1) % order.length] ?? "chat";
+      // Two rows to walk: Plan and Work. A model with no tools has only Plan.
+      const order: AgentMode[] = modelSupportsTools || providerDelegatesWork ? ["plan", "goal"] : ["plan"];
+      const next = order[(order.indexOf(m) + 1) % order.length] ?? "goal";
       agentModeRef.current = next;
       localStorage.setItem("klide.agentMode", next);
       return next;
@@ -1169,7 +1189,7 @@ export function AiPanel({
   // in usePortalMenu, not five hand-rolled effects here.
 
   const [fileList, setFileList] = useState<string[]>([]);
-  const [mention, setMention] = useState<{ query: string; atStart: boolean } | null>(null);
+  const [mention, setMention] = useState<MentionQuery | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
   // When `@` opens the menu at the very start of the message, offer subagents
   // (above files). Mid-message `@` stays file-only, so the two never clash.
@@ -1399,9 +1419,12 @@ export function AiPanel({
   useEffect(() => {
     void refreshCustomCli().then(setCustomCli).catch(() => {});
   }, []);
+  const llamaSetupMode = useLlamaSetupMode();
   const providerGroups = useMemo(
-    () => providerGroupsWithCustom(customProviders, customCli),
-    [customProviders, customCli]
+    () => providerGroupsWithCustom(customProviders, customCli).map(group => ({
+      ...group, items: group.items.filter(item => isSelectedLlamaProvider(item.id, llamaSetupMode)),
+    })),
+    [customProviders, customCli, llamaSetupMode]
   );
   // Focus offers the same stacks the workbench does, delegates included: the
   // canvas hosts their session the same way a panel does, and they are the one
@@ -1469,13 +1492,27 @@ export function AiPanel({
   function currentModeText(): string {
     return modeText({ effectiveMode, requireDiffReview, autoApproveCommands });
   }
-  // /auto-mode and /review-mode imply Goal mode (edits only happen there).
+  // /auto-mode and /review-mode imply Work mode (edits only happen there).
   const goalOrPlan = () => (modelSupportsTools || providerDelegatesWork ? "goal" : "plan") as AgentMode;
+  // A command that stays in the draft (`/goal`, a Skill) lands where it was
+  // typed, with the caret after it — see `replaceSlashWord`.
+  const insertSlashPrefix = (prefix: string) => {
+    const open = slash;
+    const next = open === null
+      ? { value: prefix, caret: prefix.length }
+      : replaceSlashWord({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix });
+    setInput(next.value);
+    setSlash(null);
+    // The textarea holds the body, not the draft: a wired skill is a lede, so
+    // the caret lands short of the prefix it stands in for.
+    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
+  };
 
   const SLASH_COMMANDS: SlashCommand[] = [
-    { name: "chat", desc: SLASH_DESC.chat, run: () => { selectMode("chat"); setInput(""); } },
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectMode("plan"); setInput(""); } },
-    { name: "goal", desc: SLASH_DESC.goal, run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
+    { name: "work", desc: SLASH_DESC.work, run: () => { selectMode(goalOrPlan()); setInput(""); } },
+    { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
     { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
     { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
@@ -1514,7 +1551,7 @@ export function AiPanel({
     { name: "explain", desc: SLASH_DESC.explain, run: () => {
       setInput(`${EXPLAIN_PREFIX}@`);
       setNextSendMode("plan");
-      setMention({ query: "", atStart: false }); setMentionIdx(0);
+      setMention(mentionQueryAt(`${EXPLAIN_PREFIX}@`)); setMentionIdx(0);
       void ensureFileList();
       requestAnimationFrame(() => taRef.current?.focus());
     }},
@@ -1531,18 +1568,7 @@ export function AiPanel({
   // where it was typed, with the cursor after it — at the head of the draft
   // that is a lede, mid-sentence it is the command as text, which is what the
   // model is sent either way.
-  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
-    const open = slash;
-    const next = open === null
-      ? { value: prefix, caret: prefix.length }
-      : replaceSlashWord({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix });
-    setInput(next.value);
-    setSlash(null);
-    // The textarea holds the body, not the draft: a wired skill is a lede, so
-    // the caret lands short of the prefix it stands in for.
-    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
-    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
-  });
+  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, insertSlashPrefix);
   SLASH_COMMANDS.push(...SKILL_COMMANDS);
   // A Claude Code conversation also offers the CLI's own commands, head only:
   // the CLI reads one only when it opens the message.
@@ -1637,9 +1663,8 @@ export function AiPanel({
     const slashQuery = slashQueryAt(value, caret);
     if (slashQuery !== null) { setSlash(slashQuery); setSlashIdx(0); setMention(null); return; }
     else if (slash !== null) setSlash(null);
-    const before = value.slice(0, caret);
-    const m = before.match(/(?:^|\s)@([^\s@]*)$/);
-    if (m) { setMention({ query: m[1], atStart: /^@[^\s@]*$/.test(before) }); setMentionIdx(0); void ensureFileList(); }
+    const at = mentionQueryAt(value, caret);
+    if (at !== null) { setMention(at); setMentionIdx(0); void ensureFileList(); }
     else if (mention !== null) setMention(null);
   }
 
@@ -2399,20 +2424,19 @@ This user request requires workspace inspection. Before answering, you MUST call
     }
   }
 
-  // Auto-summarize a finished run. Fire-and-forget — the run is already
-  // done, the user has moved on, and the worst case is a model call that
-  // fails silently. The call is keyed to the run's `currentId` and
-  // status "done" so the entry's frontmatter tells a future agent when
-  // and why it was written. The inline notice under the composer is the
-  // only UI feedback — a one-line ✓ Auto-saved to memory, fades after a
-  // few seconds, distinct from the manual Summarize button's text.
-  //
-  // Skips when there are fewer than two messages: a single user message
-  // with no assistant reply isn't a conversation worth summarising.
+  // Quiet learning: one bounded extraction after meaningful tool work or an
+  // explicit correction. Zero lessons is normal. Durable writes require review.
   async function runAutoSummarize(turn: QueuedTurn) {
     if (!workspaceRoot || summarizing) return;
     const snapshot = msgsRef.current;
-    if (snapshot.length < 2) return;
+    if (snapshot.length < 2 || normalizeAgentMode(turn.mode) === "chat") return;
+    if (getMemoryDrafts().filter((d) => d.workspaceRoot === workspaceRoot && (!d.automatic || Date.now() - d.createdAtMs < MEMORY_DRAFT_TTL)).length >= MAX_PENDING_MEMORY) return;
+    const lastUserIndex = snapshot.map((m) => m.role).lastIndexOf("user");
+    const recent = snapshot.slice(Math.max(0, lastUserIndex));
+    const lastUser = [...recent].reverse().find((m) => m.role === "user");
+    const explicitSignal = /remember|always|never|prefer|instead|correction|decid|souviens|toujours|jamais|préfère/i.test(lastUser?.content ?? "");
+    const toolWork = recent.some((m) => m.role === "assistant" && (m.toolCalls?.length ?? 0) > 0);
+    if (!explicitSignal && !toolWork) return;
     setSummarizing(true);
     try {
       // Reviewable memory: generate the note but DON'T write it. Park it as a
@@ -2421,7 +2445,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       // The note is written by the model that ran the turn; on Auto that is
       // the origin the run stamped, not the picker's sentinel.
       const origin = conversationSessionRef.current;
-      const note = await generateMemoryNote({
+      const captureWorkspace = workspaceRoot;
+      const captureRunId = currentId;
+      const notes = await generateMemoryLessons({
         workspaceRoot,
         provider: isAutoProvider(turn.provider) ? (origin.originProvider ?? turn.provider) : turn.provider,
         model: isAutoProvider(turn.provider) ? (origin.originModel ?? turn.model) : turn.model,
@@ -2430,11 +2456,13 @@ This user request requires workspace inspection. Before answering, you MUST call
         runId: currentId,
         status: "done",
       });
-      addMemoryDraft(note, workspaceRoot);
-      // Signal a draft is ready; the "review draft" pencil under the last
-      // reply surfaces it (no fading pill, no timer). Cleared on the next
-      // turn / cancel / history load via the existing reset paths.
-      setAutoMemoryNotice(note.title);
+      if (notes.length === 0) return;
+      const existing = await listMemory(captureWorkspace, 500);
+      for (const { why, evidence, ...note } of notes) {
+        if (existing.some((entry) => entry.reviewState === "reviewed" && memoryFingerprint(entry) === memoryFingerprint(note))) continue;
+        addMemoryDraft({ ...note, runId: captureRunId }, captureWorkspace, { automatic: true, why, evidence });
+      }
+      // Pending count in the Memory entry point is the only notification.
     } catch (err) {
       console.error("Auto-summarize failed:", err);
     } finally {
@@ -3052,7 +3080,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // sends {command, cwd, externalPaths, matchedAllowRule}, a network
     // capability sends whatever it declared. Everything else is typed, and the
     // Rust `frontend_mirror_matches_agent_wire` test keeps it that way.
-    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
+    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; interpreter?: CommandInterpreter | null; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
     const isCommand = !!input.command;
     // An incoming-message gate carries the sender and the text; the card shows
     // the text where the command would be and names the peer as the chat does.
@@ -3085,6 +3113,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       summary: req.summary ?? command,
       reason: req.reason ?? "",
       externalPaths: Array.isArray(input.externalPaths) ? input.externalPaths : [],
+      interpreter: isCommand ? input.interpreter ?? undefined : undefined,
       suggestedPattern: isCommand ? suggestCommandPattern(command) : undefined,
     };
   }
@@ -3123,7 +3152,11 @@ This user request requires workspace inspection. Before answering, you MUST call
       turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
     const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
     const maxParallelTools = harnessSettings?.maxParallelTools;
-    const maxTurns = harnessSettings?.maxTurns;
+    // A goal is worked to its finish line, not to a step: the runaway guard
+    // moves out to GOAL_MIN_TURNS unless Settings already allows more.
+    const maxTurns = turn.goal
+      ? Math.max(harnessSettings?.maxTurns ?? 0, GOAL_MIN_TURNS)
+      : harnessSettings?.maxTurns;
     const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
     const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
     return {
@@ -3141,6 +3174,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       requireDiffReview,
       autoApproveCommands: autoApproveCommands || undefined,
       testAfterEditCommand: testAfterEditCommand || undefined,
+      goal: turn.goal,
       // Stars are the router's strongest preference and live only in this
       // renderer's storage, so an `auto` turn carries them along.
       preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
@@ -3313,6 +3347,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     // A skill lede on its own is not a turn either — the skill still needs
     // something to apply itself to.
     if (opts?.text === undefined && skillToken && !draftBody.trim() && stagedFiles.length === 0) return;
+    // Nor is `/goal` with no objective after it.
+    const goal = goalDirectiveOf(text);
+    if (goal && !goal.objective && stagedFiles.length === 0) return;
     // Delegate TUIs do not accept image-only turns.
     if (delegateSession && !text.trim()) return;
     if (delegateSession) {
@@ -3350,9 +3387,14 @@ This user request requires workspace inspection. Before answering, you MUST call
     const directive = parseSubagentDirective(text);
     const effectiveText = directive ? directive.task : text;
     const subagentModel = directive?.subagent.model;
+    // A `/goal` lede rides in Work whatever the picker says — reaching an
+    // objective takes edits. The text goes out as typed; the system prompt
+    // names what the lede asks (`buildSystemPrompt`).
     const requestedMode = directive
       ? directive.subagent.mode
-      : opts?.mode ?? nextSendMode ?? agentModeRef.current;
+      : goal
+        ? "goal"
+        : opts?.mode ?? nextSendMode ?? agentModeRef.current;
     const availableMode: AgentMode =
       !supportsToolsForTurn && !providerDelegatesWork && requestedMode === "goal" ? "chat" : requestedMode;
     const mode: AgentMode =
@@ -3367,7 +3409,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // Staged photos/documents ride ahead of @-mention file attachments.
     const attachments = [...stagedFiles, ...collected];
     const activeProjectContext = lensItemsForPrompt(projectContext, effectiveText, contextMode);
-    controller.send({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools: supportsToolsForTurn, modelSupportsReflection: supportsReflectionForTurn, reflectionLevel: supportsReflectionForTurn ? panelReflectionLevel : undefined, attachments, subagent: directive?.subagent.id, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
+    controller.send({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools: supportsToolsForTurn, modelSupportsReflection: supportsReflectionForTurn, reflectionLevel: supportsReflectionForTurn ? panelReflectionLevel : undefined, attachments, subagent: directive?.subagent.id, goal: goal && !directive ? { objective: goal.objective } : undefined, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
     // A subagent named *inside* a larger message (not a leading directive) runs
     // in the background, concurrent with the main answer above.
     if (!directive) {
@@ -4058,8 +4100,18 @@ This user request requires workspace inspection. Before answering, you MUST call
                 ))}
               </div>
             );
+            // A turn that reopens the thread after a silence says when — the
+            // first turn, and any turn an hour or a day after the last word
+            // (`turnStamps.ts`). Centered and dim: a place marker, not a row.
+            const stamp = stampBefore(msgs, i) && m.ts !== undefined ? formatDayStamp(m.ts) : null;
             return (
-              <div key={i} className="ai-msg-in" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+              <Fragment key={i}>
+              {stamp && (
+                <div className="ai-msg-in" style={{ textAlign: "center", margin: "26px 0 2px", fontSize: 11.5, color: "var(--fg-dim)", letterSpacing: "0.01em", userSelect: "none" }}>
+                  {stamp}
+                </div>
+              )}
+              <div className="ai-msg-in" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
                 {m.subagent && (
                   <div style={{ marginBottom: 4, paddingRight: askerGutter + 2, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", userSelect: "none" }}>
                     @{m.subagent}
@@ -4118,16 +4170,18 @@ This user request requires workspace inspection. Before answering, you MUST call
                     />
                   </div>
                 )}
-                {!isEditing && m.tokenInfo && hasText && (
+                {!isEditing && hasText && !queued && !running && (m.ts !== undefined || m.tokenInfo) && (
                   <div
                     className="klide-msg-meta"
-                    title={m.tokenInfo.exact ? "Exact count from the model's tokenizer" : "Estimate — this provider has no tokenizer endpoint"}
-                    style={{ marginTop: 3, paddingRight: askerGutter, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-dim)", letterSpacing: "0.02em", userSelect: "none" }}
+                    title={m.tokenInfo ? (m.tokenInfo.exact ? "Exact count from the model's tokenizer" : "Estimate — this provider has no tokenizer endpoint") : undefined}
+                    style={{ marginTop: 3, paddingRight: askerGutter, display: "flex", gap: 12, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-dim)", letterSpacing: "0.02em", userSelect: "none" }}
                   >
-                    {m.tokenInfo.exact ? "" : "~"}{m.tokenInfo.count.toLocaleString()} tokens
+                    {m.ts !== undefined && <span>{formatClock(m.ts)}</span>}
+                    {m.tokenInfo && <span>{m.tokenInfo.exact ? "" : "~"}{m.tokenInfo.count.toLocaleString()} tokens</span>}
                   </div>
                 )}
               </div>
+              </Fragment>
             );
           }
 
@@ -4656,6 +4710,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             kind={pendingPermission.kind}
             detail={pendingPermission.reason}
             externalPaths={pendingPermission.externalPaths}
+            interpreter={pendingPermission.interpreter}
             onReject={rejectCommand}
             onApproveOnce={() => approveCommand("once")}
             peer={pendingPermission.peer}
@@ -4703,39 +4758,8 @@ This user request requires workspace inspection. Before answering, you MUST call
           {slash !== null && (
             <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} ledes={ledes} />
           )}
-          {mention !== null && mentionTotal > 0 && (
-            <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 220, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
-              {subagentMatches.length > 0 && (
-                <div style={{ padding: "4px 8px 2px", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", userSelect: "none" }}>Subagents</div>
-              )}
-              {subagentMatches.map((sub, i) => (
-                <div key={sub.id} role="option" aria-selected={i === mentionIdx}
-                  onMouseDown={(e) => { e.preventDefault(); acceptSubagent(sub.label); }}
-                  onMouseEnter={() => setMentionIdx(i)}
-                  style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: i === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
-                  <span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>@{sub.label}</span>
-                  <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{sub.blurb}</span>
-                </div>
-              ))}
-              {mentionMatches.length > 0 && subagentMatches.length > 0 && (
-                <div style={{ padding: "6px 8px 2px", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", userSelect: "none" }}>Files</div>
-              )}
-              {mentionMatches.map((path, idx) => {
-                const absIdx = subagentMatches.length + idx;
-                const slash = path.lastIndexOf("/");
-                const dir = slash >= 0 ? path.slice(0, slash + 1) : "";
-                const base = slash >= 0 ? path.slice(slash + 1) : path;
-                return (
-                  <div key={path} role="option" aria-selected={absIdx === mentionIdx}
-                    onMouseDown={(e) => { e.preventDefault(); acceptMention(path); }}
-                    onMouseEnter={() => setMentionIdx(absIdx)}
-                    style={{ display: "flex", alignItems: "baseline", gap: 2, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: absIdx === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
-                    <span style={{ color: "var(--fg-strong)" }}>{base}</span>
-                    <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{dir && ` ${dir}`}</span>
-                  </div>
-                );
-              })}
-            </div>
+          {mention !== null && (
+            <MentionMenu subagents={subagentMatches} files={mentionMatches} activeIdx={mentionIdx} onHover={setMentionIdx} onAccept={acceptMentionAt} />
           )}
           <div style={{ overflow: "hidden", borderRadius: "var(--radius-lg)" }}>
           <input
@@ -4788,9 +4812,10 @@ This user request requires workspace inspection. Before answering, you MUST call
                 }
               }
               if (mention !== null && mentionTotal > 0) {
-                if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionTotal); return; }
-                if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal); return; }
-                if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptMentionAt(mentionIdx); return; }
+                const action = mentionKeyAction(e.key);
+                if (action === "next") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionTotal); return; }
+                if (action === "prev") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal); return; }
+                if (action === "accept") { e.preventDefault(); acceptMentionAt(mentionIdx); return; }
                 if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
               }
               if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
@@ -4891,7 +4916,9 @@ This user request requires workspace inspection. Before answering, you MUST call
                       <ArtifactOutputRows value={artifactOutput} disabled={goalDisabled} onChange={(value) => { setArtifactOutput(value); if (value) selectMode("goal", false); }} />
                       {MODE_CHOICES.map((rung) => {
                         const disabled = rung.mode === "goal" && goalDisabled;
-                        const active = rung.mode === effectiveMode;
+                        // Chat has no row: a tool-less model that collapsed
+                        // Work to it still shows Work as the pick, greyed.
+                        const active = rung.mode === effectiveMode || (effectiveMode === "chat" && rung.mode === agentMode);
                         return (
                           <button key={rung.mode} type="button" role="menuitemradio" aria-checked={active} disabled={disabled}
                             onClick={() => { if (!disabled) selectMode(rung.mode); }}

@@ -1,3 +1,5 @@
+mod llamacpp_models;
+mod llamacpp_setup;
 mod visual_export;
 mod accounts;
 mod usage;
@@ -919,6 +921,10 @@ pub fn run() {
                 }
             }
 
+            // The login shell's environment for agent commands, captured now
+            // so the first command of the session doesn't wait for it.
+            agent::command_env::warm();
+
             // Persistent delegate sessions: reconnect to (or start) the ptyd
             // daemon when the toggle was left on last session. Skipped during
             // the smoke boot so a release check never touches live sessions.
@@ -958,6 +964,12 @@ pub fn run() {
                 // on_page_load) without the window ever being shown.
                 if !smoke_test_mode() {
                     let _ = window.show();
+                    // Showing is not activating. A window shown while Klide is
+                    // not the active app can leave WebKit thinking the page is
+                    // hidden, which freezes its animation timeline at frame 0 —
+                    // the Welcome fade-ins hold at opacity 0 and the window
+                    // paints blank until something brings it to the front.
+                    let _ = window.set_focus();
                 }
             }
 
@@ -1066,6 +1078,9 @@ pub fn run() {
             account_activate,
             set_active_workspace,
             ai_chat,
+            llamacpp_setup::ai_llamacpp_install,
+            llamacpp_models::ai_llamacpp_setup_info,
+            llamacpp_models::ai_llamacpp_select_model,
             local_servers::ai_local_server_start,
             local_servers::ai_local_server_stop,
             local_servers::ai_local_server_status,

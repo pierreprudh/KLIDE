@@ -13,16 +13,32 @@
 // Drafts carry their `workspaceRoot` so they stay scoped to the project that
 // produced them.
 
+import { memoryFingerprint } from "./memoryLearning";
 import type { MemoryInput } from "./memory";
 import { createPersistedStore } from "./persistedStore";
 
 export type MemoryDraft = MemoryInput & {
   /** Local draft id — distinct from the durable memory entry id. */
   draftId: string;
+  automatic?: boolean;
+  why?: string;
+  evidence?: string;
   createdAtMs: number;
   /** Project this draft belongs to; drafts are shown per-workspace. */
   workspaceRoot: string;
 };
+
+export const MAX_PENDING_MEMORY = 10;
+export const MEMORY_DRAFT_TTL = 30 * 24 * 60 * 60 * 1000;
+
+const dismissed = createPersistedStore<Record<string, string[]>>({
+  key: "klide.dismissedMemoryLessons",
+  validate: (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([, items]) => Array.isArray(items))
+      .map(([workspace, items]) => [workspace, (items as unknown[]).filter((item): item is string => typeof item === "string").slice(0, 100)]));
+  },
+});
 
 const STORAGE_KEY = "klide.memoryDrafts";
 
@@ -68,15 +84,24 @@ export function getMemoryDrafts(): MemoryDraft[] {
 
 export function addMemoryDraft(
   input: MemoryInput,
-  workspaceRoot: string
-): MemoryDraft {
+  workspaceRoot: string,
+  options: { automatic?: boolean; why?: string; evidence?: string } = {},
+): MemoryDraft | null {
+  const fingerprint = memoryFingerprint(input);
+  const active = store.get().filter((d) => !d.automatic || Date.now() - d.createdAtMs < MEMORY_DRAFT_TTL);
+  if (options.automatic && (
+    (dismissed.get()[workspaceRoot] ?? []).includes(fingerprint) ||
+    active.some((d) => d.workspaceRoot === workspaceRoot && memoryFingerprint(d) === fingerprint) ||
+    active.filter((d) => d.workspaceRoot === workspaceRoot).length >= MAX_PENDING_MEMORY
+  )) return null;
   const draft: MemoryDraft = {
     ...input,
+    ...options,
     draftId: genId(),
     createdAtMs: Date.now(),
     workspaceRoot,
   };
-  store.mutate((drafts) => [draft, ...drafts]);
+  store.mutate(() => [draft, ...active]);
   return draft;
 }
 
@@ -86,4 +111,12 @@ export function updateMemoryDraft(draftId: string, patch: Partial<MemoryInput>) 
 
 export function removeMemoryDraft(draftId: string) {
   store.mutate((drafts) => drafts.filter((d) => d.draftId !== draftId));
+}
+
+export function dismissMemoryDraft(draft: MemoryDraft) {
+  if (draft.automatic) {
+    dismissed.mutate((all) => ({ ...all, [draft.workspaceRoot]:
+      [...new Set([memoryFingerprint(draft), ...(all[draft.workspaceRoot] ?? [])])].slice(0, 100) }));
+  }
+  removeMemoryDraft(draft.draftId);
 }

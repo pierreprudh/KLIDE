@@ -370,6 +370,7 @@ function AdvisorControl({
         provider={provider as ProviderId}
         model={model}
         availableModels={models}
+        direction="down"
         onChange={(m) => onChange({ advisorProvider: provider, advisorModel: m })}
       />
     </div>
@@ -1764,6 +1765,7 @@ export function SettingsPanel({
                 <Panel>
                   <LocalServerRow provider="ollama" />
                   <LocalServerRow provider="mlx" />
+                  <LocalServerRow provider="llamacpp" />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Notes">

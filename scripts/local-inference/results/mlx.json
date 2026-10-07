@@ -1,0 +1,206 @@
+{
+  "context": 8192,
+  "maxTokens": 256,
+  "provider": "mlx",
+  "rows": [
+    {
+      "completionTokens": 76,
+      "repeat": 0,
+      "response": {
+        "content": "ready",
+        "thinking": "\nThe user says: \"Reply with exactly: ready\". So we must respond with exactly that word \"ready\". No extra text, no punctuation beyond that? The instruction: \"Reply with exactly: ready\". So we should output exactly \"ready\". No extra spaces, no quotes, no punctuation. Probably just:\n\nready\n\nThus final answer: ready.\n",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 76,
+          "promptTokens": 48
+        }
+      },
+      "scenario": "warmup",
+      "seconds": 31.918267791,
+      "streamTokensPerSecond": 54.10599542483962,
+      "toolCorrect": false,
+      "ttftSeconds": 30.513617541
+    },
+    {
+      "completionTokens": 256,
+      "repeat": 0,
+      "response": {
+        "content": "",
+        "thinking": "\nWe need to produce about 100 words, no tools, just an explanation why a missing map entry can cause a TypeScript application to crash. Likely referencing JavaScript's Map or similar, runtime errors when accessing non-existent key, causing undefined, or using optional chaining, etc. Provide concise answer ~100 words. No markdown unless asked. No extra commentary. So produce about 100 words (maybe 95-105). Let's craft ~100 words.\n\nWe must not include any disclaimer. Just answer. No formatting. Provide plain text.\n\nLet's count words. We'll aim for ~100 words.\n\nDraft:\n\n\"A missing map entry can cause a TypeScript application to crash because the language\u2019s type system is erased at runtime, and any runtime property access follows JavaScript\u2019s dynamic lookup. If code attempts to read a property that does not exist in the Map, the engine returns undefined rather than throwing a reference error, but subsequent operations that assume the value is present can produce logical failures or exceptions, especially when using optional chaining or spread operators that dereference values. In a strict mode, the missing entry may also trigger a runtime exception if the code uses a try\u2011catch block that expects a specific error type. Consequently, the application can halt unexpected",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 256,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 5.498971583,
+      "streamTokensPerSecond": 49.61119887545365,
+      "toolCorrect": false,
+      "ttftSeconds": 0.338846333
+    },
+    {
+      "completionTokens": 256,
+      "repeat": 1,
+      "response": {
+        "content": "",
+        "thinking": "\nWe need to produce about 100 words, no tools, just an explanation why a missing map entry can cause a TypeScript application to crash. Likely referencing JavaScript's Map or similar, runtime errors when accessing non-existent key, causing undefined, or using optional chaining, etc. Provide concise answer ~100 words. No markdown unless asked. No extra commentary. So produce about 100 words (maybe 95-105). Let's craft ~100 words.\n\nWe must not include any disclaimer. Just answer. No formatting. Provide plain text.\n\nLet's count words. We'll aim for ~100 words.\n\nDraft:\n\n\"A missing map entry can cause a TypeScript application to crash because the language\u2019s type system is erased at runtime, and any runtime property access follows JavaScript\u2019s dynamic lookup. If code attempts to read a property that does not exist in the Map, the engine returns undefined rather than throwing a reference error, but subsequent operations that assume the value is present can produce logical failures or exceptions, especially when using optional chaining or spread operators that dereference values. In a strict mode, the missing entry may also trigger a runtime exception if the code uses a try\u2011catch block that expects a specific error type. Consequently, the application can halt unexpected",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 256,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 5.337355833,
+      "streamTokensPerSecond": 51.15351552160762,
+      "toolCorrect": false,
+      "ttftSeconds": 0.332812208
+    },
+    {
+      "completionTokens": 256,
+      "repeat": 2,
+      "response": {
+        "content": "",
+        "thinking": "\nWe need to produce about 100 words, no tools, just an explanation why a missing map entry can cause a TypeScript application to crash. Likely referencing JavaScript's Map or similar, runtime errors when accessing non-existent key, causing undefined, or using optional chaining, etc. Provide concise answer ~100 words. No markdown unless asked. No extra commentary. So produce about 100 words (maybe 95-105). Let's craft ~100 words.\n\nWe must not include any disclaimer. Just answer. No formatting. Provide plain text.\n\nLet's count words. We'll aim for ~100 words.\n\nDraft:\n\n\"A missing map entry can cause a TypeScript application to crash because the language\u2019s type system is erased at runtime, and any runtime property access follows JavaScript\u2019s dynamic lookup. If code attempts to read a property that does not exist in the Map, the engine returns undefined rather than throwing a reference error, but subsequent operations that assume the value is present can produce logical failures or exceptions, especially when using optional chaining or spread operators that dereference values. In a strict mode, the missing entry may also trigger a runtime exception if the code uses a try\u2011catch block that expects a specific error type. Consequently, the application can halt unexpected",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 256,
+          "promptTokens": 66
+        }
+      },
+      "scenario": "short",
+      "seconds": 5.387386959,
+      "streamTokensPerSecond": 52.23093106711637,
+      "toolCorrect": false,
+      "ttftSeconds": 0.486076667
+    },
+    {
+      "completionTokens": 256,
+      "repeat": 0,
+      "response": {
+        "content": "",
+        "thinking": "\nWe need to produce a summary of the project's rules. The user gave a long list of repeated lines: \"Fixture project: TypeScript editor. Files: src/app.ts, src/utils.ts. Tests: npm test. No files may be changed.\" This appears to be a set of fixture definitions for a TypeScript editor project. The question: \"Summarize this project's rules in about 100 words. No tools.\"\n\nWe need to interpret what the \"rules\" are. The only rule mentioned is that no files may be changed. The list includes many files: src/app.ts, src/utils.ts. Tests: npm test. So the rule is that the project is a TypeScript editor, and the only allowed change is to run tests (npm test). No other modifications to source files are allowed. So the summary: The project is a TypeScript editor with a single source file (src/app.ts) and a utility module (src/utils.ts). The only permitted action is to execute the test suite via npm test; all other file changes are prohibited. That's about 50 words. The user wants about 100 words. So we need to expand a bit, but still within about 100 words. Let's produce a concise summary, maybe 80",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 256,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 7.060856334,
+      "streamTokensPerSecond": 50.893287784172095,
+      "toolCorrect": false,
+      "ttftSeconds": 2.030723459
+    },
+    {
+      "completionTokens": 256,
+      "repeat": 1,
+      "response": {
+        "content": "",
+        "thinking": "\nWe need to produce a summary of the project's rules. The user gave a long list of repeated lines: \"Fixture project: TypeScript editor. Files: src/app.ts, src/utils.ts. Tests: npm test. No files may be changed.\" This appears to be a set of fixture definitions for a TypeScript editor project. The question: \"Summarize this project's rules in about 100 words. No tools.\"\n\nWe need to interpret what the \"rules\" are. The only rule mentioned is that no files may be changed. The list includes many files: src/app.ts, src/utils.ts. Tests: npm test. So the rule is that the project is a TypeScript editor, and the only allowed change is to run tests (npm test). No other modifications to source files are allowed. So the summary: The project is a TypeScript editor with a single source file (src/app.ts) and a utility module (src/utils.ts). The only permitted action is to execute the test suite via npm test; all other file changes are prohibited. That's about 50 words. The user wants about 100 words. So we need to expand a bit, but still within about 100 words. Let's produce a concise summary, maybe 80",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 256,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 5.947335292,
+      "streamTokensPerSecond": 53.78118353424991,
+      "toolCorrect": false,
+      "ttftSeconds": 1.187306167
+    },
+    {
+      "completionTokens": 256,
+      "repeat": 2,
+      "response": {
+        "content": "",
+        "thinking": "\nWe need to produce a summary of the project's rules. The user gave a long list of repeated lines: \"Fixture project: TypeScript editor. Files: src/app.ts, src/utils.ts. Tests: npm test. No files may be changed.\" This appears to be a set of fixture definitions for a TypeScript editor project. The question: \"Summarize this project's rules in about 100 words. No tools.\"\n\nWe need to interpret what the \"rules\" are. The only rule mentioned is that no files may be changed. The list includes many files: src/app.ts, src/utils.ts. Tests: npm test. So the rule is that the project is a TypeScript editor, and the only allowed change is to run tests (npm test). No other modifications to source files are allowed. So the summary: The project is a TypeScript editor with a single source file (src/app.ts) and a utility module (src/utils.ts). The only permitted action is to execute the test suite via npm test; all other file changes are prohibited. That's about 50 words. The user wants about 100 words. So we need to expand a bit, but still within about 100 words. Let's produce a concise summary, maybe 80",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 256,
+          "promptTokens": 2859
+        }
+      },
+      "scenario": "long",
+      "seconds": 5.747616541,
+      "streamTokensPerSecond": 55.970871250885686,
+      "toolCorrect": false,
+      "ttftSeconds": 1.173808875
+    },
+    {
+      "completionTokens": 126,
+      "repeat": 0,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/utils.ts')]<|tool_call_end|>",
+        "thinking": "\nThe user asks: \"Use read_file to read src/utils.ts. Do not guess its contents.\" So we need to read that file. The system says we have a tool \"read_file\" that reads a workspace file. We need to call it with the path \"src/utils.ts\". The user didn't provide any other context. So we should call read_file with that path. Then we will get the contents and can respond accordingly. Since we have no prior content, we need to fetch it. So we will call read_file.\n",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 126,
+          "promptTokens": 115
+        }
+      },
+      "scenario": "tool",
+      "seconds": 2.472859667,
+      "streamTokensPerSecond": 57.012942616699505,
+      "toolCorrect": false,
+      "ttftSeconds": 0.262835167
+    },
+    {
+      "completionTokens": 126,
+      "repeat": 1,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/utils.ts')]<|tool_call_end|>",
+        "thinking": "\nThe user asks: \"Use read_file to read src/utils.ts. Do not guess its contents.\" So we need to read that file. The system says we have a tool \"read_file\" that reads a workspace file. We need to call it with the path \"src/utils.ts\". The user didn't provide any other context. So we should call read_file with that path. Then we will get the contents and can respond accordingly. Since we have no prior content, we need to fetch it. So we will call read_file.\n",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 126,
+          "promptTokens": 115
+        }
+      },
+      "scenario": "tool",
+      "seconds": 2.477425917,
+      "streamTokensPerSecond": 57.407522954812656,
+      "toolCorrect": false,
+      "ttftSeconds": 0.282591625
+    },
+    {
+      "completionTokens": 126,
+      "repeat": 2,
+      "response": {
+        "content": "<|tool_call_start|>[read_file(path='src/utils.ts')]<|tool_call_end|>",
+        "thinking": "\nThe user asks: \"Use read_file to read src/utils.ts. Do not guess its contents.\" So we need to read that file. The system says we have a tool \"read_file\" that reads a workspace file. We need to call it with the path \"src/utils.ts\". The user didn't provide any other context. So we should call read_file with that path. Then we will get the contents and can respond accordingly. Since we have no prior content, we need to fetch it. So we will call read_file.\n",
+        "toolCalls": [],
+        "usage": {
+          "completionTokens": 126,
+          "promptTokens": 115
+        }
+      },
+      "scenario": "tool",
+      "seconds": 2.4892885,
+      "streamTokensPerSecond": 56.77630985292233,
+      "toolCorrect": false,
+      "ttftSeconds": 0.270053042
+    }
+  ],
+  "seed": 42,
+  "temperature": 0,
+  "modelArtifact": {
+    "base": "mlx-community/LFM2.5-8B-A1B-MLX-8bit",
+    "revision": "947f12d8e575108151ff85561724255b43f44cac",
+    "adapter": "klide-adapter-ckpt1400",
+    "format": "MLX 8-bit base plus unfused LoRA",
+    "publishedGgufEquivalence": "Not independently verified"
+  },
+  "runtime": {
+    "mlx-lm": "0.31.3",
+    "mlx": "0.31.2"
+  },
+  "limitations": [
+    "Thinking-disable request was not honored: reasoning emitted in all trials",
+    "Context 8192 is benchmark target, not a hard MLX server cap; largest prompt 2859 tokens",
+    "Structured toolCalls empty; correct pythonic call appeared as content",
+    "Benchmark enables stream usage for token accounting; normal Klide MLX configuration leaves stream_options off"
+  ]
+}

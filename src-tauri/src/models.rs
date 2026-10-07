@@ -69,6 +69,10 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
     if crate::agent::routing::is_auto(&provider) {
         return Ok(vec![crate::agent::routing::AUTO_MODEL.to_string()]);
     }
+    if provider == "llamacpp" {
+        return tokio::task::spawn_blocking(|| Ok(vec![crate::llamacpp_models::launch_model()]))
+            .await.map_err(|e| e.to_string())?;
+    }
     // A registry miss falls through to the custom (self-hosted) store —
     // those endpoints expose the OpenAI `/v1/models` listing, queried
     // with their (optional) keychain token.
@@ -355,7 +359,9 @@ async fn fetch_openai_compatible_models(
 
 /// Pull per-model metadata out of an OpenAI-wire `/models` response.
 /// OpenRouter shape: `data: [{ id, context_length, top_provider:
-/// { context_length }, supported_parameters: ["tools", …] }]`. Models the
+/// { context_length }, supported_parameters: ["tools", …] }]`. Mistral says
+/// the same things under other names: `max_context_length`, and
+/// `capabilities: { function_calling, vision }` as booleans. Models the
 /// endpoint doesn't describe simply don't appear in the map.
 fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelMeta> {
     let mut out = HashMap::new();
@@ -376,13 +382,20 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
                     .and_then(|tp| tp.get("context_length"))
                     .and_then(|v| v.as_u64())
             })
+            .or_else(|| m.get("max_context_length").and_then(|v| v.as_u64()))
             .map(|n| n as usize);
+        let capability = |key: &str| {
+            m.get("capabilities")
+                .and_then(|c| c.get(key))
+                .and_then(|v| v.as_bool())
+        };
         // The model supports tool calling iff `supported_parameters` lists
         // "tools". Absent array → `None` (unknown), not `false`.
         let supports_tools = m
             .get("supported_parameters")
             .and_then(|v| v.as_array())
-            .map(|params| params.iter().any(|p| p.as_str() == Some("tools")));
+            .map(|params| params.iter().any(|p| p.as_str() == Some("tools")))
+            .or_else(|| capability("function_calling"));
         // OpenRouter prices are USD *per token*, encoded as strings
         // (e.g. "0.000001") — sometimes numbers. Accept both, scale to
         // per-million to match the local pricing table's units.
@@ -402,7 +415,7 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
                 supports_tools,
                 input_per_million: price("prompt"),
                 output_per_million: price("completion"),
-                supports_vision: None,
+                supports_vision: capability("vision"),
                 reasoning_levels: None,
             },
         );
@@ -1092,6 +1105,32 @@ mod tests {
             }
         });
         assert_eq!(find_context_window(&value), Some(128_000));
+    }
+
+    #[test]
+    fn parse_openai_models_meta_reads_mistral_shape() {
+        // Mistral `/v1/models`: the window is `max_context_length`, tools and
+        // vision are booleans under `capabilities`.
+        let value = serde_json::json!({
+            "data": [
+                {
+                    "id": "mistral-large-latest",
+                    "max_context_length": 262_144,
+                    "capabilities": { "completion_chat": true, "function_calling": true, "vision": true }
+                },
+                {
+                    "id": "mistral-embed",
+                    "max_context_length": 8_192,
+                    "capabilities": { "completion_chat": false, "function_calling": false, "vision": false }
+                }
+            ]
+        });
+        let meta = parse_openai_models_meta(&value);
+        assert_eq!(meta["mistral-large-latest"].context_length, Some(262_144));
+        assert_eq!(meta["mistral-large-latest"].supports_tools, Some(true));
+        assert_eq!(meta["mistral-large-latest"].supports_vision, Some(true));
+        assert_eq!(meta["mistral-embed"].supports_tools, Some(false));
+        assert_eq!(meta["mistral-embed"].supports_vision, Some(false));
     }
 
     #[test]

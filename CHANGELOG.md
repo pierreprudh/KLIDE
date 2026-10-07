@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Agent commands now start in the environment a terminal would give them: the login shell's PATH and variables (captured once per launch, so a Finder-opened Klide no longer runs Apple's `/usr/bin/python3`), the project's `.venv` first when there is one, and no variable whose name contains `KEY`, `SECRET` or `TOKEN`. A Python script's approval card names the interpreter it will start — version and venv — before Run.
+- A shell command that is really a Python script (`python3 - <<'PY'` or `python3 -c`) now shows as one on the approval card: the Python mark where `$` would be, the files it writes named in the reason line, and the program as highlighted code, one statement per line, first three lines until expanded. A command with anything chained after the script keeps the plain shell line, and no `python3 *` pattern is offered.
+- The Welcome card now plays a big-pixel nature film in place of the ASCII globe: five scenes (dawn, forest, a lake at night, under the surface, a summer meadow), played at a calm 0.5× pace, with tile seams and a light film grain. Scenes change through a wave of code glyphs that resolves into the next landscape. Cells stay integer-sized for crisp Retina pixels, the film pauses while the window is hidden, and Reduce motion shows a still meadow.
+
+## 0.6.7 (2026-10-06)
+
+- Live local inference testing exposed a context mismatch: Klide’s tool prompt exceeded the managed llama.cpp server’s 8k limit. Managed servers now use 16k, with matching provider metadata and more conservative memory estimates. Llama app setup guidance calls out the same context requirement.
+
+- Added Llama app as a local provider with the Llama logo, model discovery on port 9931, and a download link in Local Servers settings. Llama manages its own server and models.
+- Documented the Klide Q8 model comparison between Ollama and llama.cpp on Apple M5, including per-task latency, tool-call correctness, raw results and reproduction commands. The small sample shows no clear engine advantage; failed plain-text tasks are identified explicitly.
+- Added an opt-in live benchmark through Klide’s streaming adapters. It does not execute workspace tools or run the full agent harness.
+
+## 0.6.6 (2026-10-05)
+
+- The Settings advisor model picker opens toward the available space in the window.
+
+- Failed `/goal` checks now end the Run in error with the check output, rather than reporting successful completion. Delegate CLI goals also run the configured check even when Klide dispatched no tools.
+- Project Memory now proposes up to two evidence-backed lessons for review after meaningful work. The Memory inbox shows pending proposals; users can keep or dismiss them. Duplicate and dismissed lessons are suppressed, with bounded pending proposals and automatic expiry.
+
 ## Claude Code effort (2026-09-26)
 
 - Claude Code now offers low, medium, high, xhigh, and max reasoning effort in the existing picker. The selection reaches both terminal launch/resume and Focus chat turns.
@@ -15,6 +36,30 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Plan or Work, and a `/goal` to reach
+
+- **Two rows.** The Mode menu offers Plan and Work — Work is the `goal` tier
+  under the name of what it does, and it is the default: a new composer opens
+  on it. Chat is no longer a pick; a model that cannot call tools still
+  collapses Work to it, and the Work row stays marked, greyed, so the pick
+  is still readable. `/work` and `/plan` switch; `/chat` is gone.
+- **`/goal <objective>`.** Goal is a command now, the way Claude Code and Codex
+  spell a one-shot: it stays in the draft as typed, the turn rides in Work
+  whatever the picker says, and the system prompt asks the model to say what
+  done means, work through the checks, and stop only at the finish line. A
+  bare `/goal` is not a turn.
+- The transcript, the Rust Harness and the Mission documents keep `goal` as
+  the tier's id; only the words changed (CONTEXT.md, HARNESS_CONTRACT.md).
+- **The goal gate.** A `/goal` turn's "done" is checked. When the model stops
+  after changing the workspace, the Harness runs the post-edit check command
+  (Settings → Harness → Test after edit) once more; a failure comes back to the
+  model as the next message and it goes another round, three by default. The
+  conversation shows each round as a marker — `Goal check … failed — round 1
+  of 3, going again`, then `Goal reached: … passed` — or says plainly that no
+  check is set, so an unverified finish never reads as a verified one. A
+  `/goal` turn also gets a tool-turn cap of at least 200, the long leash a
+  goal needs.
+
 ### Approving from the keyboard
 
 - **↵ runs, Esc denies.** The command card the run is blocked on answers the
@@ -27,6 +72,37 @@ Notable changes per milestone. Dates are completion dates.
 
 ### Delegates
 
+- **Codex and Oh My Pi show their work in Focus.** Both CLIs now run a
+  headless turn in their structured mode (`codex exec --json`, `omp --mode
+  json`) and are read into the same rows Claude Code and OpenCode already
+  get: each command, patch and MCP call as a tool row with its result, text
+  as it arrives, a sandbox refusal as a failed row that says "Declined".
+  Both also continue their own session across turns (`codex exec resume
+  <thread>`, `omp --resume=<id>`), so a turn sends only the newest message
+  instead of the whole transcript. Fixtures were captured from the real CLIs
+  (codex-cli 0.154, omp 15.13.3); Codex's item shapes follow its
+  `exec_events.rs`.
+- **A mode change reaches a resumed delegate session.** A continued session
+  gets only the newest message, so switching Chat → Goal (or toggling a skill,
+  editing the project rules) used to be announced to nobody. The runner now
+  remembers a fingerprint of the instructions each session has seen and, when
+  they changed, says them again ahead of the message. In the prompt rather
+  than on `--append-system-prompt`, because Claude Code records its system
+  prompt on a session's first request and ignores the flag on `--resume`. An
+  unchanged turn still sends just the message.
+- **Claude Code asks you, per call.** A headless Claude Code turn used to
+  refuse anything its own rules did not pre-approve — `gh pr list` came back
+  "requires approval" and the turn moved on without it. The turn now names
+  Klide's embedded MCP server as its `--permission-prompt-tool`: every prompt
+  the CLI would have shown in a terminal lands on the same card Klide shows for
+  its own shell commands, in the conversation that is running it, with the
+  same answers — once, for this run, for this project. "For this project"
+  writes the project allowlist the next headless turn carries, so a project
+  that only ever used Claude Code finally builds one. The full-auto policy
+  answers a command without a card and says so in the transcript; a command
+  rejected this run is declined without asking twice. Klide answers the
+  question only — the CLI still runs the call itself, and the call stays
+  observed. Works in both hosts, the app and the background `ptyd` run host.
 - **A CLI's home is honoured everywhere.** `CODEX_HOME`, `CLAUDE_CONFIG_DIR`
   and OpenCode's XDG directories now reach every place Klide touches a
   Delegate's files — the status-hook installer, the gateway's Codex

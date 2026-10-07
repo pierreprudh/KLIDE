@@ -43,6 +43,9 @@ pub struct AgentAttachment {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentContextSnapshot {
+    /// Rust-owned frozen recall, persisted once and reused on continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<super::memory_recall::MemorySnapshot>,
     pub workspace_root: Option<String>,
     #[serde(default)]
     pub attachments: Vec<AgentAttachment>,
@@ -104,6 +107,12 @@ pub struct StartRunRequest {
     /// failing check is returned to the model as a not-ok tool result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_after_edit_command: Option<String>,
+    /// Set when this turn was a `/goal <objective>`: the model's "done" is
+    /// checked against `test_after_edit_command` before the Run may end, and a
+    /// failing check buys another round (`agent::goal`). Absent on an
+    /// ordinary turn, which ends when the model stops calling tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<super::goal::GoalSpec>,
     /// Backend-populated project approvals. Renderer input is deliberately
     /// ignored: a compromised webview must not be able to mint command trust.
     #[serde(default, skip_deserializing)]
@@ -435,6 +444,7 @@ impl PermissionRequest {
 /// `frontend_mirror_matches_agent_wire` fails the build if it drifts.
 pub mod error_code {
     pub const ABORTED: &str = "aborted";
+    pub const GOAL_CHECK_FAILED: &str = "goal_check_failed";
     pub const MAX_TURNS: &str = "max_turns";
     pub const PROVIDER_UNAVAILABLE: &str = "provider_unavailable";
     pub const STEERING_GAVE_UP: &str = "steering_gave_up";
@@ -448,9 +458,10 @@ pub mod error_code {
     /// The set the drift test compares against the frontend mirror. Nothing in
     /// the running app iterates it — it exists so the contract has one home.
     #[allow(dead_code)]
-    pub const ALL: [&str; 6] = [
+    pub const ALL: [&str; 7] = [
         ABORTED,
         MAX_TURNS,
+        GOAL_CHECK_FAILED,
         PROVIDER_UNAVAILABLE,
         STEERING_GAVE_UP,
         RUN_HOST_FAILED,
@@ -626,6 +637,12 @@ pub enum AgentEvent {
     /// together would let an observed `Bash` be counted as a command Klide
     /// verified (`summarize_validation` counts capabilities) and would tell the
     /// user a diff was reviewed when nothing reviewed it.
+    ///
+    /// A relayed permission prompt (`agent/permission_relay.rs`) does not
+    /// change that: the operator answered the CLI's *question*, and the CLI
+    /// still ran the call itself. The answer is on the record as a
+    /// `PermissionRequested` / `PermissionResolved` pair beside this event;
+    /// the call stays observed.
     ObservedToolCall {
         run_id: String,
         tool_call_id: String,

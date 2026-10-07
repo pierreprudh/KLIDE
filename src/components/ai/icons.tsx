@@ -173,6 +173,8 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   deepseek: "color-logo-img",
   // Gemini's 2025 star carries its own red→blue→green gradient.
   gemini: "color-logo-img",
+  // Mistral's pixel M is a yellow→red gradient; inverting it would ruin it.
+  mistral: "color-logo-img",
 };
 
 /** The mark for a Provider id or a bare brand key. A registry row's `brand`
@@ -250,6 +252,14 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId | BrandKey; siz
         <svg {...line} strokeWidth="1.7">
           <path d="M4 6h5l5 6-5 6H4M4 12h5" />
           <path d="M14 12h6M17 9l3 3-3 3" />
+        </svg>
+      );
+    case "llamacpp":
+      // Llama project's mark from llama.app, rendered in the theme foreground.
+      return (
+        <svg {...base} viewBox="0 0 600 600" fill="currentColor">
+          <path d="M600 392L504.249 558L504.137 557.929C487.252 584.069 458.193 600 426.864 600H120L240 392H600Z" />
+          <path d="M240 392H0L199.602 46.0254C216.032 17.5463 246.411 0 279.29 0H466.154L240 392Z" />
         </svg>
       );
     case "mlx":

@@ -1,8 +1,11 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ProviderId } from "../agent/types";
 import { ProviderLogo } from "./ai/icons";
 import { ConnectorMark } from "./linkMark";
 import { Kbd } from "./Kbd";
+import { PythonMark } from "./fileMarks";
+import { highlightCode } from "./markdown";
+import { parseScriptCommand, type ScriptCommand } from "./scriptCommand";
 
 type Props = {
   command: string;
@@ -19,6 +22,9 @@ type Props = {
   worker?: ProviderId;
   detail?: string;
   externalPaths?: string[];
+  /** The Python a command would start, resolved by Rust with the exact PATH
+   *  the command gets (command_env.rs). Shown on a script's card. */
+  interpreter?: CommandInterpreter;
   onReject: () => void;
   onApproveOnce: () => void;
   /** Approve this exact command for the rest of the run (allowlist, session). */
@@ -34,6 +40,85 @@ type Props = {
    *  leave it.) Only one card on screen may hold this. */
   hotkeys?: boolean;
 };
+
+/** Mirrors Rust `command_env::Interpreter`. */
+export type CommandInterpreter = {
+  path: string;
+  version?: string | null;
+  /** The venv folder it belongs to, relative to the command's folder. */
+  venv?: string | null;
+};
+
+/** Where an interpreter lives: its venv (`.venv`), else its folder with the
+ *  home directory shortened (`~/.pyenv/shims`, `/usr/bin`). */
+export function interpreterPlace(interpreter: CommandInterpreter): string {
+  return interpreter.venv
+    ?? interpreter.path.replace(/\/[^/]+$/, "").replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+}
+
+const REDUCED_MOTION = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** The Python mark and `python3`; hovering them slides out, from behind the
+ *  name, which Python it is — version, then where it lives. Hidden at rest so
+ *  the card stays one quiet line. */
+function ScriptInterpreter({ head, interpreter }: { head: string; interpreter?: CommandInterpreter }) {
+  const [shown, setShown] = useState(false);
+  // The label's own width: the clip opens to exactly this, so the whole
+  // duration is spent on visible travel (a generous max-width finishes the
+  // visible part in a fraction of it and reads as a snap).
+  const [width, setWidth] = useState(0);
+  const measure = (node: HTMLSpanElement | null) => {
+    if (node && node.scrollWidth !== width) setWidth(node.scrollWidth);
+  };
+  // Opening takes its time; closing gets out of the way a little faster.
+  const timing = shown ? "600ms var(--ease-soft)" : "400ms var(--ease-soft)";
+  return (
+    <span
+      onMouseEnter={() => setShown(true)}
+      onMouseLeave={() => setShown(false)}
+      style={{ display: "inline-flex", alignItems: "baseline", maxWidth: "100%", verticalAlign: "bottom" }}
+    >
+      <span style={{ display: "inline-flex", alignSelf: "center", marginRight: 7 }}>
+        <PythonMark size={13} />
+      </span>
+      {/* The reveal clips at the name's right edge, so the label slides out
+          from behind it rather than fading in beside it. */}
+      <span>{head}</span>
+      {interpreter && (
+        <span
+          aria-label={`${interpreter.version ? `Python ${interpreter.version}, ` : ""}${interpreter.path}`}
+          style={{
+            display: "inline-block",
+            overflow: "hidden",
+            minWidth: 0,
+            width: shown ? width : 0,
+            transition: REDUCED_MOTION ? undefined : `width ${timing}`,
+          }}
+        >
+          <span
+            ref={measure}
+            style={{
+              display: "inline-flex",
+              gap: 8,
+              paddingLeft: 10,
+              whiteSpace: "nowrap",
+              fontFamily: "var(--font-ui)",
+              fontSize: 11,
+              color: "var(--fg-dim)",
+              opacity: shown ? 1 : 0,
+              transform: shown || REDUCED_MOTION ? "none" : "translateX(-40%)",
+              willChange: "transform, opacity",
+              transition: REDUCED_MOTION ? `opacity ${timing}` : `transform ${timing}, opacity ${timing}`,
+            }}
+          >
+            {interpreter.version && <span>{interpreter.version}</span>}
+            <span>{interpreterPlace(interpreter)}</span>
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
 
 /** Is this key event already owned by a text field? Then the card stays out. */
 function targetIsEditable(e: KeyboardEvent): boolean {
@@ -134,6 +219,45 @@ function WordAction({
   );
 }
 
+/** How many lines of a script the card shows before "N more lines". */
+const SCRIPT_PREVIEW_LINES = 3;
+
+/** A Python script under its card's header: the program as code, no gutter,
+ *  first lines only until asked — every line is one click away, nothing is
+ *  hidden for good. */
+function ScriptBody({ script }: { script: ScriptCommand }) {
+  const [open, setOpen] = useState(false);
+  const extra = script.lines.length - SCRIPT_PREVIEW_LINES;
+  const shown = open || extra <= 0 ? script.lines : script.lines.slice(0, SCRIPT_PREVIEW_LINES);
+  return (
+    <div style={{ flexBasis: "100%", minWidth: 0, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+      <pre
+        style={{
+          margin: 0,
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          lineHeight: 1.55,
+          color: "var(--fg-muted)",
+          overflowX: "auto",
+          maxHeight: open ? 280 : undefined,
+          overflowY: open ? "auto" : undefined,
+        }}
+      >
+        <code style={{ fontFamily: "inherit" }}>{highlightCode(shown.join("\n"))}</code>
+      </pre>
+      {extra > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpen((was) => !was)}
+          style={{ marginTop: 2, padding: 0, border: "none", background: "none", font: "inherit", fontSize: 11, color: "var(--fg-subtle)", cursor: "pointer" }}
+        >
+          {open ? "Show less" : `${extra} more line${extra === 1 ? "" : "s"}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Shell-command approval — minimal: the command in mono with a `$` prompt,
  *  the quiet scope options as bare icons (approve-for-run 📌,
  *  approve-for-project 🗂, pattern), a hairline, then the decision in words
@@ -149,6 +273,7 @@ export function InlineCommandReview({
   connector,
   detail,
   externalPaths = [],
+  interpreter,
   onReject,
   onApproveOnce,
   onApproveForRun,
@@ -157,7 +282,11 @@ export function InlineCommandReview({
   onApprovePattern,
   hotkeys = false,
 }: Props) {
-  const canApprovePattern = !!pattern && !!onApprovePattern && pattern !== command;
+  // A command that is entirely a Python script shows as one: the mark where
+  // `$` would be, the files it writes in the reason line, the program below.
+  // No pattern offer — `python3 *` would approve every script there is.
+  const script = useMemo(() => (kind === "command" ? parseScriptCommand(command) : null), [kind, command]);
+  const canApprovePattern = !script && !!pattern && !!onApprovePattern && pattern !== command;
   // ⏎ approves once, esc denies — but only when no text field owns the key,
   // and never a key something else already answered (the composer prevents
   // default on the ⏎ it handles, so an approval is never counted twice).
@@ -197,7 +326,9 @@ export function InlineCommandReview({
         margin: "0 16px 8px",
         display: "flex",
         alignItems: "center",
+        flexWrap: script ? "wrap" : undefined,
         gap: 8,
+        rowGap: script ? 6 : undefined,
         padding: "7px 10px",
         borderRadius: 10,
         border: "1px solid var(--border)",
@@ -225,9 +356,9 @@ export function InlineCommandReview({
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
-          title={command}
+          title={script ? undefined : command}
         >
-          {kind === "command" && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
+          {kind === "command" && !script && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
           {kind === "connector" && connector && (
             // The mark, then — for anything but GitHub, whose mark says it — the
             // connector's name, set apart from the tool by space, not a dot.
@@ -243,9 +374,9 @@ export function InlineCommandReview({
               <span>{peer} →</span>
             </span>
           )}{kind === "worker" && peer && " "}
-          {command}
+          {script ? <ScriptInterpreter head={script.head} interpreter={interpreter} /> : command}
         </span>
-        {(detail || externalPaths.length > 0) && (
+        {(detail || externalPaths.length > 0 || (script && script.writes.length > 0)) && (
           <span
             style={{
               minWidth: 0,
@@ -256,8 +387,22 @@ export function InlineCommandReview({
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
             }}
-            title={[detail, externalPaths.length ? `Outside workspace: ${externalPaths.join(", ")}` : ""].filter(Boolean).join(" ")}
+            title={[script?.writes.length ? `Writes ${script.writes.join(", ")}.` : "", detail, externalPaths.length ? `Outside workspace: ${externalPaths.join(", ")}` : ""].filter(Boolean).join(" ")}
           >
+            {/* A script's write targets lead: in a narrow panel the line
+                truncates, and the file is what the reader needs. */}
+            {script && script.writes.length > 0 && (
+              <>
+                Writes{" "}
+                {script.writes.map((path, i) => (
+                  <span key={path}>
+                    {i > 0 && ", "}
+                    <span style={{ fontFamily: "var(--font-mono)" }}>{path.split("/").pop()}</span>
+                  </span>
+                ))}
+                .{detail ? " " : ""}
+              </>
+            )}
             {detail}
             {externalPaths.length > 0 ? `${detail ? " " : ""}Outside workspace: ${externalPaths.join(", ")}` : ""}
           </span>
@@ -295,6 +440,7 @@ export function InlineCommandReview({
         <WordAction label={rejectLabel} tone="danger" keycap={hotkeys ? "Esc" : undefined} onClick={onReject} />
         <WordAction label={approveOnceLabel} tone="accent" keycap={hotkeys ? "↵" : undefined} onClick={onApproveOnce} />
       </span>
+      {script && <ScriptBody script={script} />}
     </div>
   );
 }

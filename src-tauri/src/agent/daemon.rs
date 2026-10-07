@@ -178,6 +178,7 @@ impl RunHost {
         let live = Arc::downgrade(self);
         let operations = live.clone();
         let changes = live.clone();
+        let permissions = live.clone();
         let endpoint = self.data_dir.join("chat-coordination-endpoint.json");
         if let Err(e) = self.bridge.ensure_server(
             &endpoint,
@@ -192,6 +193,10 @@ impl RunHost {
                     )
                     .blocking_recv()
                     .map_err(|_| "Mission request was cancelled".to_string())?
+                })),
+                permission: Some(Box::new(move |session, ask| {
+                    let host = permissions.upgrade().ok_or("Background host stopped")?;
+                    super::permission_relay::answer(&*host, &session.run_id, &session.workspace_root, ask)
                 })),
                 on_change: Box::new(move |root, outcome| {
                     if let Some(host) = changes.upgrade() {

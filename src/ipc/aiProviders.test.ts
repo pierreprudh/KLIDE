@@ -5,6 +5,8 @@ const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
+  LOCAL_MODEL_CHANGED_EVENT,
+  selectLlamaModel,
   listProviderModels,
   modelReflectionLevels,
   modelSupportsReflection,
@@ -90,5 +92,25 @@ describe("AI Provider IPC Adapter", () => {
       model: "model-a",
       concurrency: 3,
     });
+  });
+});
+
+describe("llama.cpp selection", () => {
+  it("publishes the selected model only after Rust saves it", async () => {
+    const setItem = vi.fn();
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("localStorage", { setItem });
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal("CustomEvent", class { constructor(public type: string, public options: unknown) {} });
+    try {
+      invokeMock.mockReset().mockRejectedValueOnce(new Error("Disk full"));
+      await expect(selectLlamaModel("Qwen/Qwen3-8B-GGUF:Q4_K_M")).rejects.toThrow("Disk full");
+      expect(setItem).not.toHaveBeenCalled();
+      expect(dispatchEvent).not.toHaveBeenCalled();
+      invokeMock.mockResolvedValueOnce(undefined);
+      await selectLlamaModel("Qwen/Qwen3-8B-GGUF:Q4_K_M");
+      expect(setItem).toHaveBeenCalledWith("klide.model.llamacpp", "Qwen/Qwen3-8B-GGUF:Q4_K_M");
+      expect(dispatchEvent.mock.calls[0][0].type).toBe(LOCAL_MODEL_CHANGED_EVENT);
+    } finally { vi.unstubAllGlobals(); }
   });
 });

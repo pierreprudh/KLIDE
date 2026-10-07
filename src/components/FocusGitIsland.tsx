@@ -244,8 +244,21 @@ export const FocusGitIsland = memo(function FocusGitIsland({
         className="klide-focus-git-island"
         data-preview-open={expanded || undefined}
         data-ping={pinging ? "true" : undefined}
-        role="group"
-        aria-label="Git graph summary"
+        /* The whole compact window is the expand control — a tap on a commit
+           row, the title or the margin all open the preview. The corner
+           buttons are a sibling layered above it, so their clicks never
+           reach here. */
+        role="button"
+        tabIndex={expanded ? -1 : 0}
+        aria-label="Expand Git preview"
+        aria-expanded={expanded}
+        onClick={toggleExpanded}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggleExpanded();
+          }
+        }}
       >
         <div className="klide-focus-git-island-header">
           <span className="klide-focus-git-island-title">

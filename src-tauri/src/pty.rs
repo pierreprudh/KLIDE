@@ -1126,6 +1126,7 @@ fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHoo
     let cancel_app = app.clone();
     let recover_app = app.clone();
     let mission_app = app.clone();
+    let permission_app = app.clone();
     crate::coordination_bridge::BridgeHooks {
         // A Delegate's `agent_cancel` reaches a Harness Run's live token the
         // way the Harness's own does; the journal already holds the request.
@@ -1144,6 +1145,9 @@ fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHoo
             tauri::async_runtime::block_on(crate::missions::orchestration::execute(
                 mission_app.clone(), session.workspace_root.clone(), session.run_id.clone(), request,
             ))
+        })),
+        permission: Some(Box::new(move |session, ask| {
+            crate::agent::relay_delegate_permission(&permission_app, &session.run_id, &session.workspace_root, ask)
         })),
         on_change: Box::new(move |root, outcome| {
             crate::coordination::emit_coordination_changed(&emit_app, root, outcome);
