@@ -34,9 +34,9 @@ Klide opens on the surface that matches the task, and all three share the same r
 
 ### Welcome — start or resume a project
 
-Recent folders, clone, and new project on one quiet screen. `⌘1`–`⌘5` reopen a recent workspace without touching the mouse.
+Open a folder, start a new project, or clone a repository from one quiet page, with your recent workspaces numbered underneath. `⌘O`, `⌘N`, and `⌘⇧N` reach the three actions, and `⌘1`–`⌘5` reopen a recent workspace without touching the mouse. Beside the list, a framed big-pixel nature film drifts through five scenes; it holds a single still when the system asks for reduced motion.
 
-<img src=".github/assets/welcome.png" alt="Klide welcome screen with recent projects" width="900" />
+<img src=".github/assets/welcome.png" alt="Klide welcome screen: wordmark, Welcome back, Open folder, New project, Clone and Settings actions, numbered recent folders, and a framed pixel-art sunset over hills" width="900" />
 
 ### Focus — one task, one conversation
 
