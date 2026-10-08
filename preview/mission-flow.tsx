@@ -12,7 +12,7 @@ import { MissionFlow, type MissionFlowMeta } from "../src/components/MissionFlow
 import type { GraphTask } from "../src/agent/missionGraph";
 import { ProviderModelMark } from "../src/modelIdentity";
 
-const route = (provider: "anthropic" | "ollama" | "claude-code" | "codex", model: string | null, label: string) => (
+const route = (provider: "anthropic" | "ollama" | "claude-code" | "codex" | "deepseek", model: string | null, label: string) => (
   <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
     <ProviderModelMark provider={provider} model={model} size={16} />
     <span>{label}</span>
@@ -33,7 +33,7 @@ const meta: Record<string, MissionFlowMeta> = {
   t2: { title: "Draft the implementation plan", phase: "Understand", status: "done", caption: route("anthropic", "claude-sonnet-5-5", "Anthropic · Claude Sonnet") },
   t3: { title: "Scaffold the mission tool", phase: "Build", status: "running", caption: route("anthropic", "claude-sonnet-5-5", "Anthropic · Claude Sonnet") },
   t4: { title: "Render the flow in the conversation", phase: "Build", status: "review", caption: route("claude-code", null, "Claude Code") },
-  t5: { title: "Write unit tests", phase: "Verify", status: "queued", caption: "after Scaffold" },
+  t5: { title: "Write unit tests", phase: "Verify", status: "running", caption: route("deepseek", "deepseek-chat", "DeepSeek · DeepSeek") },
   t6: { title: "Visual QA of the new UI", phase: "Verify", status: "failed", caption: route("codex", null, "Codex") },
 };
 

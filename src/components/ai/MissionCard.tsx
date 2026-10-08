@@ -221,7 +221,10 @@ function RouteMark({ route, size = 16 }: { route: DurableMissionTaskDispatch | u
   if (!route) return null;
   const provider = route.provider as ProviderId;
   const model = route.workerKind === "delegate" ? null : route.model;
-  const identity = modelIdentity(model);
+  // A maker that is also the provider would read twice — "DeepSeek ·
+  // DeepSeek" — so there the id itself is the second word.
+  const maker = modelIdentity(model);
+  const identity = maker && maker.name !== providerName(provider) ? maker : null;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0 }}>
       <ProviderModelMark provider={provider} model={model} size={size} />
