@@ -27,6 +27,9 @@ import { MissionFlow, type MissionFlowMeta } from "../MissionFlow";
 import { notify } from "../../toast";
 import { errMessage } from "../../errors";
 import { ProviderModelMark, modelIdentity } from "../../modelIdentity";
+import { useMissionGates, type MissionGate } from "./missionGates";
+import { InlineCommandReview, type CommandInterpreter } from "../InlineCommandReview";
+import { InlineDiffReview } from "../InlineDiffReview";
 import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 
@@ -95,6 +98,26 @@ export function MissionCard({ receipt, workspaceRoot }: { receipt: PlanMissionRe
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The running attempts, so their gates reach this card. A Delegate attempt
+  // has no Harness transcript to follow; its verdict comes after exit.
+  const running = useMemo(() => {
+    if (!bundle) return [];
+    const out: Array<{ taskId: string; runId: string }> = [];
+    for (const task of bundle.tasks) {
+      if (task.dispatch?.workerKind === "delegate") continue;
+      const attached = bundle.events.filter((line) => line.event.type === "attempt_attached" && line.event.taskId === task.id);
+      const last = attached[attached.length - 1];
+      if (!last || last.event.type !== "attempt_attached") continue;
+      const runId = last.event.runId;
+      const settled = bundle.events.some((line) =>
+        (line.event.type === "attempt_validation_recorded" || line.event.type === "attempt_settled" || line.event.type === "attempt_dispatch_failed" || line.event.type === "attempt_interrupted")
+        && line.event.runId === runId);
+      if (!settled) out.push({ taskId: task.id, runId });
+    }
+    return out;
+  }, [bundle]);
+  const { gates, answerPermission, answerDiff } = useMissionGates(running);
+
   const view = useMemo(() => {
     if (!bundle) return null;
     const state = compileDurableMissionBundle(bundle);
@@ -116,13 +139,13 @@ export function MissionCard({ receipt, workspaceRoot }: { receipt: PlanMissionRe
       meta[task.id] = {
         title: task.title,
         phase: task.phase,
-        status: row?.status ?? "queued",
         caption: approved ? <RouteMark route={task.dispatch} /> : row?.block?.reason,
+        status: gates.some((gate) => gate.taskId === task.id) ? "waiting" : row?.status ?? "queued",
       };
     }
     const done = rows.filter((row) => row.status === "done").length;
     return { approved, terminal, rows, rowById, tasks, meta, done };
-  }, [bundle]);
+  }, [bundle, gates]);
 
   async function approveAndRun() {
     if (!workspaceRoot || !bundle || !receipt.route || busy) return;
@@ -186,6 +209,16 @@ export function MissionCard({ receipt, workspaceRoot }: { receipt: PlanMissionRe
         </div>
       )}
 
+      {gates.map((gate) => (
+        <GateRow
+          key={gate.kind === "permission" ? gate.request.id : gate.proposal.id}
+          gate={gate}
+          title={view.meta[gate.taskId]?.title ?? gate.taskId}
+          onPermission={(allow, scope) => { if (gate.kind === "permission") void answerPermission(gate, allow, scope).catch((error) => notify(`Couldn't answer — ${errMessage(error)}`, { tone: "warn" })); }}
+          onDiff={(apply) => { if (gate.kind === "diff") void answerDiff(gate, apply).catch((error) => notify(`Couldn't answer — ${errMessage(error)}`, { tone: "warn" })); }}
+        />
+      ))}
+
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px 12px", minHeight: 40 }}>
         {!view.approved ? (
           <>
@@ -211,6 +244,45 @@ export function MissionCard({ receipt, workspaceRoot }: { receipt: PlanMissionRe
         )}
       </div>
     </Frame>
+  );
+}
+
+/** A worker's pause, drawn as the panel draws its own: the task it belongs
+ *  to on a line above, then the command or the diff with its answers. */
+function GateRow({ gate, title, onPermission, onDiff }: {
+  gate: MissionGate;
+  title: string;
+  onPermission: (allow: boolean, scope: "once" | "run" | "project") => void;
+  onDiff: (apply: boolean) => void;
+}) {
+  return (
+    <div style={{ padding: "6px 14px 2px", borderTop: "1px solid var(--border)", display: "grid", gap: 4 }}>
+      <span style={{ fontSize: 11.5, color: "var(--fg-dim)" }}>{title} is waiting on you</span>
+      {gate.kind === "permission" ? (
+        (() => {
+          const input = (gate.request.input ?? {}) as { command?: string; externalPaths?: string[]; interpreter?: CommandInterpreter | null };
+          return (
+            <InlineCommandReview
+              command={input.command ?? gate.request.summary ?? gate.request.toolName}
+              kind={input.command ? "command" : "network"}
+              detail={gate.request.reason}
+              externalPaths={input.externalPaths}
+              interpreter={input.interpreter ?? undefined}
+              onReject={() => onPermission(false, "once")}
+              onApproveOnce={() => onPermission(true, "once")}
+              onApproveForRun={() => onPermission(true, "run")}
+              onApproveForProject={() => onPermission(true, "project")}
+            />
+          );
+        })()
+      ) : (
+        <InlineDiffReview
+          edit={{ path: gate.proposal.path, oldContent: gate.proposal.oldContent, newContent: gate.proposal.newContent, isCreate: gate.proposal.isCreate, reason: gate.proposal.reason }}
+          onApply={() => onDiff(true)}
+          onReject={() => onDiff(false)}
+        />
+      )}
+    </div>
   );
 }
 
