@@ -10,7 +10,7 @@
 // never the plan; dependency edits stay on the detail panel, which writes the
 // task's Markdown back. No pills, no dots, no shadows — a card is a hairline
 // box, a status is a word, a lit card is a ring.
-import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { layoutMission, type GraphTask } from "../agent/missionGraph";
 import type { MissionTaskStatus } from "../agent/missionHarness";
 import { presentMissionCardTone, toneColor } from "../runPresentation";
@@ -22,8 +22,8 @@ export type MissionFlowMeta = {
   /** Understand / Build / Verify — the small line above the card. */
   phase?: string;
   status: MissionTaskStatus | string;
-  /** The caption under the title: who does it, or what it waits on. */
-  caption?: string;
+  /** The caption under the title: who does it (a mark and a name), or what it waits on. */
+  caption?: ReactNode;
 };
 
 type MissionFlowProps = {
@@ -273,7 +273,7 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
                 <span style={{ fontSize: 13, fontWeight: status === "running" || status === "ready" ? 600 : 500, lineHeight: 1.3, color: "var(--fg-strong)", overflow: "hidden", display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2 }}>
                   {m?.title ?? node.id}
                 </span>
-                <span style={{ display: "block", marginTop: 2, fontSize: 11.5, lineHeight: 1.4, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 3, fontSize: 11.5, lineHeight: 1.4, color: "var(--fg-subtle)", overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 }}>
                   {!quietWord && (
                     <span style={{ fontFamily: "var(--font-mono)", color: toneColor(tone) }}>{status}</span>
                   )}

@@ -26,6 +26,9 @@ import type { GraphTask } from "../../agent/missionGraph";
 import { MissionFlow, type MissionFlowMeta } from "../MissionFlow";
 import { notify } from "../../toast";
 import { errMessage } from "../../errors";
+import { ProviderModelMark, modelIdentity } from "../../modelIdentity";
+import { providerName } from "../../agent/providers";
+import type { ProviderId } from "../../agent/types";
 
 /** What `plan_mission` hands back, as the handler shaped it. */
 export type PlanMissionReceipt = {
@@ -114,7 +117,7 @@ export function MissionCard({ receipt, workspaceRoot }: { receipt: PlanMissionRe
         title: task.title,
         phase: task.phase,
         status: row?.status ?? "queued",
-        caption: approved ? routeLabel(task.dispatch) : row?.block?.reason,
+        caption: approved ? <RouteMark route={task.dispatch} /> : row?.block?.reason,
       };
     }
     const done = rows.filter((row) => row.status === "done").length;
@@ -189,7 +192,15 @@ export function MissionCard({ receipt, workspaceRoot }: { receipt: PlanMissionRe
             <button className="klide-button klide-button-primary" disabled={busy || !receipt.route || !workspaceRoot} onClick={() => void approveAndRun()}>
               {busy ? "Starting…" : `Approve and run (${total})`}
             </button>
-            <Line dim>{receipt.route ? `${routeLabel(receipt.route)} · ${receipt.route.requireDiffReview ? "edits reviewed" : "edits auto-applied"}` : "No route for this Run"}</Line>
+            {receipt.route ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                {/* Room here for the pair — the runner with the maker tucked in. */}
+                <RouteMark route={receipt.route} size={22} />
+                <Line dim>· {receipt.route.requireDiffReview ? "edits reviewed" : "edits auto-applied"}</Line>
+              </span>
+            ) : (
+              <Line dim>No route for this Run</Line>
+            )}
           </>
         ) : view.terminal?.event.type === "mission_parked" ? (
           <Line tone="var(--warning)">Parked · {view.terminal.event.reason}</Line>
@@ -203,9 +214,25 @@ export function MissionCard({ receipt, workspaceRoot }: { receipt: PlanMissionRe
   );
 }
 
-function routeLabel(route: DurableMissionTaskDispatch | undefined): string {
-  if (!route) return "";
-  return route.workerKind === "delegate" ? route.provider : `${route.provider} · ${route.model}`;
+/** Who runs a task: the provider's mark with the model's maker tucked in,
+ *  the provider's name, and the model's display name (its id when unknown).
+ *  A Delegate CLI picks its own model, so it shows as the CLI alone. */
+function RouteMark({ route, size = 16 }: { route: DurableMissionTaskDispatch | undefined; size?: number }) {
+  if (!route) return null;
+  const provider = route.provider as ProviderId;
+  const model = route.workerKind === "delegate" ? null : route.model;
+  const identity = modelIdentity(model);
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+      <ProviderModelMark provider={provider} model={model} size={size} />
+      <span style={{ color: "var(--fg-subtle)", whiteSpace: "nowrap" }}>{providerName(provider)}</span>
+      {model && (
+        <span style={{ fontFamily: identity ? "inherit" : "var(--font-mono)", fontSize: identity ? undefined : 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {identity?.name ?? model}
+        </span>
+      )}
+    </span>
+  );
 }
 
 function Frame({ title, children }: { title: string; children: React.ReactNode }) {
