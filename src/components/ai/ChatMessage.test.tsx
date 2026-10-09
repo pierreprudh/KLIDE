@@ -1,8 +1,7 @@
-import { Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { extractThinking, renderMessageBody, ThinkingBlock, type AttachedResult } from "./ChatMessage";
+import { extractThinking, renderMessageBody, type AttachedResult } from "./ChatMessage";
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -32,25 +31,20 @@ describe("tool-run thinking", () => {
     expect(extractThinking(message)).toBe(expected);
   });
 
-  it("renders one hoisted copy when the folded message body remains mounted", () => {
+  it("keeps its thinking in place inside a fold, so opening one restores the order", () => {
     const message: Msg = {
       role: "assistant",
       content: "",
       thinking: "Inspect the workspace.",
+      thinkingMs: 700,
       toolCalls: [{ name: "read_file", args: { path: "src/App.tsx" } }],
     };
-    const thinking = extractThinking(message);
 
-    const html = renderToStaticMarkup(
-      <Fragment>
-        <ThinkingBlock text={thinking} streaming={false} />
-        {renderMessageBody(message, false, { hideThinking: true })}
-      </Fragment>,
-    );
+    const html = renderToStaticMarkup(renderMessageBody(message, false));
 
-    expect(occurrences(html, "Thought process")).toBe(1);
+    expect(occurrences(html, "Thought for 0.7s")).toBe(1);
     expect(occurrences(html, "Inspect the workspace.")).toBe(1);
-    expect(html).toContain("read_file");
+    expect(html.indexOf("Inspect the workspace.")).toBeLessThan(html.indexOf("read_file"));
   });
 
   it("keeps the original thinking block when the message is not folded", () => {

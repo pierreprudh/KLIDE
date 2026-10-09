@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { groupToolRuns, pairToolResults, toolRunLabel, toolRunIndex } from "./toolRuns";
+import { groupToolRuns, pairToolResults, toolRunLabel } from "./toolRuns";
 
 const call = (name: string): Msg => ({
   role: "assistant",
@@ -102,13 +102,16 @@ describe("groupToolRuns", () => {
     expect(runs[0].calls).toBe(3);
   });
 
-  it("answers which run a message belongs to", () => {
-    const msgs = [asks("go"), ...burst("Bash", 3)];
-    const at = toolRunIndex(groupToolRuns(msgs));
+  it("sums the reasoning between the calls, so the row can say how long it thought", () => {
+    const thought = (ms: number): Msg => ({ role: "assistant", content: "", thinking: "next", thinkingMs: ms, toolCalls: [{ name: "Bash", args: {} }] });
+    const runs = groupToolRuns([asks("go"), thought(700), result("Bash"), thought(1400), result("Bash"), call("Bash"), result("Bash")]);
 
-    expect(at(0)).toBeNull();
-    expect(at(1)?.start).toBe(1);
-    expect(at(6)?.start).toBe(1);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].thinkingMs).toBe(2100);
+  });
+
+  it("leaves the span unknown when no turn measured one", () => {
+    expect(groupToolRuns([asks("go"), ...burst("Bash", 3)])[0].thinkingMs).toBeUndefined();
   });
 });
 
@@ -122,6 +125,11 @@ describe("toolRunLabel", () => {
 
   it("says one call in the singular", () => {
     expect(toolRunLabel({ start: 0, end: 1, calls: 1, names: ["Bash"] }).count).toBe("1 tool call");
+  });
+
+  it("leads with the thinking it folded away, in a turn header's words", () => {
+    expect(toolRunLabel({ start: 0, end: 9, calls: 11, names: ["list_dir"], thinkingMs: 6300 }).thought).toBe("Thought for 6.3s");
+    expect(toolRunLabel({ start: 0, end: 9, calls: 11, names: ["list_dir"] }).thought).toBeUndefined();
   });
 });
 

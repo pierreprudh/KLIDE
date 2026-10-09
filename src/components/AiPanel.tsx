@@ -119,12 +119,12 @@ import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
-import { PendingInboxRow, renderMessageBody, extractThinking, CompactionRow, ThinkingBlock, ToolRunRow, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
+import { PendingInboxRow, renderMessageBody, CompactionRow, ToolRunRow, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
-import { groupToolRuns, pairToolResults, toolRunIndex, toolRunLabel } from "./ai/toolRuns";
+import { groupToolRuns, pairToolResults, toolRunLabel } from "./ai/toolRuns";
 import type { AttachedResult } from "./ai/ChatMessage";
 import { MessageActions } from "./ai/MessageActions";
 import { ConversationHistory } from "./ai/ConversationHistory";
@@ -1254,11 +1254,6 @@ export function AiPanel({
   // them.
   const toolPairing = useMemo(() => pairToolResults(msgs), [msgs]);
   const toolRuns = useMemo(() => groupToolRuns(msgs, toolPairing), [msgs, toolPairing]);
-  // Constant-time "is this message inside a folded run?" for the message loop:
-  // a message in a run hands its thought process to the run's header
-  // (`stackToolRuns` hoists it above the "N tool calls" row) and must not draw
-  // a second copy inside the fold.
-  const toolRunAt = useMemo(() => toolRunIndex(toolRuns), [toolRuns]);
   // Which messages have handed their mark to a folded row's header. A turn
   // that opens with tool work keeps its mark on the header in *both* states —
   // a mark that appears and disappears as you click reads as the row moving,
@@ -1306,7 +1301,7 @@ export function AiPanel({
       // once the answer it was gathering for arrives.
       const working = streaming && run.end === msgs.length;
       const open = openToolRuns.has(run.start) || working;
-      const { count, names } = toolRunLabel(run);
+      const { thought, count, names } = toolRunLabel(run);
       // When a turn opens with tool work, the message wearing the agent's mark
       // is the one this row folds away — and a response with no mark reads as
       // nobody's. The row wears it instead, open or closed, and the message
@@ -1314,16 +1309,12 @@ export function AiPanel({
       const first = msgs[run.start];
       const startsResponse = toolRunMarkOwners.has(run.start);
       const mark = startsResponse && first.role === "assistant" ? responseMark(first) : null;
-      // The reasoning that drove this stretch of tool work is the agent's
-      // voice, not tool machinery — it stays visible above the fold, in
-      // arrival order, whether the run is open or closed. The messages inside
-      // render with `hideThinking` so opening the run never shows it twice.
-      const thinkingNodes: ReactNode[] = [];
-      for (let i = run.start; i < run.end; i++) {
-        const m = msgs[i];
-        const t = extractThinking(m);
-        if (t) thinkingNodes.push(<ThinkingBlock key={`think-${i}`} text={t} streaming={false} thinkingMs={m.role === "assistant" ? m.thinkingMs : undefined} />);
-      }
+      // The reasoning between the calls folds with them: it stays in its
+      // place inside the body, so opening the row shows think → call → think
+      // in the order it happened, and the row carries the sum ("Thought for
+      // 6.3s") so a closed fold still says the agent reasoned, not only that
+      // it called tools. Hoisting every thought above the row stacked five
+      // half-second decisions into one deliberation with nothing between.
       out.push(
         <div
           key={`tool-run-${run.start}`}
@@ -1345,8 +1336,8 @@ export function AiPanel({
             {startsResponse ? mark?.node ?? <KlideMark size={20} /> : null}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            {thinkingNodes}
             <ToolRunRow
+              thought={thought}
               count={count}
               names={names}
               expanded={open}
@@ -4370,7 +4361,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions

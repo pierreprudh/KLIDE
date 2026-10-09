@@ -12,9 +12,17 @@
 // *no prose*. The moment the agent says something, the run ends — a sentence
 // between two tool calls is the agent explaining itself, and burying it would
 // cost more than the tidiness is worth.
+//
+// The thinking between those calls folds *with* them. Each thought in a run
+// is a half-second decision about which tool to call next, and hoisted out
+// of the fold the five of them stack into what reads as one long deliberation
+// with nothing happening in between. So the row sums them — "Thought for
+// 6.3s · 11 tool calls" — and opening it gives the think → call → think order
+// back exactly as it happened.
 
 import type { Msg } from "./types";
 import { splitThinking, stripPlanJson } from "../markdown";
+import { formatElapsed } from "./WorkingRow";
 
 /** One stretch of uninterrupted tool work. `end` is exclusive. */
 export type ToolRun = {
@@ -24,6 +32,9 @@ export type ToolRun = {
   calls: number;
   /** Distinct tool names, in the order they first appear. */
   names: string[];
+  /** How long the model reasoned across the run, summed from each turn's
+   *  measured span. Absent when no turn measured anything. */
+  thinkingMs?: number;
 };
 
 /** Below this a run is left alone: two rows are not a wall, and hiding them
@@ -117,17 +128,20 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
   const flush = (end: number) => {
     if (start < 0) return;
     let calls = 0;
+    let thinkingMs: number | undefined;
     const names: string[] = [];
     for (let i = start; i < end; i++) {
-      calls += callsIn(msgs[i]);
-      for (const name of namesIn(msgs[i])) {
+      const m = msgs[i];
+      calls += callsIn(m);
+      if (m.role === "assistant" && m.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + m.thinkingMs;
+      for (const name of namesIn(m)) {
         if (!names.includes(name)) names.push(name);
       }
     }
     // A run of results with no calls in view (the calls were compacted away)
     // is still a run — count the rows so the summary is never "0 tool calls".
     if (calls === 0) calls = end - start;
-    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, names });
+    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, names, thinkingMs });
     start = -1;
   };
   for (let i = 0; i < msgs.length; i++) {
@@ -146,22 +160,15 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
   return runs;
 }
 
-/** The run a message index falls in, or null. Built once per render so the
- *  message loop can answer the question in constant time. */
-export function toolRunIndex(runs: ToolRun[]): (index: number) => ToolRun | null {
-  const byIndex = new Map<number, ToolRun>();
-  for (const run of runs) {
-    for (let i = run.start; i < run.end; i++) byIndex.set(i, run);
-  }
-  return (index) => byIndex.get(index) ?? null;
-}
 
 /** What the collapsed row says. Three names is enough to tell one run from
- *  another; past that the count is the information. */
-export function toolRunLabel(run: ToolRun): { count: string; names: string } {
+ *  another; past that the count is the information. `thought` is the
+ *  reasoning the fold put away, in the words a single turn's header uses. */
+export function toolRunLabel(run: ToolRun): { thought?: string; count: string; names: string } {
   const shown = run.names.slice(0, 3);
   const rest = run.names.length - shown.length;
   return {
+    thought: run.thinkingMs ? `Thought for ${formatElapsed(run.thinkingMs)}` : undefined,
     count: `${run.calls} tool call${run.calls === 1 ? "" : "s"}`,
     names: rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", "),
   };
