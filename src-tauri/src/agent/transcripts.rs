@@ -497,7 +497,7 @@ const ORIGIN_SCAN_LINES: usize = 64;
 /// This is the authority on what produced a Conversation's turns. The run
 /// summary is not: it is a rollup that the *latest* run rewrites, so a thread
 /// that began on one model and continued on another reports the continuation
-/// there. `RunStarted` is written once per run at dispatch, so the first one is
+/// there. `RunStarted` is written at every turn's dispatch, so the first one is
 /// the thread's origin — exactly what `originProvider`/`originModel` mean.
 ///
 /// Reads the head only, and streams: this runs over every stored Conversation
