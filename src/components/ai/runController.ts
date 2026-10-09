@@ -44,7 +44,7 @@ import {
   type AgentRunSession,
   type RunReattachment,
 } from "../../agent/client";
-import { isDelegateProvider, providerName } from "../../agent/providers";
+import { isAutoProvider, isDelegateProvider, providerName } from "../../agent/providers";
 import { compactionMsg, interruptedMsg } from "../../agent/foldEvents";
 import { pendingGatesFromEvents } from "../../agent/pendingGates";
 import { errMessage, RunBusyError } from "../../errors";
@@ -441,7 +441,15 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
     // The headless path hands back the whole reply at once, so its placeholder
     // shows a status word and a clock instead of the streaming loader.
     const delegateHeadless = isDelegate && d.delegateStyle === "headless" ? (true as const) : undefined;
-    opening.splice(userIndex + 1, 0, { role: "assistant", content: "", delegateConsole, delegateProvider, delegateHeadless });
+    // The placeholder wears the pair this turn dispatches with from the moment
+    // it appears. The fold restamps it when `run_started` lands, but that line
+    // is a second or so out (routing, memory recall, the summary write), and
+    // an unstamped row falls back to the thread's origin — so a Mistral thread
+    // continued on DeepSeek flashed Mistral's mark before DeepSeek's. `auto`
+    // is the one pair that isn't a mark: the origin is its locked answer, and
+    // `run_started` brings the resolved one.
+    const dispatched = isAutoProvider(turn.provider) ? {} : { provider: turn.provider, model: turn.model };
+    opening.splice(userIndex + 1, 0, { role: "assistant", content: "", ...dispatched, delegateConsole, delegateProvider, delegateHeadless });
     const assistantIndex = userIndex + 1;
     transcript.commit(opening);
     // The turn carries the pair it actually dispatches with, which stamps the

@@ -232,6 +232,9 @@ describe("createRunController — the turn queue", () => {
     expect(h.backend.runs).toHaveLength(1);
     expect(h.backend.runs[0].input.text).toBe("a");
     expect(h.session.runStarted).toHaveBeenCalledWith("thinking", { provider: "ollama", model: "m" });
+    // The placeholder already wears this turn's pair: `run_started` is a
+    // second out, and an unstamped row would draw the thread's origin mark.
+    expect(h.msgs()[1]).toMatchObject({ role: "assistant", content: "", provider: "ollama", model: "m" });
 
     h.backend.last().emit(started());
     h.backend.last().emit(message("first answer"));
