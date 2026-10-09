@@ -118,10 +118,9 @@ function ThinkingLiveLabel({ startedAt }: { startedAt?: number }) {
 // Every flavour of "the model is thinking out loud" a message can carry,
 // merged in arrival order: the structured block the adapter captured
 // (Anthropic / Ollama), an inline `<think>…</think>` leak, and the bare
-// plan-JSON fallback smaller local models emit. AiPanel uses this to hoist a
-// folded tool run's reasoning out of the fold — the thought process reads as
-// the agent's voice, not as tool work, so it must not disappear into the
-// "N tool calls" row.
+// plan-JSON fallback smaller local models emit. One reader for all three, so
+// the thinking block and the fold rule (toolRuns.ts) agree on what a turn
+// said out loud.
 export function extractThinking(m: Msg): string {
   if (m.role !== "assistant") return "";
   const { thinking: inlineThinking, content: cleaned } = splitThinking(m.content);
@@ -597,11 +596,16 @@ function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
 // screen and nothing else — a summary that looked like a different kind of
 // object would read as a new concept rather than as the same rows, folded.
 export function ToolRunRow({
+  thought,
   count,
   names,
   expanded,
   onToggle,
 }: {
+  /** The reasoning folded in with the calls — "Thought for 6.3s". It leads
+   *  the row because it is what the reader last saw happening: the thought
+   *  came first, the calls were what it decided. */
+  thought?: string;
   count: string;
   names: string;
   expanded: boolean;
@@ -680,7 +684,7 @@ export function ToolRunRow({
           flexShrink: 0,
         }}
       >
-        {count}
+        {thought ? `${thought} · ${count}` : count}
       </span>
       {names && (
         <span
@@ -1384,9 +1388,6 @@ export function WorkingSince({ since }: { since?: number }) {
 }
 
 type MessageBodyOptions = {
-  /** Skip the ThinkingBlock — the caller renders it elsewhere (AiPanel
-   *  hoists a folded tool run's reasoning above the "N tool calls" row). */
-  hideThinking?: boolean;
   /** Lets a delivered-agent-message row fetch its bodies from the journal. */
   workspaceRoot?: string | null;
   /** This turn's tool results, by call key (`toolCallKey`) — each call row
@@ -1399,7 +1400,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, results }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
   }
@@ -1474,7 +1475,7 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
       !!mergedThinking;
     return (
       <>
-        {mergedThinking && !hideThinking && (
+        {mergedThinking && (
           <ThinkingBlock text={mergedThinking} streaming={streaming} startedAt={m.thinkingStartedAt} thinkingMs={m.thinkingMs} />
         )}
         {visibleContent && (
@@ -1544,7 +1545,6 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
     <MessageBody
       m={m}
       active={active}
-      hideThinking={opts?.hideThinking}
       workspaceRoot={opts?.workspaceRoot}
       results={opts?.results}
     />
