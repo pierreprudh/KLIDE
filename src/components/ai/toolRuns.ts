@@ -12,9 +12,17 @@
 // *no prose*. The moment the agent says something, the run ends — a sentence
 // between two tool calls is the agent explaining itself, and burying it would
 // cost more than the tidiness is worth.
+//
+// The thinking between those calls folds *with* them. Each thought in a run
+// is a half-second decision about which tool to call next, and hoisted out
+// of the fold the five of them stack into what reads as one long deliberation
+// with nothing happening in between. So the row sums them — "Thought for
+// 6.3s · 11 tool calls" — and opening it gives the think → call → think order
+// back exactly as it happened.
 
 import type { Msg } from "./types";
 import { splitThinking, stripPlanJson } from "../markdown";
+import { formatElapsed } from "./WorkingRow";
 
 /** One stretch of uninterrupted tool work. `end` is exclusive. */
 export type ToolRun = {
@@ -24,17 +32,36 @@ export type ToolRun = {
   calls: number;
   /** Distinct tool names, in the order they first appear. */
   names: string[];
+  /** How long the model reasoned across the run, summed from each turn's
+   *  measured span. Absent when no turn measured anything. */
+  thinkingMs?: number;
+  /** Wall time across the run — each turn's span since the boundary before
+   *  it, tool execution included. The fallback word when the reasoning was
+   *  never streamed and so never timed (a Delegate turn lands whole). */
+  workedMs?: number;
 };
 
 /** Below this a run is left alone: two rows are not a wall, and hiding them
  *  behind a summary costs a click to learn less than the rows already said. */
 export const MIN_STACKED_CALLS = 3;
 
+/** Mirrors `PLAN_MISSION_TOOL` in src-tauri/src/agent/tools.rs. */
+export const PLAN_MISSION_TOOL = "plan_mission";
+
+/** Tool calls that are the agent addressing the operator, not machinery: a
+ *  planned Mission is drawn as a card the operator approves on, a delegation
+ *  is a row the operator watches. Folding either into "5 tool calls" hides
+ *  the one thing the turn was for, so a message that makes one of these
+ *  calls ends a run the way a sentence does. */
+export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "spawn_subagent"]);
+
 /** Whether a message is tool work and nothing else. An assistant turn that
- *  also speaks is prose with tool rows attached, not part of a run. */
+ *  also speaks is prose with tool rows attached, not part of a run — and a
+ *  call that draws a card is the agent speaking (see `SPEAKING_TOOLS`). */
 function isToolWork(m: Msg): boolean {
   if (m.role === "tool") return true;
   if (m.role !== "assistant" || !m.toolCalls?.length) return false;
+  if (m.toolCalls.some((call) => SPEAKING_TOOLS.has(call.name))) return false;
 
   // Reasoning-only payloads are still tool work. Providers encode them three
   // ways: a structured `thinking` field (already absent from `content`), an
@@ -117,17 +144,24 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
   const flush = (end: number) => {
     if (start < 0) return;
     let calls = 0;
+    let thinkingMs: number | undefined;
+    let workedMs: number | undefined;
     const names: string[] = [];
     for (let i = start; i < end; i++) {
-      calls += callsIn(msgs[i]);
-      for (const name of namesIn(msgs[i])) {
+      const m = msgs[i];
+      calls += callsIn(m);
+      if (m.role === "assistant") {
+        if (m.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + m.thinkingMs;
+        if (m.meta?.ms !== undefined) workedMs = (workedMs ?? 0) + m.meta.ms;
+      }
+      for (const name of namesIn(m)) {
         if (!names.includes(name)) names.push(name);
       }
     }
     // A run of results with no calls in view (the calls were compacted away)
     // is still a run — count the rows so the summary is never "0 tool calls".
     if (calls === 0) calls = end - start;
-    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, names });
+    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, names, thinkingMs, workedMs });
     start = -1;
   };
   for (let i = 0; i < msgs.length; i++) {
@@ -146,23 +180,22 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
   return runs;
 }
 
-/** The run a message index falls in, or null. Built once per render so the
- *  message loop can answer the question in constant time. */
-export function toolRunIndex(runs: ToolRun[]): (index: number) => ToolRun | null {
-  const byIndex = new Map<number, ToolRun>();
-  for (const run of runs) {
-    for (let i = run.start; i < run.end; i++) byIndex.set(i, run);
-  }
-  return (index) => byIndex.get(index) ?? null;
-}
 
-/** What the collapsed row says. Three names is enough to tell one run from
- *  another; past that the count is the information. */
-export function toolRunLabel(run: ToolRun): { count: string; names: string } {
-  const shown = run.names.slice(0, 3);
-  const rest = run.names.length - shown.length;
+/** What the collapsed row says: the time it put away on the first line, the
+ *  count underneath. `thought` is the reasoning span in a turn header's own
+ *  words when one was measured, else the wall time the run took — "Worked for
+ *  41s" — because a row that says only "35 tool calls" over five thoughts
+ *  reads as if the agent never reasoned at all. `names` is every distinct
+ *  tool, for the hover only: printed on the row they made the line a
+ *  sentence nobody read, but a pointer resting on it is a question. */
+export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs" | "workedMs">): { thought?: string; count: string; names: string } {
   return {
+    thought: run.thinkingMs
+      ? `Thought for ${formatElapsed(run.thinkingMs)}`
+      : run.workedMs
+        ? `Worked for ${formatElapsed(run.workedMs)}`
+        : undefined,
     count: `${run.calls} tool call${run.calls === 1 ? "" : "s"}`,
-    names: rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", "),
+    names: run.names.join(", "),
   };
 }
