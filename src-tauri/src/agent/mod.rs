@@ -1972,8 +1972,8 @@ async fn loop_body(
     // A reused id means this is a follow-up turn in an existing conversation
     // (the AI panel keys runs by its convo id). Continue the transcript instead
     // of restarting it: pick up `seq` where we left off, skip the one-time
-    // RunStarted/ContextSnapshot preamble, and offset tool-call ids past the
-    // turns already on disk so checkpoint files never collide across turns.
+    // ContextSnapshot, and offset tool-call ids past the turns already on
+    // disk so checkpoint files never collide across turns.
     let resuming = !prior_events.is_empty();
     // Start this run's file-snapshot slate clean so a reused id never inherits
     // stale read/write hashes from a previous run (see tools::clear_run_snapshots).
@@ -2040,25 +2040,31 @@ async fn loop_body(
     let memory = crate::blocking::run(move || {
         Ok(memory_recall::for_conversation(&memory_request, &memory_prior, resuming))
     }).await?;
-    if !resuming {
-        emit(AgentEvent::RunStarted {
+    // Every turn records the pair it was dispatched with, a continuation
+    // included: the fold stamps each response with the `RunStarted` in effect
+    // when its row opens, so a thread moved to another model shows both marks.
+    // Writing it once per Transcript left every later turn wearing the first
+    // turn's model (a Mistral thread switched to Ministral kept drawing Large).
+    // The first line is still the origin (`read_run_origin`), and the replay
+    // skips every `RunStarted` as a non-message, so a mid-transcript one costs
+    // nothing downstream.
+    emit(AgentEvent::RunStarted {
+        run_id: id.clone(),
+        cwd: cwd.clone(),
+        mode: request.mode.clone(),
+        provider: request.provider.clone(),
+        model: request.model.clone(),
+        ts: now_ms(),
+    })?;
+    if let Some(routed) = request.routed.clone() {
+        emit(AgentEvent::RouteResolved {
             run_id: id.clone(),
-            cwd: cwd.clone(),
-            mode: request.mode.clone(),
             provider: request.provider.clone(),
             model: request.model.clone(),
+            reason: routed.reason,
+            skipped: routed.skipped,
             ts: now_ms(),
         })?;
-        if let Some(routed) = request.routed.clone() {
-            emit(AgentEvent::RouteResolved {
-                run_id: id.clone(),
-                provider: request.provider.clone(),
-                model: request.model.clone(),
-                reason: routed.reason,
-                skipped: routed.skipped,
-                ts: now_ms(),
-            })?;
-        }
     }
     // A photo the run's own model cannot see is described by other eyes
     // before the turn is recorded, so the transcript and every replay carry
@@ -5857,6 +5863,55 @@ mod run_loop_tests {
         )
         .await
         .expect("run loop settles without an infrastructure error");
+    }
+
+    /// A follow-up turn records the pair it ran on. The Transcript's first
+    /// `RunStarted` stays the thread's origin, but the fold stamps each
+    /// response with the `RunStarted` in effect when its row opened — so a
+    /// continuation on another model has to write its own line, or every
+    /// later answer keeps wearing the first model's mark.
+    #[tokio::test]
+    async fn a_continuation_records_the_model_it_ran_on() {
+        let (runs_dir, root) = sandbox("continuation-pair");
+        let first = ScriptedProviderCaller::new(vec![scripted_turn("First answer.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        drive_loop(sup.clone(), &runs_dir, "thread", test_request(&root, &[]), first).await;
+
+        let second = ScriptedProviderCaller::new(vec![scripted_turn("Second answer.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        let mut request = test_request(&root, &[]);
+        request.model = "mock-model-2".to_string();
+        request.initial_text = "Again, on the other model.".to_string();
+        drive_loop(sup.clone(), &runs_dir, "thread", request, second).await;
+
+        let events = read_events(&runs_dir, "thread").unwrap();
+        let started: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::RunStarted { model, .. } => Some(model.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started, vec!["mock-model", "mock-model-2"]);
+        // The second line sits between the turns, after the first settled.
+        let settled = events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::RunResult { .. }))
+            .unwrap();
+        let second_start = events
+            .iter()
+            .rposition(|e| matches!(e, AgentEvent::RunStarted { .. }))
+            .unwrap();
+        assert!(second_start > settled);
+        // The context snapshot is still a one-time preamble.
+        let snapshots = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ContextSnapshot { .. }))
+            .count();
+        assert_eq!(snapshots, 1);
+        // And the origin is unchanged.
+        let origin = crate::agent::transcripts::read_run_origin(&runs_dir, "thread").unwrap().unwrap();
+        assert_eq!(origin.model, "mock-model");
     }
 
     /// A `/goal` run's "done" is checked. The first claim fails the check
