@@ -61,7 +61,8 @@ import {
   loadPanelSession,
 } from "./components/ai/storedConversations";
 import type { AgentAttachment, AgentEvent, AgentMode, ProviderId } from "./agent/types";
-import { defaultModelForProvider, providerName } from "./agent/providers";
+import { providerName } from "./agent/providers";
+import { switchModelForProvider } from "./components/ai/rememberedModel";
 import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
@@ -3607,11 +3608,12 @@ function App() {
                     const panelId = primaryPanelId;
                     setAiPanelProvider(panelId, p);
                     // The panel keeps its model across provider switches, but a
-                    // hero pick means "start on this provider" — reset to its
-                    // default so the pair is never mismatched. Resolved through
-                    // providers so a self-hosted endpoint lands on the model
-                    // pinned in Settings, not on an empty string.
-                    updateAiPanelModel(panelId, defaultModelForProvider(p));
+                    // hero pick means "start on this provider" — move to the
+                    // model that Provider is remembered on (last human pick,
+                    // then newest star, then its configured default) so the
+                    // pair is never mismatched and a switch lands where it
+                    // was left, not on the row's default every time.
+                    updateAiPanelModel(panelId, switchModelForProvider(p));
                   }}
                   model={aiPanels[0]?.model ?? aiModel}
                   onModelChange={(m) => updateAiPanelModel(primaryPanelId, m)}

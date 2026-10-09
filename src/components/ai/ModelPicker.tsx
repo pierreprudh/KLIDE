@@ -139,7 +139,7 @@ export function ModelPicker({
   // Set on open, consumed by the focused-row effect: the first paint scrolls
   // the list to the top (where the favorites live) instead of chasing the
   // active model down the list.
-  const openAtTopRef = useRef(false);
+  const openAtTopRef = useRef<number | null>(null);
 
   // Per-model metadata (context window / tool support / price) for the
   // badges. Fetched once per provider; the Rust side caches the underlying
@@ -274,8 +274,9 @@ export function ModelPicker({
     // Index in the *displayed* order — which pins favorites to the top — not
     // in the provider's raw order, or the cursor lands on an unrelated row.
     const idx = filtered.indexOf(model);
-    setFocusIdx(idx >= 0 ? idx : 0);
-    openAtTopRef.current = true;
+    const parked = idx >= 0 ? idx : 0;
+    setFocusIdx(parked);
+    openAtTopRef.current = parked;
     return () => window.clearTimeout(t);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -321,11 +322,20 @@ export function ModelPicker({
   // Keep the focused row in view when arrow-keying through a long list — but
   // not on the first paint after opening: the menu opens at the top of the
   // list, on the favorites, however deep the active model sits.
+  //
+  // The open effect parks the cursor on the active model with `setFocusIdx`,
+  // and that lands one render LATER than the open itself. So this effect runs
+  // twice per open — once with the stale index, once with the parked one — and
+  // the guard must hold until the parked index has arrived, or the second run
+  // scrolls the active row into view ("nearest" pins it to the bottom edge of
+  // the list), which is exactly the open-at-the-bottom this ref exists to
+  // prevent.
   useEffect(() => {
     if (!open) return;
-    if (openAtTopRef.current) {
-      openAtTopRef.current = false;
+    const parked = openAtTopRef.current;
+    if (parked !== null) {
       if (listRef.current) listRef.current.scrollTop = 0;
+      if (focusIdx === parked) openAtTopRef.current = null;
       return;
     }
     const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${focusIdx}"]`);
