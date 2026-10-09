@@ -39,7 +39,7 @@ describe("groupToolRuns", () => {
     const runs = groupToolRuns(msgs);
 
     expect(runs).toHaveLength(2);
-    expect(runs[0]).toMatchObject({ start: 1, end: 19, calls: 9 });
+    expect(runs[0]).toMatchObject({ start: 1, end: 19, calls: 9, names: ["Bash"] });
     expect(runs[1]).toMatchObject({ start: 20, end: 30, calls: 5 });
   });
 
@@ -70,7 +70,7 @@ describe("groupToolRuns", () => {
     ];
 
     expect(groupToolRuns(msgs)).toEqual([
-      { start: 0, end: 6, calls: 3 },
+      { start: 0, end: 6, calls: 3, names: ["Read", "Grep", "Bash"] },
     ]);
   });
 
@@ -82,6 +82,12 @@ describe("groupToolRuns", () => {
     const msgs = [...burst("Bash", 3), speaking, result("Read"), ...burst("Grep", 3)];
 
     expect(groupToolRuns(msgs).map((run) => run.calls)).toEqual([3, 3]);
+  });
+
+  it("keeps the distinct tool names, in the order they appear", () => {
+    const msgs = [call("Bash"), result("Bash"), call("Read"), result("Read"), call("Bash"), result("Bash"), call("Grep"), result("Grep")];
+
+    expect(groupToolRuns(msgs)[0].names).toEqual(["Bash", "Read", "Grep"]);
   });
 
   it("does not stack what was never a wall", () => {
@@ -120,23 +126,26 @@ describe("groupToolRuns", () => {
 });
 
 describe("toolRunLabel", () => {
-  it("counts the calls, and never names the tools", () => {
-    expect(toolRunLabel({ calls: 9 })).toEqual({ count: "9 tool calls" });
+  it("counts the calls, and names every distinct tool for the hover", () => {
+    expect(toolRunLabel({ calls: 9, names: ["Bash", "Read", "Grep", "Edit"] })).toEqual({
+      count: "9 tool calls",
+      names: "Bash, Read, Grep, Edit",
+    });
   });
 
   it("says one call in the singular", () => {
-    expect(toolRunLabel({ calls: 1 }).count).toBe("1 tool call");
+    expect(toolRunLabel({ calls: 1, names: ["Bash"] }).count).toBe("1 tool call");
   });
 
   it("leads with the thinking it folded away, in a turn header's words", () => {
-    expect(toolRunLabel({ calls: 11, thinkingMs: 6300 }).thought).toBe("Thought for 6.3s");
-    expect(toolRunLabel({ calls: 11 }).thought).toBeUndefined();
+    expect(toolRunLabel({ calls: 11, names: [], thinkingMs: 6300 }).thought).toBe("Thought for 6.3s");
+    expect(toolRunLabel({ calls: 11, names: [] }).thought).toBeUndefined();
   });
 
   it("falls back to the wall time when the reasoning was never timed", () => {
-    expect(toolRunLabel({ calls: 35, workedMs: 41_000 }).thought).toBe("Worked for 41.0s");
+    expect(toolRunLabel({ calls: 35, names: [], workedMs: 41_000 }).thought).toBe("Worked for 41.0s");
     // A measured reasoning span wins: it is the more specific claim.
-    expect(toolRunLabel({ calls: 35, thinkingMs: 6300, workedMs: 41_000 }).thought).toBe("Thought for 6.3s");
+    expect(toolRunLabel({ calls: 35, names: [], thinkingMs: 6300, workedMs: 41_000 }).thought).toBe("Thought for 6.3s");
   });
 });
 
@@ -191,7 +200,7 @@ describe("pairToolResults", () => {
 
     expect(runs).toHaveLength(1);
     expect(runs[0].start).toBe(3);
-    expect(runs[0].calls).toBe(3);
+    expect(runs[0].names).toEqual(["read_file"]);
   });
 
   it("still counts orphan results as a run", () => {

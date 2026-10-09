@@ -30,6 +30,8 @@ export type ToolRun = {
   end: number;
   /** How many tool calls it made — not how many messages it took. */
   calls: number;
+  /** Distinct tool names, in the order they first appear. */
+  names: string[];
   /** How long the model reasoned across the run, summed from each turn's
    *  measured span. Absent when no turn measured anything. */
   thinkingMs?: number;
@@ -114,6 +116,11 @@ function callsIn(m: Msg): number {
   return m.role === "assistant" ? m.toolCalls?.length ?? 0 : 0;
 }
 
+function namesIn(m: Msg): string[] {
+  if (m.role === "assistant") return (m.toolCalls ?? []).map((t) => t.name);
+  return m.role === "tool" && m.toolName ? [m.toolName] : [];
+}
+
 /**
  * The stackable runs in a conversation, in order. Runs shorter than
  * `MIN_STACKED_CALLS` are not returned at all — the caller renders those
@@ -127,6 +134,7 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     let calls = 0;
     let thinkingMs: number | undefined;
     let workedMs: number | undefined;
+    const names: string[] = [];
     for (let i = start; i < end; i++) {
       const m = msgs[i];
       calls += callsIn(m);
@@ -134,11 +142,14 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
         if (m.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + m.thinkingMs;
         if (m.meta?.ms !== undefined) workedMs = (workedMs ?? 0) + m.meta.ms;
       }
+      for (const name of namesIn(m)) {
+        if (!names.includes(name)) names.push(name);
+      }
     }
     // A run of results with no calls in view (the calls were compacted away)
     // is still a run — count the rows so the summary is never "0 tool calls".
     if (calls === 0) calls = end - start;
-    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, thinkingMs, workedMs });
+    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, names, thinkingMs, workedMs });
     start = -1;
   };
   for (let i = 0; i < msgs.length; i++) {
@@ -162,10 +173,10 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
  *  count underneath. `thought` is the reasoning span in a turn header's own
  *  words when one was measured, else the wall time the run took — "Worked for
  *  41s" — because a row that says only "35 tool calls" over five thoughts
- *  reads as if the agent never reasoned at all. The tool names are not on the
- *  row: which tools is what opening it is for, and three names plus "+4"
- *  made the line a sentence nobody read. */
-export function toolRunLabel(run: Pick<ToolRun, "calls" | "thinkingMs" | "workedMs">): { thought?: string; count: string } {
+ *  reads as if the agent never reasoned at all. `names` is every distinct
+ *  tool, for the hover only: printed on the row they made the line a
+ *  sentence nobody read, but a pointer resting on it is a question. */
+export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs" | "workedMs">): { thought?: string; count: string; names: string } {
   return {
     thought: run.thinkingMs
       ? `Thought for ${formatElapsed(run.thinkingMs)}`
@@ -173,5 +184,6 @@ export function toolRunLabel(run: Pick<ToolRun, "calls" | "thinkingMs" | "worked
         ? `Worked for ${formatElapsed(run.workedMs)}`
         : undefined,
     count: `${run.calls} tool call${run.calls === 1 ? "" : "s"}`,
+    names: run.names.join(", "),
   };
 }
