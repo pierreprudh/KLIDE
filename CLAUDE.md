@@ -182,7 +182,7 @@ Klide/
 │   │   ├── MissionControlSkeleton.tsx Geometry-matched loading skeleton
 │   │   ├── missionControl/glyphs.tsx Mission Control's source marks + action glyphs, out of the board file
 │   │   ├── MissionGraph.tsx     Mission dependency graph view + dependency editing
-│   │   ├── OrchestratorConsole.tsx Mission planner + chained execution board
+│   │   ├── MissionFlow.tsx       Shared Mission plan canvas (conversation + Mission Control)
 │   │   ├── ProfileModal.tsx     Local IDE profile (avatar + identity + workspace)
 │   │   ├── SearchPanel.tsx      Find-in-files results
 │   │   ├── SettingsPanel.tsx    Settings shell (sections live in settings/)
@@ -221,6 +221,8 @@ Klide/
 │   │       ├── toolRuns.ts        Fold a prose-free stretch of tool messages into one openable row
 │   │       ├── CompletionCard.tsx A finished run's evidence — what changed, what it ran, documents to open
 │   │       ├── QuestionCard.tsx   A question the run is waiting on, answered in place
+│   │       ├── MissionCard.tsx    Plan approval, worker routes, gates and recovery in the conversation
+│   │       ├── MissionTaskEditor.tsx Draft task details, acceptance criteria and dependencies
 │   │       ├── canvasColumn.ts    The Focus canvas' right-hand column as a rule — plan, result, question
 │   │       ├── WorkingRow.tsx     The one 'still working' row under a streaming turn
 │   │       ├── PeerLink.tsx       Two conversations talking: this thread's mark, a hairline, the peer's

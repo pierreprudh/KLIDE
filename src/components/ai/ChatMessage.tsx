@@ -442,14 +442,14 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
   );
 }
 
-function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null }) {
+function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot, onOpenRun }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null; onOpenRun?: (runId: string) => void }) {
   // A planned Mission is drawn, not printed: the card reads the draft the
   // receipt names and carries the operator's approval. Until the receipt
   // lands, or if the call failed, the row is an ordinary tool call.
   // The card is the call: a "plan_mission <title>" row above a card whose
   // header says the same title read as two objects for one gesture.
   const receipt = name === PLAN_MISSION_TOOL && result && !result.active ? parsePlanMissionReceipt(result.msg.content) : null;
-  if (receipt) return <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} />;
+  if (receipt) return <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} />;
   const call =
     name === "spawn_subagent" ? (
       // The child is still going until a *real* report lands. The pending
@@ -1395,6 +1395,7 @@ export function WorkingSince({ since }: { since?: number }) {
 type MessageBodyOptions = {
   /** Lets a delivered-agent-message row fetch its bodies from the journal. */
   workspaceRoot?: string | null;
+  onOpenRun?: (runId: string) => void;
   /** This turn's tool results, by call key (`toolCallKey`) — each call row
    *  draws its own underneath. See `pairToolResults`. */
   results?: Map<string, AttachedResult>;
@@ -1405,7 +1406,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
   }
@@ -1497,7 +1498,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageB
             calls.map((tc, index) => ({ tc, key: toolCallKey(tc, index) })),
             ({ tc }) => (COORDINATION_TOOL_NAMES.has(tc.name) ? `${tc.name}\n${JSON.stringify(tc.args ?? null)}` : null),
           ).map(({ item: { tc, key }, count }) => (
-            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} />
+            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} />
           ));
           // A call that draws a card is the point of the turn, never folded.
           if (!visibleContent || calls.length < MIN_STACKED_CALLS || calls.some((tc) => SPEAKING_TOOLS.has(tc.name))) return rows;
@@ -1553,6 +1554,7 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
       active={active}
       workspaceRoot={opts?.workspaceRoot}
       results={opts?.results}
+      onOpenRun={opts?.onOpenRun}
     />
   );
 }

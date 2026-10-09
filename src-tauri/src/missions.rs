@@ -9,7 +9,7 @@
 //! - `mission.md` and `tasks/*.md` are human/agent editable specifications.
 //! - `events.jsonl` is append-only execution history.
 //! - Harness transcripts remain the evidence source and are referenced by run
-//!   id; Missions never duplicate them.
+//!   id; report.json snapshots only the accepted final answers at completion.
 
 use crate::agent::transcripts::{app_runs_dir, now_ms, read_summary, run_id, validate_run_id};
 use crate::agent::types::{
@@ -87,6 +87,8 @@ pub struct MissionTaskDispatch {
     pub model: String,
     #[serde(default)]
     pub require_diff_review: bool,
+    #[serde(default)]
+    pub auto_approve_commands: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -98,6 +100,9 @@ pub struct MissionSpec {
     pub intent: String,
     pub mode: MissionMode,
     pub task_ids: Vec<String>,
+    /// Authenticated planning Run; subsequent workers are its children.
+    #[serde(default)]
+    pub coordinator_run_id: Option<String>,
     pub created_ms: i64,
     pub updated_ms: i64,
 }
@@ -217,6 +222,8 @@ pub struct MissionTaskApprovalInput {
     pub model: String,
     #[serde(default)]
     pub require_diff_review: bool,
+    #[serde(default)]
+    pub auto_approve_commands: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -287,12 +294,20 @@ pub struct MissionEventLine {
     pub event: MissionEvent,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DurableMissionReport {
+    pub markdown: String,
+    pub completed_ms: i64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DurableMissionBundle {
     pub mission: MissionSpec,
     pub tasks: Vec<MissionTaskSpec>,
     pub events: Vec<MissionEventLine>,
+    pub report: Option<DurableMissionReport>,
 }
 
 /// A Mission directory that would not load. Reported, never skipped silently:
@@ -398,12 +413,13 @@ fn json<T: Serialize>(value: &T) -> Result<String, String> {
 
 fn render_mission_markdown(spec: &MissionSpec) -> Result<String, String> {
     Ok(format!(
-        "---\nschemaVersion: {}\nid: {}\ntitle: {}\nmode: {}\ntaskIds: {}\ncreatedMs: {}\nupdatedMs: {}\n---\n\n# Intent\n\n{}\n",
+        "---\nschemaVersion: {}\nid: {}\ntitle: {}\nmode: {}\ntaskIds: {}\ncoordinatorRunId: {}\ncreatedMs: {}\nupdatedMs: {}\n---\n\n# Intent\n\n{}\n",
         spec.schema_version,
         json(&spec.id)?,
         json(&spec.title)?,
         json(&spec.mode)?,
         json(&spec.task_ids)?,
+        json(&spec.coordinator_run_id)?,
         spec.created_ms,
         spec.updated_ms,
         spec.intent.trim()
@@ -520,6 +536,7 @@ fn parse_mission_markdown(text: &str) -> Result<MissionSpec, String> {
         intent,
         mode: required_json(&fields, "mode")?,
         task_ids: required_json(&fields, "taskIds")?,
+        coordinator_run_id: optional_json(&fields, "coordinatorRunId")?,
         created_ms: required_i64(&fields, "createdMs")?,
         updated_ms: required_i64(&fields, "updatedMs")?,
     };
@@ -644,6 +661,57 @@ fn append_event(dir: &Path, mission_id: &str, event: MissionEvent) -> Result<(),
         .map_err(|e| format!("Unable to append Mission event: {e}"))
 }
 
+fn read_mission_report(dir: &Path) -> Result<Option<DurableMissionReport>, String> {
+    match std::fs::read(dir.join("report.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map(Some)
+            .map_err(|e| format!("Unable to decode Mission report: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Unable to read Mission report: {e}")),
+    }
+}
+
+fn finalize_mission_report(dir: &Path, bundle: &DurableMissionBundle, runs_dir: &Path) -> Result<(), String> {
+    if read_mission_report(dir)?.is_some() { return Ok(()); }
+    let runtime = fold_runtime(bundle);
+    let mut markdown = format!("## Mission completed: {}\n", bundle.mission.title);
+    for task in &bundle.tasks {
+        let run = runtime.tasks.get(&task.id).and_then(|task| task.accepted_run_id.as_deref())
+            .ok_or_else(|| format!("Task `{}` has no accepted attempt for its report.", task.id))?;
+        let transcript = if crate::agent::transcripts::transcript_path(runs_dir, run).exists() {
+            crate::agent::transcripts::read_events(runs_dir, run)?
+        } else { vec![] };
+        let answer = crate::agent::last_assistant_text(runs_dir, run)
+            .unwrap_or_else(|| "No written result is available. Open the worker transcript for details.".into());
+        markdown.push_str(&format!("\n### {}\n\n{}\n\nWorker: `{}`", task.title, answer, run));
+        if let Some(route) = &task.dispatch {
+            markdown.push_str(&format!(" · {} / {}", route.provider, route.model));
+        }
+        if let Some(validation) = bundle.events.iter().rev().find_map(|line| match &line.event {
+            MissionEvent::AttemptValidationRecorded { run_id, validation, .. } if run_id == run => Some(validation),
+            _ => None,
+        }) {
+            markdown.push_str(&format!("\n\nVerification: {} · {} files changed · {} commands run · {} failed.\n", validation.status, validation.files_changed, validation.commands_run, validation.commands_failed));
+            for check in &validation.checks {
+                markdown.push_str(&format!("- {}: {}\n", check.label, check.status));
+            }
+            for warning in &validation.warnings { markdown.push_str(&format!("- Warning: {}\n", warning)); }
+        }
+        let files: std::collections::BTreeSet<_> = transcript.iter().filter_map(|event| match event {
+            crate::agent::types::AgentEvent::FileChanged { path, .. } => Some(path),
+            _ => None,
+        }).collect();
+        if !files.is_empty() {
+            markdown.push_str("\nChanged files:\n");
+            for path in files { markdown.push_str(&format!("- `{path}`\n")); }
+        }
+        markdown.push('\n');
+    }
+    let report = DurableMissionReport { markdown, completed_ms: now_ms() };
+    let bytes = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
+    crate::durable::write_atomic(&dir.join("report.json"), &bytes)
+        .map_err(|e| format!("Unable to save Mission report: {e}"))
+}
+
 fn load_bundle_from_dir(dir: &Path) -> Result<DurableMissionBundle, String> {
     let mission_text = std::fs::read_to_string(dir.join("mission.md"))
         .map_err(|e| format!("Unable to read mission.md: {e}"))?;
@@ -663,6 +731,7 @@ fn load_bundle_from_dir(dir: &Path) -> Result<DurableMissionBundle, String> {
         mission,
         tasks,
         events: read_events(dir)?,
+        report: read_mission_report(dir)?,
     })
 }
 
@@ -946,11 +1015,8 @@ fn start_request_for(
         goal: None,
         command_allowlist: vec![],
         require_diff_review: Some(dispatch.require_diff_review),
-        // Mission attempts keep the command permission gate: its pauses have
-        // durable supervisor state, and approval froze a diff-review policy,
-        // not command trust.
-        auto_approve_commands: None,
-        parent_id: None,
+        auto_approve_commands: Some(dispatch.auto_approve_commands),
+        parent_id: bundle.mission.coordinator_run_id.clone(),
         mission_id: Some(bundle.mission.id.clone()),
         mission_task_id: Some(task.id.clone()),
         // Approval froze a concrete provider and model into the task file, so a
@@ -1077,9 +1143,14 @@ fn first_dependency_cycle(deps_by_id: &HashMap<String, Vec<String>>) -> Option<V
     None
 }
 
-fn do_create(
+fn do_create(workspace_root: &str, input: CreateMissionInput) -> Result<DurableMissionBundle, String> {
+    do_create_for_run(workspace_root, input, None)
+}
+
+fn do_create_for_run(
     workspace_root: &str,
     input: CreateMissionInput,
+    coordinator_run_id: Option<String>,
 ) -> Result<DurableMissionBundle, String> {
     let title = clean_title(&input.title, "Mission")?;
     let mission_id = input.id.unwrap_or_else(|| generated_mission_id(&title));
@@ -1151,6 +1222,7 @@ fn do_create(
         intent: input.intent.trim().to_string(),
         mode: input.mode,
         task_ids: tasks.iter().map(|task| task.id.clone()).collect(),
+        coordinator_run_id,
         created_ms: now,
         updated_ms: now,
     };
@@ -1198,10 +1270,23 @@ pub fn mission_create(
 }
 
 #[tauri::command]
-pub async fn mission_list(workspace_root: String) -> Result<Vec<DurableMissionBundle>, String> {
+pub async fn mission_list(app: tauri::AppHandle, workspace_root: String) -> Result<Vec<DurableMissionBundle>, String> {
     // One Markdown + events read per Mission, on the board's tick — off the
     // main thread (blocking.rs).
-    crate::blocking::run(move || list_missions(&workspace_root)).await
+    crate::blocking::run(move || {
+        let state = app.state::<MissionStoreState>();
+        let _guard = state.write_gate.lock().map_err(|_| "Mission store is unavailable.")?;
+        let mut bundles = list_missions(&workspace_root)?;
+        let runs_dir = app_runs_dir(&app)?;
+        for bundle in &mut bundles {
+            if bundle.report.is_none() && matches!(bundle.events.last().map(|line| &line.event), Some(MissionEvent::MissionCompleted)) {
+                let dir = mission_dir(&workspace_root, &bundle.mission.id, true)?;
+                finalize_mission_report(&dir, bundle, &runs_dir)?;
+                bundle.report = read_mission_report(&dir)?;
+            }
+        }
+        Ok(bundles)
+    }).await
 }
 
 /// Synchronous body of `mission_list` — the interface the tests use.
@@ -1409,6 +1494,7 @@ fn snapshot_approval(
             provider: route.provider.trim().to_string(),
             model: route.model.trim().to_string(),
             require_diff_review: route.require_diff_review,
+            auto_approve_commands: route.auto_approve_commands,
         });
         updated.updated_ms = now_ms();
         updates.push(updated);
@@ -1489,7 +1575,7 @@ async fn dispatch_task_for(
     task_id: &str,
     coordinator: Option<&str>,
 ) -> Result<String, String> {
-    let (run_id, launch) = {
+    let (run_id, launch, parent_run_id) = {
         let state = app.state::<MissionStoreState>();
         let _guard = state
             .write_gate
@@ -1530,7 +1616,10 @@ async fn dispatch_task_for(
             },
         )?;
         let launch = launch_for(workspace_root, &bundle, &task, &attempt_run_id);
-        (attempt_run_id, launch)
+        let parent = coordinator
+            .map(str::to_string)
+            .or_else(|| bundle.mission.coordinator_run_id.clone());
+        (attempt_run_id, launch, parent)
     };
 
     let launch = match launch {
@@ -1542,8 +1631,39 @@ async fn dispatch_task_for(
     };
     let result = match launch {
         MissionLaunch::Harness(mut request) => {
-            request.parent_id = coordinator.map(str::to_string);
-            crate::agent::start_background_run(app.clone(), request).await.map(|_| ())
+            request.parent_id = parent_run_id.clone();
+            let started = if request.parent_id.is_some() {
+                crate::agent::start_subagent_run(app.clone(), request, None).await
+            } else {
+                // Legacy Missions authored before planning lineage was stored.
+                crate::agent::start_background_run(app.clone(), request).await
+            };
+            match started {
+                Err(error) => Err(error),
+                Ok(_) => {
+            // Approval and dispatch can overlap a policy change. Re-read the
+            // policy under the same writer gate once the live handle exists,
+            // so an attempt captured before the change does not keep it stale.
+            let policy_app = app.clone();
+            let policy_root = workspace_root.to_string();
+            let policy_mission = mission_id.to_string();
+            let policy_task = task_id.to_string();
+            let policy_run = run_id.clone();
+            crate::blocking::run(move || {
+                let store = policy_app.state::<MissionStoreState>();
+                let _guard = store.write_gate.lock().map_err(|_| "Mission store is unavailable.")?;
+                let latest = load_bundle(&policy_root, &policy_mission)?;
+                let route = latest.tasks.iter().find(|task| task.id == policy_task)
+                    .and_then(|task| task.dispatch.as_ref()).ok_or("Mission task has no execution policy.")?;
+                let agents = policy_app.state::<crate::agent::AgentSupervisorState>();
+                let runs = agents.runs.lock().map_err(|_| "Agent state is unavailable.")?;
+                if let Some(handle) = runs.get(&policy_run) {
+                    crate::agent::apply_mission_run_policy(handle, route.require_diff_review, route.auto_approve_commands);
+                }
+                Ok(())
+            }).await
+                }
+            }
         },
         MissionLaunch::Delegate {
             provider,
@@ -1563,7 +1683,7 @@ async fn dispatch_task_for(
             // a Mission attempt runs at the CLI's own configured level.
             None,
             None,
-            coordinator.map(str::to_string),
+            parent_run_id,
             Some(mission_id.to_string()),
             Some(task_id.to_string()),
             Some(true),
@@ -1623,13 +1743,17 @@ async fn drive_mission_inner(
             Ok(())
         }
         SupervisorDecision::Complete => {
-            let state = app.state::<MissionStoreState>();
-            let _guard = state
-                .write_gate
-                .lock()
-                .map_err(|_| "Mission store is unavailable.".to_string())?;
-            let dir = mission_dir(workspace_root, mission_id, true)?;
-            append_lifecycle_event(&dir, mission_id, MissionEvent::MissionCompleted)
+            let app = app.clone();
+            let root = workspace_root.to_string();
+            let id = mission_id.to_string();
+            crate::blocking::run(move || {
+                let state = app.state::<MissionStoreState>();
+                let _guard = state.write_gate.lock().map_err(|_| "Mission store is unavailable.")?;
+                let dir = mission_dir(&root, &id, true)?;
+                let bundle = load_bundle_from_dir(&dir)?;
+                finalize_mission_report(&dir, &bundle, &app_runs_dir(&app)?)?;
+                append_lifecycle_event(&dir, &id, MissionEvent::MissionCompleted)
+            }).await
         }
         SupervisorDecision::Park(reason) => {
             let state = app.state::<MissionStoreState>();
@@ -1725,6 +1849,45 @@ pub async fn mission_approve(
         drive_mission(app, workspace_root.clone(), mission_id.clone()).await?;
     }
     load_bundle(&workspace_root, &mission_id)
+}
+
+/// Change only the operator's execution policy, preserving every task's route
+/// and authored contract. Future attempts read the durable snapshot; active
+/// native attempts receive an explicit override and any newly auto-approved
+/// edit/command pause is released through its existing decision channel.
+#[tauri::command]
+pub async fn mission_set_policy(
+    app: tauri::AppHandle,
+    workspace_root: String,
+    mission_id: String,
+    require_diff_review: bool,
+    auto_approve_commands: bool,
+) -> Result<DurableMissionBundle, String> {
+    crate::blocking::run(move || {
+        let state = app.state::<MissionStoreState>();
+        let _guard = state.write_gate.lock().map_err(|_| "Mission store is unavailable.")?;
+        let dir = mission_dir(&workspace_root, &mission_id, true)?;
+        let bundle = load_bundle_from_dir(&dir)?;
+        let runtime = fold_runtime(&bundle);
+        if !runtime.approved { return Err("Approve the plan before changing a running Mission's policy.".to_string()); }
+        for task in &bundle.tasks {
+            let mut updated = task.clone();
+            let dispatch = updated.dispatch.as_mut().ok_or("Task has no approved route.")?;
+            dispatch.require_diff_review = require_diff_review;
+            dispatch.auto_approve_commands = auto_approve_commands;
+            updated.updated_ms = now_ms();
+            crate::durable::write_atomic(&task_path(&dir, &task.id)?, render_task_markdown(&updated)?.as_bytes()).map_err(|error| error.to_string())?;
+            append_event(&dir, &mission_id, MissionEvent::TaskUpdated { task_id: task.id.clone() })?;
+        }
+        let agents = app.state::<crate::agent::AgentSupervisorState>();
+        let runs = agents.runs.lock().map_err(|_| "Agent state is unavailable.")?;
+        for run_id in runtime.tasks.values().flat_map(|task| task.active.iter()) {
+            if let Some(handle) = runs.get(run_id) {
+                crate::agent::apply_mission_run_policy(handle, require_diff_review, auto_approve_commands);
+            }
+        }
+        load_bundle_from_dir(&dir)
+    }).await
 }
 
 /// The operator's "run this task". It does not dispatch: it checks the gate
@@ -3449,9 +3612,63 @@ src/agent/durableMissions.ts — update both"
     }
 
     #[test]
+    fn completed_report_uses_accepted_results_and_survives_restart_once() {
+        use crate::agent::types::{AgentEvent, AgentContentBlock};
+        let root = temp_workspace("completion-report");
+        do_create_for_run(root.to_str().unwrap(), sample_input(), Some("planner".into())).unwrap();
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        let runs = root.join("runs");
+        std::fs::create_dir_all(&runs).unwrap();
+        let draft = load_bundle_from_dir(&dir).unwrap();
+        assert!(finalize_mission_report(&dir, &draft, &runs).is_err());
+        assert!(!dir.join("report.json").exists());
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        for (task, run, answer) in [("inspect", "accepted-inspect", "App name: klide"), ("implement", "accepted-implement", "Heading: # Klide")] {
+            crate::agent::transcripts::append_event(&runs, run, 0, &AgentEvent::AssistantMessage {
+                run_id: run.into(), message_id: "answer".into(),
+                content: vec![AgentContentBlock::Text { text: answer.into() }],
+                usage: None, timing: None, ts: 1,
+            }).unwrap();
+            append_event(&dir, "mission-one", MissionEvent::AttemptAttached { task_id: task.into(), run_id: run.into() }).unwrap();
+            append_event(&dir, "mission-one", MissionEvent::AttemptValidationRecorded {
+                task_id: task.into(), run_id: run.into(), accepted: true, validation: skipped_validation(),
+            }).unwrap();
+        }
+        // A rejected retry must never replace the accepted result.
+        append_event(&dir, "mission-one", MissionEvent::AttemptValidationRecorded {
+            task_id: "inspect".into(), run_id: "rejected-run".into(), accepted: false, validation: skipped_validation(),
+        }).unwrap();
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        assert_eq!(supervisor_decision(&bundle, &fold_runtime(&bundle), None).unwrap(), SupervisorDecision::Complete);
+        finalize_mission_report(&dir, &bundle, &runs).unwrap();
+        append_lifecycle_event(&dir, "mission-one", MissionEvent::MissionCompleted).unwrap();
+        let reopened = load_bundle_from_dir(&dir).unwrap();
+        let report = reopened.report.as_ref().unwrap();
+        assert!(report.markdown.contains("App name: klide"));
+        assert!(report.markdown.contains("Heading: # Klide"));
+        assert!(report.markdown.contains("Verification: skipped"));
+        assert!(!report.markdown.contains("rejected-run"));
+        let bytes = std::fs::read(dir.join("report.json")).unwrap();
+        finalize_mission_report(&dir, &reopened, &runs).unwrap();
+        assert_eq!(std::fs::read(dir.join("report.json")).unwrap(), bytes);
+    }
+
+    #[test]
+    fn legacy_mission_without_planning_lineage_still_loads() {
+        let root = temp_workspace("legacy-lineage");
+        let bundle = do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        let markdown = render_mission_markdown(&bundle.mission).unwrap();
+        let legacy = markdown.lines().filter(|line| !line.starts_with("coordinatorRunId:"))
+            .collect::<Vec<_>>().join("\n");
+        let loaded = parse_mission_markdown(&legacy).unwrap();
+        assert_eq!(loaded.coordinator_run_id, None);
+        assert_eq!(loaded.task_ids, bundle.mission.task_ids);
+    }
+
+    #[test]
     fn approval_snapshot_persists_the_exact_execution_choice() {
         let root = temp_workspace("approval-snapshot");
-        let bundle = do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        let bundle = do_create_for_run(root.to_str().unwrap(), sample_input(), Some("run-planner".into())).unwrap();
         let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
         snapshot_approval(
             &dir,
@@ -3467,6 +3684,7 @@ src/agent/durableMissions.ts — update both"
                         provider: "openai".to_string(),
                         model: "gpt-test".to_string(),
                         require_diff_review: true,
+                        auto_approve_commands: true,
                     })
                     .collect(),
             },
@@ -3479,6 +3697,13 @@ src/agent/durableMissions.ts — update both"
         assert_eq!(dispatch.provider, "openai");
         assert_eq!(dispatch.model, "gpt-test");
         assert!(dispatch.require_diff_review);
+        assert!(dispatch.auto_approve_commands);
+        let request = start_request_for(root.to_str().unwrap(), &loaded, &loaded.tasks[0], "policy-test").unwrap();
+        assert_eq!(request.auto_approve_commands, Some(true));
+        assert_eq!(loaded.mission.coordinator_run_id.as_deref(), Some("run-planner"));
+        assert_eq!(request.parent_id.as_deref(), Some("run-planner"));
+        assert_eq!(request.mission_id.as_deref(), Some("mission-one"));
+        assert_eq!(request.mission_task_id.as_deref(), Some("inspect"));
         let markdown = std::fs::read_to_string(dir.join("tasks/inspect.md")).unwrap();
         assert!(markdown.contains("dispatch: {"));
     }

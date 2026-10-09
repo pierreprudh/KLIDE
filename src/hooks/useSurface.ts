@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
  * The Surface — which of Klide's screens the app is on.
  *
  * "Three surfaces, one state" used to be encoded in four unrelated atoms plus
- * a derived condition: `view` (workbench/runs/orchestrator/settings/git-review),
+ * a derived condition: `view` (workbench/runs/settings/git-review),
  * `focusMode` (boolean + localStorage), `panelLayout.anchored` (per-workspace),
  * `activeGridId` (+ localStorage), and Welcome as `view !== "settings" &&
  * !workspaceRoot`. Every screen switch had to set 3–4 of them in the right
@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from "react";
  *   projects it into its union but does not store it). Focus-over-a-grid is
  *   unrepresentable: `base` is one of them.
  * - `overlay` — a full-window view sitting over the base (Mission Control,
- *   Orchestrator, Settings, Git Review). The base stays mounted underneath so
+ *   Settings, Git Review). The base stays mounted underneath so
  *   live run subscriptions keep streaming; `back()` returns to it.
  * - **Welcome** stays derived, exactly like the old `view !== "settings" &&
  *   !workspaceRoot` condition: `resolveSurface` yields it whenever no
@@ -35,7 +35,7 @@ import { useCallback, useEffect, useState } from "react";
 
 /** The full-window views that sit over the base surface. This is the old
  *  `view` enum minus "workbench" (which is the absence of an overlay). */
-export type OverlayView = "runs" | "orchestrator" | "settings" | "git-review";
+export type OverlayView = "runs" | "settings" | "git-review";
 
 /** What the main canvas is when no overlay covers it. `panels` means the
  *  anchored/free workbench — which of the two is the panel-layout store's

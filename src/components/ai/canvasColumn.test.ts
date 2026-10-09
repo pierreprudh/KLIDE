@@ -25,6 +25,16 @@ describe("canvas column geometry", () => {
     expect(columnGeometry({ ...roomy, observerUp: false }).inset).toBe(0);
   });
 
+  it("keeps a Mission in the side column and leaves a reopen control when folded", () => {
+    const open = columnGeometry({ ...roomy, missionUp: true });
+    expect(open.cardsUp).toBe(true);
+    expect(open.width).toBe(280);
+    expect(open.inset).toBe(316);
+    const folded = columnGeometry({ ...roomy, missionUp: true, hidden: true });
+    expect(folded.marksUp).toBe(true);
+    expect(folded.inset).toBe(76);
+  });
+
   it("takes the column's width for a card", () => {
     const g = columnGeometry({ ...roomy, planSlot: "card" });
     expect(g.cardsUp).toBe(true);

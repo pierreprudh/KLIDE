@@ -740,8 +740,7 @@ async fn run_subagent_to_completion(
     };
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-    let on_event = Channel::<AgentEvent>::new(|_| Ok(()));
-    start_run(app, request, on_event, Some(done_tx), None).await?;
+    start_subagent_run(app, request, Some(done_tx)).await?;
     // A dropped sender means the spawned loop task went away without settling.
     // Report that instead of hanging the parent forever.
     match done_rx.await {
@@ -783,7 +782,7 @@ fn last_run_error(runs_dir: &Path, run_id: &str) -> Option<String> {
 
 /// The child's answer: the text of the last `AssistantMessage` on its
 /// transcript. `None` when the child never produced one.
-fn last_assistant_text(runs_dir: &Path, run_id: &str) -> Option<String> {
+pub(crate) fn last_assistant_text(runs_dir: &Path, run_id: &str) -> Option<String> {
     read_events(runs_dir, run_id)
         .ok()?
         .into_iter()
@@ -1587,6 +1586,29 @@ pub async fn agent_start_run(
     on_event: Channel<AgentEvent>,
 ) -> Result<StartRunResponse, String> {
     start_run(app, request, on_event, None, None).await
+}
+
+/// Shared child launcher for the spawn_subagent Tool and approved Mission
+/// workers. Their caller supplies the contract; the Harness owns execution,
+/// transcript, coordination registration, validation and parent lineage.
+pub(crate) async fn start_subagent_run(
+    app: tauri::AppHandle,
+    request: StartRunRequest,
+    done: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+) -> Result<StartRunResponse, String> {
+    validate_subagent_parent(&request)?;
+    let on_event = Channel::<AgentEvent>::new(|_| Ok(()));
+    start_run(app, request, on_event, done, None).await
+}
+
+fn validate_subagent_parent(request: &StartRunRequest) -> Result<(), String> {
+    let parent = request.parent_id.as_deref().filter(|id| !id.trim().is_empty())
+        .ok_or("A subagent must have a parent Run.")?;
+    validate_run_id(parent)?;
+    if request.run_id.as_deref() == Some(parent) {
+        return Err("A Run cannot be its own subagent.".into());
+    }
+    Ok(())
 }
 
 /// Start a Harness run without a request-scoped frontend channel. Structural
@@ -3117,6 +3139,23 @@ pub async fn agent_resolve_permission(
             }
         }
         None => Err(format!("No known run with id {}", decision.run_id)),
+    }
+}
+
+/// Only the owning Mission's operator command calls this with an attempt id
+/// recovered from its durable journal. A conversation flip cannot reach it.
+pub(crate) fn apply_mission_run_policy(handle: &AgentRunHandle, review_edits: bool, auto_commands: bool) {
+    handle.trust.set_mission_policy(review_edits, auto_commands);
+    if !review_edits {
+        if let Some(sender) = handle.pending_diff.lock().unwrap().take() {
+            let _ = sender.send("{\"behavior\":\"apply\",\"via\":\"mission_policy\"}".to_string());
+        }
+    }
+    if auto_commands && handle.trust.pending_capability() == Some(permission::Capability::Command) {
+        if let Some(sender) = handle.pending_permission.lock().unwrap().take() {
+            handle.trust.note_pending_capability(None);
+            let _ = sender.send(permission::FULL_AUTO_DECISION.to_string());
+        }
     }
 }
 
@@ -7222,6 +7261,38 @@ mod permission_gate_tests {
         }
     }
 
+    #[tokio::test]
+    async fn mission_policy_changes_release_owned_pauses_and_restore_review() {
+        let mut request = test_request("/unused", &[]);
+        request.mission_id = Some("mission".into());
+        request.require_diff_review = Some(false);
+        request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("mission-policy", &request);
+        let cancel = CancellationToken::new();
+        let ctx = ToolCtx { sup: &sup, id: "mission-policy", request: &request, cancel: &cancel, runs_dir: Path::new("/unused") };
+        sup.with_handle(ctx.id, &mut |handle| apply_mission_run_policy(handle, true, false));
+        assert!(!permission::edits_auto_applied(&ctx), "Review overrides a run that started auto-applying");
+        assert!(matches!(permission::precheck(&ctx, permission::Capability::Command, "new-command", false), permission::Precheck::Ask));
+        let (edit_tx, mut edit_rx) = tokio::sync::oneshot::channel();
+        let (command_tx, mut command_rx) = tokio::sync::oneshot::channel();
+        let mut edit_tx = Some(edit_tx);
+        let mut command_tx = Some(command_tx);
+        sup.with_handle(ctx.id, &mut |handle| {
+            *handle.pending_diff.lock().unwrap() = edit_tx.take();
+            *handle.pending_permission.lock().unwrap() = command_tx.take();
+            handle.trust.note_pending_capability(Some(permission::Capability::Command));
+            apply_mission_run_policy(handle, false, true);
+        });
+        assert!(edit_rx.try_recv().unwrap().contains("apply"));
+        assert!(command_rx.try_recv().unwrap().contains("full_auto"));
+        assert!(permission::edits_auto_applied(&ctx));
+        assert!(matches!(permission::precheck(&ctx, permission::Capability::Command, "new-command", false), permission::Precheck::Execute(_)));
+        assert!(matches!(permission::precheck(&ctx, permission::Capability::Network, "new-network", false), permission::Precheck::Ask));
+        sup.with_handle(ctx.id, &mut |handle| apply_mission_run_policy(handle, true, false));
+        assert!(!permission::edits_auto_applied(&ctx));
+        assert!(matches!(permission::precheck(&ctx, permission::Capability::Command, "another-command", false), permission::Precheck::Ask));
+    }
+
     /// A Mission attempt and a spawned child keep the policy their request
     /// set: no conversation's flip reaches them.
     #[test]
@@ -8197,6 +8268,18 @@ mod worker_dispatch_tests {
     use super::types::QuestionChoices;
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn child_launcher_requires_a_distinct_parent() {
+        let mut request = test_request("/tmp", &[]);
+        request.run_id = Some("run-child".into());
+        request.parent_id = None;
+        assert!(validate_subagent_parent(&request).is_err());
+        request.parent_id = Some("run-child".into());
+        assert!(validate_subagent_parent(&request).is_err());
+        request.parent_id = Some("run-planner".into());
+        assert!(validate_subagent_parent(&request).is_ok());
+    }
 
     fn plain_folder(name: &str) -> String {
         let dir = std::env::temp_dir().join(format!(

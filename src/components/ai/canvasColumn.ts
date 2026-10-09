@@ -40,6 +40,7 @@ export type ColumnInput = {
   visualUp?: boolean;
   /** A conversation-owned GitHub observer remains reachable as chat scrolls. */
   observerUp?: boolean;
+  missionUp?: boolean;
   /** The reader closed the column. A question overrides it: that card holds
    *  the run, and hiding it strands the run with no way to answer. */
   hidden: boolean;
@@ -72,20 +73,21 @@ export function showsVisuals(canvasWidth: number): boolean {
   return canvasWidth === 0 || canvasWidth - PROSE_MIN - COLUMN_MARGINS >= COLUMN_MAX;
 }
 
-export function columnGeometry({ planSlot, resultUp, questionUp, visualUp = false, observerUp = false, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
+export function columnGeometry({ planSlot, resultUp, questionUp, visualUp = false, observerUp = false, missionUp = false, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
   // A question is never hidden, so it also un-hides everything beside it: a
   // reader answering one should see the plan it came from.
   const closed = hidden && !questionUp;
+  const maxWidth = missionUp && planSlot === "none" && !resultUp && !questionUp && !visualUp && !observerUp ? 280 : COLUMN_MAX;
   const width = canvasWidth === 0
-    ? COLUMN_MAX
-    : Math.max(COLUMN_MIN, Math.min(COLUMN_MAX, canvasWidth - PROSE_MIN - COLUMN_MARGINS));
+    ? maxWidth
+    : Math.max(COLUMN_MIN, Math.min(maxWidth, canvasWidth - PROSE_MIN - COLUMN_MARGINS));
 
   // Open, every entry in the column is a full-width window; closed, every one
   // is its mark. So the column is "open" whenever it holds anything the reader
   // has not folded away, and the corner keeps the marks either way — a
   // finished run never vanishes from the top right.
-  const cardsUp = !closed && (planSlot === "card" || questionUp || resultUp || visualUp || observerUp);
-  const marksUp = !cardsUp && (planSlot !== "none" || resultUp || visualUp || observerUp);
+  const cardsUp = !closed && (planSlot === "card" || questionUp || resultUp || visualUp || observerUp || missionUp);
+  const marksUp = !cardsUp && (planSlot !== "none" || resultUp || visualUp || observerUp || missionUp);
 
   return {
     width,

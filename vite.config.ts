@@ -38,7 +38,7 @@ export default defineConfig(async () => ({
     // worst shape for a wrong number — it only lies on the machine you develop
     // on. `KIDE-worktrees/` siblings are outside the root and were never
     // affected.
-    exclude: [...configDefaults.exclude, "**/.claude/worktrees/**"],
+    exclude: [...configDefaults.exclude, "**/.claude/worktrees/**", "**/artifacts/**"],
   },
   build: {
     // Keep the app shell readable in production output. Monaco's workers stay

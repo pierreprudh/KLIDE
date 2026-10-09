@@ -19,6 +19,7 @@ export type DurableMissionTaskDispatch = {
   provider: string;
   model: string;
   requireDiffReview: boolean;
+  autoApproveCommands?: boolean;
 };
 
 export type DurableMissionSpec = {
@@ -28,6 +29,7 @@ export type DurableMissionSpec = {
   intent: string;
   mode: DurableMissionMode;
   taskIds: string[];
+  coordinatorRunId?: string | null;
   createdMs: number;
   updatedMs: number;
 };
@@ -162,6 +164,7 @@ export type DurableMissionBundle = {
   mission: DurableMissionSpec;
   tasks: DurableMissionTaskSpec[];
   events: DurableMissionEventLine[];
+  report?: { markdown: string; completedMs: number } | null;
 };
 
 /**
@@ -368,4 +371,9 @@ export async function reviewDurableMissionAttempt(
     missionId,
     input,
   });
+}
+
+/** Operator policy change for an approved Mission, including active native workers. */
+export async function setDurableMissionPolicy(workspaceRoot: string, missionId: string, requireDiffReview: boolean, autoApproveCommands: boolean): Promise<DurableMissionBundle> {
+  return invoke("mission_set_policy", { workspaceRoot, missionId, requireDiffReview, autoApproveCommands });
 }

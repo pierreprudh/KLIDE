@@ -144,7 +144,7 @@ type Props = {
   /** The rail's shared destinations — the same handler the free-mode activity
    *  bar calls, so Focus opens the identical Git view / Memory / Skills /
    *  Settings / Profile surfaces instead of parallel ones. */
-  onOpenPanel: (panel: "git" | "memory" | "skills" | "settings" | "profile" | "orchestrator") => void;
+  onOpenPanel: (panel: "git" | "memory" | "skills" | "settings" | "profile") => void;
   /** Open Settings straight on one section. The composer's provider picker
    *  sends keyless providers to "api" (API keys) instead of dead-ending on a
    *  row you can't run. */

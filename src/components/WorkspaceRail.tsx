@@ -15,7 +15,7 @@
 // in what they hand it:
 //
 //   nav        the rows above the tree. Focus: New task, Mission Control,
-//              Orchestrator, Memory, Skills. The workbench adds the panel
+//              Memory, Skills. The workbench adds the panel
 //              tools it alone can open — Explorer, Git, AI.
 //   footActions the icon buttons on the identity row's ragged right edge —
 //              the terminal toggle and the way out to the other shell. Both
