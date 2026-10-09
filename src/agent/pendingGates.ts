@@ -18,12 +18,12 @@
 // Gates are persisted like every other event, so the transcript is the answer:
 // walk it, and whatever was requested and never resolved is what the run is
 // waiting on right now.
-import type { AgentEvent, DiffProposal, PermissionRequest } from "./types";
+import type { AgentEvent, DiffProposal, PermissionRequest, QuestionChoices } from "./types";
 
 export type PendingGates = {
   permission: PermissionRequest | null;
   diff: DiffProposal | null;
-  question: { runId: string; requestId: string; question: string } | null;
+  question: { runId: string; requestId: string; question: string; choices?: QuestionChoices } | null;
 };
 
 export const NO_PENDING_GATES: PendingGates = {
@@ -65,6 +65,7 @@ export function pendingGatesFromEvents(events: readonly AgentEvent[]): PendingGa
           runId: event.runId,
           requestId: event.requestId,
           question: event.question,
+          ...(event.choices ? { choices: event.choices } : {}),
         };
         break;
       case "user_question_resolved":

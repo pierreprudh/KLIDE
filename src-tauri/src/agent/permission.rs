@@ -183,6 +183,9 @@ pub struct TrustMemory {
     /// rung is per conversation, and a conversation's live Run is part of it —
     /// so a flip reaches the Run that is asking, not only the next one.
     commands_policy: std::sync::Mutex<Option<bool>>,
+    /// Explicit operator override from the owning Mission, separate from a
+    /// conversation policy so it never leaks into another Run.
+    mission_policy: std::sync::Mutex<Option<(bool, bool)>>,
     /// Which capability the stashed permission sender is waiting on, while a
     /// card is up. A policy change answers the card it silences (a command)
     /// and leaves every other card standing — a dispatch, a network target, a
@@ -198,6 +201,14 @@ impl TrustMemory {
 
     pub fn set_commands_policy(&self, auto_approve: bool) {
         *self.commands_policy.lock().unwrap() = Some(auto_approve);
+    }
+
+    pub(crate) fn mission_policy(&self) -> Option<(bool, bool)> {
+        *self.mission_policy.lock().unwrap()
+    }
+
+    pub(crate) fn set_mission_policy(&self, review_edits: bool, auto_commands: bool) {
+        *self.mission_policy.lock().unwrap() = Some((review_edits, auto_commands));
     }
 
     /// Record (or clear) what the pending permission card is about.
@@ -281,7 +292,9 @@ pub fn remember_write_rejection(ctx: &ToolCtx<'_>, edit_key: &str) {
 /// Has "Validate all" been chosen earlier in this run? Later edits then apply
 /// without pausing, exactly as if the run had started with review off.
 pub fn edits_auto_applied(ctx: &ToolCtx<'_>) -> bool {
-    with_run_handle(ctx.sup, ctx.id, |h| h.trust.edits_auto_applied()).unwrap_or(false)
+    with_run_handle(ctx.sup, ctx.id, |h| h.trust.mission_policy().map(|(review, _)| !review)
+        .unwrap_or(ctx.request.require_diff_review == Some(false) || h.trust.edits_auto_applied()))
+        .unwrap_or(ctx.request.require_diff_review == Some(false))
 }
 
 pub fn remember_edits_auto_apply(ctx: &ToolCtx<'_>) {
@@ -494,7 +507,8 @@ pub fn precheck(ctx: &ToolCtx<'_>, cap: Capability, run_key: &str, project_ok: b
         (
             h.trust.approved(cap, run_key),
             h.trust.rejected(cap, run_key),
-            h.subject.rung_covers(cap) && h.subject.full_auto(h.trust.commands_policy()),
+            h.subject.rung_covers(cap) && h.trust.mission_policy().map(|(_, commands)| commands)
+                .unwrap_or_else(|| h.subject.full_auto(h.trust.commands_policy())),
         )
     })
     .unwrap_or((false, false, false));

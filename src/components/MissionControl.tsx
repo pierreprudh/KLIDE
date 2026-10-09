@@ -1,3 +1,4 @@
+import { MissionLibrary } from "./missionControl/MissionLibrary";
 import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listProviderModels } from "../ipc/aiProviders";
@@ -4731,6 +4732,7 @@ export function MissionControl({
         />
 
         <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
+          <MissionLibrary workspaceRoot={workspaceRoot} onOpenRun={setSelectedId} />
           <TaskComposer
             workspaceRoot={workspaceRoot}
             onAdded={(id) => setSelectedId(id)}

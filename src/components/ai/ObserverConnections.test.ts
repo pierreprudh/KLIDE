@@ -15,6 +15,17 @@ describe("observer connections", () => {
   it("links to the launch across unrelated turns without highlighting them", () => {
     expect(observerConnections(msgs)).toEqual([{ start: 0, end: 5, members: [5, 0, 2, 6] }]);
   });
+  it("connects a Mission summary to its own planning call across other turns", () => {
+    const mission: Msg[] = [
+      { role: "assistant", content: "", toolCalls: [{ id: "plan", name: "plan_mission", args: {} }] },
+      { role: "tool", toolName: "plan_mission", toolCallId: "plan", content: JSON.stringify({ action: "plan", missionId: "m1" }) },
+      { role: "user", content: "Unrelated question" },
+      { role: "assistant", content: "Unrelated answer" },
+      { role: "assistant", content: "Mission completed", missionReportId: "m1" },
+    ];
+    expect(observerConnections(mission)).toEqual([{ start: 0, end: 4, members: [0, 4], direct: true }]);
+    expect(observerConnections([...mission.slice(0, 4), { role: "assistant", content: "Other Mission", missionReportId: "m2" }])).toEqual([]);
+  });
   it("does not connect ordinary conversations or foreground commands", () => {
     expect(observerConnections(msgs.slice(0, 5))).toEqual([]);
     const foreground = msgs.map(row => row.role === "tool" ? { ...row, content: "Command exited 0" } : row);

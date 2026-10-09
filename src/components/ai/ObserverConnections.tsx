@@ -3,8 +3,25 @@ import type { Msg } from "./types";
 
 /** Match the durable observer id, never the position of the latest user turn. */
 export function observerConnections(msgs: Msg[]) {
-  const links: { start: number; end: number; members: number[] }[] = [];
+  const links: { start: number; end: number; members: number[]; direct?: boolean }[] = [];
   msgs.forEach((msg, end) => {
+    if (msg.role === "assistant" && msg.missionReportId) {
+      const toolIndex = msgs.findIndex((row, i) => {
+        if (i >= end || row.role !== "tool" || row.toolName !== "plan_mission") return false;
+        try { const receipt = JSON.parse(row.content); return receipt.action === "plan" && receipt.missionId === msg.missionReportId; }
+        catch { return false; }
+      });
+      const tool = msgs[toolIndex];
+      if (!tool || tool.role !== "tool") return;
+      let start = -1;
+      for (let i = toolIndex - 1; i >= 0; i--) {
+        const row = msgs[i];
+        if (row.role === "user") break;
+        if (row.role === "assistant" && row.toolCalls?.some(call => call.id === tool.toolCallId)) { start = i; break; }
+      }
+      if (start >= 0) links.push({ start, end, members: [start, end], direct: true });
+      return;
+    }
     if (msg.role !== "system" || !msg.observer) return;
     const toolIndex = msgs.findIndex((row, i) => i < end && row.role === "tool" && row.toolName === "run_command" && row.content.startsWith("Watching `") && row.content.includes(` as \`${msg.observer!.shellId}\`.`));
     if (toolIndex < 0) return;
@@ -41,7 +58,7 @@ export function ObserverConnections({ msgs, children }: { msgs: Msg[]; children:
       setPaths(links.map(link => {
         const logos = Array.from(node.querySelectorAll<HTMLElement>('[data-observer-logo]'));
         const a = logos.filter(logo => Number(logo.dataset.observerLogo) <= link.start).pop();
-        const b = logos.find(logo => Number(logo.dataset.observerLogo) > link.end && link.members.includes(Number(logo.dataset.observerLogo)));
+        const b = logos.find(logo => link.direct ? Number(logo.dataset.observerLogo) === link.end : Number(logo.dataset.observerLogo) > link.end && link.members.includes(Number(logo.dataset.observerLogo)));
         if (!a || !b) return "";
         const from = a.getBoundingClientRect(), to = b.getBoundingClientRect();
         const x1 = from.left - box.left - 3, x2 = to.left - box.left - 3;

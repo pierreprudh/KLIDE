@@ -1,3 +1,6 @@
+import { appendMissionReports } from "./ai/missionReports";
+import { MissionLibrary } from "./missionControl/MissionLibrary";
+import { listDurableMissions } from "../agent/durableMissions";
 import { useLlamaSetupMode, isSelectedLlamaProvider } from "../hooks/useLlamaSetupMode";
 import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
@@ -115,7 +118,7 @@ import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } fr
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon } from "../icons";
+import { AttachIcon, CloseIcon, MissionWorkflowIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
 import { PendingInboxRow, renderMessageBody, CompactionRow, ToolRunRow, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
@@ -782,6 +785,29 @@ export function AiPanel({
   const msgs = conversationSession.messages;
   const provider = conversationSession.provider;
   const model = conversationSession.model;
+  const [missionPresent, setMissionPresent] = useState(false);
+  // Completion is durable Mission state; delivery is a normal persisted chat
+  // message. Reopening the planning chat picks up missed reports once.
+  useEffect(() => {
+    setMissionPresent(false);
+    if (!workspaceRoot) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const read = async () => {
+      try {
+        const bundles = await listDurableMissions(workspaceRoot);
+        if (!live || conversationSessionRef.current.conversationId !== currentId) return;
+        const owned = bundles.filter((bundle) => bundle.mission.coordinatorRunId === currentId);
+        setMissionPresent(owned.length > 0);
+        if (conversationSessionRef.current.run.active) return;
+        const next = appendMissionReports(msgsRef.current, owned, currentId);
+        if (next !== msgsRef.current) setMsgs(next);
+      } catch (error) { console.warn("Mission report delivery failed", error); }
+      finally { if (live) timer = setTimeout(() => void read(), 1500); }
+    };
+    void read();
+    return () => { live = false; clearTimeout(timer); };
+  }, [workspaceRoot, currentId]);
   const currentForkedFrom = conversationSession.forkedFrom;
   // The mark for a response whose own turn carries no stamp — everything
   // stored before the fold started recording one. The thread's origin is the
@@ -2866,6 +2892,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   // the column itself takes a switch. A parked question overrides it: that
   // card holds the run, and hiding the run's own question would strand it.
   const [sidePanelHidden, setSidePanelHidden] = useState(false);
+  useEffect(() => {
+    if (missionPresent) setSidePanelHidden(false);
+  }, [currentId, missionPresent]);
 
   // The result is not dismissible: what a run produced stays in the corner for
   // as long as the run is the latest one. The column's close folds it to its
@@ -2964,6 +2993,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     questionUp: pendingQuestion !== null,
     visualUp: latestVisuals !== null,
     observerUp: githubPresence.runId === currentId && githubPresence.present,
+    missionUp: missionPresent,
     hidden: sidePanelHidden,
     canvasWidth,
   });
@@ -4220,7 +4250,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               : null;
           const before = hoistedInbox ? msgs[i - 2] : prevMsg;
           const isResponseStart =
-            (!before || (before.role !== "assistant" && before.role !== "tool")) &&
+            (!!(m.role === "assistant" && m.missionReportId) || !before || (before.role !== "assistant" && before.role !== "tool")) &&
             // …unless a folded run's header is already wearing this turn's
             // mark, in which case this row draws the spacer and keeps the
             // column aligned without a second one.
@@ -4279,7 +4309,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
@@ -4589,6 +4619,11 @@ This user request requires workspace inspection. Before answering, you MUST call
             onPresenceChange={setPlanSlot}
           />
           )}
+          {missionPresent && <div style={{ pointerEvents: "auto", flexShrink: 0, alignSelf: column.planFolded ? "flex-end" : "stretch" }}>
+            {column.planFolded
+              ? <button type="button" className="github-observer-mark" aria-label="Show Mission" title="Mission" onClick={() => setSidePanelHidden(false)}><MissionWorkflowIcon size={22} /></button>
+              : <MissionLibrary workspaceRoot={workspaceRoot ?? null} coordinatorRunId={currentId} onOpenRun={onOpenRunInMissionControl} />}
+          </div>}
           {/* The result lives in the corner whether the column is open or
               folded — "a document or review should stay in icons" — and its
               own resting state is that icon. The card draws that mark itself

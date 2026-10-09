@@ -26,7 +26,6 @@ import {
   GitIcon,
   MissionIcon,
   NewTaskIcon,
-  OrchestratorIcon,
   SkillsIcon,
 } from "./icons";
 import { Sidebar } from "./components/Sidebar";
@@ -149,7 +148,6 @@ import { promoteWorkedFolder, rememberOpenedFolder } from "./recentFolders";
 import "./styles/tokens.css";
 
 const MissionControl = lazy(() => import("./components/MissionControl").then((m) => ({ default: m.MissionControl })));
-const OrchestratorConsole = lazy(() => import("./components/OrchestratorConsole").then((m) => ({ default: m.OrchestratorConsole })));
 const FocusMode = lazy(() => import("./components/FocusMode").then((m) => ({ default: m.FocusMode })));
 const GitReview = lazy(() => import("./components/GitReview").then((m) => ({ default: m.GitReview })));
 const MemoryModal = lazy(() => import("./components/MemoryModal").then((m) => ({ default: m.MemoryModal })));
@@ -162,7 +160,7 @@ const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) =
 const KeyboardShortcuts = lazy(() => import("./components/KeyboardShortcuts").then((m) => ({ default: m.KeyboardShortcuts })));
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
-type ActivityPanel = Panel | "orchestrator" | "home";
+type ActivityPanel = Panel | "home";
 export type { HarnessSettings } from "./settingsStore";
 
 /** Documents whose best picture App keeps in memory for the viewer's first
@@ -851,7 +849,6 @@ function App() {
     skills: overlay === null && (skillsVisible || sidebarSlot2 === "skills"),
     ai: overlay === null && aiVisible,
     runs: overlay === "runs",
-    orchestrator: overlay === "orchestrator",
     settings: overlay === "settings",
     profile: profileVisible,
   };
@@ -876,10 +873,6 @@ function App() {
     }
     if (panel === "runs") {
       openOverlay("runs");
-      return;
-    }
-    if (panel === "orchestrator") {
-      openOverlay("orchestrator");
       return;
     }
     back();
@@ -1056,13 +1049,6 @@ function App() {
       onClick: () => togglePanel("runs"),
     },
     {
-      id: "orchestrator",
-      label: "Orchestrator",
-      icon: <OrchestratorIcon size={15} />,
-      active: activityState.orchestrator,
-      onClick: () => togglePanel("orchestrator"),
-    },
-    {
       id: "memory",
       label: "Memory",
       icon: <MemoryInboxIcon />,
@@ -1123,13 +1109,6 @@ function App() {
       icon: <MissionIcon size={15} />,
       active: activityState.runs,
       onClick: () => openOverlay("runs"),
-    },
-    {
-      id: "orchestrator",
-      label: "Orchestrator",
-      icon: <OrchestratorIcon size={15} />,
-      active: activityState.orchestrator,
-      onClick: () => togglePanel("orchestrator"),
     },
     {
       id: "memory",
@@ -3127,7 +3106,6 @@ function App() {
     { id: "layout-focus", label: "Layout: Focus (chat)", action: () => { enterFocus(); setPaletteOpen(false); } },
     { id: "terminal-focus", label: "Terminal: Open in Focus", action: () => { setFocusTerminalOpen(true); setTerminalVisible(false); enterFocus(); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { openOverlay("runs"); setPaletteOpen(false); } },
-    { id: "orchestrator", label: "View: Orchestrator", action: () => { openOverlay("orchestrator"); setPaletteOpen(false); } },
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { back(); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { toggleOverlay("git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await createPr(workspaceRoot, "Klide changes", null); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
@@ -3438,13 +3416,6 @@ function App() {
                   onMergeWorktreeRun={mergeWorktreeRun}
                   summarizingFromRunId={summarizingFromRun}
                 />
-              </Suspense>
-            ) : overlay === "orchestrator" ? (
-              // The tier-board console. Rust's Mission supervisor owns which
-              // task runs next (ADR-0002); this surface authors the plan,
-              // approves it, and reattaches to the resulting Harness Runs.
-              <Suspense fallback={null}>
-                <OrchestratorConsole workspaceRoot={workspaceRoot} />
               </Suspense>
             ) : activeGrid ? (
               // A grid base and Focus are mutually exclusive by construction

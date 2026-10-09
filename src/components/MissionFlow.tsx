@@ -10,7 +10,7 @@
 // never the plan; dependency edits stay on the detail panel, which writes the
 // task's Markdown back. No pills, no dots, no shadows — a card is a hairline
 // box, a status is a word, a lit card is a ring.
-import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { layoutMission, type GraphTask } from "../agent/missionGraph";
 import type { MissionTaskStatus } from "../agent/missionHarness";
 import { presentMissionCardTone, toneColor } from "../runPresentation";
@@ -24,6 +24,8 @@ export type MissionFlowMeta = {
   status: MissionTaskStatus | string;
   /** The caption under the title: who does it (a mark and a name), or what it waits on. */
   caption?: ReactNode;
+  /** Worker identity and inspection, in the task header beside its phase. */
+  worker?: ReactNode;
 };
 
 type MissionFlowProps = {
@@ -41,12 +43,23 @@ const COL_GAP = 28;
 const ROW_GAP = 56;
 const PAD_X = 24;
 const PAD_Y = 22;
-const PHASE_H = 18; // the phase line sits above the card inside its slot
+const PHASE_H = 38; // the phase line sits above the card inside its slot
 
 function markState(status: string): "todo" | "active" | "done" {
   if (status === "done") return "done";
   if (status === "running" || status === "validating") return "active";
   return "todo";
+}
+
+function beginTransfer(node: SVGElement | null) {
+  (node as SVGAnimationElement | null)?.beginElement();
+}
+
+/** Animate actual handoffs, never replayed completed graphs on mount. */
+export function missionFlowTransfers(previous: Record<string, string>, current: Record<string, string>, edges: { from: string; to: string }[]): string[] {
+  const started = (status: string | undefined) => status === "running" || status === "validating" || status === "done";
+  return edges.filter(edge => current[edge.from] === "done" && started(current[edge.to]) && !started(previous[edge.to]))
+    .map(edge => `${edge.from}->${edge.to}`);
 }
 
 export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true }: MissionFlowProps) {
@@ -57,6 +70,24 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
   const [offsets, setOffsets] = useState<Record<string, { dx: number; dy: number }>>({});
   const drag = useRef<{ id: string; startX: number; startY: number; baseDx: number; baseDy: number; moved: boolean } | null>(null);
 
+  const [transfers, setTransfers] = useState<Record<string, number>>({});
+  const previousStatuses = useRef<Record<string, string> | null>(null);
+  const statusesKey = JSON.stringify(Object.fromEntries(tasks.map(task => [task.id, String(meta[task.id]?.status ?? "queued")])));
+  const edgesKey = JSON.stringify(tasks.map(task => ({ from: task.dependencies, to: task.id })));
+  useEffect(() => {
+    const current = JSON.parse(statusesKey) as Record<string, string>;
+    const graph = JSON.parse(edgesKey) as { from: string[]; to: string }[];
+    const edges = graph.flatMap(task => task.from.map(from => ({ from, to: task.to })));
+    if (previousStatuses.current) {
+      const changed = missionFlowTransfers(previousStatuses.current, current, edges);
+      if (changed.length) setTransfers(previous => {
+        const next = { ...previous };
+        changed.forEach(id => { next[id] = (next[id] ?? 0) + 1; });
+        return next;
+      });
+    }
+    previousStatuses.current = current;
+  }, [statusesKey, edgesKey]);
   const { nodes, edges } = layoutMission(tasks);
   const order = new Map(nodes.map((node) => [node.id, node]));
 
@@ -102,7 +133,9 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
   const cw = width || 560;
   // The widest row must fit: cards narrow together before any of them wraps.
   const widestRow = Math.max(1, ...layers.map((layer) => nodes.filter((node) => node.layer === layer).length));
-  const cardW = Math.max(150, Math.min(CARD_W, (cw - PAD_X * 2 - (widestRow - 1) * COL_GAP) / widestRow));
+  const workersOnRight = widestRow === 1 && nodes.some(node => meta[node.id]?.worker);
+  const workerLane = workersOnRight ? 94 : 0;
+  const cardW = Math.max(workersOnRight ? 120 : 150, Math.min(CARD_W, (cw - PAD_X * 2 - workerLane - (widestRow - 1) * COL_GAP) / widestRow));
 
   // The phase line is written once per run of a phase in reading order, so a
   // row of three Build tasks says "Build" once, not three times.
@@ -122,7 +155,7 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
     if (!node) return null;
     const siblings = nodes.filter((n) => n.layer === node.layer).length;
     const groupW = siblings * cardW + (siblings - 1) * COL_GAP;
-    const left0 = (cw - groupW) / 2 + node.order * (cardW + COL_GAP);
+    const left0 = (cw - groupW - workerLane) / 2 + node.order * (cardW + COL_GAP);
     const off = offsets[id];
     return {
       left: Math.max(PAD_X / 2, left0) + (off?.dx ?? 0),
@@ -136,7 +169,7 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
     const b = place(edge.to);
     if (!a || !b) return null;
     const x1 = a.left + cardW / 2;
-    const y1 = a.top + PHASE_H + a.h;
+    const y1 = a.top + a.h;
     const x2 = b.left + cardW / 2;
     const y2 = b.top + PHASE_H;
     const k = Math.min(Math.max(Math.abs(y2 - y1) * 0.55, 20), 72);
@@ -149,7 +182,6 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
       if (!draggable || event.button !== 0) return;
       const off = offsets[id];
       drag.current = { id, startX: event.clientX, startY: event.clientY, baseDx: off?.dx ?? 0, baseDy: off?.dy ?? 0, moved: false };
-      event.currentTarget.setPointerCapture(event.pointerId);
     };
   }
   function onPointerMove(id: string) {
@@ -159,6 +191,9 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
       const dx = d.baseDx + event.clientX - d.startX;
       const dy = d.baseDy + event.clientY - d.startY;
       if (!d.moved && Math.hypot(dx - d.baseDx, dy - d.baseDy) < 3) return;
+      // Capture only a real drag; capturing on pointerdown retargets the
+      // button’s click to this wrapper and prevents task selection.
+      event.currentTarget.setPointerCapture(event.pointerId);
       d.moved = true;
       setOffsets((current) => ({ ...current, [id]: { dx, dy } }));
     };
@@ -198,14 +233,17 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
           const d = connector(edge);
           if (!d) return null;
           return (
-            <path
-              key={`${edge.from}->${edge.to}`}
+            <g key={`${edge.from}->${edge.to}`}><path
               d={d}
               fill="none"
-              stroke={lit(edge) ? "var(--accent)" : "var(--border-strong)"}
-              strokeWidth={1.25}
+              stroke={lit(edge) ? "var(--accent)" : "var(--fg-dim)"}
+              strokeWidth={1.5}
               style={{ transition: "stroke 150ms var(--ease-out)" }}
             />
+            {transfers[`${edge.from}->${edge.to}`] && <circle key={transfers[`${edge.from}->${edge.to}`]} r={3} fill="var(--accent)" className="mission-flow-transfer">
+              <animateMotion ref={beginTransfer} path={d} dur="900ms" begin="indefinite" fill="freeze" />
+            </circle>}
+            </g>
           );
         })}
       </svg>
@@ -239,9 +277,16 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
               cursor: draggable ? "grab" : "default",
             }}
           >
-            <span style={{ height: PHASE_H - 4, fontSize: 11, lineHeight: `${PHASE_H - 4}px`, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", paddingLeft: 2 }}>
-              {phaseShown.has(node.id) ? m?.phase : ""}
-            </span>
+            <div style={{ height: PHASE_H - 4, width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <span style={{ fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", paddingLeft: 2 }}>
+                {phaseShown.has(node.id) ? m?.phase : ""}
+              </span>
+
+            </div>
+            {workersOnRight && m?.worker && <div aria-label="Task worker" style={{ position: "absolute", left: "calc(100% + 10px)", top: PHASE_H + 28, transform: "translateY(-50%)", display: "inline-flex", alignItems: "center", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: 999, padding: "0 3px" }}>
+              <span aria-hidden="true" style={{ position: "absolute", left: -11, top: "50%", width: 10, height: 1, background: "var(--border-strong)", pointerEvents: "none" }} />
+              {m.worker}
+            </div>}
             <button
               type="button"
               aria-pressed={active}
@@ -282,6 +327,10 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
                 </span>
               </span>
             </button>
+            {!workersOnRight && m?.worker && <div aria-label="Task worker" style={{ position: "relative", alignSelf: "center", marginTop: 6, display: "inline-flex", alignItems: "center", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: 999, padding: "0 3px" }}>
+              <span aria-hidden="true" style={{ position: "absolute", top: -11, left: "50%", width: 1, height: 10, background: "var(--border-strong)", pointerEvents: "none" }} />
+              {m.worker}
+            </div>}
           </div>
         );
       })}

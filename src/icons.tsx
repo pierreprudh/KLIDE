@@ -152,6 +152,11 @@ export function MissionIcon(p: GlyphProps) {
   return <Icon as={CirclesThree} {...p} />;
 }
 
+/** One Mission workflow, distinct from the aggregate Mission Control board. */
+export function MissionWorkflowIcon(p: GlyphProps) {
+  return <Icon as={FlowArrow} {...p} />;
+}
+
 export function OrchestratorIcon(p: GlyphProps) {
   return <Icon as={FlowArrow} {...p} />;
 }

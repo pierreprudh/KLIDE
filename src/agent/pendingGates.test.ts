@@ -81,6 +81,13 @@ describe("pendingGatesFromEvents", () => {
     expect(gates.question).toEqual({ runId: RUN, requestId: "q-1", question: "Which port?" });
   });
 
+  it("restores a worker's choice question and clears only its matching answer", () => {
+    const request: AgentEvent = { type: "user_question_requested", runId: RUN, requestId: "choice-1", question: "Which worker?", choices: { options: ["codex", "claude-code"], kind: "dispatch", preselected: "codex", preselectedModel: "default" }, ts };
+    const unrelated: AgentEvent = { type: "user_question_resolved", runId: RUN, requestId: "other", answer: "skip", ts };
+    expect(pendingGatesFromEvents([request, unrelated]).question?.choices).toEqual(request.choices);
+    expect(pendingGatesFromEvents([request, { ...unrelated, requestId: "choice-1" }]).question).toBeNull();
+  });
+
   it("clears a diff when its own proposal is resolved", () => {
     expect(pendingGatesFromEvents([proposed("diff-1"), resolved("diff-1")]).diff).toBeNull();
     expect(pendingGatesFromEvents([proposed("diff-2"), resolved("diff-1")]).diff?.id).toBe("diff-2");

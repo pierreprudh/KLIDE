@@ -1133,6 +1133,7 @@ pub fn run() {
             missions::mission_list,
             missions::mission_save_task,
             missions::mission_approve,
+            missions::mission_set_policy,
             missions::mission_request_task,
             missions::mission_review_attempt,
             git::github::create_pr,
