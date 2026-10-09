@@ -446,15 +446,10 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot 
   // A planned Mission is drawn, not printed: the card reads the draft the
   // receipt names and carries the operator's approval. Until the receipt
   // lands, or if the call failed, the row is an ordinary tool call.
+  // The card is the call: a "plan_mission <title>" row above a card whose
+  // header says the same title read as two objects for one gesture.
   const receipt = name === PLAN_MISSION_TOOL && result && !result.active ? parsePlanMissionReceipt(result.msg.content) : null;
-  if (receipt) {
-    return (
-      <>
-        <ToolCallDisclosure name={name} args={args} />
-        <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} />
-      </>
-    );
-  }
+  if (receipt) return <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} />;
   const call =
     name === "spawn_subagent" ? (
       // The child is still going until a *real* report lands. The pending
