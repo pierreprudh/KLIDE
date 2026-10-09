@@ -9134,3 +9134,19 @@ button:focus-visible .menu-leadout {
    the divider's ends. */
 .github-observer-sidebar .github-observer-content > :first-child { margin-inline:5px; }
 .github-observer-sidebar .github-observer-arrow { width:0; margin-left:4px; margin-right:-4px; }
+
+/* Mission task edits use the same quiet, compact control rhythm as the panel. */
+.mission-task-form > label, .mission-task-worker-grid > label,
+.mission-task-options > label:not(.mission-task-check) {
+  display:grid; gap:5px; color:var(--fg-subtle); font-size:11px;
+}
+.mission-task-form textarea { resize:vertical; min-height:54px; }
+.mission-task-form input:focus-visible, .mission-task-form textarea:focus-visible,
+.mission-task-form select:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
+.mission-task-hint { font-size:10.5px; color:var(--fg-dim); font-weight:400; }
+.mission-task-check { display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--fg-subtle); }
+.mission-task-check input { margin:0; accent-color:var(--accent); }
+.mission-task-options { display:flex; align-items:end; flex-wrap:wrap; gap:12px; }
+.mission-task-options .mission-task-check { padding-bottom:7px; }
+.mission-task-worker-heading { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--fg-subtle); border-top:1px solid var(--border); padding-top:12px; }
+.mission-task-worker-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr)); gap:10px; align-items:start; }

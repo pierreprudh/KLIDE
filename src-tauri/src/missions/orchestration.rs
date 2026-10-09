@@ -341,7 +341,7 @@ pub async fn execute(
                     .write_gate
                     .lock()
                     .map_err(|_| "Mission store is unavailable.".to_string())?;
-                do_create(&plan_root, input)?
+                do_create_for_run(&plan_root, input, Some(actor.clone()))?
             };
             Ok(json!({"schemaVersion":1,"action":"plan","missionId":bundle.mission.id,
                 "title":bundle.mission.title,"approved":false,
@@ -431,6 +431,7 @@ mod tests {
     use super::*;
     fn bundle(events: Vec<MissionEvent>) -> DurableMissionBundle {
         DurableMissionBundle {
+            report: None,
             mission: MissionSpec {
                 schema_version: 1,
                 id: "m1".into(),
@@ -438,6 +439,7 @@ mod tests {
                 intent: "Test".into(),
                 mode: MissionMode::Goal,
                 task_ids: vec!["t1".into()],
+                coordinator_run_id: None,
                 created_ms: 0,
                 updated_ms: 0,
             },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePlanMissionReceipt } from "./MissionCard";
+import { parsePlanMissionReceipt, missionRouteHasSameBrand } from "./MissionCard";
 
 describe("parsePlanMissionReceipt", () => {
   it("reads a plan receipt and its route", () => {
@@ -19,5 +19,14 @@ describe("parsePlanMissionReceipt", () => {
   });
   it("drops a malformed route rather than offering it", () => {
     expect(parsePlanMissionReceipt(JSON.stringify({ action: "plan", missionId: "m", title: "t", route: { provider: 1 } }))?.route).toBeUndefined();
+  });
+});
+
+describe("Mission worker marks", () => {
+  it("merges provider and model maker when they share a brand", () => {
+    expect(missionRouteHasSameBrand("anthropic", "claude-sonnet-5")).toBe(true);
+    expect(missionRouteHasSameBrand("openai", "gpt-5")).toBe(true);
+    expect(missionRouteHasSameBrand("openrouter", "anthropic/claude-sonnet-5")).toBe(false);
+    expect(missionRouteHasSameBrand("anthropic", "unknown-model")).toBe(false);
   });
 });

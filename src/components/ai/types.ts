@@ -33,6 +33,7 @@ export type Msg =
   | {
       role: "assistant";
       content: string;
+      missionReportId?: string;
       toolCalls?: ToolCall[];
       thinking?: string;
       /** When reasoning began streaming, epoch ms — anchors the live

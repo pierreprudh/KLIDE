@@ -1883,7 +1883,7 @@ Do not propose it again — take a different approach or ask the user what they'
     // the checkpoint written below keeps it revertable — which is what makes
     // auto-accept safe. Otherwise pause for diff review.
     let decision =
-        if ctx.request.require_diff_review == Some(false) || permission::edits_auto_applied(ctx) {
+        if permission::edits_auto_applied(ctx) {
             emit(AgentEvent::DiffProposed {
                 run_id: ctx.id.to_string(),
                 proposal: proposal.clone(),
