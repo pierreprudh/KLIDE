@@ -82,6 +82,7 @@ import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import {
   EXPLAIN_PREFIX,
   GOAL_PREFIX,
+  MISSION_PREFIX,
   SLASH_DESC,
   skillSlashCommands,
   SLASH_PROMPTS,
@@ -1921,6 +1922,7 @@ function FocusComposer({
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectAgentMode("plan"); clearDraft(); } },
     { name: "work", desc: SLASH_DESC.work, run: () => { selectAgentMode(goalOrPlan()); clearDraft(); } },
     { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
+    { name: "mission", desc: SLASH_DESC.mission, run: () => insertSlashPrefix(MISSION_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => {
       clearDraft();
       notify(currentModeText({

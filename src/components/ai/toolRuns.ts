@@ -45,11 +45,23 @@ export type ToolRun = {
  *  behind a summary costs a click to learn less than the rows already said. */
 export const MIN_STACKED_CALLS = 3;
 
+/** Mirrors `PLAN_MISSION_TOOL` in src-tauri/src/agent/tools.rs. */
+export const PLAN_MISSION_TOOL = "plan_mission";
+
+/** Tool calls that are the agent addressing the operator, not machinery: a
+ *  planned Mission is drawn as a card the operator approves on, a delegation
+ *  is a row the operator watches. Folding either into "5 tool calls" hides
+ *  the one thing the turn was for, so a message that makes one of these
+ *  calls ends a run the way a sentence does. */
+export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "spawn_subagent"]);
+
 /** Whether a message is tool work and nothing else. An assistant turn that
- *  also speaks is prose with tool rows attached, not part of a run. */
+ *  also speaks is prose with tool rows attached, not part of a run — and a
+ *  call that draws a card is the agent speaking (see `SPEAKING_TOOLS`). */
 function isToolWork(m: Msg): boolean {
   if (m.role === "tool") return true;
   if (m.role !== "assistant" || !m.toolCalls?.length) return false;
+  if (m.toolCalls.some((call) => SPEAKING_TOOLS.has(call.name))) return false;
 
   // Reasoning-only payloads are still tool work. Providers encode them three
   // ways: a structured `thinking` field (already absent from `content`), an

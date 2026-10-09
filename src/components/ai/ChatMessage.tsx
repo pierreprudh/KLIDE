@@ -18,7 +18,9 @@ import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { formatElapsed, useElapsed } from "./WorkingRow";
-import { MIN_STACKED_CALLS, toolCallKey, toolRunLabel } from "./toolRuns";
+import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
+
+import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, toolCallKey, toolRunLabel } from "./toolRuns";
 import { SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
 import { isWatchable } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
@@ -443,7 +445,14 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
   );
 }
 
-function ToolCallRow({ name, args, count = 1, result, childRunId }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string }) {
+function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null }) {
+  // A planned Mission is drawn, not printed: the card reads the draft the
+  // receipt names and carries the operator's approval. Until the receipt
+  // lands, or if the call failed, the row is an ordinary tool call.
+  // The card is the call: a "plan_mission <title>" row above a card whose
+  // header says the same title read as two objects for one gesture.
+  const receipt = name === PLAN_MISSION_TOOL && result && !result.active ? parsePlanMissionReceipt(result.msg.content) : null;
+  if (receipt) return <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} />;
   const call =
     name === "spawn_subagent" ? (
       // The child is still going until a *real* report lands. The pending
@@ -1506,9 +1515,10 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageB
             calls.map((tc, index) => ({ tc, key: toolCallKey(tc, index) })),
             ({ tc }) => (COORDINATION_TOOL_NAMES.has(tc.name) ? `${tc.name}\n${JSON.stringify(tc.args ?? null)}` : null),
           ).map(({ item: { tc, key }, count }) => (
-            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} />
+            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} />
           ));
-          if (!visibleContent || calls.length < MIN_STACKED_CALLS) return rows;
+          // A call that draws a card is the point of the turn, never folded.
+          if (!visibleContent || calls.length < MIN_STACKED_CALLS || calls.some((tc) => SPEAKING_TOOLS.has(tc.name))) return rows;
           const names: string[] = [];
           for (const tc of calls) if (!names.includes(tc.name)) names.push(tc.name);
           const label = toolRunLabel({ calls: calls.length, names });
