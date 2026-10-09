@@ -23,6 +23,104 @@ pub enum Request {
         #[serde(default)]
         timeout_seconds: u64,
     },
+    /// Author a Mission from inside a conversation. It is written as a draft
+    /// — `dispatch: None` on every task — and only the operator's approval,
+    /// answered on the conversation's card, freezes a route and starts it.
+    Plan {
+        title: String,
+        intent: String,
+        #[serde(default)]
+        tasks: Vec<PlanTaskInput>,
+    },
+}
+
+/// One task as the model states it: a short id it chose, the prose, and the
+/// ids it waits on. Everything the durable spec needs beyond this is a default
+/// a draft can carry (Goal mode, medium risk, no routing).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlanTaskInput {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub phase: MissionTaskPhase,
+    #[serde(default)]
+    pub risk: Option<MissionTaskRisk>,
+    #[serde(default)]
+    pub writes_files: bool,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+}
+
+/// The most tasks one plan may carry. A Mission is a bounded outcome, not a
+/// backlog; past this the model is asked to plan the first slice.
+pub const MAX_PLAN_TASKS: usize = 12;
+
+impl PlanTaskInput {
+    fn into_create(self) -> CreateMissionTaskInput {
+        let acceptance_criteria = if self.acceptance_criteria.iter().any(|c| !c.trim().is_empty()) {
+            self.acceptance_criteria
+        } else if !self.description.trim().is_empty() {
+            vec![self.description.trim().to_string()]
+        } else {
+            vec![format!("The task outcome satisfies: {}", self.title.trim())]
+        };
+        CreateMissionTaskInput {
+            id: Some(self.id),
+            title: self.title,
+            body_markdown: self.description,
+            phase: self.phase,
+            mode: MissionMode::Goal,
+            risk: self.risk.unwrap_or(MissionTaskRisk::Medium),
+            writes_files: self.writes_files,
+            dependencies: self.depends_on,
+            acceptance_criteria,
+            needs_repo_wide_context: false,
+            needs_strong_reasoning: false,
+            needs_delegate_cli: false,
+            needs_visual_review: false,
+        }
+    }
+}
+
+/// The `plan_mission` Tool: the one way a Run authors a Mission. Separate
+/// from `mission_orchestrate` so a conversation can draw the plan it returns
+/// by name, and so coordinating approved work keeps its own, smaller schema.
+pub fn plan_tool() -> Value {
+    json!({
+        "name": "plan_mission",
+        "description": "Turn the operator's objective into a durable Mission: 3 to 8 concrete tasks with dependencies, written to the workspace for the operator to approve in the conversation. Call it once per objective and never before you have inspected enough to name real files and checks. It never dispatches work: after the operator approves, mission_orchestrate list/dispatch/inspect coordinate the tasks. Task ids are short slugs you choose; dependsOn names them. A task should be one bounded change a single worker can finish and verify.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type":"string", "minLength":1, "maxLength":120, "description":"The Mission in a few words."},
+                "intent": {"type":"string", "minLength":1, "description":"The operator's objective, as they stated it."},
+                "tasks": {
+                    "type":"array", "minItems":1, "maxItems": MAX_PLAN_TASKS,
+                    "items": {
+                        "type":"object",
+                        "properties": {
+                            "id": {"type":"string", "minLength":1, "maxLength":40, "description":"A short slug, unique in this plan (e.g. scaffold-tool)."},
+                            "title": {"type":"string", "minLength":1, "maxLength":120},
+                            "description": {"type":"string", "description":"What to do and where — the files, functions and commands involved."},
+                            "phase": {"type":"string", "enum":["Understand","Build","Verify"]},
+                            "risk": {"type":"string", "enum":["low","medium","high"]},
+                            "writesFiles": {"type":"boolean"},
+                            "dependsOn": {"type":"array", "items":{"type":"string"}, "description":"Ids of tasks that must be accepted first."},
+                            "acceptanceCriteria": {"type":"array", "items":{"type":"string"}, "description":"How a reviewer knows it is done."}
+                        },
+                        "required":["id","title","phase"],
+                        "additionalProperties":false
+                    }
+                }
+            },
+            "required":["title","intent","tasks"],
+            "additionalProperties":false
+        }
+    })
 }
 
 pub fn tool() -> Value {
@@ -198,7 +296,7 @@ pub async fn execute(
             .to_string()
     };
     let mission_id = match &request {
-        Request::List {} => None,
+        Request::List {} | Request::Plan { .. } => None,
         Request::Dispatch { mission_id, .. } | Request::Inspect { mission_id, .. } => {
             Some(mission_id)
         }
@@ -213,6 +311,44 @@ pub async fn execute(
         }
     }
     match request {
+        Request::Plan { title, intent, tasks } => {
+            // A worker inside a Mission plans nothing: its scope is its task.
+            if registration.parent_run_id.is_some() || registration.mission_id.is_some() {
+                return Err("Only a top-level Run may plan a Mission.".into());
+            }
+            if tasks.is_empty() {
+                return Err("A Mission needs at least one task.".into());
+            }
+            if tasks.len() > MAX_PLAN_TASKS {
+                return Err(format!(
+                    "A Mission carries at most {MAX_PLAN_TASKS} tasks — plan the first slice and keep the rest for a later Mission."
+                ));
+            }
+            let input = CreateMissionInput {
+                id: None,
+                title,
+                intent,
+                mode: MissionMode::Goal,
+                tasks: tasks.into_iter().map(PlanTaskInput::into_create).collect(),
+            };
+            // The draft lives beside the Run — in its own checkout, worktree
+            // or not — which is where the conversation's card reads and
+            // approves it; the coordinator rule above then finds it first.
+            let plan_root = local.root().to_string_lossy().to_string();
+            let bundle = {
+                let state = app.state::<MissionStoreState>();
+                let _guard = state
+                    .write_gate
+                    .lock()
+                    .map_err(|_| "Mission store is unavailable.".to_string())?;
+                do_create(&plan_root, input)?
+            };
+            Ok(json!({"schemaVersion":1,"action":"plan","missionId":bundle.mission.id,
+                "title":bundle.mission.title,"approved":false,
+                "tasks":bundle.tasks.iter().map(|t| json!({"taskId":t.id,"title":t.title,
+                    "phase":t.phase,"dependencies":t.dependencies})).collect::<Vec<_>>(),
+                "next":"The operator approves this plan on the conversation's card; until then nothing runs. Tell them what the plan covers in two or three lines and stop."}))
+        }
         Request::List {} => {
             let missions = list_missions(&root)?.into_iter()
                 .filter(|b| authorized(registration, &b.mission.id) && fold_runtime(b).approved)
@@ -344,6 +480,43 @@ mod tests {
             run_id: id.into(),
         }
     }
+    #[test]
+    fn plan_request_is_the_plan_action_with_draft_defaults() {
+        let request: Request = serde_json::from_value(json!({
+            "action":"plan","title":"Ship /mission","intent":"let Kit plan from chat",
+            "tasks":[
+                {"id":"map","title":"Map the seams","phase":"Understand"},
+                {"id":"tool","title":"Add plan_mission","phase":"Build","dependsOn":["map"],"risk":"high","writesFiles":true,
+                 "description":"tools.rs + orchestration.rs","acceptanceCriteria":["cargo test passes"]}
+            ]
+        }))
+        .unwrap();
+        let Request::Plan { tasks, .. } = request else { panic!("not a plan") };
+        let create: Vec<CreateMissionTaskInput> = tasks.into_iter().map(PlanTaskInput::into_create).collect();
+        // Every draft task is Goal mode with no route; risk defaults to medium.
+        assert!(matches!(create[0].mode, MissionMode::Goal));
+        assert!(matches!(create[0].risk, MissionTaskRisk::Medium));
+        assert_eq!(create[0].acceptance_criteria, vec!["The task outcome satisfies: Map the seams"]);
+        assert_eq!(create[1].id.as_deref(), Some("tool"));
+        assert_eq!(create[1].dependencies, vec!["map"]);
+        assert_eq!(create[1].body_markdown, "tools.rs + orchestration.rs");
+        assert_eq!(create[1].acceptance_criteria, vec!["cargo test passes"]);
+        assert!(matches!(create[1].risk, MissionTaskRisk::High));
+        // The model cannot smuggle a route or an actor through a task.
+        assert!(serde_json::from_value::<Request>(json!({"action":"plan","title":"t","intent":"i",
+            "tasks":[{"id":"a","title":"a","phase":"Build","dispatch":{"provider":"x"}}]})).is_err());
+    }
+
+    #[test]
+    fn plan_tool_schema_has_no_action_and_no_union() {
+        let tool = plan_tool();
+        assert_eq!(tool["name"], "plan_mission");
+        let schema = &tool["inputSchema"];
+        assert!(schema.get("oneOf").is_none() && schema.get("anyOf").is_none());
+        assert!(schema["properties"].get("action").is_none());
+        assert_eq!(schema["properties"]["tasks"]["maxItems"], MAX_PLAN_TASKS);
+    }
+
     #[test]
     fn old_completion_never_satisfies_a_new_attempt() {
         let b = bundle(vec![

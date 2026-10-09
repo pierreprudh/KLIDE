@@ -69,6 +69,8 @@ pub const ADVISOR_TOOL: &str = "consult_advisor";
 pub const RUN_COMMAND_TOOL: &str = "run_command";
 /// Launches a Mission from inside a Run — a Goal-only coordination tool.
 pub const MISSION_ORCHESTRATE_TOOL: &str = "mission_orchestrate";
+/// Authors a draft Mission from a conversation; Goal-only like orchestration.
+pub const PLAN_MISSION_TOOL: &str = "plan_mission";
 
 /// Which Pause ceremony a Pause entry runs. Tool identity is registry data:
 /// the run loop dispatches on this, never on a tool-name literal.
@@ -100,6 +102,7 @@ pub fn pause_flavor(name: &str) -> Option<PauseFlavor> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinationFlavor {
     Orchestrate,
+    PlanMission,
     List,
     Send,
     Wait,
@@ -111,6 +114,7 @@ pub fn coordination_flavor(name: &str) -> Option<CoordinationFlavor> {
     use crate::coordination::ops;
     match name {
         "mission_orchestrate" => Some(CoordinationFlavor::Orchestrate),
+        PLAN_MISSION_TOOL => Some(CoordinationFlavor::PlanMission),
         ops::AGENT_LIST => Some(CoordinationFlavor::List),
         ops::AGENT_SEND => Some(CoordinationFlavor::Send),
         ops::AGENT_WAIT => Some(CoordinationFlavor::Wait),
@@ -900,6 +904,13 @@ fn registry() -> Vec<ToolEntry> {
             run_read: None,
             run_write_preview: None,
             summary: |_| "coordinate approved Mission".into(),
+        },
+        ToolEntry {
+            kind: ToolKind::Coordination,
+            schema: function_schema(&crate::missions::orchestration::plan_tool()),
+            run_read: None,
+            run_write_preview: None,
+            summary: |_| "plan a Mission".into(),
         },
         ToolEntry {
             kind: ToolKind::Coordination,
@@ -4699,7 +4710,7 @@ mod tests {
                 (_, None) => {}
             }
         }
-        assert_eq!(seen.len(), 6, "expected six native coordination Tools");
+        assert_eq!(seen.len(), 7, "expected seven native coordination Tools: five peers, orchestrate, plan");
         assert!(tool_allowed_in_mode(
             &AgentMode::Plan,
             ToolKind::Coordination

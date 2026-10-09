@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { groupToolRuns, pairToolResults, toolRunLabel } from "./toolRuns";
+import { groupToolRuns, pairToolResults, toolRunLabel, PLAN_MISSION_TOOL } from "./toolRuns";
 
 const call = (name: string): Msg => ({
   role: "assistant",
@@ -88,6 +88,23 @@ describe("groupToolRuns", () => {
     const msgs = [call("Bash"), result("Bash"), call("Read"), result("Read"), call("Bash"), result("Bash"), call("Grep"), result("Grep")];
 
     expect(groupToolRuns(msgs)[0].names).toEqual(["Bash", "Read", "Grep"]);
+  });
+
+  it("ends a run at a call that draws a card — the plan is the agent speaking", () => {
+    // Four reads, then plan_mission: the card the planner's receipt draws must
+    // not sit inside "5 tool calls" with the reads it followed.
+    const msgs = [asks("plan it"), ...burst("read_file", 4), call(PLAN_MISSION_TOOL), result(PLAN_MISSION_TOOL)];
+    const runs = groupToolRuns(msgs, pairToolResults(msgs));
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ start: 1, end: 9, calls: 4 });
+  });
+
+  it("keeps a delegation out of a run, so the watched row stays in view", () => {
+    const msgs = [asks("go"), ...burst("Bash", 3), call("spawn_subagent"), result("spawn_subagent"), ...burst("Bash", 3)];
+    const runs = groupToolRuns(msgs, pairToolResults(msgs));
+
+    expect(runs.map((r) => [r.start, r.end])).toEqual([[1, 7], [9, 15]]);
   });
 
   it("does not stack what was never a wall", () => {

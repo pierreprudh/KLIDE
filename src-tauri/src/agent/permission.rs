@@ -121,7 +121,8 @@ impl GateSubject {
             return Ok(());
         }
         let Some(kind) = kind else { return Ok(()) };
-        let mission_ok = name != tools::MISSION_ORCHESTRATE_TOOL || self.mode == AgentMode::Goal;
+        let mission_tool = name == tools::MISSION_ORCHESTRATE_TOOL || name == tools::PLAN_MISSION_TOOL;
+        let mission_ok = !mission_tool || self.mode == AgentMode::Goal;
         if mission_ok && tools::tool_allowed_in_mode(&self.mode, kind) {
             Ok(())
         } else {

@@ -47,14 +47,14 @@ pub struct MissionStoreState {
     reconciled_workspaces: Mutex<HashSet<String>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MissionMode {
     Plan,
     Goal,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MissionTaskRisk {
     Low,
@@ -62,7 +62,7 @@ pub enum MissionTaskRisk {
     High,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum MissionTaskPhase {
     Understand,
     Build,

@@ -808,13 +808,22 @@ where
         )));
     };
 
-    if flavor == tools::CoordinationFlavor::Orchestrate {
+    if matches!(flavor, tools::CoordinationFlavor::Orchestrate | tools::CoordinationFlavor::PlanMission) {
         // Enforce at execution too: a hallucinated tool name cannot let a
         // Chat/Plan Run launch a Goal worker indirectly.
         if !matches!(ctx.request.mode, AgentMode::Goal) {
             return Ok(coordination_tool_error("Mission orchestration requires Goal mode."));
         }
-        let request = match serde_json::from_value(call.input.clone()) {
+        let planning = flavor == tools::CoordinationFlavor::PlanMission;
+        // `plan_mission` is the `plan` action under its own name: the schema
+        // the model saw has no `action`, so it is set here, never by the model.
+        let mut input = call.input.clone();
+        if planning {
+            if let serde_json::Value::Object(map) = &mut input {
+                map.insert("action".into(), serde_json::Value::String("plan".into()));
+            }
+        }
+        let request = match serde_json::from_value(input) {
             Ok(request) => request,
             Err(error) => return Ok(coordination_tool_error(format!("Invalid Mission request: {error}"))),
         };
@@ -824,9 +833,25 @@ where
             result = receiver => result.map_err(|_| "Mission host ended without responding.".to_string()).and_then(|r| r),
         };
         return Ok(match response {
-            Ok(value) => ToolOutcome::Produced(ToolResult {
-                ok: true, content: serde_json::to_string_pretty(&value).unwrap_or_default(), metadata: Some(value),
-            }),
+            Ok(mut value) => {
+                if planning {
+                    // The route the card offers by default: the pair this
+                    // very Run resolved to (auto is concrete by now), as a
+                    // Delegate worker when the provider is a CLI, else the
+                    // Harness; edits reviewed unless this Run auto-applies.
+                    let provider = ctx.request.provider.clone();
+                    let worker_kind = if crate::delegate::lookup(&provider).is_some() { "delegate" } else { "harness" };
+                    value["route"] = serde_json::json!({
+                        "workerKind": worker_kind,
+                        "provider": provider,
+                        "model": ctx.request.model.clone(),
+                        "requireDiffReview": ctx.request.require_diff_review.unwrap_or(true),
+                    });
+                }
+                ToolOutcome::Produced(ToolResult {
+                    ok: true, content: serde_json::to_string_pretty(&value).unwrap_or_default(), metadata: Some(value),
+                })
+            }
             Err(error) => coordination_tool_error(error),
         });
     }
