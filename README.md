@@ -142,10 +142,18 @@ Once Klide opens:
 
 1. Open a workspace folder
 2. Open the AI panel and select a provider
-3. Press `Tab` to switch between `Chat`, `Plan`, and `Goal`
+3. Press `Tab` in the composer to switch between `Plan` and `Work`
 4. Open Mission Control to follow active and completed work
 
 `⌘P` jumps to a file, `⌘⇧P` opens the command palette, and `⌘/` shows the full shortcut cheatsheet.
+
+One task, end to end:
+
+1. Open a folder, open the AI panel, and select `Ollama` in the provider selector
+2. Leave the composer's `+` menu on `Work` — the default — or press `Tab` to reach `Plan`
+3. Describe the change and press `↵`
+4. The mode note under the composer reads `reviewing edits`: `Validate` applies the edit, `Cancel` drops it, and `⤢` opens the changes in the editor
+5. Press `⌘⇧G` to see the applied edit in `Git Review`, or open `Mission Control` to follow the run
 
 ## Use the Klide model
 
