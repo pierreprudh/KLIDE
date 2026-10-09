@@ -1301,7 +1301,7 @@ export function AiPanel({
       // once the answer it was gathering for arrives.
       const working = streaming && run.end === msgs.length;
       const open = openToolRuns.has(run.start) || working;
-      const { thought, count } = toolRunLabel(run);
+      const { thought, count, names } = toolRunLabel(run);
       // When a turn opens with tool work, the message wearing the agent's mark
       // is the one this row folds away — and a response with no mark reads as
       // nobody's. The row wears it instead, open or closed, and the message
@@ -1339,6 +1339,7 @@ export function AiPanel({
             <ToolRunRow
               thought={thought}
               count={count}
+              names={names}
               expanded={open}
               onToggle={() => toggleToolRun(run.start)}
             />

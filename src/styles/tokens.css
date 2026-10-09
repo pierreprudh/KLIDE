@@ -2429,6 +2429,30 @@ textarea.klide-diff-comment-input:focus-visible {
   transition: grid-template-rows var(--motion-slow) var(--ease-out);
 }
 
+/* The folded row dims a step under the pointer, like every other quiet
+   control, and the tool names it keeps off the line fade in beside the count
+   — a hover reveal, the same move the message actions make. They sit in the
+   row from the start so nothing shifts when they appear. */
+.klide-tool-run-row {
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.klide-tool-run-row:hover {
+  opacity: 0.82;
+}
+.klide-tool-run-names {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: var(--fg-dim);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.klide-tool-run-row:hover .klide-tool-run-names,
+.klide-tool-run-row:focus-visible .klide-tool-run-names {
+  opacity: 1;
+}
+
 .klide-tool-run-body[data-open="true"] {
   grid-template-rows: 1fr;
 }
