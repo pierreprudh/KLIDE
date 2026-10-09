@@ -430,12 +430,12 @@ export type AttachedResult = { msg: Extract<Msg, { role: "tool" }>; active: bool
 // prose-free stretch gets from AiPanel. The sentence is the agent explaining
 // itself; the rows are the machinery it explained. Open while the work is
 // still running, so the only thing moving on screen is never hidden.
-function InlineToolRun({ count, names, working, children }: { count: string; names: string; working: boolean; children: ReactNode }) {
+function InlineToolRun({ count, working, children }: { count: string; working: boolean; children: ReactNode }) {
   const [opened, setOpened] = useState(false);
   const open = opened || working;
   return (
     <>
-      <ToolRunRow count={count} names={names} expanded={open} onToggle={() => setOpened((was) => !was)} />
+      <ToolRunRow count={count} expanded={open} onToggle={() => setOpened((was) => !was)} />
       <div className="klide-tool-run-body" data-open={open ? "true" : "false"}>
         <div>{children}</div>
       </div>
@@ -591,23 +591,23 @@ function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
   );
 }
 
-// The one row a stretch of tool work collapses to. It wears the same icon and
-// mono type as the rows it stands in for, so opening it changes the amount on
+// The one row a stretch of tool work collapses to. It wears the same mono
+// type as the rows it stands in for, so opening it changes the amount on
 // screen and nothing else — a summary that looked like a different kind of
 // object would read as a new concept rather than as the same rows, folded.
+// Two lines when the fold knows how long it took: the time first, in the
+// turn header's own words, and the count under it a step quieter — the
+// count is what the time was spent on, not a second headline.
 export function ToolRunRow({
   thought,
   count,
-  names,
   expanded,
   onToggle,
 }: {
-  /** The reasoning folded in with the calls — "Thought for 6.3s". It leads
-   *  the row because it is what the reader last saw happening: the thought
-   *  came first, the calls were what it decided. */
+  /** The time folded in with the calls — "Thought for 6.3s" / "Worked for
+   *  41.0s". It leads because it is what the reader last saw happening. */
   thought?: string;
   count: string;
-  names: string;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -618,14 +618,13 @@ export function ToolRunRow({
       aria-expanded={expanded}
       style={{
         display: "flex",
-        alignItems: "center",
+        alignItems: "flex-start",
         gap: 8,
         width: "100%",
         // The row that hosts this owns its spacing and its gutter — a margin
         // here would push the text off the mark sitting beside it. The 22px
-        // box matches that mark so the two centre on the same line.
+        // first line matches that mark so the two centre on the same line.
         margin: 0,
-        minHeight: 22,
         padding: 0,
         border: "none",
         background: "transparent",
@@ -645,6 +644,7 @@ export function ToolRunRow({
         style={{
           display: "grid",
           placeItems: "center",
+          height: 22,
           color: "var(--fg-subtle)",
           flexShrink: 0,
           // Closed points down, at the rows it will bring; open points up, at
@@ -673,33 +673,36 @@ export function ToolRunRow({
           <path d="M9 5l7 7-7 7" />
         </svg>
       </span>
-      <span
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: 11.5,
-          // Same one-step-dimmer recipe as the rows it folds away (see
-          // ToolCallRow): the summary is still tool machinery, not prose.
-          color: "var(--fg-subtle)",
-          fontWeight: 500,
-          flexShrink: 0,
-        }}
-      >
-        {thought ? `${thought} · ${count}` : count}
-      </span>
-      {names && (
+      <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         <span
           style={{
             fontFamily: "var(--font-mono)",
             fontSize: 11.5,
-            color: "var(--fg-dim)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            lineHeight: "22px",
+            // Same one-step-dimmer recipe as the rows it folds away (see
+            // ToolCallRow): the summary is still tool machinery, not prose.
+            color: "var(--fg-subtle)",
+            fontWeight: 500,
           }}
         >
-          {names}
+          {thought ?? count}
         </span>
-      )}
+        {thought && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              lineHeight: 1.5,
+              color: "var(--fg-subtle)",
+              // The same quiet a closed thought-process summary sits at.
+              opacity: 0.55,
+              margin: "-3px 0 2px",
+            }}
+          >
+            {count}
+          </span>
+        )}
+      </span>
     </button>
   );
 }
@@ -1495,12 +1498,10 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageB
             <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} />
           ));
           if (!visibleContent || calls.length < MIN_STACKED_CALLS) return rows;
-          const names: string[] = [];
-          for (const tc of calls) if (!names.includes(tc.name)) names.push(tc.name);
-          const label = toolRunLabel({ start: 0, end: 0, calls: calls.length, names });
+          const label = toolRunLabel({ calls: calls.length });
           const working = active || [...(results?.values() ?? [])].some((r) => r.active);
           return (
-            <InlineToolRun count={label.count} names={label.names} working={working}>
+            <InlineToolRun count={label.count} working={working}>
               {rows}
             </InlineToolRun>
           );

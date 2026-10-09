@@ -175,7 +175,6 @@ describe("a speaking turn with a wall of calls", () => {
     const html = speaking(7);
     expect(html).toContain("I&#x27;ll set up a todo list and read the code.");
     expect(html).toContain("7 tool calls");
-    expect(html).toContain("update_todo_list, glob");
     expect(html).toContain('data-open="false"');
     // the rows are still there, mounted under the fold
     expect(occurrences(html, "update_todo_list")).toBeGreaterThanOrEqual(6);
