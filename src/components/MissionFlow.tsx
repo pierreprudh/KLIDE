@@ -10,7 +10,7 @@
 // never the plan; dependency edits stay on the detail panel, which writes the
 // task's Markdown back. No pills, no dots, no shadows — a card is a hairline
 // box, a status is a word, a lit card is a ring.
-import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { layoutMission, type GraphTask } from "../agent/missionGraph";
 import type { MissionTaskStatus } from "../agent/missionHarness";
 import { presentMissionCardTone, toneColor } from "../runPresentation";
@@ -51,6 +51,17 @@ function markState(status: string): "todo" | "active" | "done" {
   return "todo";
 }
 
+function beginTransfer(node: SVGElement | null) {
+  (node as SVGAnimationElement | null)?.beginElement();
+}
+
+/** Animate actual handoffs, never replayed completed graphs on mount. */
+export function missionFlowTransfers(previous: Record<string, string>, current: Record<string, string>, edges: { from: string; to: string }[]): string[] {
+  const started = (status: string | undefined) => status === "running" || status === "validating" || status === "done";
+  return edges.filter(edge => current[edge.from] === "done" && started(current[edge.to]) && !started(previous[edge.to]))
+    .map(edge => `${edge.from}->${edge.to}`);
+}
+
 export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true }: MissionFlowProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
@@ -59,6 +70,24 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
   const [offsets, setOffsets] = useState<Record<string, { dx: number; dy: number }>>({});
   const drag = useRef<{ id: string; startX: number; startY: number; baseDx: number; baseDy: number; moved: boolean } | null>(null);
 
+  const [transfers, setTransfers] = useState<Record<string, number>>({});
+  const previousStatuses = useRef<Record<string, string> | null>(null);
+  const statusesKey = JSON.stringify(Object.fromEntries(tasks.map(task => [task.id, String(meta[task.id]?.status ?? "queued")])));
+  const edgesKey = JSON.stringify(tasks.map(task => ({ from: task.dependencies, to: task.id })));
+  useEffect(() => {
+    const current = JSON.parse(statusesKey) as Record<string, string>;
+    const graph = JSON.parse(edgesKey) as { from: string[]; to: string }[];
+    const edges = graph.flatMap(task => task.from.map(from => ({ from, to: task.to })));
+    if (previousStatuses.current) {
+      const changed = missionFlowTransfers(previousStatuses.current, current, edges);
+      if (changed.length) setTransfers(previous => {
+        const next = { ...previous };
+        changed.forEach(id => { next[id] = (next[id] ?? 0) + 1; });
+        return next;
+      });
+    }
+    previousStatuses.current = current;
+  }, [statusesKey, edgesKey]);
   const { nodes, edges } = layoutMission(tasks);
   const order = new Map(nodes.map((node) => [node.id, node]));
 
@@ -204,14 +233,17 @@ export function MissionFlow({ tasks, meta, selected, onSelect, draggable = true 
           const d = connector(edge);
           if (!d) return null;
           return (
-            <path
-              key={`${edge.from}->${edge.to}`}
+            <g key={`${edge.from}->${edge.to}`}><path
               d={d}
               fill="none"
               stroke={lit(edge) ? "var(--accent)" : "var(--fg-dim)"}
               strokeWidth={1.5}
               style={{ transition: "stroke 150ms var(--ease-out)" }}
             />
+            {transfers[`${edge.from}->${edge.to}`] && <circle key={transfers[`${edge.from}->${edge.to}`]} r={3} fill="var(--accent)" className="mission-flow-transfer">
+              <animateMotion ref={beginTransfer} path={d} dur="900ms" begin="indefinite" fill="freeze" />
+            </circle>}
+            </g>
           );
         })}
       </svg>
