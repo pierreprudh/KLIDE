@@ -9150,3 +9150,7 @@ button:focus-visible .menu-leadout {
 .mission-task-options .mission-task-check { padding-bottom:7px; }
 .mission-task-worker-heading { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--fg-subtle); border-top:1px solid var(--border); padding-top:12px; }
 .mission-task-worker-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr)); gap:10px; align-items:start; }
+
+.mission-flow-transfer { animation:mission-flow-transfer 900ms ease-out both; }
+@keyframes mission-flow-transfer { 0% { opacity:0; } 15%,75% { opacity:0.85; } 100% { opacity:0; } }
+@media (prefers-reduced-motion:reduce) { .mission-flow-transfer { display:none; animation:none; } }
