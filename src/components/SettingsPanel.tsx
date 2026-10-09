@@ -1720,8 +1720,8 @@ export function SettingsPanel({
 
                   {/* Eyes — who describes a photo for a model that cannot see one */}
                   <Row
-                    title="Eyes model"
-                    description="Which model describes an image when the model you're talking to can't see it. Automatic tries an installed local vision model first (the picture stays on this machine), then a hosted model you have a key for. Describing happens once per turn, before the message goes out, and the thread says who looked. Subscription CLIs can't be eyes yet."
+                    title="Eyes model (OCR)"
+                    description="Which model reads an image (OCR) when the model you're talking to can't see it: text, screenshots, diagrams, photos. Automatic tries an installed local vision model first (the picture stays on this machine), then a hosted model you have a key for. Describing happens once per turn, before the message goes out, and the thread says who looked. Subscription CLIs can't be eyes yet."
                     control={
                       <ModelPairControl
                         label="Eyes"

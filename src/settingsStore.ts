@@ -403,7 +403,7 @@ export const SETTINGS = {
       { label: "Command timeout", section: "ai", keywords: "command timeout shell run seconds" },
       { label: "Test after edit", section: "ai", keywords: "test verify after edit syntax check command" },
       { label: "Auto-draft memory on run done", section: "ai", keywords: "memory draft auto note handoff summarize pending review" },
-      { label: "Eyes model", section: "ai", keywords: "eyes vision image photo screenshot describe blind model" },
+      { label: "Eyes model (OCR)", section: "ai", keywords: "eyes ocr vision image photo screenshot read text describe blind model" },
     ],
   } as SettingDef<HarnessSettings>,
 } as const;
