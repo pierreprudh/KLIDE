@@ -35,6 +35,10 @@ export type ToolRun = {
   /** How long the model reasoned across the run, summed from each turn's
    *  measured span. Absent when no turn measured anything. */
   thinkingMs?: number;
+  /** Wall time across the run — each turn's span since the boundary before
+   *  it, tool execution included. The fallback word when the reasoning was
+   *  never streamed and so never timed (a Delegate turn lands whole). */
+  workedMs?: number;
 };
 
 /** Below this a run is left alone: two rows are not a wall, and hiding them
@@ -129,11 +133,15 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     if (start < 0) return;
     let calls = 0;
     let thinkingMs: number | undefined;
+    let workedMs: number | undefined;
     const names: string[] = [];
     for (let i = start; i < end; i++) {
       const m = msgs[i];
       calls += callsIn(m);
-      if (m.role === "assistant" && m.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + m.thinkingMs;
+      if (m.role === "assistant") {
+        if (m.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + m.thinkingMs;
+        if (m.meta?.ms !== undefined) workedMs = (workedMs ?? 0) + m.meta.ms;
+      }
       for (const name of namesIn(m)) {
         if (!names.includes(name)) names.push(name);
       }
@@ -141,7 +149,7 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     // A run of results with no calls in view (the calls were compacted away)
     // is still a run — count the rows so the summary is never "0 tool calls".
     if (calls === 0) calls = end - start;
-    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, names, thinkingMs });
+    if (calls >= MIN_STACKED_CALLS) runs.push({ start, end, calls, names, thinkingMs, workedMs });
     start = -1;
   };
   for (let i = 0; i < msgs.length; i++) {
@@ -162,13 +170,20 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
 
 
 /** What the collapsed row says. Three names is enough to tell one run from
- *  another; past that the count is the information. `thought` is the
- *  reasoning the fold put away, in the words a single turn's header uses. */
+ *  another; past that the count is the information. `thought` is the time
+ *  the fold put away: the reasoning span in a turn header's own words when
+ *  one was measured, else the wall time the run took — "Worked for 41s" —
+ *  because a row that says only "35 tool calls" over five thoughts reads as
+ *  if the agent never reasoned at all. */
 export function toolRunLabel(run: ToolRun): { thought?: string; count: string; names: string } {
   const shown = run.names.slice(0, 3);
   const rest = run.names.length - shown.length;
   return {
-    thought: run.thinkingMs ? `Thought for ${formatElapsed(run.thinkingMs)}` : undefined,
+    thought: run.thinkingMs
+      ? `Thought for ${formatElapsed(run.thinkingMs)}`
+      : run.workedMs
+        ? `Worked for ${formatElapsed(run.workedMs)}`
+        : undefined,
     count: `${run.calls} tool call${run.calls === 1 ? "" : "s"}`,
     names: rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", "),
   };

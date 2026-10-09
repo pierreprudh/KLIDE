@@ -111,7 +111,17 @@ describe("groupToolRuns", () => {
   });
 
   it("leaves the span unknown when no turn measured one", () => {
-    expect(groupToolRuns([asks("go"), ...burst("Bash", 3)])[0].thinkingMs).toBeUndefined();
+    const [run] = groupToolRuns([asks("go"), ...burst("Bash", 3)]);
+    expect(run.thinkingMs).toBeUndefined();
+    expect(run.workedMs).toBeUndefined();
+  });
+
+  it("sums the wall time of the turns, for runs whose reasoning was never timed", () => {
+    const landed = (ms: number): Msg => ({ role: "assistant", content: "", thinking: "whole", meta: { ms }, toolCalls: [{ name: "Bash", args: {} }] });
+    const [run] = groupToolRuns([asks("go"), landed(20_000), result("Bash"), landed(21_000), result("Bash"), call("Bash"), result("Bash")]);
+
+    expect(run.workedMs).toBe(41_000);
+    expect(run.thinkingMs).toBeUndefined();
   });
 });
 
@@ -130,6 +140,12 @@ describe("toolRunLabel", () => {
   it("leads with the thinking it folded away, in a turn header's words", () => {
     expect(toolRunLabel({ start: 0, end: 9, calls: 11, names: ["list_dir"], thinkingMs: 6300 }).thought).toBe("Thought for 6.3s");
     expect(toolRunLabel({ start: 0, end: 9, calls: 11, names: ["list_dir"] }).thought).toBeUndefined();
+  });
+
+  it("falls back to the wall time when the reasoning was never timed", () => {
+    expect(toolRunLabel({ start: 0, end: 9, calls: 35, names: ["list_dir"], workedMs: 41_000 }).thought).toBe("Worked for 41.0s");
+    // A measured reasoning span wins: it is the more specific claim.
+    expect(toolRunLabel({ start: 0, end: 9, calls: 35, names: ["list_dir"], thinkingMs: 6300, workedMs: 41_000 }).thought).toBe("Thought for 6.3s");
   });
 });
 
