@@ -9,11 +9,12 @@
 // elsewhere clears the card here too, and answers through the same Rust
 // commands the panel uses. Nothing here decides anything on its own.
 import { useEffect, useRef, useState } from "react";
-import { readAgentRunEvents, reattachAgentRun, resolveDiff, resolvePermission } from "../../agent/client";
+import { readAgentRunEvents, reattachAgentRun, resolveDiff, resolvePermission, resolveUserQuestion } from "../../agent/client";
 import { pendingGatesFromEvents } from "../../agent/pendingGates";
 import type { AgentEvent, DiffProposal, PermissionRequest } from "../../agent/types";
 
 export type MissionGate =
+  | { kind: "question"; taskId: string; question: NonNullable<ReturnType<typeof pendingGatesFromEvents>["question"]> }
   | { kind: "permission"; taskId: string; request: PermissionRequest }
   | { kind: "diff"; taskId: string; proposal: DiffProposal };
 
@@ -41,14 +42,18 @@ export function useMissionGates(attempts: ReadonlyArray<{ taskId: string; runId:
     }
     for (const [runId, taskId] of wanted) {
       if (attached.current.has(runId)) continue;
-      attached.current.set(runId, () => {}); // claimed; replaced once attached
+      let ownDetach = () => {};
+      attached.current.set(runId, ownDetach); // claimed; replaced once attached
       const fold = () => {
+        if (attached.current.get(runId) !== ownDetach) return;
         const pending = pendingGatesFromEvents(events.current.get(runId) ?? []);
         const gate: MissionGate | null = pending.permission
           ? { kind: "permission", taskId, request: pending.permission }
           : pending.diff
             ? { kind: "diff", taskId, proposal: pending.diff }
-            : null;
+            : pending.question
+              ? { kind: "question", taskId, question: pending.question }
+              : null;
         setGates((current) => ({ ...current, [runId]: gate }));
       };
       void (async () => {
@@ -62,17 +67,19 @@ export function useMissionGates(attempts: ReadonlyArray<{ taskId: string; runId:
               fold();
             }
           });
-          if (!attached.current.has(runId)) {
+          if (attached.current.get(runId) !== ownDetach) {
             reattachment.detach();
             return;
           }
-          attached.current.set(runId, reattachment.detach);
+          ownDetach = reattachment.detach;
+          attached.current.set(runId, ownDetach);
           const snapshot = await readAgentRunEvents(runId);
+          if (attached.current.get(runId) !== ownDetach) return;
           snapshotLength = snapshot.length;
           events.current.set(runId, [...snapshot, ...buffered.filter(({ seq }) => seq >= snapshot.length).map(({ event }) => event)]);
           fold();
         } catch {
-          attached.current.delete(runId);
+          if (attached.current.get(runId) === ownDetach) { ownDetach(); attached.current.delete(runId); }
         }
       })();
     }
@@ -101,5 +108,7 @@ export function useMissionGates(attempts: ReadonlyArray<{ taskId: string; runId:
     });
   }
 
-  return { gates: open, answerPermission, answerDiff };
+  return { gates: open, answerPermission, answerDiff, answerQuestion: async (gate: Extract<MissionGate, { kind: "question" }>, answer: string) => {
+    await resolveUserQuestion({ runId: gate.question.runId, requestId: gate.question.requestId, answer });
+  } };
 }

@@ -2357,29 +2357,27 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
-/* Thought-process disclosure: the chevron flips up when the reasoning is
-   expanded. The block itself is borderless (a hairline left-rule carries the
-   body) so a long run reads as a calm timeline, not a stack of cards. */
-.klide-think[open] > summary .klide-think-chev {
-  transform: rotate(180deg);
-}
-
-/* Reasoning is optional reading: keep the disclosure faint and out of the way,
-   reveal it on hover/focus, and let it sit a touch brighter only while it is
-   actively streaming. */
+/* Thought-process disclosure: the same line as a folded tool run — label,
+   a chevron that turns down when open, a hairline under. Inside a fold's
+   body it is one row among the work and the rule goes. The block itself is
+   borderless (a hairline left-rule carries the body) so a long run reads as
+   a calm timeline, not a stack of cards. */
 .klide-think > summary {
-  opacity: 0.42;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
   transition: opacity var(--motion-fast) var(--ease-out);
 }
-.klide-think > summary:hover,
-.klide-think > summary:focus-visible,
-.klide-think[open] > summary {
-  opacity: 0.78;
+.klide-tool-run-body .klide-think > summary {
+  padding-bottom: 0;
+  border-bottom: none;
 }
-.klide-think.is-streaming > summary {
-  opacity: 0.85;
+.klide-think[open] > summary .klide-fold-chev {
+  transform: rotate(90deg);
 }
-/* The reasoning body reads as secondary too — faint by default, settling to a
+.klide-think > summary:hover {
+  opacity: 0.82;
+}
+/* The reasoning body reads as secondary — faint by default, settling to a
    comfortably readable level on hover/while open. */
 .klide-think > div {
   opacity: 0.6;
@@ -9134,3 +9132,23 @@ button:focus-visible .menu-leadout {
    the divider's ends. */
 .github-observer-sidebar .github-observer-content > :first-child { margin-inline:5px; }
 .github-observer-sidebar .github-observer-arrow { width:0; margin-left:4px; margin-right:-4px; }
+
+/* Mission task edits use the same quiet, compact control rhythm as the panel. */
+.mission-task-form > label, .mission-task-worker-grid > label,
+.mission-task-options > label:not(.mission-task-check) {
+  display:grid; gap:5px; color:var(--fg-subtle); font-size:11px;
+}
+.mission-task-form textarea { resize:vertical; min-height:54px; }
+.mission-task-form input:focus-visible, .mission-task-form textarea:focus-visible,
+.mission-task-form select:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
+.mission-task-hint { font-size:10.5px; color:var(--fg-dim); font-weight:400; }
+.mission-task-check { display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--fg-subtle); }
+.mission-task-check input { margin:0; accent-color:var(--accent); }
+.mission-task-options { display:flex; align-items:end; flex-wrap:wrap; gap:12px; }
+.mission-task-options .mission-task-check { padding-bottom:7px; }
+.mission-task-worker-heading { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--fg-subtle); border-top:1px solid var(--border); padding-top:12px; }
+.mission-task-worker-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr)); gap:10px; align-items:start; }
+
+.mission-flow-transfer { animation:mission-flow-transfer 900ms ease-out both; }
+@keyframes mission-flow-transfer { 0% { opacity:0; } 15%,75% { opacity:0.85; } 100% { opacity:0; } }
+@media (prefers-reduced-motion:reduce) { .mission-flow-transfer { display:none; animation:none; } }

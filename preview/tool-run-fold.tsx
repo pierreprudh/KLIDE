@@ -34,7 +34,7 @@ function Fold() {
   const pairing = pairToolResults(msgs);
   const [run] = groupToolRuns(msgs, pairing);
   const [open, setOpen] = useState(new URLSearchParams(location.search).get("open") === "1");
-  const { thought, count, names } = toolRunLabel(run);
+  const { label, count, names } = toolRunLabel(run);
   const row = (m: Msg, i: number) => {
     if (pairing.claimed.has(i)) return null;
     const mine = pairing.byCall.get(i);
@@ -51,7 +51,7 @@ function Fold() {
       <div style={{ display: "flex", gap: 10, margin: "14px 0 0" }}>
         <div aria-hidden style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, display: "grid", placeItems: "center" }}><KlideMark size={20} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <ToolRunRow thought={thought} count={count} names={names} expanded={open} onToggle={() => setOpen((v) => !v)} />
+          <ToolRunRow label={label} count={count} names={names} expanded={open} onToggle={() => setOpen((v) => !v)} />
         </div>
       </div>
       <div className="klide-tool-run-body" data-open={open ? "true" : "false"} inert={!open}>

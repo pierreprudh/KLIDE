@@ -1,3 +1,6 @@
+import { appendMissionReports } from "./ai/missionReports";
+import { MissionLibrary } from "./missionControl/MissionLibrary";
+import { listDurableMissions } from "../agent/durableMissions";
 import { useLlamaSetupMode, isSelectedLlamaProvider } from "../hooks/useLlamaSetupMode";
 import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
@@ -115,10 +118,10 @@ import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } fr
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon } from "../icons";
+import { AttachIcon, CloseIcon, MissionWorkflowIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
-import { PendingInboxRow, renderMessageBody, CompactionRow, ToolRunRow, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
+import { PendingInboxRow, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
@@ -823,6 +826,29 @@ export function AiPanel({
   const msgs = conversationSession.messages;
   const provider = conversationSession.provider;
   const model = conversationSession.model;
+  const [missionPresent, setMissionPresent] = useState(false);
+  // Completion is durable Mission state; delivery is a normal persisted chat
+  // message. Reopening the planning chat picks up missed reports once.
+  useEffect(() => {
+    setMissionPresent(false);
+    if (!workspaceRoot) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const read = async () => {
+      try {
+        const bundles = await listDurableMissions(workspaceRoot);
+        if (!live || conversationSessionRef.current.conversationId !== currentId) return;
+        const owned = bundles.filter((bundle) => bundle.mission.coordinatorRunId === currentId);
+        setMissionPresent(owned.length > 0);
+        if (conversationSessionRef.current.run.active) return;
+        const next = appendMissionReports(msgsRef.current, owned, currentId);
+        if (next !== msgsRef.current) setMsgs(next);
+      } catch (error) { console.warn("Mission report delivery failed", error); }
+      finally { if (live) timer = setTimeout(() => void read(), 1500); }
+    };
+    void read();
+    return () => { live = false; clearTimeout(timer); };
+  }, [workspaceRoot, currentId]);
   const currentForkedFrom = conversationSession.forkedFrom;
   // The mark for a response whose own turn carries no stamp — everything
   // stored before the fold started recording one. The thread's origin is the
@@ -1265,6 +1291,17 @@ export function AiPanel({
     }
     return owners;
   }, [toolRuns, msgs]);
+  // Which turns sit inside a fold, and which answers handed their reasoning
+  // to the fold that led to them (`ToolRun.answer`).
+  const foldedTurns = useMemo(() => {
+    const inRun = new Set<number>();
+    const answers = new Set<number>();
+    for (const run of toolRuns) {
+      for (let i = run.start; i < run.end; i++) inRun.add(i);
+      if (run.answer !== undefined) answers.add(run.answer);
+    }
+    return { inRun, answers };
+  }, [toolRuns]);
   const [openToolRuns, setOpenToolRuns] = useState<Set<number>>(() => new Set());
   function toggleToolRun(start: number) {
     setOpenToolRuns((prev) => {
@@ -1293,7 +1330,7 @@ export function AiPanel({
       // once the answer it was gathering for arrives.
       const working = streaming && run.end === msgs.length;
       const open = openToolRuns.has(run.start) || working;
-      const { thought, count, names } = toolRunLabel(run);
+      const { label, count, names } = toolRunLabel(run);
       // When a turn opens with tool work, the message wearing the agent's mark
       // is the one this row folds away — and a response with no mark reads as
       // nobody's. The row wears it instead, open or closed, and the message
@@ -1303,15 +1340,15 @@ export function AiPanel({
       const mark = startsResponse && first.role === "assistant" ? responseMark(first) : null;
       // The reasoning between the calls folds with them: it stays in its
       // place inside the body, so opening the row shows think → call → think
-      // in the order it happened, and the row carries the sum ("Thought for
-      // 6.3s") so a closed fold still says the agent reasoned, not only that
-      // it called tools. Hoisting every thought above the row stacked five
-      // half-second decisions into one deliberation with nothing between.
+      // in the order it happened. The answer's own thought is the last row
+      // of that body — the fold is everything before the reply, and the
+      // reply starts under the rule.
+      const answer = run.answer !== undefined ? msgs[run.answer] : undefined;
       out.push(
         <div
           key={`tool-run-${run.start}`}
           data-observer-row={run.start}
-          style={{ display: "flex", gap: 10, margin: startsResponse ? "14px 0 0" : "6px 0 0" }}
+          style={{ display: "flex", gap: 10, margin: startsResponse ? "14px 0 8px" : "6px 0 8px" }}
         >
           <div
             aria-hidden="true"
@@ -1329,7 +1366,7 @@ export function AiPanel({
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <ToolRunRow
-              thought={thought}
+              label={label}
               count={count}
               names={names}
               expanded={open}
@@ -1355,6 +1392,14 @@ export function AiPanel({
         >
           <div>
             {nodes.slice(run.start, run.end)}
+            {answer?.role === "assistant" && (
+              <div style={{ display: "flex", gap: 10, margin: "3px 0" }}>
+                <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <ThinkingBlock text={extractThinking(answer)} streaming={false} thinkingMs={answer.thinkingMs} />
+                </div>
+              </div>
+            )}
           </div>
         </div>,
       );
@@ -2907,6 +2952,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   // the column itself takes a switch. A parked question overrides it: that
   // card holds the run, and hiding the run's own question would strand it.
   const [sidePanelHidden, setSidePanelHidden] = useState(false);
+  useEffect(() => {
+    if (missionPresent) setSidePanelHidden(false);
+  }, [currentId, missionPresent]);
 
   // The result is not dismissible: what a run produced stays in the corner for
   // as long as the run is the latest one. The column's close folds it to its
@@ -3005,6 +3053,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     questionUp: pendingQuestion !== null,
     visualUp: latestVisuals !== null,
     observerUp: githubPresence.runId === currentId && githubPresence.present,
+    missionUp: missionPresent,
     hidden: sidePanelHidden,
     canvasWidth,
   });
@@ -4261,7 +4310,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               : null;
           const before = hoistedInbox ? msgs[i - 2] : prevMsg;
           const isResponseStart =
-            (!before || (before.role !== "assistant" && before.role !== "tool")) &&
+            (!!(m.role === "assistant" && m.missionReportId) || !before || (before.role !== "assistant" && before.role !== "tool")) &&
             // …unless a folded run's header is already wearing this turn's
             // mark, in which case this row draws the spacer and keeps the
             // column aligned without a second one.
@@ -4320,7 +4369,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i) })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
@@ -4630,6 +4679,11 @@ This user request requires workspace inspection. Before answering, you MUST call
             onPresenceChange={setPlanSlot}
           />
           )}
+          {missionPresent && <div style={{ pointerEvents: "auto", flexShrink: 0, alignSelf: column.planFolded ? "flex-end" : "stretch" }}>
+            {column.planFolded
+              ? <button type="button" className="github-observer-mark" aria-label="Show Mission" title="Mission" onClick={() => setSidePanelHidden(false)}><MissionWorkflowIcon size={22} /></button>
+              : <MissionLibrary workspaceRoot={workspaceRoot ?? null} coordinatorRunId={currentId} onOpenRun={onOpenRunInMissionControl} />}
+          </div>}
           {/* The result lives in the corner whether the column is open or
               folded — "a document or review should stay in icons" — and its
               own resting state is that icon. The card draws that mark itself

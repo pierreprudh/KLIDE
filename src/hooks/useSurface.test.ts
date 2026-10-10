@@ -95,15 +95,15 @@ describe("surfaceReducer — transition table", () => {
       ],
     ],
     [
-      { type: "open-overlay", view: "orchestrator" },
+      { type: "open-overlay", view: "runs" },
       // Overlays cover the base without disturbing it.
       [
-        { overlay: "orchestrator", base: { kind: "panels" } },
-        { overlay: "orchestrator", base: { kind: "focus" } },
-        { overlay: "orchestrator", base: { kind: "grid", gridId: "g1" } },
-        { overlay: "orchestrator", base: { kind: "panels" } },
-        { overlay: "orchestrator", base: { kind: "focus" } },
-        { overlay: "orchestrator", base: { kind: "grid", gridId: "g1" } },
+        { overlay: "runs", base: { kind: "panels" } },
+        { overlay: "runs", base: { kind: "focus" } },
+        { overlay: "runs", base: { kind: "grid", gridId: "g1" } },
+        { overlay: "runs", base: { kind: "panels" } },
+        { overlay: "runs", base: { kind: "focus" } },
+        { overlay: "runs", base: { kind: "grid", gridId: "g1" } },
       ],
     ],
     [
@@ -234,7 +234,6 @@ describe("surface predicates", () => {
   const FREE_S: Surface = { kind: "workbench", layout: { kind: "free" } };
   const GRID_S: Surface = { kind: "workbench", layout: { kind: "grid", gridId: "g1" } };
   const RUNS_S: Surface = { kind: "overlay", view: "runs" };
-  const ORCH_S: Surface = { kind: "overlay", view: "orchestrator" };
   const SETTINGS_S: Surface = { kind: "overlay", view: "settings" };
   const GIT_S: Surface = { kind: "overlay", view: "git-review" };
 
@@ -248,7 +247,6 @@ describe("surface predicates", () => {
     ["workbench free", FREE_S, false, true, true, true],
     ["workbench grid", GRID_S, false, true, true, true],
     ["overlay runs", RUNS_S, false, true, true, false],
-    ["overlay orchestrator", ORCH_S, false, true, true, false],
     ["overlay settings", SETTINGS_S, false, false, false, false],
     ["overlay git-review", GIT_S, false, true, false, false],
   ];

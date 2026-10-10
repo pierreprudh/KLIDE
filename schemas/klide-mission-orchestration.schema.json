@@ -306,6 +306,10 @@
         },
         "requireDiffReview": {
           "type": "boolean"
+        },
+        "autoApproveCommands": {
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false

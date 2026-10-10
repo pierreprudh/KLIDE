@@ -13,16 +13,30 @@ the Run (`.klide/missions/<id>/`, every task `dispatch: None`). The receipt
 names the Mission and the route this Run would give it (its own resolved
 provider and model, as a Delegate worker when the provider is a CLI). The
 conversation draws the draft as a card; **Approve and run** on that card is
-the operator's `mission_approve` with `autoStart`, which freezes the route
-into every task and hands the Mission to the supervisor. The card then follows
+the operator's `mission_approve` with `autoStart`, which freezes each chosen worker route
+into its task and hands the Mission to the supervisor. The card then follows
 the durable events until the Mission completes or parks, and offers the
 Accept / Reject verdict for a Delegate attempt in review. Nothing in the Tool
 can approve, route, dispatch or accept; a worker inside a Mission cannot plan.
 
 ## Workflow
 
-The operator creates and approves the Mission in Mission Control, freezing each
-task's worker kind, provider, model, and diff-review policy. The coordinator then
+The operator plans in a conversation with `/mission`, edits task details,
+acceptance criteria and dependencies on the card, and chooses each worker’s
+provider, model and diff-review policy before approval. Approval freezes those
+settings, including command approval. The operator can change execution policy
+on the card while a Mission runs: future tasks use the saved policy, active
+native workers receive the override, and newly auto-approved edit or command
+pauses are released. Switching back to Review affects subsequent edits and
+commands; it does not undo accepted changes. Full auto disables edit and command
+prompts for native workers; Delegate completion still requires operator
+acceptance. Old Mission snapshots default to prompting for commands. The card follows worker permissions, diff reviews and questions,
+offers Delegate verdicts and explicit retries for parked work, and opens each
+worker in Mission Control for inspection. Mission Control also lists saved
+Missions so plans remain reachable after their conversation closes. The
+separate Orchestrator console is no longer a navigation destination.
+
+The coordinator then
 uses the same tool through native Harness calls or MCP:
 
 ```json
@@ -89,8 +103,11 @@ evidence, not as a clean checkout. Review the actual branch/files before merging
   attempt. It never silently retries or starts another paid worker. Intentional
   retries remain in Mission Control, where Run is a request to the supervisor
   (`mission_request_task`), not a second dispatcher.
-- A newly dispatched worker records the coordinator as its parent in both the
-  Harness and Delegate launch paths.
+- `plan_mission` persists its authenticated planning Run as the coordinator.
+  Card-launched workers retain that parent in both Harness and Delegate paths,
+  so Mission Control groups them as subagents. Native workers share the
+  `spawn_subagent` child launcher and retain their Mission validation contract.
+  Legacy Missions without a recorded coordinator retain their existing lineage.
 - A coordinator in a linked worktree uses Missions authored there when present;
   otherwise it discovers Missions in the owning checkout. Existing worktree-local
   Missions are preserved.
@@ -129,3 +146,13 @@ Delegate messages remain pull-based through `agent_wait`. Automatic wakeups,
 recoverable delivery acknowledgements, and automatic integration are unchanged.
 These limits are surfaced here and in the tool description rather than being
 inferred from a process exiting or a terminal becoming idle.
+
+Completion writes an atomic `report.json` beside the Mission event log before
+recording `mission_completed`. The report uses accepted attempt transcripts,
+worker models, changed paths and recorded verification; it does not make another
+model call. Completed older Missions receive a report on the next listing.
+The planning chat delivers the report as a persisted assistant message, once
+per Mission, when idle or reopened. Its Focus side column follows the same
+Mission card and report as Mission Control. CLI attempts without a written
+Harness result show an explicit transcript link instruction rather than an
+invented answer.

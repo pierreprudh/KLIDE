@@ -34,6 +34,52 @@ function normalizeThinking(text: string): string {
   return text.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
 }
 
+/** The one disclosure line a conversation draws: a quiet label in the UI
+ *  face — "Worked for 19.4s", "Thought for 0.5s" — and a small chevron after
+ *  it that turns down when the line is open. Both the folded run and a
+ *  thought on its own are this line, so the reader learns one control. */
+export function FoldLine({ expanded, children, trailing }: { expanded: boolean; children: ReactNode; trailing?: ReactNode }) {
+  return (
+    <>
+      <span style={{ flexShrink: 0 }}>{children}</span>
+      <span
+        aria-hidden
+        className="klide-fold-chev"
+        style={{
+          display: "grid",
+          placeItems: "center",
+          width: 12,
+          height: 22,
+          flexShrink: 0,
+          opacity: 0.7,
+          // A disclosure that points at what it will show: right while the
+          // rows wait beside it, down once they are under it.
+          transform: expanded ? "rotate(90deg)" : "none",
+          transition: "transform var(--motion-slow) var(--ease-out)",
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M9 5l7 7-7 7" />
+        </svg>
+      </span>
+      {trailing}
+    </>
+  );
+}
+
+/** Shared by the fold row and a thought's summary: the same face, size,
+ *  colour, rule underneath. */
+export const foldLineStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  minWidth: 0,
+  fontFamily: "var(--font-ui)",
+  fontSize: 13,
+  lineHeight: "22px",
+  color: "var(--fg-subtle)",
+} as const;
+
 export function ThinkingBlock({
   text,
   streaming,
@@ -47,48 +93,21 @@ export function ThinkingBlock({
   /** Settled reasoning span; drawn as "Thought for 4.2s" when known. */
   thinkingMs?: number;
 }) {
+  // The same line as a folded run (`ToolRunRow`). On its own — a thought
+  // before an answer that called nothing — it carries the rule a fold row
+  // does; inside a fold's body it is one row among the work, and the rule
+  // goes (`.klide-tool-run-body .klide-think`, tokens.css).
   return (
-    <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: "2px 0 6px" }}>
-      <summary
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "1px 0",
-          cursor: "pointer",
-          listStyle: "none",
-          userSelect: "none",
-          color: "var(--fg-dim)",
-        }}
-      >
-        {streaming ? (
-          <ThinkingLiveLabel startedAt={startedAt} />
-        ) : (
-          <span style={{ fontSize: 10, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
-            {thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}
-          </span>
-        )}
-        <span
-          aria-hidden
-          className="klide-think-chev"
-          style={{
-            width: 8,
-            height: 8,
-            display: "grid",
-            placeItems: "center",
-            opacity: 0.7,
-            transition: "transform var(--motion-fast) var(--ease-out)",
-          }}
-        >
-          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </span>
+    <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: 0 }}>
+      <summary style={{ ...foldLineStyle, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+        <FoldLine expanded={false}>
+          {streaming ? <ThinkingLiveLabel startedAt={startedAt} /> : thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}
+        </FoldLine>
       </summary>
       <div
         style={{
-          margin: "5px 0 2px",
-          paddingLeft: 11,
+          margin: "8px 0 6px",
+          paddingLeft: 12,
           borderLeft: "1px solid var(--border)",
           fontSize: 12,
           lineHeight: 1.6,
@@ -109,10 +128,8 @@ function ThinkingLiveLabel({ startedAt }: { startedAt?: number }) {
   const elapsed = useElapsed(startedAt);
   return (
     <>
-      <span className="ai-working-label" style={{ fontSize: 10, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
-        Thinking
-      </span>
-      <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{elapsed}</span>
+      <span className="ai-working-label">Thinking</span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>{elapsed}</span>
     </>
   );
 }
@@ -437,7 +454,7 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
   const open = opened || working;
   return (
     <>
-      <ToolRunRow count={count} names={names} expanded={open} onToggle={() => setOpened((was) => !was)} />
+      <ToolRunRow label={count} count={count} names={names} expanded={open} onToggle={() => setOpened((was) => !was)} />
       <div className="klide-tool-run-body" data-open={open ? "true" : "false"}>
         <div>{children}</div>
       </div>
@@ -445,14 +462,14 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
   );
 }
 
-function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null }) {
+function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot, onOpenRun }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null; onOpenRun?: (runId: string) => void }) {
   // A planned Mission is drawn, not printed: the card reads the draft the
   // receipt names and carries the operator's approval. Until the receipt
   // lands, or if the call failed, the row is an ordinary tool call.
   // The card is the call: a "plan_mission <title>" row above a card whose
   // header says the same title read as two objects for one gesture.
   const receipt = name === PLAN_MISSION_TOOL && result && !result.active ? parsePlanMissionReceipt(result.msg.content) : null;
-  if (receipt) return <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} />;
+  if (receipt) return <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} />;
   const call =
     name === "spawn_subagent" ? (
       // The child is still going until a *real* report lands. The pending
@@ -600,32 +617,28 @@ function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
   );
 }
 
-// The one row a stretch of tool work collapses to. It wears the same mono
-// type as the rows it stands in for, so opening it changes the amount on
-// screen and nothing else — a summary that looked like a different kind of
-// object would read as a new concept rather than as the same rows, folded.
-// Two lines when the fold knows how long it took: the time first, in the
-// turn header's own words, and the count under it a step quieter — the
-// count is what the time was spent on, not a second headline. The tool
-// names are not printed; a pointer resting on the row is the question
-// "which tools?", and they fade in beside the count to answer it
-// (`.klide-tool-run-names`).
+/** The one line a stretch of work folds to — "Worked for 19.4s ›" over a
+ *  hairline, in the conversation's own face. The time is what the reader
+ *  last saw happening; the count and the tool names are the answer to a
+ *  pointer resting on the row ("which tools?") and fade in at its end
+ *  (`.klide-tool-run-names`), so nothing on the line is a sentence. */
 export function ToolRunRow({
-  thought,
+  label,
   count,
   names,
   expanded,
   onToggle,
 }: {
-  /** The time folded in with the calls — "Thought for 6.3s" / "Worked for
-   *  41.0s". It leads because it is what the reader last saw happening. */
-  thought?: string;
+  /** "Worked for 19.4s" / "Thought for 6.3s" — or the count, when nothing
+   *  was timed. */
+  label: string;
   count: string;
   /** Every distinct tool, comma-separated; shown on hover only. */
   names: string;
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const hover = [label === count ? null : count, names || null].filter(Boolean).join(" · ");
   return (
     <button
       type="button"
@@ -633,96 +646,32 @@ export function ToolRunRow({
       onClick={onToggle}
       aria-expanded={expanded}
       style={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 8,
+        ...foldLineStyle,
         width: "100%",
         // The row that hosts this owns its spacing and its gutter — a margin
         // here would push the text off the mark sitting beside it. The 22px
-        // first line matches that mark so the two centre on the same line.
+        // line matches that mark so the two centre on the same line.
         margin: 0,
-        padding: 0,
+        padding: "0 0 6px",
         border: "none",
+        borderBottom: "1px solid var(--border)",
         background: "transparent",
         cursor: "pointer",
         textAlign: "left",
-        minWidth: 0,
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          display: "grid",
-          placeItems: "center",
-          height: 22,
-          color: "var(--fg-subtle)",
-          flexShrink: 0,
-          // Closed points down, at the rows it will bring; open points up, at
-          // the row that will put them away — and it gets there by flipping,
-          // never by turning. Down and up are 180° apart, so a rotation sweeps
-          // the tip through pointing-right on every click: a lateral arc, on a
-          // control that has not moved. Interpolating scaleY from 1 to -1
-          // passes through a flat line instead, so the mark changes direction
-          // without travelling.
-          transform: expanded ? "rotate(90deg) scaleY(-1)" : "rotate(90deg) scaleY(1)",
-          // The same duration and curve as the box it opens: a chevron that
-          // finishes before the rows do reads as two separate events.
-          transition: "transform var(--motion-slow) var(--ease-out)",
-        }}
+      <FoldLine
+        expanded={expanded}
+        trailing={
+          hover ? (
+            <span className="klide-tool-run-names" style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              {hover}
+            </span>
+          ) : null
+        }
       >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.9"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M9 5l7 7-7 7" />
-        </svg>
-      </span>
-      <span style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
-        <span
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            gap: 8,
-            minWidth: 0,
-            fontFamily: "var(--font-mono)",
-            fontSize: 11.5,
-            lineHeight: "22px",
-            // Same one-step-dimmer recipe as the rows it folds away (see
-            // ToolCallRow): the summary is still tool machinery, not prose.
-            color: "var(--fg-subtle)",
-            fontWeight: 500,
-          }}
-        >
-          <span style={{ flexShrink: 0 }}>{thought ?? count}</span>
-          {!thought && <span className="klide-tool-run-names">{names}</span>}
-        </span>
-        {thought && (
-          <span
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              gap: 8,
-              minWidth: 0,
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              lineHeight: 1.5,
-              color: "var(--fg-subtle)",
-              // The same quiet a closed thought-process summary sits at.
-              opacity: 0.55,
-              margin: "-3px 0 2px",
-            }}
-          >
-            <span style={{ flexShrink: 0 }}>{count}</span>
-            <span className="klide-tool-run-names">{names}</span>
-          </span>
-        )}
-      </span>
+        {label}
+      </FoldLine>
     </button>
   );
 }
@@ -1413,9 +1362,16 @@ export function WorkingSince({ since }: { since?: number }) {
 type MessageBodyOptions = {
   /** Lets a delivered-agent-message row fetch its bodies from the journal. */
   workspaceRoot?: string | null;
+  onOpenRun?: (runId: string) => void;
   /** This turn's tool results, by call key (`toolCallKey`) — each call row
    *  draws its own underneath. See `pairToolResults`. */
   results?: Map<string, AttachedResult>;
+  /** The turn's reasoning is drawn elsewhere — folded into the run that led
+   *  to it (`ToolRun.answer`) — so the body must not draw it again. */
+  hideThinking?: boolean;
+  /** This turn already sits inside a conversation-level fold; its own rows
+   *  stay flat rather than folding a second time under the sentence. */
+  inRun?: boolean;
 };
 
 type MessageBodyProps = MessageBodyOptions & {
@@ -1423,7 +1379,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, inRun }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
   }
@@ -1498,7 +1454,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageB
       !!mergedThinking;
     return (
       <>
-        {mergedThinking && (
+        {mergedThinking && !hideThinking && (
           <ThinkingBlock text={mergedThinking} streaming={streaming} startedAt={m.thinkingStartedAt} thinkingMs={m.thinkingMs} />
         )}
         {visibleContent && (
@@ -1515,10 +1471,10 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results }: MessageB
             calls.map((tc, index) => ({ tc, key: toolCallKey(tc, index) })),
             ({ tc }) => (COORDINATION_TOOL_NAMES.has(tc.name) ? `${tc.name}\n${JSON.stringify(tc.args ?? null)}` : null),
           ).map(({ item: { tc, key }, count }) => (
-            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} />
+            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} />
           ));
           // A call that draws a card is the point of the turn, never folded.
-          if (!visibleContent || calls.length < MIN_STACKED_CALLS || calls.some((tc) => SPEAKING_TOOLS.has(tc.name))) return rows;
+          if (inRun || !visibleContent || calls.length < MIN_STACKED_CALLS || calls.some((tc) => SPEAKING_TOOLS.has(tc.name))) return rows;
           const names: string[] = [];
           for (const tc of calls) if (!names.includes(tc.name)) names.push(tc.name);
           const label = toolRunLabel({ calls: calls.length, names });
@@ -1571,6 +1527,9 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
       active={active}
       workspaceRoot={opts?.workspaceRoot}
       results={opts?.results}
+      onOpenRun={opts?.onOpenRun}
+      hideThinking={opts?.hideThinking}
+      inRun={opts?.inRun}
     />
   );
 }
