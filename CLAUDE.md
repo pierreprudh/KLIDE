@@ -219,7 +219,7 @@ Klide/
 │   │       ├── summarize.ts       Summarize-and-handoff + auto-skill detect
 │   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, refuse binaries (AttachmentTray.tsx: staged strip)
 │   │       ├── sight.ts           The composer's half of eyes for a blind model — may a photo be dropped, what the hint says, who looked
-│   │       ├── toolRuns.ts        Fold a prose-free stretch of tool messages into one openable row
+│   │       ├── toolRuns.ts        Everything before the answer folds to one line — "Worked for 19s ›" over a hairline, opened for the rows
 │   │       ├── CompletionCard.tsx A finished run's evidence — what changed, what it ran, documents to open
 │   │       ├── QuestionCard.tsx   A question the run is waiting on, answered in place
 │   │       ├── MissionCard.tsx    Plan approval, worker routes, gates and recovery in the conversation
