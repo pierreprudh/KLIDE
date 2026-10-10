@@ -620,6 +620,25 @@ pub fn catalog() -> Vec<DelegateFacts> {
         .collect()
 }
 
+/// One run of one delegate by the id the CLI itself knows it as — the
+/// `--resume` id. Only the candidate whose key *is* that id (or whose file is
+/// named by it) is parsed, so answering "which project was this session in?"
+/// for a `klide://resume` link costs one stat walk and one parse, never a
+/// page of transcripts. `None`: unknown delegate, or no such session on disk.
+pub fn find_run(env: &dyn Env, provider: &str, session_id: &str) -> Option<AgentRun> {
+    let delegate = ALL.iter().find(|d| d.id() == provider)?;
+    let stamp = delegate.parse_inputs_stamp(env);
+    let candidate = delegate.discover_runs(env).into_iter().find(|c| {
+        c.key == session_id
+            || std::path::Path::new(&c.key)
+                .file_stem()
+                .is_some_and(|stem| stem == session_id)
+    })?;
+    PARSED_RUNS.get_or_compute(std::path::Path::new(&candidate.key), stamp, |_| {
+        delegate.run_parser(env).parse(&candidate.key)
+    })
+}
+
 /// One page of recent runs across every delegate, newest first. Stat-and-sort
 /// is cheap; only the requested page (offset..offset+limit) is parsed, so big
 /// histories stay fast and the UI can lazily page in older runs.

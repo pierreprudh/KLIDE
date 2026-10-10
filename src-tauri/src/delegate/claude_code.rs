@@ -1486,6 +1486,19 @@ mod tests {
     }
 
     #[test]
+    fn find_run_answers_a_session_id_with_its_project() {
+        let home = temp_home("find-run");
+        let proj = home.join(".claude/projects/-Users-x-proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("abc-123.jsonl"), FIXTURE).unwrap();
+        let env = crate::delegate::home::test_env(&home);
+        let run = crate::delegate::find_run(&env, "claude-code", "abc-123").expect("the session is on disk");
+        assert_eq!(run.cwd.as_deref(), Some("/Users/x/proj"));
+        assert!(crate::delegate::find_run(&env, "claude-code", "abc-124").is_none());
+        assert!(crate::delegate::find_run(&env, "not-a-cli", "abc-123").is_none());
+    }
+
+    #[test]
     fn discovers_subagent_jsonl_files_under_parent_sessions() {
         let home = temp_home("discover-subagents");
         let proj = home.join(".claude/projects/-Users-x-proj");

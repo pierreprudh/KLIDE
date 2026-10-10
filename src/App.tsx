@@ -711,11 +711,27 @@ function App() {
   const clearFocusComposerSeed = useCallback(() => setFocusComposerSeed(null), []);
   /** A file link for a project that wasn't open: held until that project is. */
   const pendingLinkOpenRef = useRef<{ root: string; path: string; line: number | null } | null>(null);
+  /** A session link for a project that wasn't open: held until that project is. */
+  const pendingLinkResumeRef = useRef<{ root: string; provider: DelegateId; session: string } | null>(null);
   const deepLinkRef = useRef<(action: LinkAction) => void>(() => {});
   deepLinkRef.current = (action) => {
     if (action.kind === "project") {
       back();
       changeRoot(action.path);
+      return;
+    }
+    if (action.kind === "resume") {
+      const root = action.project ?? workspaceRoot;
+      if (!root) {
+        notify("Open a project first, then resume the session", { tone: "warn" });
+        return;
+      }
+      if (root === workspaceRoot) {
+        openRunInAiPanel({ provider: action.provider, workspaceRoot: root, resumeSessionId: action.session, cwd: root });
+      } else {
+        pendingLinkResumeRef.current = { root, provider: action.provider, session: action.session };
+        changeRoot(root);
+      }
       return;
     }
     if (action.kind === "new") {
@@ -758,6 +774,13 @@ function App() {
     if (!pending || pending.root !== workspaceRoot) return;
     pendingLinkOpenRef.current = null;
     void openLinkedFile(pending.root, pending.path, pending.line);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceRoot]);
+  useEffect(() => {
+    const pending = pendingLinkResumeRef.current;
+    if (!pending || pending.root !== workspaceRoot) return;
+    pendingLinkResumeRef.current = null;
+    openRunInAiPanel({ provider: pending.provider, workspaceRoot: pending.root, resumeSessionId: pending.session, cwd: pending.root });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceRoot]);
   useEffect(() => {

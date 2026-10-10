@@ -5,16 +5,28 @@
 
 import { useEffect, useState } from "react";
 import { askKitServiceInstalled, setAskKitService } from "../../ipc/servicesMenu";
+import { klideSkillInstalled, setKlideSkill } from "../../ipc/klideSkill";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
 import { CodeText, Panel, Row, Toggle } from "./controls";
 
 export function FromOtherApps() {
   const [installed, setInstalled] = useState<boolean | null>(null);
+  const [skill, setSkill] = useState<boolean | null>(null);
 
   useEffect(() => {
     askKitServiceInstalled().then(setInstalled).catch(() => setInstalled(false));
+    klideSkillInstalled().then(setSkill).catch(() => setSkill(false));
   }, []);
+
+  async function toggleSkill(enabled: boolean) {
+    try {
+      setSkill(await setKlideSkill(enabled));
+      if (enabled) notify("The /klide skill is in ~/.claude/skills — say “open this in Klide” to Claude Code", { tone: "success" });
+    } catch (e) {
+      notify(errMessage(e), { tone: "error" });
+    }
+  }
 
   async function toggle(enabled: boolean) {
     try {
@@ -35,8 +47,13 @@ export function FromOtherApps() {
         }
       />
       <Row
+        title="Continue in Klide from Claude Code"
+        description="Installs a /klide skill for Claude Code. In any terminal session, “open this conversation in Klide” resumes that same session in an AI panel, in its project."
+        control={<Toggle checked={skill === true} onChange={(v) => void toggleSkill(v)} label="Continue in Klide from Claude Code" />}
+      />
+      <Row
         title="Klide links"
-        description="For Raycast quicklinks, Shortcuts or a terminal: klide://new?prompt=…, klide://open?path=/file:42, klide://project?path=/folder. A link fills the composer; it never sends."
+        description="For Raycast quicklinks, Shortcuts or a terminal: klide://new?prompt=…, klide://open?path=/file:42, klide://project?path=/folder, klide://resume?provider=claude-code&session=<id>. A link fills the composer or resumes a session; it never sends."
         control={<CodeText>open "klide://new?prompt=hi"</CodeText>}
       />
     </Panel>

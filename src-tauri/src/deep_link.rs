@@ -1,7 +1,7 @@
 //! `klide://` links — how Raycast, a Shortcut, a terminal or the Services menu
 //! reach Klide.
 //!
-//! Three actions, all addressed by the URL's host:
+//! Four actions, all addressed by the URL's host:
 //!
 //! * `klide://new?prompt=…&project=/abs/dir` — start a conversation with the
 //!   composer **pre-filled**. Never sent: any web page can fire a `klide://`
@@ -9,6 +9,12 @@
 //! * `klide://open?path=/abs/file&line=42` — open a file in an editor tab
 //!   (`path=/abs/file:42` works too).
 //! * `klide://project?path=/abs/dir` — open a folder as the project.
+//! * `klide://resume?provider=claude-code&session=<id>` — continue a Delegate
+//!   CLI's own session in an AI panel (`claude --resume <id>`), in the project
+//!   that session ran in. The project is read from the session's transcript
+//!   unless `project=/abs/dir` names it. This is how "open this conversation
+//!   in Klide", said to Claude Code in a terminal, reaches Klide: the `/klide`
+//!   skill (klide_skill.rs) opens this link with `$CLAUDE_CODE_SESSION_ID`.
 //!
 //! Rust owns the rules: the URL is parsed and every path checked here, so the
 //! webview only ever receives an action that already made sense. macOS
@@ -43,12 +49,27 @@ pub enum LinkAction {
     Open { path: String, line: Option<u32>, project: Option<String> },
     /// A folder as the open project.
     Project { path: String },
+    /// A Delegate CLI's session, continued in an AI panel: `provider` is the
+    /// Delegate id (`claude-code`, `codex`, …), `session` the id that CLI
+    /// resumes by, `project` the folder it ran in when known.
+    Resume { provider: String, session: String, project: Option<String> },
 }
+
+/// A session id longer than this came from something other than a CLI.
+const MAX_SESSION_CHARS: usize = 128;
 
 static PENDING: Mutex<Vec<LinkAction>> = Mutex::new(Vec::new());
 
 /// Parse and check one link. The error is said to the user as-is.
 pub fn parse(raw: &str) -> Result<LinkAction, String> {
+    parse_with(raw, &|provider, session| {
+        crate::delegate::find_run(&crate::delegate::home::ProcessEnv, provider, session).and_then(|run| run.cwd)
+    })
+}
+
+/// `parse` with the session → project lookup injected: `session_project`
+/// answers which folder a Delegate session ran in, from its transcript.
+pub fn parse_with(raw: &str, session_project: &dyn Fn(&str, &str) -> Option<String>) -> Result<LinkAction, String> {
     let url = reqwest::Url::parse(raw.trim()).map_err(|_| format!("Not a Klide link: {raw}"))?;
     if url.scheme() != "klide" {
         return Err(format!("Not a Klide link: {raw}"));
@@ -83,6 +104,25 @@ pub fn parse(raw: &str) -> Result<LinkAction, String> {
         "project" => {
             let path = query("path").ok_or("klide://project needs a path")?;
             Ok(LinkAction::Project { path: existing(&path, Kind::Dir)? })
+        }
+        "resume" => {
+            let provider = query("provider").ok_or("klide://resume needs a provider")?;
+            if crate::delegate::lookup(&provider).is_none() {
+                return Err(format!("Klide can't resume `{provider}` sessions"));
+            }
+            let session = query("session").ok_or("klide://resume needs a session id")?;
+            if session.len() > MAX_SESSION_CHARS
+                || !session.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            {
+                return Err("That isn't a session id".to_string());
+            }
+            let project = match query("project") {
+                Some(p) => Some(existing(&p, Kind::Dir)?),
+                // The transcript knows the folder; a folder that is gone since
+                // leaves the session to resume in the project open now.
+                None => session_project(&provider, &session).and_then(|cwd| existing(&cwd, Kind::Dir).ok()),
+            };
+            Ok(LinkAction::Resume { provider, session, project })
         }
         other => Err(format!("Klide doesn't know the link action `{other}`")),
     }
@@ -285,6 +325,48 @@ mod tests {
             LinkAction::New { prompt, .. } => assert_eq!(prompt.len(), MAX_PROMPT_CHARS),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn resume_names_a_delegate_and_a_session_and_finds_the_project() {
+        let dir = temp("resume");
+        let found = |provider: &str, session: &str| {
+            assert_eq!((provider, session), ("claude-code", "abc-123"));
+            Some(dir.to_string_lossy().into_owned())
+        };
+        assert_eq!(
+            parse_with("klide://resume?provider=claude-code&session=abc-123", &found).unwrap(),
+            LinkAction::Resume {
+                provider: "claude-code".into(),
+                session: "abc-123".into(),
+                project: Some(dir.to_string_lossy().into()),
+            }
+        );
+        // An explicit project wins and is checked like any other folder.
+        let explicit = format!("klide://resume?provider=codex&session=s1&project={}", enc(dir.to_str().unwrap()));
+        match parse_with(&explicit, &|_, _| panic!("not asked")).unwrap() {
+            LinkAction::Resume { project, .. } => assert_eq!(project, Some(dir.to_string_lossy().into())),
+            other => panic!("{other:?}"),
+        }
+        // A session whose folder is gone still resumes, in the open project.
+        match parse_with("klide://resume?provider=opencode&session=ses_1", &|_, _| Some("/klide/no/such/dir".into()))
+            .unwrap()
+        {
+            LinkAction::Resume { project, .. } => assert_eq!(project, None),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn resume_refuses_what_is_not_a_delegate_session() {
+        let none = |_: &str, _: &str| None;
+        assert!(parse_with("klide://resume?provider=ollama&session=x", &none).unwrap_err().contains("ollama"));
+        assert!(parse_with("klide://resume?session=x", &none).unwrap_err().contains("provider"));
+        assert!(parse_with("klide://resume?provider=claude-code", &none).unwrap_err().contains("session"));
+        let shell = format!("klide://resume?provider=claude-code&session={}", enc("x; rm -rf /"));
+        assert!(parse_with(&shell, &none).unwrap_err().contains("session id"));
+        let long = format!("klide://resume?provider=claude-code&session={}", "a".repeat(MAX_SESSION_CHARS + 1));
+        assert!(parse_with(&long, &none).is_err());
     }
 
     #[test]
