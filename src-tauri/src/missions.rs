@@ -1013,6 +1013,7 @@ fn start_request_for(
         command_timeout_secs: None,
         test_after_edit_command: None,
         goal: None,
+        delegate_session: None,
         command_allowlist: vec![],
         require_diff_review: Some(dispatch.require_diff_review),
         auto_approve_commands: Some(dispatch.auto_approve_commands),

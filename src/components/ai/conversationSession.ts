@@ -40,6 +40,8 @@ export type ConversationSession = {
   workspaceRoot: string | null;
   branch: string | null;
   worktree: string | null;
+  /** The CLI session this thread continues, when it was carried in from one. */
+  delegateSession: string | null;
   forkedFrom: Conversation["forkedFrom"];
   run: {
     active: boolean;
@@ -118,6 +120,7 @@ export function restoreConversationSession({
       workspaceRoot,
       branch: workspaceBranch,
       worktree: null,
+      delegateSession: null,
       forkedFrom: null,
       run: { active: false, activity: null },
     };
@@ -178,6 +181,7 @@ export function restoreConversationSession({
     // A genuinely new identity still snapshots the live branch.
     branch: saved ? saved.branch ?? null : workspaceBranch,
     worktree: saved?.worktree ?? null,
+    delegateSession: saved?.delegateSession ?? null,
     forkedFrom: saved?.forkedFrom ?? null,
     run: { active: false, activity: null },
   };
@@ -208,6 +212,7 @@ export function conversationSessionReducer(
         originModel: undefined,
         branch: action.branch ?? null,
         worktree: null,
+        delegateSession: null,
         forkedFrom: null,
         run: { active: false, activity: null },
       };
@@ -225,6 +230,7 @@ export function conversationSessionReducer(
         originModel: conversation.model ?? undefined,
         branch: conversation.branch ?? null,
         worktree: conversation.worktree ?? null,
+        delegateSession: conversation.delegateSession ?? null,
         forkedFrom: conversation.forkedFrom ?? null,
         run: { active: false, activity: null },
       };
@@ -234,6 +240,9 @@ export function conversationSessionReducer(
         ...session,
         conversationId: action.conversationId,
         messages: session.messages.slice(0, action.messageIndex + 1),
+        // A branch keeps part of the thread; the CLI's session holds all of
+        // it, so continuing that session here would answer the wrong history.
+        delegateSession: null,
         forkedFrom: {
           conversationId: session.conversationId,
           title: deriveTitle(session.messages),
@@ -359,6 +368,7 @@ export function snapshotConversationSession(
     cwd: session.workspaceRoot,
     branch: session.branch,
     worktree: session.worktree,
+    delegateSession: session.delegateSession ?? null,
     forkedFrom: session.forkedFrom ?? null,
   };
 }

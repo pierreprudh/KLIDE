@@ -31,6 +31,7 @@ type StartRunRequest = {
   autoApproveCommands?: boolean;
   testAfterEditCommand?: string;
   goal?: { objective: string; maxRounds?: number };
+  delegateSession?: string;
   parentId?: string;
   missionId?: string;
   missionTaskId?: string;
@@ -92,6 +93,7 @@ export async function startAgentRun(
       autoApproveCommands: input.autoApproveCommands,
       testAfterEditCommand: input.testAfterEditCommand,
       goal: input.goal,
+      delegateSession: input.delegateSession,
       parentId: input.parentId,
       missionId: input.missionId,
       missionTaskId: input.missionTaskId,

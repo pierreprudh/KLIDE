@@ -989,6 +989,7 @@ export function AiPanel({
       cwd: workspaceRoot,
       branch: conversationGitMeta.branch,
       worktree: conversationGitMeta.worktree,
+      delegateSession: conversationSession.delegateSession ?? null,
       forkedFrom: currentForkedFrom ?? null,
     });
     if (streaming && last.streaming && last.count === msgs.length && last.meta === metaKey) return;
@@ -3210,6 +3211,10 @@ This user request requires workspace inspection. Before answering, you MUST call
       // Stars are the router's strongest preference and live only in this
       // renderer's storage, so an `auto` turn carries them along.
       preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
+      // A thread carried in from a CLI's own session continues *that* session
+      // on its first headless turn; the Rust side ignores it once the CLI has
+      // reported a newer id of its own.
+      delegateSession: conversationSession.delegateSession ?? undefined,
     };
   }
 

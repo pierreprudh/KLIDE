@@ -130,6 +130,18 @@ fn remember_session(key: &str, session: &str) {
     }
 }
 
+/// Start a conversation on a session the CLI already has (a `klide://resume`
+/// or `open_cli_session` target) — unless this conversation has already run a
+/// turn, whose reported id is newer than what it was opened with.
+fn seed_session(key: &str, seed: &str) -> bool {
+    let seed = seed.trim();
+    if seed.is_empty() || remembered_session(key).is_some() {
+        return false;
+    }
+    remember_session(key, seed);
+    true
+}
+
 fn forget_session(key: &str) {
     if let Ok(mut map) = sessions().lock() {
         map.remove(key);
@@ -152,6 +164,7 @@ pub async fn run_subscription_chat(
     messages: Vec<serde_json::Value>,
     workspace_root: Option<String>,
     run_id: Option<String>,
+    delegate_session: Option<String>,
     allowed_commands: Vec<String>,
     mcp: Option<super::McpWiring>,
     on_chunk: &Channel<StreamChunk>,
@@ -170,6 +183,13 @@ pub async fn run_subscription_chat(
     let key = run_id
         .filter(|id| !id.trim().is_empty())
         .map(|id| session_key(&id, adapter.id()));
+    // A conversation carried in from the CLI's own session starts *there*:
+    // the seed is remembered like a session the CLI reported, but only when
+    // nothing is remembered yet — once a turn has run, the CLI's newest id
+    // (a fork, a compaction) outranks what the conversation was opened with.
+    if let (Some(k), Some(seed)) = (key.as_deref(), delegate_session.as_deref()) {
+        seed_session(k, seed);
+    }
     // Resume only when this adapter actually honours the id — claiming to and
     // then ignoring it would silently drop every earlier turn, since a resuming
     // turn deliberately sends just the newest message.
@@ -810,6 +830,20 @@ mod tests {
         assert_eq!(latest_user_message(&[msg("assistant", "hi")]), "");
         assert_eq!(latest_user_message(&[]), "");
         assert_eq!(latest_user_message(&[msg("user", "   ")]), "");
+    }
+
+    #[test]
+    fn a_seed_starts_the_session_but_never_outranks_one_the_cli_reported() {
+        let key = session_key("seeded-run", "claude-code");
+        assert!(!seed_session(&key, "  "), "an empty seed is no seed");
+        assert!(seed_session(&key, "cli-session-1"));
+        assert_eq!(remembered_session(&key).as_deref(), Some("cli-session-1"));
+        // The same seed arrives on every turn of the conversation; after the
+        // CLI answered with a fork, the fork is the live session.
+        remember_session(&key, "cli-session-1-fork");
+        assert!(!seed_session(&key, "cli-session-1"));
+        assert_eq!(remembered_session(&key).as_deref(), Some("cli-session-1-fork"));
+        forget_session(&key);
     }
 
     #[test]
