@@ -230,7 +230,9 @@ function MissionCardBody({ receipt, workspaceRoot, onOpenRun, variant = "convers
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-          {bundle.tasks.map(task => { const attempt = view.rowById.get(task.id)?.lastAttempt; return task.dispatch ? <RouteMark key={task.id} route={task.dispatch} size={14} onOpen={attempt && onOpenRun ? () => onOpenRun(attempt.runId) : undefined} /> : null; })}
+          {bundle.tasks.filter((task, position, tasks) => task.dispatch && tasks.findIndex((other) =>
+            other.dispatch?.provider === task.dispatch?.provider && other.dispatch?.model === task.dispatch?.model
+          ) === position).map(task => <RouteMark key={task.id} route={task.dispatch} size={14} onOpen={() => setExpanded(true)} />)}
         </div>
         {completed ? <button className="github-observer-action" style={{ fontSize: 11, flexShrink: 0 }} onClick={() => setExpanded(true)}>View report</button> : !view.approved ? <Line dim>Awaiting approval in chat</Line> : null}
       </div>

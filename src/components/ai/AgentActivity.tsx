@@ -18,19 +18,22 @@ import { loadConversations } from "./storedConversations";
 import { METRIC_GAP, participantStats, workerRunStats } from "./participantStats";
 import { fetchAgentRunsCached, fetchRunOrigins, type Run, type RunOrigin } from "../../runs";
 
-function Participant({ name, mark, status, outcome, stats, children }: {
+type ParticipantRow = { name: string; mark: ReactNode; status: string; outcome?: "done" | "failed"; stats: () => string; children?: ReactNode };
+
+function Participant({ name, mark, status, outcome, stats, children, rows }: {
   name: string; mark: ReactNode; status: string;
   /** How the run ended, said by a mark at the end of the metrics line — the
    *  plan's own filled check for done, a muted cross for failed — never a
    *  word, never a colour on the card. Absent while it is live or for a peer. */
   outcome?: "done" | "failed";
-  stats: () => string; children?: ReactNode;
+  stats: () => string; children?: ReactNode; rows?: ParticipantRow[];
 }) {
   const menu = usePortalMenu({ closeOnOutsideClick: true, computePos: (rect) => ({
     left: Math.max(12, Math.min(rect.right - 380, window.innerWidth - 392)),
     bottom: window.innerHeight - rect.top + 10,
   }) });
-  const [line, setLine] = useState("");
+  const [lines, setLines] = useState<string[]>([]);
+  const entries = rows ?? [{ name, mark, status, outcome, stats, children }];
   useEffect(() => {
     if (!menu.open) return;
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { menu.close(); menu.triggerRef.current?.focus(); } };
@@ -40,16 +43,18 @@ function Participant({ name, mark, status, outcome, stats, children }: {
   return <>
     <button ref={menu.triggerRef} type="button" className="ai-agent-avatar" title={name}
       aria-label={`${name} — show stats`} aria-expanded={menu.open}
-      onClick={() => { if (menu.open) menu.close(); else { setLine(stats()); menu.openMenu(); } }}>{mark}</button>
+      onClick={() => { if (menu.open) menu.close(); else { setLines(entries.map((entry) => entry.stats())); menu.openMenu(); } }}>{mark}</button>
     {menu.open && menu.pos && createPortal(<div ref={menu.menuRef} className="ai-agent-stats-card" style={menu.pos} role="dialog" aria-label={`${name} stats${outcome ? `, ${outcome}` : ""}`}>
-      <div className="ai-agent-stats-heading"><span className="ai-agent-activity-name">{mark}<strong>{name}</strong></span><span>{status}</span>{children}</div>
-      <div className="ai-agent-stats-line" data-metrics="1" title={line.split(METRIC_GAP).join("  ")}>
-        {line.split(METRIC_GAP).map((part, i) => <span key={i}>{part}</span>)}
-        {outcome === "done" && <span aria-label="done" style={{ flexShrink: 0, display: "grid", placeItems: "center" }}><StepMark index={0} state="done" /></span>}
-        {outcome === "failed" && (
+      {entries.map((entry, rowIndex) => <div key={rowIndex} style={{ paddingTop: rowIndex ? 12 : 0 }}>
+      <div className="ai-agent-stats-heading"><span className="ai-agent-activity-name">{entry.mark}<strong>{entry.name}</strong></span><span>{entry.status}</span>{entry.children}</div>
+      <div className="ai-agent-stats-line" data-metrics="1" title={(lines[rowIndex] ?? "").split(METRIC_GAP).join("  ")}>
+        {(lines[rowIndex] ?? "").split(METRIC_GAP).map((part, i) => <span key={i}>{part}</span>)}
+        {entry.outcome === "done" && <span aria-label="done" style={{ flexShrink: 0, display: "grid", placeItems: "center" }}><StepMark index={0} state="done" /></span>}
+        {entry.outcome === "failed" && (
           <span aria-label="failed" style={{ flexShrink: 0, width: 14, height: 14, borderRadius: "50%", border: "1px solid var(--border-strong)", display: "grid", placeItems: "center", color: "var(--fg-dim)", fontSize: 9, lineHeight: 1 }}>×</span>
         )}
       </div>
+      </div>)}
     </div>, document.body)}
   </>;
 }
@@ -115,25 +120,33 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
       model: origin?.model ?? record?.model ?? worker?.model ?? null,
     });
   }
+  const participantGroups = new Map<string, string[]>();
+  for (const id of peers) {
+    const identity = index.get(id);
+    const label = conversationMark(identity?.model, identity?.provider, 16)?.label ?? "Klide agent";
+    participantGroups.set(label, [...(participantGroups.get(label) ?? []), id]);
+  }
   if (!peers.length && !shellAgents.length && !eyes.length) return null;
   return <div className="ai-agent-activity" key={key} role="group" aria-label="Agents in this conversation">
-    {peers.map((id) => {
-      const child = runs.some((r) => r.registration.runId === id);
-      const open = child && onOpenRun ? () => onOpenRun(id) : props.onOpen ? () => props.onOpen?.(id) : undefined;
-      return <Participant key={id} name={peerName(id, index)}
-        mark={conversationMark(index.get(id)?.model, index.get(id)?.provider, 16)?.node ?? <AgentMark size={16} />}
-        status={[child ? undefined : "Message peer", index.get(id)?.model].filter(Boolean).join(" ")}
-        outcome={(() => {
-          const state = runs.find((r) => r.registration.runId === id)?.state;
-          return state === "done" ? "done" : state === "failed" || state === "cancelled" ? "failed" : undefined;
-        })()}
-        stats={() => {
-          const record = child ? runRecords.get(id) : undefined;
-          if (record) return workerRunStats(record);
-          return participantStats(loadConversations<Conversation>().find((conversation) => conversation.id === id)?.msgs ?? []);
-        }}>
-        <button type="button" className="ai-agent-open" disabled={!open} onClick={open} aria-label={`Open ${peerName(id, index)}`} title={child && onOpenRun ? "Open in Mission Control" : "Open conversation"}><span aria-hidden="true">↗</span></button>
-      </Participant>;
+    {[...participantGroups.values()].map((ids) => {
+      const id = ids[0];
+      const rows: ParticipantRow[] = ids.map((peer) => {
+        const child = runs.some((run) => run.registration.runId === peer);
+        const state = runs.find((run) => run.registration.runId === peer)?.state;
+        const open = child && onOpenRun ? () => onOpenRun(peer) : props.onOpen ? () => props.onOpen?.(peer) : undefined;
+        return {
+          name: peerName(peer, index),
+          mark: conversationMark(index.get(peer)?.model, index.get(peer)?.provider, 16)?.node ?? <AgentMark size={16} />,
+          status: [child ? undefined : "Message peer", index.get(peer)?.model].filter(Boolean).join(" "),
+          outcome: state === "done" ? "done" : state === "failed" || state === "cancelled" ? "failed" : undefined,
+          stats: () => {
+            const record = child ? runRecords.get(peer) : undefined;
+            return record ? workerRunStats(record) : participantStats(loadConversations<Conversation>().find((conversation) => conversation.id === peer)?.msgs ?? []);
+          },
+          children: <button type="button" className="ai-agent-open" disabled={!open} onClick={open} aria-label={`Open ${peerName(peer, index)}`} title={`Open ${peerName(peer, index)}`}><span aria-hidden="true">↗</span></button>,
+        };
+      });
+      return <Participant key={id} {...rows[0]} name={rows.map((row) => row.name).join(", ")} rows={rows} />;
     })}
     {shellAgents.map((name) => <Participant key={name} name={name}
       mark={<ProviderLogo id={name === "Codex" ? "codex" : "claude-code"} size={16} />}
