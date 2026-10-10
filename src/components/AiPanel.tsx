@@ -121,7 +121,7 @@ import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon, MissionWorkflowIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
-import { PendingInboxRow, renderMessageBody, CompactionRow, ToolRunRow, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
+import { PendingInboxRow, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
@@ -1250,6 +1250,17 @@ export function AiPanel({
     }
     return owners;
   }, [toolRuns, msgs]);
+  // Which turns sit inside a fold, and which answers handed their reasoning
+  // to the fold that led to them (`ToolRun.answer`).
+  const foldedTurns = useMemo(() => {
+    const inRun = new Set<number>();
+    const answers = new Set<number>();
+    for (const run of toolRuns) {
+      for (let i = run.start; i < run.end; i++) inRun.add(i);
+      if (run.answer !== undefined) answers.add(run.answer);
+    }
+    return { inRun, answers };
+  }, [toolRuns]);
   const [openToolRuns, setOpenToolRuns] = useState<Set<number>>(() => new Set());
   function toggleToolRun(start: number) {
     setOpenToolRuns((prev) => {
@@ -1278,7 +1289,7 @@ export function AiPanel({
       // once the answer it was gathering for arrives.
       const working = streaming && run.end === msgs.length;
       const open = openToolRuns.has(run.start) || working;
-      const { thought, count, names } = toolRunLabel(run);
+      const { label, count, names } = toolRunLabel(run);
       // When a turn opens with tool work, the message wearing the agent's mark
       // is the one this row folds away — and a response with no mark reads as
       // nobody's. The row wears it instead, open or closed, and the message
@@ -1288,15 +1299,15 @@ export function AiPanel({
       const mark = startsResponse && first.role === "assistant" ? responseMark(first) : null;
       // The reasoning between the calls folds with them: it stays in its
       // place inside the body, so opening the row shows think → call → think
-      // in the order it happened, and the row carries the sum ("Thought for
-      // 6.3s") so a closed fold still says the agent reasoned, not only that
-      // it called tools. Hoisting every thought above the row stacked five
-      // half-second decisions into one deliberation with nothing between.
+      // in the order it happened. The answer's own thought is the last row
+      // of that body — the fold is everything before the reply, and the
+      // reply starts under the rule.
+      const answer = run.answer !== undefined ? msgs[run.answer] : undefined;
       out.push(
         <div
           key={`tool-run-${run.start}`}
           data-observer-row={run.start}
-          style={{ display: "flex", gap: 10, margin: startsResponse ? "14px 0 0" : "6px 0 0" }}
+          style={{ display: "flex", gap: 10, margin: startsResponse ? "14px 0 8px" : "6px 0 8px" }}
         >
           <div
             aria-hidden="true"
@@ -1314,7 +1325,7 @@ export function AiPanel({
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <ToolRunRow
-              thought={thought}
+              label={label}
               count={count}
               names={names}
               expanded={open}
@@ -1340,6 +1351,14 @@ export function AiPanel({
         >
           <div>
             {nodes.slice(run.start, run.end)}
+            {answer?.role === "assistant" && (
+              <div style={{ display: "flex", gap: 10, margin: "3px 0" }}>
+                <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <ThinkingBlock text={extractThinking(answer)} streaming={false} thinkingMs={answer.thinkingMs} />
+                </div>
+              </div>
+            )}
           </div>
         </div>,
       );
@@ -4309,7 +4328,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i) })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
