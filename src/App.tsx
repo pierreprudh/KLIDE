@@ -1006,6 +1006,17 @@ function App() {
     setFocusChatActive(false);
   }
 
+  /** Switch into Focus from the workbench. It lands on the start stage:
+   *  `focusChatActive` survives a trip to free mode, and an AI panel that went
+   *  to a fresh chat out there came back as an empty conversation under Focus
+   *  (the "Ask Kit" placeholder) instead of the hero. The one entrance that
+   *  wants a conversation up — a Focus resume admission — switches it on
+   *  itself after `enterFocus()`. */
+  function enterFocusHome() {
+    enterFocus();
+    setFocusChatActive(false);
+  }
+
   /** Resume a conversation the rail's tree points at, into an AI panel. Focus
    *  does the same work against its own canvas (see `onOpenConversation` on
    *  <FocusMode>) — one set of rules, one surface each. */
@@ -3134,8 +3145,8 @@ function App() {
     { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
     { id: "layout-anchored", label: "Layout: Anchored (IDE)", action: () => { enterWorkbench("anchored"); setPaletteOpen(false); } },
     { id: "layout-free", label: "Layout: Free (floating panels)", action: () => { enterWorkbench("free"); setPaletteOpen(false); } },
-    { id: "layout-focus", label: "Layout: Focus (chat)", action: () => { enterFocus(); setPaletteOpen(false); } },
-    { id: "terminal-focus", label: "Terminal: Open in Focus", action: () => { setFocusTerminalOpen(true); setTerminalVisible(false); enterFocus(); setPaletteOpen(false); } },
+    { id: "layout-focus", label: "Layout: Focus (chat)", action: () => { enterFocusHome(); setPaletteOpen(false); } },
+    { id: "terminal-focus", label: "Terminal: Open in Focus", action: () => { setFocusTerminalOpen(true); setTerminalVisible(false); enterFocusHome(); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { openOverlay("runs"); setPaletteOpen(false); } },
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { back(); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { toggleOverlay("git-review"); setPaletteOpen(false); } },
@@ -3201,7 +3212,7 @@ function App() {
       activeGridId={activeGridId}
       anchoredLayout={panelLayout.anchored !== false}
       focusMode={focusBase}
-      onSetFocusMode={(on) => (on ? enterFocus() : exitFocus())}
+      onSetFocusMode={(on) => (on ? enterFocusHome() : exitFocus())}
       onApplyGrid={applyGrid}
       onExitGrid={exitGrid}
       onSetAnchored={setAnchoredLayout}
@@ -3397,7 +3408,7 @@ function App() {
                         enterWorkbench("free");
                         return;
                       }
-                      enterFocus();
+                      enterFocusHome();
                     }}
                   >
                     {focusBase ? <FreeLayoutIcon size={14} /> : <FocusLayoutIcon size={14} />}
@@ -4097,7 +4108,7 @@ function App() {
                       onOpenInFocus={() => {
                         setFocusTerminalOpen(true);
                         setTerminalVisible(false);
-                        enterFocus();
+                        enterFocusHome();
                       }}
                     />
                   )}
