@@ -1,5 +1,6 @@
 import type { ProviderId } from "../../agent/types";
 import { isDelegateProvider } from "../../agent/providers";
+import { switchModelForProvider } from "./rememberedModel";
 import type { Conversation, Msg } from "./types";
 import {
   deriveTitle,
@@ -220,12 +221,18 @@ export function conversationSessionReducer(
       return { ...session, branch: action.branch };
     case "resumed": {
       const conversation = action.conversation;
+      const provider = conversation.provider ?? session.provider;
+      // A thread without a recorded model keeps the panel's — unless it lands
+      // on another Provider, where that model means nothing (a Claude Code
+      // session carried in from a DeepSeek chat showed "deepseek-v4.1" in
+      // its composer). Then it starts where a switch to that Provider would.
+      const model = conversation.model || (provider === session.provider ? session.model : switchModelForProvider(provider));
       return {
         ...session,
         conversationId: conversation.id,
         messages: conversation.msgs,
-        provider: conversation.provider ?? session.provider,
-        model: conversation.model || session.model,
+        provider,
+        model,
         originProvider: conversation.provider,
         originModel: conversation.model ?? undefined,
         branch: conversation.branch ?? null,
