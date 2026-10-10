@@ -416,7 +416,7 @@ fn run_list_cli_sessions(
         ));
         let _ = label;
     }
-    content.push_str("\n\nTo continue one in Klide, call open_cli_session with its provider and session. If more than one could be what the user means, ask which.");
+    content.push_str("\n\nTo continue one in Klide, call open_cli_session with its provider and session. For current/latest, use the newest session. Otherwise, if more than one could be what the user means, ask which.");
     ok(content)
 }
 
@@ -841,7 +841,7 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ConversationHistory,
-            schema: schema("open_cli_session", "Continue one Claude Code, Codex, OpenCode or Oh My Pi session in a new Klide conversation beside this one. Take provider and session from list_cli_sessions. When several sessions could be the one the user means, list them and ask which first — never guess.",
+            schema: schema("open_cli_session", "Continue one Claude Code, Codex, OpenCode or Oh My Pi session in a new Klide conversation beside this one. Take provider and session from list_cli_sessions. For current/latest, use the newest session from list_cli_sessions; if a prior turn identified the session, reuse it. Ask which only when several sessions could match and the user has not selected the latest or a specific session. Opening requested in natural language needs no further confirmation.",
                 serde_json::json!({
                     "provider": { "type": "string", "enum": ["claude-code", "codex", "opencode", "omp"] },
                     "session": { "type": "string", "description": "The session id exactly as list_cli_sessions returned it." }

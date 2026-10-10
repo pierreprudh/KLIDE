@@ -1288,13 +1288,13 @@ export function AiPanel({
         cursor = run.end;
         continue;
       }
-      // Work still happening is folded too — the current call joins the
-      // line rather than stacking under it — and the line itself is what
-      // moves: "Working" with a clock ticking from the turn's send time
-      // (`ToolRunRow`). The settled "Worked for" replaces it when the answer
-      // arrives. A click still opens the rows mid-run.
+      // Work still happening stays open so the operator sees what is going
+      // on, under a line that reads "Working" with a clock ticking from the
+      // turn's send time (`ToolRunRow`). When the answer arrives the rows
+      // fold under the settled "Worked for" line on their own — a click
+      // mid-run is not remembered as "keep it open".
       const working = streaming && run.end === msgs.length;
-      const open = openToolRuns.has(run.start);
+      const open = openToolRuns.has(run.start) || working;
       let turnStartedAt: number | undefined;
       if (working) {
         for (let i = run.start - 1; i >= 0; i--) {
@@ -1342,7 +1342,7 @@ export function AiPanel({
               count={count}
               names={names}
               expanded={open}
-              onToggle={() => toggleToolRun(run.start)}
+              onToggle={() => { if (!working) toggleToolRun(run.start); }}
               working={working ? { since: turnStartedAt } : undefined}
             />
           </div>
