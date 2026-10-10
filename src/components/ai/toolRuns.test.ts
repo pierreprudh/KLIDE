@@ -49,10 +49,30 @@ describe("groupToolRuns", () => {
     expect(groupToolRuns(msgs).map((r) => r.calls)).toEqual([3, 3]);
   });
 
-  it("leaves a turn that both speaks and calls tools out of a run", () => {
+  it("folds a turn that speaks and calls — its sentence is narration on the way, not the answer", () => {
     const speaking: Msg = { role: "assistant", content: "Reading it now.", toolCalls: [{ name: "Read", args: {} }] };
 
-    expect(groupToolRuns([speaking, result("Read")])).toEqual([]);
+    expect(groupToolRuns([speaking, result("Read"), says("It reads the config.")])).toMatchObject([{ start: 0, end: 2, calls: 1 }]);
+  });
+
+  it("folds the answer's own reasoning in, and counts its span", () => {
+    const answer: Msg = { role: "assistant", content: "Done.", thinking: "Everything checks out.", thinkingMs: 1100 };
+    const thought: Msg = { role: "assistant", content: "", thinking: "next", thinkingMs: 700, toolCalls: [{ name: "Bash", args: {} }] };
+
+    const [run] = groupToolRuns([asks("go"), thought, result("Bash"), answer]);
+
+    expect(run).toMatchObject({ start: 1, end: 3, answer: 3, thinkingMs: 1800 });
+  });
+
+  it("leaves a lone thought before an answer alone — nothing was called", () => {
+    const thought: Msg = { role: "assistant", content: "", thinking: "hmm", thinkingMs: 700 };
+    expect(groupToolRuns([asks("go"), thought, says("Here.")])).toEqual([]);
+  });
+
+  it("keeps a turn that has said nothing yet inside the run, so the fold stays open while it streams", () => {
+    const placeholder: Msg = { role: "assistant", content: "" };
+    const [run] = groupToolRuns([asks("go"), ...burst("Bash", 2), placeholder]);
+    expect(run).toMatchObject({ start: 1, end: 6, calls: 2 });
   });
 
   it("folds every reasoning-only encoding without treating it as prose", () => {
@@ -74,14 +94,14 @@ describe("groupToolRuns", () => {
     ]);
   });
 
-  it("still ends a run when inline thinking is followed by visible prose", () => {
+  it("keeps a turn with inline thinking and narration inside the run — it still made a call", () => {
     const speaking = reasoningCall(
       "Read",
       "<think>Choose the next file.</think>Reading the implementation now.",
     );
     const msgs = [...burst("Bash", 3), speaking, result("Read"), ...burst("Grep", 3)];
 
-    expect(groupToolRuns(msgs).map((run) => run.calls)).toEqual([3, 3]);
+    expect(groupToolRuns(msgs).map((run) => run.calls)).toEqual([7]);
   });
 
   it("keeps the distinct tool names, in the order they appear", () => {
@@ -107,8 +127,8 @@ describe("groupToolRuns", () => {
     expect(runs.map((r) => [r.start, r.end])).toEqual([[1, 7], [9, 15]]);
   });
 
-  it("does not stack what was never a wall", () => {
-    expect(groupToolRuns(burst("Bash", 2))).toEqual([]);
+  it("folds however little work there was — one call on the way is still on the way", () => {
+    expect(groupToolRuns(burst("Bash", 1))).toHaveLength(1);
     expect(groupToolRuns(burst("Bash", 3))).toHaveLength(1);
   });
 
@@ -145,6 +165,7 @@ describe("groupToolRuns", () => {
 describe("toolRunLabel", () => {
   it("counts the calls, and names every distinct tool for the hover", () => {
     expect(toolRunLabel({ calls: 9, names: ["Bash", "Read", "Grep", "Edit"] })).toEqual({
+      label: "9 tool calls",
       count: "9 tool calls",
       names: "Bash, Read, Grep, Edit",
     });
@@ -154,15 +175,16 @@ describe("toolRunLabel", () => {
     expect(toolRunLabel({ calls: 1, names: ["Bash"] }).count).toBe("1 tool call");
   });
 
-  it("leads with the thinking it folded away, in a turn header's words", () => {
-    expect(toolRunLabel({ calls: 11, names: [], thinkingMs: 6300 }).thought).toBe("Thought for 6.3s");
-    expect(toolRunLabel({ calls: 11, names: [] }).thought).toBeUndefined();
+  it("leads with the time the work took, in a turn header's words", () => {
+    expect(toolRunLabel({ calls: 35, names: [], workedMs: 41_000 }).label).toBe("Worked for 41.0s");
+    // Tools ran, so the wall time is the honest span — the reasoning alone
+    // would understate it.
+    expect(toolRunLabel({ calls: 35, names: [], thinkingMs: 6300, workedMs: 41_000 }).label).toBe("Worked for 41.0s");
   });
 
-  it("falls back to the wall time when the reasoning was never timed", () => {
-    expect(toolRunLabel({ calls: 35, names: [], workedMs: 41_000 }).thought).toBe("Worked for 41.0s");
-    // A measured reasoning span wins: it is the more specific claim.
-    expect(toolRunLabel({ calls: 35, names: [], thinkingMs: 6300, workedMs: 41_000 }).thought).toBe("Thought for 6.3s");
+  it("falls back to the reasoning span, then to the count", () => {
+    expect(toolRunLabel({ calls: 11, names: [], thinkingMs: 6300 }).label).toBe("Thought for 6.3s");
+    expect(toolRunLabel({ calls: 11, names: [] }).label).toBe("11 tool calls");
   });
 });
 
@@ -204,7 +226,7 @@ describe("pairToolResults", () => {
     expect(claimed.size).toBe(0);
   });
 
-  it("keeps a sentence's results out of the run that follows it", () => {
+  it("files a sentence's results with it inside the one run", () => {
     // The prose turn draws its own glob + grep rows; their results must not
     // seed a fold that counts them again right underneath.
     const msgs = [
@@ -215,9 +237,10 @@ describe("pairToolResults", () => {
     ];
     const runs = groupToolRuns(msgs, pairToolResults(msgs));
 
+    // The sentence made calls, so it is on the way too: one run from the top,
+    // its results filed under it and the reads after them.
     expect(runs).toHaveLength(1);
-    expect(runs[0].start).toBe(3);
-    expect(runs[0].names).toEqual(["read_file"]);
+    expect(runs[0]).toMatchObject({ start: 0, calls: 5, names: ["glob", "grep", "read_file"] });
   });
 
   it("still counts orphan results as a run", () => {
