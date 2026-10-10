@@ -22,6 +22,7 @@ function session(overrides: Partial<ConversationSession> = {}): ConversationSess
     workspaceRoot: "/workspace",
     branch: "feature/a",
     worktree: "a",
+    delegateSession: null,
     forkedFrom: null,
     run: { active: false, activity: null },
     ...overrides,
@@ -80,6 +81,7 @@ describe("restoreConversationSession", () => {
       workspaceRoot: "/workspace",
       branch: "feature/saved",
       worktree: "saved-tree",
+      delegateSession: null,
       forkedFrom: saved.forkedFrom,
       run: { active: false, activity: null },
     });
@@ -511,6 +513,7 @@ describe("snapshotConversationSession", () => {
       cwd: "/workspace",
       branch: "feature/a",
       worktree: "a",
+      delegateSession: null,
       forkedFrom: null,
     });
   });
@@ -605,5 +608,20 @@ describe("a thread records the Provider that produced it, not the picker", () =>
     // …while the thread still says what produced its turns.
     expect(restored.originProvider).toBe("claude-code");
     expect(snapshotConversationSession(restored, 50)?.provider).toBe("claude-code");
+  });
+});
+
+describe("delegateSession", () => {
+  it("is carried in by a resume, kept in the snapshot, and dropped by a fresh start or a branch", () => {
+    const resumed = conversationSessionReducer(session(), {
+      type: "resumed",
+      conversation: { id: "cli-thread", title: "t", msgs: [userMessage], updatedAt: 1, provider: "claude-code", delegateSession: "abc-123" },
+    });
+    expect(resumed.delegateSession).toBe("abc-123");
+    expect(snapshotConversationSession(resumed, 5)?.delegateSession).toBe("abc-123");
+    expect(conversationSessionReducer(resumed, { type: "fresh-started", conversationId: "n" }).delegateSession).toBeNull();
+    expect(
+      conversationSessionReducer(resumed, { type: "branched", conversationId: "b", messageIndex: 0, createdAt: 2, mode: "chat" }).delegateSession,
+    ).toBeNull();
   });
 });

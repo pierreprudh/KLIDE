@@ -429,4 +429,7 @@ export type StartAgentRunInput = {
   /** Optional durable Mission attempt linkage. Task id and Run id stay distinct. */
   missionId?: string;
   missionTaskId?: string;
+  /** A Delegate CLI session this conversation continues; see
+   *  `Conversation.delegateSession`. Only a subscription CLI turn reads it. */
+  delegateSession?: string;
 };

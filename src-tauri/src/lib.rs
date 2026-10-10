@@ -344,6 +344,7 @@ async fn ai_chat(
             // A bare `ai_chat` is a one-shot (the summarizer); it has no
             // conversation to continue.
             run_id: None,
+            delegate_session: None,
             // A one-shot has no project approvals to carry: it is the
             // summarizer, which asks the model for prose and runs no tools.
             allowed_commands: Vec::new(),
@@ -670,6 +671,15 @@ async fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>,
 #[tauri::command]
 async fn delegate_catalog() -> Vec<delegate::DelegateFacts> {
     delegate::catalog()
+}
+
+/// One Delegate session by the id its CLI resumes it under — the row Mission
+/// Control would show for it, or `None`. What "Continue in Focus" needs to
+/// carry a `klide://resume` / `open_cli_session` target into a conversation.
+/// A stat walk plus one parse, on the blocking pool.
+#[tauri::command]
+async fn delegate_run_lookup(provider: String, session: String) -> Result<Option<delegate::AgentRun>, String> {
+    blocking::run(move || Ok(delegate::find_run(&delegate::ProcessEnv, &provider, &session))).await
 }
 
 /// The `/` commands a delegate CLI answers itself in this workspace, for the
@@ -1039,6 +1049,7 @@ pub fn run() {
             read_agent_run,
             delegate_slash_commands,
             delegate_catalog,
+            delegate_run_lookup,
             claude_code_settings,
             providers::ai_list_providers,
             models::ai_provider_models,
