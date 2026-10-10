@@ -639,6 +639,23 @@ pub fn find_run(env: &dyn Env, provider: &str, session_id: &str) -> Option<Agent
     })
 }
 
+/// The session of one delegate that `workspace_root` saw last — what a
+/// `klide://resume` link without a session id means, for a CLI that doesn't
+/// tell its shell its own id. Newest by transcript mtime, confirmed by the
+/// parsed `cwd` (a glob-named folder can hold a cousin project's sessions).
+pub fn find_latest_run(env: &dyn Env, provider: &str, workspace_root: &str) -> Option<AgentRun> {
+    let delegate = ALL.iter().find(|d| d.id() == provider)?;
+    let stamp = delegate.parse_inputs_stamp(env);
+    let mut candidates = delegate.discover_runs_for_workspace(env, workspace_root);
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.mtime_ms));
+    let parser = delegate.run_parser(env);
+    candidates
+        .into_iter()
+        .take(MAX_WORKSPACE_MISSES)
+        .filter_map(|c| PARSED_RUNS.get_or_compute(std::path::Path::new(&c.key), stamp, |_| parser.parse(&c.key)))
+        .find(|run| run_matches_workspace(run, workspace_root))
+}
+
 /// One page of recent runs across every delegate, newest first. Stat-and-sort
 /// is cheap; only the requested page (offset..offset+limit) is parsed, so big
 /// histories stay fast and the UI can lazily page in older runs.

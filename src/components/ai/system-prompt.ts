@@ -120,6 +120,7 @@ ${
     toolsAvailable
       ? `- Find before reading: locate code with grep, glob, or list_dir, then read_file only the files the task needs. If asked what folders/files are in a directory, call list_dir first and answer only from its result.
 - Answer git questions (branch, changes, history) with get_git_status / get_git_diff / get_git_log — never from memory.
+- To open, continue or follow up a conversation the user had in Claude Code, Codex, OpenCode or Oh My Pi: call list_cli_sessions with words from what they said, then open_cli_session on the one match. If several could be it, name them in one line each and ask which — never pick for them. Klide opens it in a new conversation beside this one.
 - Use write_file / create_file for text files and write_spreadsheet for Excel workbooks; successful write tools are the way to change files — text in your reply changes nothing. Every edit opens a diff modal for the user to APPLY or REJECT; you never write directly. Local changes you didn't make belong to the user; preserve them and work around them.`
       : "- No tool APIs are available in this turn. Do not claim that you can read or edit files directly. Do not answer filesystem, folder, directory, file-list, git, or project-structure questions from memory; say tools are unavailable and ask the user to switch to Plan or Work."
   }${modeBlock}${mode === "goal" ? `\n\n${spreadsheetGuide}` : ""}

@@ -1586,6 +1586,14 @@ function App() {
           setMissionOpenRequest(runId);
           openOverlay("runs");
         }}
+        onOpenCliSession={(session) => {
+          // Kit found the CLI conversation the user asked for: the same door a
+          // Mission Control "Resume" or a klide://resume link takes — a new
+          // panel pinned to that Delegate, `--resume`d in the session's own
+          // folder, beside the conversation that asked.
+          const cwd = session.project ?? root;
+          openRunInAiPanel({ provider: session.provider, workspaceRoot: cwd, resumeSessionId: session.session, cwd: cwd ?? undefined });
+        }}
         onOpenPeerConversation={(conversationId) => {
           // The peer link's card names another thread; land it exactly where a
           // click in the rail's tree would — raised if it is already open.

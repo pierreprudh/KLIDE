@@ -270,7 +270,7 @@ Klide/
     │   ├── cli.rs                Login-shell binary resolution + subscription-CLI install/auth status
     │   ├── deep_link.rs          `klide://` links — new (pre-filled, never sent) / open file:line / project; parsed + path-checked in Rust, queued until the page drains them
     │   ├── services_menu.rs      "Ask Kit" Services Quick Action — installed/removed from Settings, opens `klide://new?prompt=`
-    │   ├── klide_skill.rs        The `/klide` skill for Claude Code — one SKILL.md in ~/.claude/skills that opens `klide://resume?…&session=$CLAUDE_CODE_SESSION_ID`
+    │   ├── klide_skill.rs        The `/klide` skill — SKILL.md in ~/.claude/skills (exact, `$CLAUDE_CODE_SESSION_ID`) + ~/.agents/skills (Codex/OpenCode/omp, newest session in the folder), both opening `klide://resume`
     │   ├── adapters.rs           Provider streaming trait + shared loop + 3 wire adapters (Ollama/OpenAI/Anthropic)
     │   ├── providers.rs          Provider registry — one row is the whole provider (wire, key, models, label, group, defaults, brand, caps); publishes itself to TS
     │   ├── custom_providers.rs   User-added self-hosted OpenAI-wire endpoints
@@ -722,7 +722,7 @@ enforce wrapper coverage for the git family.
 - [x] Monaco editor with syntax highlighting, Cmd+S, 7 themes
 - [x] Status bar — file path, language, git branch, theme/terminal/layout toggles, dot separators
 - [x] Terminal panel with real shell via Rust portable-pty
-- [x] AI panel — streaming chat across Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter + self-hosted endpoints, 22 built-in tools, inline diff review + the foot-bar Goal-policy decider (review / auto-accept / full auto)
+- [x] AI panel — streaming chat across Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter + self-hosted endpoints, 24 built-in tools, inline diff review + the foot-bar Goal-policy decider (review / auto-accept / full auto)
 - [x] Agent mode — goal/plan modes, diff-reviewed edits, tool loop
 - [x] Git panel — full-view Git Review workbench (staging + diffs)
 - [x] Mission Control — aggregate agent run board (Claude Code, Codex, OpenCode, Oh My Pi, Klide) with handoff to AI panel
@@ -754,6 +754,7 @@ enforce wrapper coverage for the git family.
 - [x] Subagent watcher — the "Delegated to" row follows the child Run live; a failed child is a failed Tool result, dependent dispatches pin a source commit
 - [x] Links and places — a URL in an answer opens in the browser under its name, a rooted path in Finder, a file of the open project in an editor tab
 - [x] `klide://` links + Ask Kit — Raycast, Shortcuts, a terminal or the Services menu open a pre-filled conversation, a file at a line, or a project (installed app only on macOS)
+- [x] CLI sessions both ways — "follow up this conversation in Klide", said to Claude Code / Codex / OpenCode / omp, resumes it in Klide (`klide://resume` + the `/klide` skill); "open the Claude Code conv about X", said to Kit, lists and opens it (`list_cli_sessions` / `open_cli_session`)
 
 ## Development
 

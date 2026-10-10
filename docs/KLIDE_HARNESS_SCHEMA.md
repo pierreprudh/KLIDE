@@ -81,11 +81,13 @@ warnings for unverified implementation work.
 |---|---|---|
 | `update_todo_list` | add/complete/uncomplete/edit/remove/clear todos. *(`PlanState` kind, capability `UpdatePlanState`: it mutates Klide's own planning metadata, not workspace files — so it runs in Plan mode with no diff review.)* | CC (TodoWrite) |
 
-### Conversation history (Plan + Goal) — 1
+### Conversation history (Plan + Goal) — 3
 
 | Tool | Purpose | Lineage |
 |---|---|---|
 | `search_conversations` | Search prior Klide Harness Conversations in the current Workspace, excluding the current Run and its children. Carries `ReadConversationHistory`, not `ReadWorkspace`. | K |
+| `list_cli_sessions` | The Delegate CLI sessions (Claude Code, Codex, OpenCode, Oh My Pi) on this machine, newest first, with title, session id and folder — Workspace-scoped unless `anywhere`. Read through the Delegate adapters, the same rows Mission Control shows. | K |
+| `open_cli_session` | Continue one Delegate session in a new Klide conversation. The Tool only verifies the session exists and reports; the result's `metadata.openSession` is what the live panel acts on (a replayed Transcript never reopens it). The panel takes the Mission Control "Resume" door: a new panel pinned to that Delegate, `--resume`d in the session's own folder. | K |
 
 ### Project Memory (Plan + Goal) — 2
 
