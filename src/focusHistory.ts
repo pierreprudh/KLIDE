@@ -4,22 +4,28 @@ import type { ProviderId } from "./agent/types";
  *  as long as it is mounted; see `keepOrder`. */
 export type OrderMemory = Map<string, string[]>;
 
+export function orderProviderHistory<T extends { provider: string; conversations: { id: string }[] }>(
+  groups: T[], memory: OrderMemory, project: string,
+): T[] {
+  return keepOrder(groups, (group) => group.provider, memory, project);
+}
+
 /**
  * Recency ordering, decided when a list's *membership* changes rather than on
  * every tick of its timestamps.
  *
- * Both lists in the rail's tree — provider groups within a project,
- * conversations within a group — sort by `updatedAt`. A running conversation
+ * Provider groups within a project sort by `updatedAt`. A running conversation
  * bumps that on every message, so two live runs under two different providers
  * made their groups leapfrog each other continuously, trading first place with
  * every token. Sorting is not the problem; sorting *live* is. A list you click
  * in must not rearrange itself under the cursor.
  *
- * So the order is resolved once and then held: everything already on screen
+ * Provider group order is resolved once and then held: everything already on screen
  * keeps the place it had, and only genuinely new arrivals move — in at the
  * top, in the incoming recency order, which is where the thing you just
  * started belongs. Dropping the memory (the rail unmounting) re-resolves from
- * scratch, so recency still decides the order you come back to.
+ * scratch, so recency still decides the order you come back to. Conversation
+ * rows use their current recency order so resumed chats return to the top.
  */
 export function keepOrder<T>(
   items: T[],
