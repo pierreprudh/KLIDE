@@ -14,6 +14,17 @@ import { providerSwitchModel } from "./modelSelection";
 
 /** `klide.model.<provider>`, or the Provider's default when unset — with the
  *  guards that reject another Provider's id that leaked in. */
+/** Whether `model` plainly belongs to some other Provider than `id`. Claude
+ *  Code and Codex take bare model names ("opus", "gpt-5.3-codex"), so a value
+ *  with a repo prefix or a tag (`deepseek/deepseek-v4.1-flash`,
+ *  `pierreprudh/lfm2.5-8b-a1b:latest`) leaked in from another Provider and
+ *  must never be handed to the CLI. OpenCode and omp legitimately use
+ *  provider/model ids, so they are exempt — as is every API Provider, whose
+ *  model lists are the only judge of their own ids. */
+export function isForeignModelFor(id: ProviderId, model: string): boolean {
+  return (id === "claude-code" || id === "codex") && (model.includes("/") || model.includes(":"));
+}
+
 export function storedModelForProvider(id: ProviderId): string {
   const stored = localStorage.getItem(`klide.model.${id}`);
   if (id === "mlx" && stored) {
@@ -22,14 +33,7 @@ export function storedModelForProvider(id: ProviderId): string {
     const looksLikeMlx = stored.includes("/") || stored.startsWith(".");
     if (!looksLikeMlx || stored.includes(":")) return defaultModelForProvider(id);
   }
-  if ((id === "claude-code" || id === "codex") && stored) {
-    // These CLIs take bare model names ("opus", "gpt-5.3-codex") — a stored
-    // value with a repo prefix or tag (`pierreprudh/lfm2.5-8b-a1b:latest`) is
-    // another provider's model that leaked in via a stale-persist bug; never
-    // hand it to the CLI. (OpenCode/omp legitimately use provider/model ids,
-    // so they are exempt.)
-    if (stored.includes("/") || stored.includes(":")) return defaultModelForProvider(id);
-  }
+  if (stored && isForeignModelFor(id, stored)) return defaultModelForProvider(id);
   return stored || defaultModelForProvider(id);
 }
 

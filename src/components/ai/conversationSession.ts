@@ -1,6 +1,6 @@
 import type { ProviderId } from "../../agent/types";
 import { isDelegateProvider } from "../../agent/providers";
-import { switchModelForProvider } from "./rememberedModel";
+import { isForeignModelFor, switchModelForProvider } from "./rememberedModel";
 import type { Conversation, Msg } from "./types";
 import {
   deriveTitle,
@@ -226,7 +226,10 @@ export function conversationSessionReducer(
       // on another Provider, where that model means nothing (a Claude Code
       // session carried in from a DeepSeek chat showed "deepseek-v4.1" in
       // its composer). Then it starts where a switch to that Provider would.
-      const model = conversation.model || (provider === session.provider ? session.model : switchModelForProvider(provider));
+      // A recorded model that plainly belongs to another Provider (saved by
+      // the bug above before it was fixed) counts as none.
+      const recorded = conversation.model && !isForeignModelFor(provider, conversation.model) ? conversation.model : "";
+      const model = recorded || (provider === session.provider ? session.model : switchModelForProvider(provider));
       return {
         ...session,
         conversationId: conversation.id,

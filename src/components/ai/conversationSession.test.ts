@@ -644,3 +644,14 @@ describe("resumed onto another Provider", () => {
     expect(same.model).toBe("deepseek/deepseek-v4.1-flash");
   });
 });
+
+describe("resumed with a foreign recorded model", () => {
+  it("treats a CLI thread's other-Provider model as none", () => {
+    const fromDeepSeek = session({ provider: "openrouter", model: "deepseek/deepseek-v4.1-flash" });
+    const carriedIn = conversationSessionReducer(fromDeepSeek, {
+      type: "resumed",
+      conversation: { id: "cli-thread", title: "t", msgs: [userMessage], updatedAt: 1, provider: "claude-code", model: "deepseek/deepseek-v4.1-flash" },
+    });
+    expect(carriedIn.model).toBe("default");
+  });
+});

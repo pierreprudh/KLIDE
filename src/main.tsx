@@ -8,6 +8,7 @@ import "@fontsource/monaspace-neon/400.css";
 import "@fontsource/monaspace-neon/700.css";
 import App from "./App";
 import {
+  healStoredConversationModels,
   healStoredConversationOrigins,
   healStoredConversationsFromTranscripts,
 } from "./components/ai/conversationOriginHeal";
@@ -21,6 +22,9 @@ import { notify } from "./toast";
 // index — Mission Control re-derives its rows from it on the same boot.
 try {
   healStoredConversationOrigins();
+  // And threads that kept another Provider's model when they were carried
+  // onto a CLI (a Claude Code session showing DeepSeek in its composer).
+  healStoredConversationModels();
 } catch {
   /* a broken conversation index must never block the app from starting */
 }
