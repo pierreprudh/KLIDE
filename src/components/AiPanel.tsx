@@ -1288,11 +1288,20 @@ export function AiPanel({
         cursor = run.end;
         continue;
       }
-      // Work still happening stays open. Collapsing a run the agent is in the
-      // middle of would hide the only thing moving on screen; it folds itself
-      // once the answer it was gathering for arrives.
+      // Work still happening is folded too — the current call joins the
+      // line rather than stacking under it — and the line itself is what
+      // moves: "Working" with a clock ticking from the turn's send time
+      // (`ToolRunRow`). The settled "Worked for" replaces it when the answer
+      // arrives. A click still opens the rows mid-run.
       const working = streaming && run.end === msgs.length;
-      const open = openToolRuns.has(run.start) || working;
+      const open = openToolRuns.has(run.start);
+      let turnStartedAt: number | undefined;
+      if (working) {
+        for (let i = run.start - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.role === "user") { turnStartedAt = m.ts; break; }
+        }
+      }
       const { label, count, names } = toolRunLabel(run);
       // When a turn opens with tool work, the message wearing the agent's mark
       // is the one this row folds away — and a response with no mark reads as
@@ -1334,6 +1343,7 @@ export function AiPanel({
               names={names}
               expanded={open}
               onToggle={() => toggleToolRun(run.start)}
+              working={working ? { since: turnStartedAt } : undefined}
             />
           </div>
         </div>,

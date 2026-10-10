@@ -101,7 +101,7 @@ export function ThinkingBlock({
     <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: 0 }}>
       <summary style={{ ...foldLineStyle, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
         <FoldLine expanded={false}>
-          {streaming ? <ThinkingLiveLabel startedAt={startedAt} /> : thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}
+          {streaming ? <LiveLabel label="Thinking" startedAt={startedAt} /> : thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}
         </FoldLine>
       </summary>
       <div
@@ -120,17 +120,19 @@ export function ThinkingBlock({
   );
 }
 
-// The streaming header: a shimmer sweeping through "Thinking" and a live
+// The live header: a shimmer sweeping through "Thinking" / "Working" and a
 // timer beside it, the same pair the Working row wears — one language for
 // "the model is busy". Its own component so the 100ms tick re-renders only
-// this label, never the reasoning body under it.
-function ThinkingLiveLabel({ startedAt }: { startedAt?: number }) {
+// this label, never the reasoning body or the fold's rows under it.
+function LiveLabel({ label, startedAt }: { label: string; startedAt?: number }) {
   const elapsed = useElapsed(startedAt);
+  // Its own flex box: the fold line wraps its children in a plain span, so
+  // the gap between the word and the clock has to be this element's.
   return (
-    <>
-      <span className="ai-working-label">Thinking</span>
+    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+      <span className="ai-working-label">{label}</span>
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>{elapsed}</span>
-    </>
+    </span>
   );
 }
 
@@ -628,6 +630,7 @@ export function ToolRunRow({
   names,
   expanded,
   onToggle,
+  working,
 }: {
   /** "Worked for 19.4s" / "Thought for 6.3s" — or the count, when nothing
    *  was timed. */
@@ -637,6 +640,11 @@ export function ToolRunRow({
   names: string;
   expanded: boolean;
   onToggle: () => void;
+  /** The run is still going: the line reads "Working" with a clock that
+   *  ticks from the turn's send time (`since`, epoch ms; absent → from
+   *  mount), the way the thinking header does. The settled label replaces
+   *  it once the answer arrives. */
+  working?: { since?: number };
 }) {
   const hover = [label === count ? null : count, names || null].filter(Boolean).join(" · ");
   return (
@@ -670,7 +678,7 @@ export function ToolRunRow({
           ) : null
         }
       >
-        {label}
+        {working ? <LiveLabel label="Working" startedAt={working.since} /> : label}
       </FoldLine>
     </button>
   );
