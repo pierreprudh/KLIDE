@@ -2359,7 +2359,8 @@ textarea.klide-diff-comment-input:focus-visible {
 
 /* Thought-process disclosure: the same line as a folded tool run — label,
    a chevron that turns down when open, a hairline under. Inside a fold's
-   body it is one row among the work and the rule goes. The block itself is
+   body — or the step still in flight under a Working row — it is one row
+   among the work and the rule goes. The block itself is
    borderless (a hairline left-rule carries the body) so a long run reads as
    a calm timeline, not a stack of cards. */
 .klide-think > summary {
@@ -2367,7 +2368,8 @@ textarea.klide-diff-comment-input:focus-visible {
   border-bottom: 1px solid var(--border);
   transition: opacity var(--motion-fast) var(--ease-out);
 }
-.klide-tool-run-body .klide-think > summary {
+.klide-tool-run-body .klide-think > summary,
+.klide-tool-run-live .klide-think > summary {
   padding-bottom: 0;
   border-bottom: none;
 }

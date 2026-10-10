@@ -1389,7 +1389,7 @@ export function AiPanel({
       // fold's state. It joins the body — and folds — once it is done.
       if (liveStart < run.end) {
         out.push(
-          <div key={`tool-run-live-${run.start}`}>
+          <div key={`tool-run-live-${run.start}`} className="klide-tool-run-live">
             {nodes.slice(liveStart, run.end)}
           </div>,
         );
