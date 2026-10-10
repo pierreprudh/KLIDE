@@ -2368,12 +2368,16 @@ textarea.klide-diff-comment-input:focus-visible {
   transform: rotate(90deg) scaleY(-1);
 }
 
-/* Reasoning is optional reading, at the same quiet as the fold row beside it:
-   a step dimmer under the pointer, a touch brighter only while streaming. */
+/* Reasoning is optional reading, at the quiet of the fold row's second line
+   (the count under "Worked for 27.7s"): it comes up under the pointer and
+   while open, and sits brightest only while streaming. */
 .klide-think > summary {
+  opacity: 0.55;
   transition: opacity var(--motion-fast) var(--ease-out);
 }
-.klide-think > summary:hover {
+.klide-think > summary:hover,
+.klide-think > summary:focus-visible,
+.klide-think[open] > summary {
   opacity: 0.82;
 }
 .klide-think.is-streaming > summary {

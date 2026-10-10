@@ -48,7 +48,10 @@ export function ThinkingBlock({
   // the time in the turn header's own words beside it. A thought that stands
   // on its own — before the first sentence, after the last call — and a
   // thought folded in with its calls are the same thing to the reader, and
-  // drawn as two different controls they read as two.
+  // drawn as two different controls they read as two. It sits at the fold's
+  // *second* line, though — the count's size and quiet — not its headline:
+  // a thought is a step under the work it led to, and at the headline's
+  // weight three of them in one answer stacked into a wall.
   return (
     <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: 0 }}>
       <summary
@@ -70,7 +73,7 @@ export function ThinkingBlock({
           style={{
             display: "grid",
             placeItems: "center",
-            height: 22,
+            height: 18,
             flexShrink: 0,
             // Closed points down, open points up, and it gets there by
             // flipping — see the same mark on ToolRunRow for why not a turn.
@@ -90,8 +93,8 @@ export function ThinkingBlock({
             gap: 8,
             minWidth: 0,
             fontFamily: "var(--font-mono)",
-            fontSize: 11.5,
-            lineHeight: "22px",
+            fontSize: 11,
+            lineHeight: "18px",
             fontWeight: 500,
           }}
         >
@@ -107,7 +110,7 @@ export function ThinkingBlock({
           // The rule hangs from the chevron's centre and the text lines up
           // under the label, so an open thought reads as the row's own body.
           margin: "2px 0 6px 6px",
-          paddingLeft: 13,
+          paddingLeft: 12,
           borderLeft: "1px solid var(--border)",
           fontSize: 12,
           lineHeight: 1.6,
