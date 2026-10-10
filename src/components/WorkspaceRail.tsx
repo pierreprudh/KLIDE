@@ -71,7 +71,7 @@ import { DotGridLoader, ProviderLogo } from "./ai/icons";
 import { conversationMark } from "../modelIdentity";
 import { setConversationDrag } from "../conversationDrag";
 import { useIsConversationRunning } from "../runningConversations";
-import { keepOrder, providerHistoryExpanded } from "../focusHistory";
+import { orderProviderHistory, providerHistoryExpanded } from "../focusHistory";
 import { canonicalWorkspaceRoot, linkedProjectForPath } from "../projectPaths";
 
 /** A row above the tree. `onClick` receives the meta/ctrl modifier so the
@@ -866,7 +866,7 @@ function ProviderHistoryGroup({
   onTogglePin: (conversation: Conversation) => void;
 }) {
   const [showAllConversations, setShowAllConversations] = useState(false);
-  // Pinned rows lead; recency orders the rest, held by `keepOrder` upstream.
+  // Pinned rows lead; current recency orders the rest.
   const orderedConversations = useMemo(
     () => orderPinnedFirst(group.conversations, pinnedIds),
     [group.conversations, pinnedIds],
@@ -1270,25 +1270,15 @@ export function WorkspaceRail({
   }, [convos, railProjects]);
   const convosByProject = folderedHistory.byProject;
   const linkedProjectByConversationId = folderedHistory.projectByConversationId;
-  // Recency picks the order; `keepOrder` decides when it is allowed to change.
-  // Without it the tree re-sorts on every message of every live run — see the
-  // note on `keepOrder` for what that looked like with two providers running.
+  // Hold provider group positions while conversation rows follow recency.
+  // This prevents live providers leapfrogging and lets resumed chats rise.
   const orderMemory = useRef<Map<string, string[]>>(new Map());
   const providerHistoriesByProject = useMemo(() => {
     const byProject = new Map<string, ProviderHistory[]>();
     for (const [project, projectHistory] of convosByProject) {
-      const groups = groupHistoryByProvider(projectHistory).map((group) => ({
-        ...group,
-        conversations: keepOrder(
-          group.conversations,
-          (conversation) => conversation.id,
-          orderMemory.current,
-          providerHistoryKey(project, group.provider),
-        ),
-      }));
       byProject.set(
         project,
-        keepOrder(groups, (group) => group.provider, orderMemory.current, project),
+        orderProviderHistory(groupHistoryByProvider(projectHistory), orderMemory.current, project),
       );
     }
     return byProject;

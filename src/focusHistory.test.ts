@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { keepOrder, providerHistoryExpanded, type OrderMemory } from "./focusHistory";
+import { keepOrder, orderProviderHistory, providerHistoryExpanded, type OrderMemory } from "./focusHistory";
+
+it("promotes a resumed conversation while provider groups stay stable", () => {
+  const memory: OrderMemory = new Map();
+  const older = { id: "older" };
+  const resumed = { id: "resumed" };
+  orderProviderHistory([
+    { provider: "mistral", conversations: [{ id: "other" }] },
+    { provider: "openrouter", conversations: [older, resumed] },
+  ], memory, "project");
+  const next = orderProviderHistory([
+    { provider: "openrouter", conversations: [resumed, older] },
+    { provider: "mistral", conversations: [{ id: "other" }] },
+  ], memory, "project");
+  expect(next.map((group) => group.provider)).toEqual(["mistral", "openrouter"]);
+  expect(next[1].conversations.map((c) => c.id)).toEqual(["resumed", "older"]);
+});
 
 describe("providerHistoryExpanded", () => {
   it("reveals the newest worked provider even when the primary panel uses another provider", () => {
