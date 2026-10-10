@@ -2559,7 +2559,11 @@ This user request requires workspace inspection. Before answering, you MUST call
       if (panelId) localStorage.setItem(`klide.provider.${panelId}`, c.provider);
       onProviderChange?.(c.provider);
     }
-    if (c.model && c.model !== model) onModelChange(c.model);
+    // The session may have picked a model the thread did not record (a
+    // Provider change with no model of its own), so the host follows what was
+    // adopted, not what the record said.
+    const adoptedModel = conversationSessionRef.current.model;
+    if (adoptedModel && adoptedModel !== model) onModelChange(adoptedModel);
     // Explicit resume is intent to continue this Conversation across a
     // remount; the `resumed` transition above persisted that binding.
     // No usage stored with history → estimate until this chat's next turn.

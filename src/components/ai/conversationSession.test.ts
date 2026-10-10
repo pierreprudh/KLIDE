@@ -625,3 +625,22 @@ describe("delegateSession", () => {
     ).toBeNull();
   });
 });
+
+describe("resumed onto another Provider", () => {
+  it("never keeps the old Provider's model when the thread recorded none", () => {
+    const fromDeepSeek = session({ provider: "openrouter", model: "deepseek/deepseek-v4.1-flash" });
+    const carriedIn = conversationSessionReducer(fromDeepSeek, {
+      type: "resumed",
+      conversation: { id: "cli-thread", title: "t", msgs: [userMessage], updatedAt: 1, provider: "claude-code", model: null },
+    });
+    expect(carriedIn.provider).toBe("claude-code");
+    expect(carriedIn.model).not.toBe("deepseek/deepseek-v4.1-flash");
+    expect(carriedIn.model).toBe("default");
+    // Same Provider, no recorded model: the panel's own still stands.
+    const same = conversationSessionReducer(fromDeepSeek, {
+      type: "resumed",
+      conversation: { id: "t2", title: "t", msgs: [userMessage], updatedAt: 1, provider: "openrouter", model: null },
+    });
+    expect(same.model).toBe("deepseek/deepseek-v4.1-flash");
+  });
+});
