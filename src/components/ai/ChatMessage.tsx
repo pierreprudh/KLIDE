@@ -44,48 +44,70 @@ export function ThinkingBlock({
   /** Settled reasoning span; drawn as "Thought for 4.2s" when known. */
   thinkingMs?: number;
 }) {
+  // The same row as a folded tool run (`ToolRunRow`): chevron on the left,
+  // the time in the turn header's own words beside it. A thought that stands
+  // on its own — before the first sentence, after the last call — and a
+  // thought folded in with its calls are the same thing to the reader, and
+  // drawn as two different controls they read as two.
   return (
-    <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: "2px 0 6px" }}>
+    <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: 0 }}>
       <summary
         style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "1px 0",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          padding: 0,
           cursor: "pointer",
           listStyle: "none",
           userSelect: "none",
-          color: "var(--fg-dim)",
+          color: "var(--fg-subtle)",
+          minWidth: 0,
         }}
       >
-        {streaming ? (
-          <ThinkingLiveLabel startedAt={startedAt} />
-        ) : (
-          <span style={{ fontSize: 10, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
-            {thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}
-          </span>
-        )}
         <span
           aria-hidden
           className="klide-think-chev"
           style={{
-            width: 8,
-            height: 8,
             display: "grid",
             placeItems: "center",
-            opacity: 0.7,
-            transition: "transform var(--motion-fast) var(--ease-out)",
+            height: 22,
+            flexShrink: 0,
+            // Closed points down, open points up, and it gets there by
+            // flipping — see the same mark on ToolRunRow for why not a turn.
+            // Both states live in tokens.css (`.klide-think-chev`) because
+            // the open one keys off the <details> attribute.
+            transition: "transform var(--motion-slow) var(--ease-out)",
           }}
         >
-          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M6 9l6 6 6-6" />
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M9 5l7 7-7 7" />
           </svg>
+        </span>
+        <span
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 8,
+            minWidth: 0,
+            fontFamily: "var(--font-mono)",
+            fontSize: 11.5,
+            lineHeight: "22px",
+            fontWeight: 500,
+          }}
+        >
+          {streaming ? (
+            <ThinkingLiveLabel startedAt={startedAt} />
+          ) : (
+            <span>{thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}</span>
+          )}
         </span>
       </summary>
       <div
         style={{
-          margin: "5px 0 2px",
-          paddingLeft: 11,
+          // The rule hangs from the chevron's centre and the text lines up
+          // under the label, so an open thought reads as the row's own body.
+          margin: "2px 0 6px 6px",
+          paddingLeft: 13,
           borderLeft: "1px solid var(--border)",
           fontSize: 12,
           lineHeight: 1.6,
@@ -106,10 +128,8 @@ function ThinkingLiveLabel({ startedAt }: { startedAt?: number }) {
   const elapsed = useElapsed(startedAt);
   return (
     <>
-      <span className="ai-working-label" style={{ fontSize: 10, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
-        Thinking
-      </span>
-      <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{elapsed}</span>
+      <span className="ai-working-label">Thinking</span>
+      <span style={{ fontWeight: 400, fontVariantNumeric: "tabular-nums" }}>{elapsed}</span>
     </>
   );
 }
