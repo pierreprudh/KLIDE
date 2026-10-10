@@ -1288,13 +1288,22 @@ export function AiPanel({
         cursor = run.end;
         continue;
       }
-      // Work still happening stays open so the operator sees what is going
-      // on, under a line that reads "Working" with a clock ticking from the
-      // turn's send time (`ToolRunRow`). When the answer arrives the rows
-      // fold under the settled "Worked for" line on their own — a click
-      // mid-run is not remembered as "keep it open".
+      // Work still happening: the line reads "Working" with a clock ticking
+      // from the turn's send time (`ToolRunRow`), and under it only the step
+      // in flight stays in view — the call that is running, the thought
+      // being written. Each step folds under the line the moment it is
+      // done, so the operator sees what is going on without the finished
+      // rows piling up; a click opens the finished ones. When the answer
+      // arrives the last step folds too and "Worked for" takes the line.
       const working = streaming && run.end === msgs.length;
-      const open = openToolRuns.has(run.start) || working;
+      const open = openToolRuns.has(run.start);
+      // Where the live step starts: the run's last message, or — when that
+      // is a result drawn under its call — the call's own turn.
+      let liveStart = run.end;
+      if (working) {
+        const last = run.end - 1;
+        liveStart = toolPairing.claimed.get(last) ?? last;
+      }
       let turnStartedAt: number | undefined;
       if (working) {
         for (let i = run.start - 1; i >= 0; i--) {
@@ -1342,7 +1351,7 @@ export function AiPanel({
               count={count}
               names={names}
               expanded={open}
-              onToggle={() => { if (!working) toggleToolRun(run.start); }}
+              onToggle={() => toggleToolRun(run.start)}
               working={working ? { since: turnStartedAt } : undefined}
             />
           </div>
@@ -1364,7 +1373,7 @@ export function AiPanel({
           inert={!open}
         >
           <div>
-            {nodes.slice(run.start, run.end)}
+            {nodes.slice(run.start, liveStart)}
             {answer?.role === "assistant" && (
               <div style={{ display: "flex", gap: 10, margin: "3px 0" }}>
                 <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
@@ -1376,6 +1385,15 @@ export function AiPanel({
           </div>
         </div>,
       );
+      // The step in flight, outside the fold so it is in view whatever the
+      // fold's state. It joins the body — and folds — once it is done.
+      if (liveStart < run.end) {
+        out.push(
+          <div key={`tool-run-live-${run.start}`}>
+            {nodes.slice(liveStart, run.end)}
+          </div>,
+        );
+      }
       cursor = run.end;
     }
     for (; cursor < nodes.length; cursor++) out.push(nodes[cursor]);
