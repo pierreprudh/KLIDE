@@ -7,6 +7,7 @@
 // nudge. A link that didn't parse arrives as `deep-link:error`, in words.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { DelegateId } from "../delegates";
 
 export type LinkAction =
   /** A new conversation with `prompt` in the composer — pre-filled, never sent. */
@@ -14,7 +15,10 @@ export type LinkAction =
   /** A file in a tab, at `line` when given; `project` is its repository. */
   | { kind: "open"; path: string; line: number | null; project: string | null }
   /** A folder as the open project. */
-  | { kind: "project"; path: string };
+  | { kind: "project"; path: string }
+  /** A Delegate CLI's own session, continued in an AI panel (`--resume`);
+   *  `project` is the folder it ran in, read from its transcript when known. */
+  | { kind: "resume"; provider: DelegateId; session: string; project: string | null };
 
 export const DEEP_LINK_EVENT = "deep-link";
 export const DEEP_LINK_ERROR_EVENT = "deep-link:error";

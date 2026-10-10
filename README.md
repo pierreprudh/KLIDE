@@ -98,7 +98,7 @@ Klide has three capability modes:
 | **Models** | Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, OpenAI-compatible endpoints, about forty more behind the opencodex gateway, and `auto` resolved once in Rust at run start |
 | **Delegate CLIs** | Claude Code, Codex, OpenCode, and OMP in persistent PTYs or as streaming Focus turns; each CLI's own `/` commands in the composer, Claude Code's reasoning effort levels, `/config` drawn as a settings card, version and updater per CLI, and per-login usage in the account menu |
 | **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, image and document attachments, skills, dynamic tools, search over previous conversations, native recall over reviewed Project Memory with provenance, and `html` / `svg` visuals drawn in the answer |
-| **From other apps** | `klide://` links open a pre-filled conversation, a file at a line, or a project; Ask Kit in the macOS Services menu sends selected text to a new conversation |
+| **From other apps** | `klide://` links open a pre-filled conversation, a file at a line, a project, or resume a Claude Code session; Ask Kit in the macOS Services menu sends selected text to a new conversation; a `/klide` skill lets Claude Code hand its own session to Klide |
 | **Local security** | Workspace-rooted file access, operating-system keychain storage, project command allowlists, network permissions, a user-choosable transcript folder with measured cleanup, and Rust deciding what a run may open, reveal, or must refuse |
 
 ## Get started

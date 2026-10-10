@@ -108,7 +108,7 @@ Klide/
 │   ├── diffComments.ts          Line-anchored diff comments sent back to running agents
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
-│   ├── ipc/deepLink.ts          `klide://` link actions + drain (servicesMenu.ts: the Ask Kit toggle)
+│   ├── ipc/deepLink.ts          `klide://` link actions + drain (servicesMenu.ts: the Ask Kit toggle, klideSkill.ts: the /klide skill toggle)
 │   ├── ipc/connectors.ts        connectors_* wire — the MCP servers Klide connects to (store, discover, probe, GitHub preset, pool status)
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
 │   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
@@ -270,6 +270,7 @@ Klide/
     │   ├── cli.rs                Login-shell binary resolution + subscription-CLI install/auth status
     │   ├── deep_link.rs          `klide://` links — new (pre-filled, never sent) / open file:line / project; parsed + path-checked in Rust, queued until the page drains them
     │   ├── services_menu.rs      "Ask Kit" Services Quick Action — installed/removed from Settings, opens `klide://new?prompt=`
+    │   ├── klide_skill.rs        The `/klide` skill for Claude Code — one SKILL.md in ~/.claude/skills that opens `klide://resume?…&session=$CLAUDE_CODE_SESSION_ID`
     │   ├── adapters.rs           Provider streaming trait + shared loop + 3 wire adapters (Ollama/OpenAI/Anthropic)
     │   ├── providers.rs          Provider registry — one row is the whole provider (wire, key, models, label, group, defaults, brand, caps); publishes itself to TS
     │   ├── custom_providers.rs   User-added self-hosted OpenAI-wire endpoints

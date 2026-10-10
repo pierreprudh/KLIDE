@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Continue a Claude Code terminal session in Klide. `klide://resume?provider=claude-code&session=<id>` resumes that CLI session in an AI panel, in the project its transcript names; Settings › From other apps installs a `/klide` skill so "open this conversation in Klide", said to Claude Code, opens that link with the shell's own session id. Links also carry an explicit `project=`, and any Delegate with a resume flag is accepted.
+
 ## 0.6.8 (2026-10-07)
 
 - Sight lets a model without image support borrow another model's vision. Settings can select the Eyes model; automatic selection prefers an installed local vision model. Descriptions, attribution, and usage are retained in the conversation.

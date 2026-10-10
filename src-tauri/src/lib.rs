@@ -41,6 +41,7 @@ pub mod pty_daemon;
 mod pty_host;
 mod pty_spawn;
 mod search;
+mod klide_skill;
 mod services_menu;
 mod skills;
 mod storage;
@@ -1097,6 +1098,8 @@ pub fn run() {
             deep_link::deep_link_take,
             services_menu::services_ask_kit_status,
             services_menu::services_ask_kit_set,
+            klide_skill::klide_skill_status,
+            klide_skill::klide_skill_set,
             connectors::connectors_add_github,
             connectors::connectors_status,
             agent::agent_start_run,
