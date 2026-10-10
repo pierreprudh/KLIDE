@@ -60,6 +60,26 @@ import {
 import { nextBusyWait } from "./runBusyRetry";
 import type { Pricing } from "./transcriptReducer";
 import { createTurnDriver, type TurnDriverOptions } from "./turnDriver";
+import { isDelegateId, type DelegateId } from "../../delegates";
+
+/** A Delegate CLI session `open_cli_session` verified, as the Tool reported it. */
+export type CliSessionRef = { provider: DelegateId; session: string; project: string | null; title: string };
+
+/** The `openSession` marker a successful `open_cli_session` result carries
+ *  (`agent/tools.rs`), or null for any other result. */
+export function cliSessionToOpen(result: { ok: boolean; metadata?: Record<string, unknown> }): CliSessionRef | null {
+  if (!result.ok) return null;
+  const raw = result.metadata?.openSession;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.provider !== "string" || !isDelegateId(r.provider) || typeof r.session !== "string" || !r.session) return null;
+  return {
+    provider: r.provider,
+    session: r.session,
+    project: typeof r.project === "string" && r.project ? r.project : null,
+    title: typeof r.title === "string" ? r.title : "",
+  };
+}
 import type { Msg, QueuedTurn } from "./types";
 
 // ── The wire the controller drives ──
@@ -244,6 +264,10 @@ export type RunControllerHooks = {
   onFileChanged?(path: string): void;
   /** The executor parked on `consult_advisor`; the panel services it. */
   onAdvisorRequested?(event: Extract<AgentEvent, { type: "advisor_requested" }>): void;
+  /** `open_cli_session` verified a Delegate CLI session; the host opens it
+   *  in a new conversation. Fired from the live result only — a replayed
+   *  transcript must never reopen it. */
+  onOpenCliSession?(session: CliSessionRef): void;
   /** A turn's Run failed to start or to finish; the failure is on screen. */
   onTurnFailed?(turn: QueuedTurn, error: unknown): void;
   /** A turn is over and the conversation is idle again. */
@@ -529,6 +553,13 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
           };
           commit(next);
         }
+      }
+      // A Tool result can carry one side effect for the window the Run has
+      // none of: `open_cli_session` asks for a new conversation. Read it before
+      // the driver folds the row, which consumes the event.
+      if (event.type === "tool_call_finished") {
+        const open = cliSessionToOpen(event.result);
+        if (open) deps().hooks.onOpenCliSession?.(open);
       }
       // Transcript events (deltas, finalized messages, tool cards) belong to
       // the turn driver; everything below is panel behaviour.

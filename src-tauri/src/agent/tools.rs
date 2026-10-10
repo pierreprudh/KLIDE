@@ -358,6 +358,141 @@ fn peek_summary(call: &NormalizedToolCall) -> String {
     }
 }
 
+/// `list_cli_sessions` — the Delegate CLI sessions (Claude Code, Codex,
+/// OpenCode, Oh My Pi) on this machine, newest first, so a model can find
+/// "the Claude Code conversation about the login bug" by its title. Scoped to
+/// the open Workspace unless `anywhere`. Reads the CLIs' own transcripts
+/// through the Delegate adapters — the same rows Mission Control shows.
+fn run_list_cli_sessions(
+    ws: &Workspace,
+    input: &serde_json::Value,
+    _run_id: &str,
+    _runs_dir: Option<&Path>,
+) -> ToolResult {
+    let provider = input.get("provider").and_then(|v| v.as_str()).map(str::trim).filter(|p| !p.is_empty());
+    if let Some(p) = provider {
+        if crate::delegate::lookup(p).is_none() {
+            return err(format!("Unknown CLI `{p}`. One of: {}.", delegate_ids().join(", ")));
+        }
+    }
+    let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();
+    let anywhere = input.get("anywhere").and_then(|v| v.as_bool()).unwrap_or(false);
+    let limit = input.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
+    let env = crate::delegate::ProcessEnv;
+    // A page wide enough that a provider or title filter still fills the ask.
+    let page = (limit * 8).max(40);
+    let runs = if anywhere {
+        crate::delegate::list_runs(&env, page, 0)
+    } else {
+        crate::delegate::list_runs_for_workspace(&env, page, 0, &ws.root().to_string_lossy())
+    };
+    let hits: Vec<_> = runs
+        .into_iter()
+        .filter(|r| provider.is_none_or(|p| r.source == p))
+        .filter(|r| query.is_empty() || r.title.to_lowercase().contains(&query) || r.cwd.as_deref().is_some_and(|c| c.to_lowercase().contains(&query)))
+        .take(limit)
+        .collect();
+    if hits.is_empty() {
+        let scope = if anywhere { "on this machine" } else { "in this workspace" };
+        return ok(format!(
+            "No {} sessions {scope}{}. Try anywhere:true, another provider, or fewer words.",
+            provider.map(|p| crate::delegate::lookup(p).map(|d| d.label()).unwrap_or(p)).unwrap_or("CLI"),
+            if query.is_empty() { String::new() } else { format!(" matching {query:?}") },
+        ));
+    }
+    let mut content = format!("{} CLI session{} (newest first):", hits.len(), if hits.len() == 1 { "" } else { "s" });
+    for (i, r) in hits.iter().enumerate() {
+        let label = crate::delegate::lookup(&r.source).map(|d| d.label()).unwrap_or(r.source.as_str());
+        content.push_str(&format!(
+            "\n\n{}. {}\n   provider: {}\n   session: {}\n   project: {}\n   updated: {} · {} messages · {}",
+            i + 1,
+            if r.title.trim().is_empty() { "(untitled)" } else { r.title.trim() },
+            r.source,
+            r.id,
+            r.cwd.as_deref().unwrap_or("?"),
+            iso_date(r.updated_ms),
+            r.message_count,
+            r.status,
+        ));
+        let _ = label;
+    }
+    content.push_str("\n\nTo continue one in Klide, call open_cli_session with its provider and session. If more than one could be what the user means, ask which.");
+    ok(content)
+}
+
+fn delegate_ids() -> Vec<&'static str> {
+    crate::delegate::catalog().into_iter().map(|d| d.id).collect()
+}
+
+fn iso_date(ms: i64) -> String {
+    if ms <= 0 {
+        return "unknown".to_string();
+    }
+    let secs = ms / 1000;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Civil-from-days (Howard Hinnant), enough for a date a model can read.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", rem / 3600, (rem % 3600) / 60)
+}
+
+/// `open_cli_session` — continue one Delegate session in a new Klide
+/// conversation. The Tool only *verifies* (the session exists for that CLI)
+/// and reports; the panel that receives the result opens the conversation,
+/// because a Run has no window. The marker rides `ToolResult.metadata` as
+/// `openSession`, so a daemon-hosted Run's result reaches the app the same
+/// way a live one's does, and a replay of the transcript never re-opens it.
+fn run_open_cli_session(
+    _ws: &Workspace,
+    input: &serde_json::Value,
+    _run_id: &str,
+    _runs_dir: Option<&Path>,
+) -> ToolResult {
+    let provider = input.get("provider").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let session = input.get("session").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if provider.is_empty() || session.is_empty() {
+        return err("open_cli_session needs a provider and a session id — list_cli_sessions gives both.".to_string());
+    }
+    let Some(delegate) = crate::delegate::lookup(provider) else {
+        return err(format!("Unknown CLI `{provider}`. One of: {}.", delegate_ids().join(", ")));
+    };
+    let Some(run) = crate::delegate::find_run(&crate::delegate::ProcessEnv, provider, session) else {
+        return err(format!("No {} session `{session}` on this machine. Call list_cli_sessions and use a session id it returned.", delegate.label()));
+    };
+    let title = if run.title.trim().is_empty() { "(untitled)".to_string() } else { run.title.trim().to_string() };
+    ToolResult {
+        ok: true,
+        content: format!(
+            "Opening the {} session \"{title}\" in a new Klide conversation{}. Tell the user it is open beside this one; the CLI continues that same session there.",
+            delegate.label(),
+            run.cwd.as_deref().map(|c| format!(" (project {c})")).unwrap_or_default(),
+        ),
+        metadata: Some(serde_json::json!({
+            "openSession": { "provider": provider, "session": session, "project": run.cwd, "title": title }
+        })),
+    }
+}
+
+fn cli_session_summary(call: &NormalizedToolCall) -> String {
+    let pick = |key: &str| call.input.get(key).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+    match (pick("provider"), pick("query"), pick("session")) {
+        (Some(p), _, Some(s)) => format!("{} {p} {s}", call.name),
+        (Some(p), Some(q), None) => format!("{} {p} {q:?}", call.name),
+        (Some(p), None, None) => format!("{} {p}", call.name),
+        (None, Some(q), _) => format!("{} {q:?}", call.name),
+        _ => call.name.clone(),
+    }
+}
+
 fn run_conversation_search(
     ws: &Workspace,
     input: &serde_json::Value,
@@ -689,6 +824,32 @@ fn registry() -> Vec<ToolEntry> {
             run_read: Some(run_conversation_search),
             run_write_preview: None,
             summary: query_summary,
+        },
+        ToolEntry {
+            kind: ToolKind::ConversationHistory,
+            schema: schema("list_cli_sessions", "List recent Claude Code, Codex, OpenCode or Oh My Pi sessions on this machine, newest first, with their titles and session ids. Use this when the user wants to open, continue, resume or follow up a conversation they had in one of those CLIs. Scoped to this workspace unless anywhere is true.",
+                serde_json::json!({
+                    "provider": { "type": "string", "enum": ["claude-code", "codex", "opencode", "omp"], "description": "Only this CLI's sessions. Omit for all four." },
+                    "query": { "type": "string", "description": "Words from the conversation's title (its first message) or its folder." },
+                    "anywhere": { "type": "boolean", "description": "Search every project on this machine, not just the open one." },
+                    "maxResults": { "type": "integer", "minimum": 1, "maximum": 25, "description": "Optional cap (default 8)." }
+                }),
+                &[]),
+            run_read: Some(run_list_cli_sessions),
+            run_write_preview: None,
+            summary: cli_session_summary,
+        },
+        ToolEntry {
+            kind: ToolKind::ConversationHistory,
+            schema: schema("open_cli_session", "Continue one Claude Code, Codex, OpenCode or Oh My Pi session in a new Klide conversation beside this one. Take provider and session from list_cli_sessions. When several sessions could be the one the user means, list them and ask which first — never guess.",
+                serde_json::json!({
+                    "provider": { "type": "string", "enum": ["claude-code", "codex", "opencode", "omp"] },
+                    "session": { "type": "string", "description": "The session id exactly as list_cli_sessions returned it." }
+                }),
+                &["provider", "session"]),
+            run_read: Some(run_open_cli_session),
+            run_write_preview: None,
+            summary: cli_session_summary,
         },
         ToolEntry {
             kind: ToolKind::ProjectMemory,
@@ -4413,6 +4574,26 @@ mod tests {
             !dir.join("marker").exists(),
             "read-only dispatch must not run the dynamic shell command"
         );
+    }
+
+    #[test]
+    fn cli_session_tools_list_and_verify_through_the_delegate_adapters() {
+        let dir = std::env::temp_dir().join(format!("klide-cli-sessions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::new(dir.to_str().unwrap()).unwrap();
+        let bad = run_open_cli_session(&ws, &serde_json::json!({"provider": "ollama", "session": "x"}), "r", None);
+        assert!(!bad.ok && bad.content.contains("Unknown CLI"));
+        let missing = run_open_cli_session(&ws, &serde_json::json!({"provider": "claude-code", "session": "no-such-session-id"}), "r", None);
+        assert!(!missing.ok && missing.content.contains("list_cli_sessions"));
+        let none = run_list_cli_sessions(&ws, &serde_json::json!({"provider": "nope"}), "r", None);
+        assert!(!none.ok && none.content.contains("claude-code"));
+        // An empty workspace lists nothing, and says how to widen.
+        let empty = run_list_cli_sessions(&ws, &serde_json::json!({"query": "zz-no-such-title-zz"}), "r", None);
+        assert!(empty.ok && empty.content.contains("anywhere"));
+        assert_eq!(iso_date(0), "unknown");
+        assert_eq!(iso_date(1_760_000_000_000), "2025-10-09 08:53 UTC");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
