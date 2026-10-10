@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Threads already saved with another Provider's model (a Claude Code thread on `deepseek/…`) are healed at boot: the model is dropped so the thread opens on the CLI's own default, the same rule a resume now applies when a recorded model is plainly foreign.
 - A thread carried onto another Provider without a recorded model no longer keeps the previous Provider's model: a Claude Code session opened from a DeepSeek chat showed "deepseek-v4.1" in its composer. It now starts where a switch to that Provider would (remembered pick, star, or the CLI's own default).
 
 - In Focus, an opened CLI session becomes a Focus conversation on that agent, not a terminal: the transcript is carried in ("Continue in Focus") and the thread remembers the CLI's session id, so its first headless turn runs `claude --resume <id>` on the real session instead of a cold start over the folded history. In the workbench the same request opens the CLI's own terminal, as before.
