@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Threads already saved with another Provider's model (a Claude Code thread on `deepseek/…`) are healed at boot: the model is dropped so the thread opens on the CLI's own default, the same rule a resume now applies when a recorded model is plainly foreign.
+- A thread carried onto another Provider without a recorded model no longer keeps the previous Provider's model: a Claude Code session opened from a DeepSeek chat showed "deepseek-v4.1" in its composer. It now starts where a switch to that Provider would (remembered pick, star, or the CLI's own default).
+
+- In Focus, an opened CLI session becomes a Focus conversation on that agent, not a terminal: the transcript is carried in ("Continue in Focus") and the thread remembers the CLI's session id, so its first headless turn runs `claude --resume <id>` on the real session instead of a cold start over the folded history. In the workbench the same request opens the CLI's own terminal, as before.
 - Open a CLI conversation from a Klide conversation. Kit has `list_cli_sessions` and `open_cli_session`: "open the Claude Code conv about the login bug" lists the matches, asks when several fit, and opens the one in a new panel beside the conversation, `--resume`d in its own folder. Works for Claude Code, Codex, OpenCode and Oh My Pi, with any model that calls tools.
 - `klide://resume` without a session id takes the newest session of that CLI in `project=`, so Codex, OpenCode and Oh My Pi can hand a session to Klide too; the From other apps toggle now installs a second `/klide` skill in `~/.agents/skills` for them.
 - Continue a Claude Code terminal session in Klide. `klide://resume?provider=claude-code&session=<id>` resumes that CLI session in an AI panel, in the project its transcript names; Settings › From other apps installs a `/klide` skill so "open this conversation in Klide", said to Claude Code, opens that link with the shell's own session id. Links also carry an explicit `project=`, and any Delegate with a resume flag is accepted.

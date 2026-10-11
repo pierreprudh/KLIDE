@@ -169,6 +169,10 @@ export type Conversation = {
   cwd?: string | null;
   branch?: string | null;
   worktree?: string | null;
+  /** The Delegate CLI session this thread continues (`claude --resume <id>`),
+   *  set when a CLI conversation was carried into Focus. The first headless
+   *  turn resumes it instead of cold-starting over the folded transcript. */
+  delegateSession?: string | null;
   forkedFrom?: {
     conversationId: string;
     title: string;

@@ -989,6 +989,7 @@ export function AiPanel({
       cwd: workspaceRoot,
       branch: conversationGitMeta.branch,
       worktree: conversationGitMeta.worktree,
+      delegateSession: conversationSession.delegateSession ?? null,
       forkedFrom: currentForkedFrom ?? null,
     });
     if (streaming && last.streaming && last.count === msgs.length && last.meta === metaKey) return;
@@ -2560,7 +2561,11 @@ This user request requires workspace inspection. Before answering, you MUST call
       if (panelId) localStorage.setItem(`klide.provider.${panelId}`, c.provider);
       onProviderChange?.(c.provider);
     }
-    if (c.model && c.model !== model) onModelChange(c.model);
+    // The session may have picked a model the thread did not record (a
+    // Provider change with no model of its own), so the host follows what was
+    // adopted, not what the record said.
+    const adoptedModel = conversationSessionRef.current.model;
+    if (adoptedModel && adoptedModel !== model) onModelChange(adoptedModel);
     // Explicit resume is intent to continue this Conversation across a
     // remount; the `resumed` transition above persisted that binding.
     // No usage stored with history → estimate until this chat's next turn.
@@ -3212,6 +3217,10 @@ This user request requires workspace inspection. Before answering, you MUST call
       // Stars are the router's strongest preference and live only in this
       // renderer's storage, so an `auto` turn carries them along.
       preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
+      // A thread carried in from a CLI's own session continues *that* session
+      // on its first headless turn; the Rust side ignores it once the CLI has
+      // reported a newer id of its own.
+      delegateSession: conversationSession.delegateSession ?? undefined,
     };
   }
 

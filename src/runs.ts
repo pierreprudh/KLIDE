@@ -653,6 +653,15 @@ export function invalidateAgentRunsCache() {
 
 // Read a single run's conversation (the detail pane's résumé). Throws if the
 // command is unavailable; callers handle the empty/error state.
+/** One Delegate session by the id its CLI resumes it under — the Run row
+ *  Mission Control would show for it, or null. `delegate_run_lookup` is a
+ *  stat walk and one parse; what a `klide://resume` or `open_cli_session`
+ *  target needs before it can be carried into a conversation. */
+export async function fetchCliSessionRun(provider: DelegateId, session: string): Promise<Run | null> {
+  const dto = await invoke<AgentRunDto | null>("delegate_run_lookup", { provider, session });
+  return dto ? fromDto(dto) : null;
+}
+
 export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {
   if (run.source === "klide") {
     const events = await readAgentRunEvents(run.id);

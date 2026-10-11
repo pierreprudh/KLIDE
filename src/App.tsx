@@ -64,7 +64,7 @@ import { providerName } from "./agent/providers";
 import { switchModelForProvider } from "./components/ai/rememberedModel";
 import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
-import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
+import { fetchCliSessionRun, fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
 import { isDelegateId, type DelegateId } from "./delegates";
 import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId } from "./theme";
@@ -727,7 +727,7 @@ function App() {
         return;
       }
       if (root === workspaceRoot) {
-        openRunInAiPanel({ provider: action.provider, workspaceRoot: root, resumeSessionId: action.session, cwd: root });
+        void openCliSessionWhereUserIs(action.provider, action.session, root);
       } else {
         pendingLinkResumeRef.current = { root, provider: action.provider, session: action.session };
         changeRoot(root);
@@ -780,7 +780,7 @@ function App() {
     const pending = pendingLinkResumeRef.current;
     if (!pending || pending.root !== workspaceRoot) return;
     pendingLinkResumeRef.current = null;
-    openRunInAiPanel({ provider: pending.provider, workspaceRoot: pending.root, resumeSessionId: pending.session, cwd: pending.root });
+    void openCliSessionWhereUserIs(pending.provider, pending.session, pending.root);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceRoot]);
   useEffect(() => {
@@ -1602,8 +1602,7 @@ function App() {
           // Mission Control "Resume" or a klide://resume link takes — a new
           // panel pinned to that Delegate, `--resume`d in the session's own
           // folder, beside the conversation that asked.
-          const cwd = session.project ?? root;
-          openRunInAiPanel({ provider: session.provider, workspaceRoot: cwd, resumeSessionId: session.session, cwd: cwd ?? undefined });
+          void openCliSessionWhereUserIs(session.provider, session.session, session.project);
         }}
         onOpenPeerConversation={(conversationId) => {
           // The peer link's card names another thread; land it exactly where a
@@ -2333,11 +2332,39 @@ function App() {
           title: run.title,
           forkedFrom: null,
           provider,
+          // A CLI run's id is the session its CLI resumes it under, so the
+          // first headless turn continues the real session (`claude --resume`)
+          // rather than cold-starting over the folded transcript.
+          delegateSession: isDelegateId(run.source) ? run.id : null,
         },
       });
     } catch (e) {
       setFileNotice(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  // A CLI session named from outside the board — a `klide://resume` link or
+  // Kit's `open_cli_session` — lands where the user is. In Focus that is a
+  // conversation on the session (the chat-first "Continue in Focus"); in the
+  // workbench it is the Delegate's own terminal, `--resume`d (the Mission
+  // Control "Resume" door). The workbench door accepts a session the board
+  // has never parsed; the Focus one needs the transcript, so a session the
+  // adapter cannot find falls back to the terminal with a word.
+  async function openCliSessionWhereUserIs(provider: DelegateId, session: string, project: string | null) {
+    const cwd = project ?? workspaceRoot ?? undefined;
+    if (focusBase) {
+      try {
+        const run = await fetchCliSessionRun(provider, session);
+        if (run) {
+          await continueRunInFocus(run);
+          return;
+        }
+        notify(`${providerName(provider)}'s session has no readable transcript; opening its terminal instead.`, { tone: "warn" });
+      } catch (e) {
+        notify(errMessage(e), { tone: "warn" });
+      }
+    }
+    openRunInAiPanel({ provider, workspaceRoot: cwd ?? null, resumeSessionId: session, cwd });
   }
 
   async function forkRunInWorktree(run: Run, preloadedMessages?: MissionRunMessage[]) {

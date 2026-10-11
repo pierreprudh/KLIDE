@@ -120,6 +120,14 @@ pub struct StartRunRequest {
     /// ordinary turn, which ends when the model stops calling tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<super::goal::GoalSpec>,
+    /// A Delegate CLI's own session this conversation continues (`claude
+    /// --resume <id>`) — set when a CLI conversation was carried into Focus
+    /// (`klide://resume`, `open_cli_session`), so the first headless turn
+    /// resumes the real session instead of a cold start over a folded
+    /// transcript. Only the subscription-CLI path reads it, and only when it
+    /// remembers no session of its own for this conversation yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_session: Option<String>,
     /// Backend-populated project approvals. Renderer input is deliberately
     /// ignored: a compromised webview must not be able to mint command trust.
     #[serde(default, skip_deserializing)]

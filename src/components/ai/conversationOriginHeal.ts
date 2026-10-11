@@ -37,6 +37,7 @@
 import type { Conversation, Msg } from "./types";
 import { delegateProviderByName, isDelegateProvider } from "../../agent/providers";
 import { loadConversations, saveConversations } from "./storedConversations";
+import { isForeignModelFor } from "./rememberedModel";
 import type { RunOrigin } from "../../runs";
 
 /** The delegate a thread demonstrably began on, or null when its first
@@ -89,6 +90,37 @@ export function healStoredConversationOrigins(): number {
     return fixed;
   });
   // Don't rewrite (or notify) an index that was already correct.
+  if (healed > 0) saveConversations(next, undefined, false);
+  return healed;
+}
+
+/* ─────────────── a model that belongs to another Provider ────────────── */
+
+/**
+ * The record with its model dropped, when that model plainly belongs to
+ * another Provider — or null when it is fine. A thread carried onto a CLI
+ * from an API chat used to keep the chat's model (a Claude Code session
+ * showing `deepseek/deepseek-v4.1-flash`); `conversationSession` no longer
+ * lets that happen, and this clears what was saved before. Dropping, not
+ * replacing: with no model the thread opens on the CLI's own default, which
+ * is where a resumed session belongs anyway.
+ */
+export function healedConversationModel(conv: Conversation): Conversation | null {
+  if (!conv.provider || !conv.model || !isForeignModelFor(conv.provider, conv.model)) return null;
+  return { ...conv, model: null };
+}
+
+/** Repair every stored thread whose model is another Provider's. Returns how
+ *  many changed; the index is rewritten only when one did. */
+export function healStoredConversationModels(): number {
+  let healed = 0;
+  const conversations = loadConversations<Conversation>();
+  const next = conversations.map((conv) => {
+    const fixed = healedConversationModel(conv);
+    if (!fixed) return conv;
+    healed += 1;
+    return fixed;
+  });
   if (healed > 0) saveConversations(next, undefined, false);
   return healed;
 }

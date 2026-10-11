@@ -193,6 +193,9 @@ struct ProviderTurnRequest {
     /// This run's id, so a subscription CLI can continue the session it opened
     /// for this conversation instead of starting a new one per turn.
     run_id: Option<String>,
+    /// The CLI session this conversation was carried in from, if any
+    /// ([`StartRunRequest::delegate_session`]).
+    delegate_session: Option<String>,
     /// Commands the project has already approved, read once per turn and handed
     /// to a delegate CLI so a headless turn can run what the user already said
     /// yes to. Empty for every provider whose tools Klide dispatches itself.
@@ -230,6 +233,7 @@ impl AgentProviderCaller for RealProviderCaller {
                     tools: request.tools,
                     workspace_root: request.workspace_root,
                     run_id: request.run_id,
+                    delegate_session: request.delegate_session,
                     allowed_commands: request.allowed_commands,
                     mcp: request.mcp,
                     num_ctx: request.num_ctx,
@@ -720,6 +724,7 @@ async fn run_subagent_to_completion(
         command_timeout_secs: spec.command_timeout_secs,
         test_after_edit_command: None,
         goal: None,
+        delegate_session: None,
         command_allowlist: vec![],
         require_diff_review: spec.require_diff_review,
         // Never inherited from the parent: the parent conversation's operator
@@ -2623,6 +2628,7 @@ async fn loop_body(
                 tools: turn_tools.clone(),
                 workspace_root: request.workspace_root.clone(),
                 run_id: Some(id.clone()),
+                delegate_session: request.delegate_session.clone(),
                 allowed_commands,
                 mcp,
                 num_ctx: request.num_ctx,
@@ -4823,6 +4829,7 @@ mod provider_caller_tests {
                 tools: Some(Vec::new()),
                 workspace_root: Some("/tmp".to_string()),
                 run_id: None,
+                delegate_session: None,
                 allowed_commands: Vec::new(),
                 mcp: None,
                 num_ctx: Some(1024),

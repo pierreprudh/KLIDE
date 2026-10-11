@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { memoryStorage } from "../../testStorage";
 import type { Conversation, Msg } from "./types";
 import {
+  healStoredConversationModels,
   healStoredConversationOrigins,
   healStoredConversationsFromTranscripts,
   healedConversationFromRunOrigin,
@@ -81,6 +82,25 @@ describe("healedConversationOrigin", () => {
         conversation({ msgs: [ask, answer(), ask, answer("Claude Code")] }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("healStoredConversationModels", () => {
+  it("drops a CLI thread's model when it plainly belongs to another Provider, and nothing else", () => {
+    saveConversations([
+      conversation({ id: "carried-in", provider: "claude-code", model: "deepseek/deepseek-v4.1-flash", updatedAt: 7 }),
+      conversation({ id: "bare", provider: "claude-code", model: "opus", updatedAt: 6 }),
+      conversation({ id: "opencode-ok", provider: "opencode", model: "anthropic/claude-sonnet-4-6", updatedAt: 5 }),
+      conversation({ id: "router", provider: "openrouter", model: "deepseek/deepseek-v4.1-flash", updatedAt: 4 }),
+    ]);
+    expect(healStoredConversationModels()).toBe(1);
+    const stored = loadConversations<Conversation>();
+    expect(stored.find((c) => c.id === "carried-in")?.model).toBeNull();
+    expect(stored.find((c) => c.id === "carried-in")?.updatedAt).toBe(7);
+    expect(stored.find((c) => c.id === "bare")?.model).toBe("opus");
+    expect(stored.find((c) => c.id === "opencode-ok")?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(stored.find((c) => c.id === "router")?.model).toBe("deepseek/deepseek-v4.1-flash");
+    expect(healStoredConversationModels()).toBe(0);
   });
 });
 

@@ -1545,6 +1545,9 @@ pub(crate) struct ProviderTurn {
     /// subscription-CLI path reads it: a delegate keeps a session of its own
     /// per conversation, and the run id is what identifies the conversation.
     pub run_id: Option<String>,
+    /// The CLI session a Focus conversation was carried in from, when one
+    /// was: the subscription-CLI path resumes it on the first turn.
+    pub delegate_session: Option<String>,
     /// Commands this project has already approved in Klide. Only the
     /// subscription-CLI path reads them: a delegate runs its own permission
     /// layer, and a headless turn has no terminal to answer it in.
@@ -1620,6 +1623,7 @@ pub(crate) async fn dispatch(
         tools,
         workspace_root,
         run_id,
+        delegate_session,
         allowed_commands,
         mcp,
         num_ctx,
@@ -1663,6 +1667,7 @@ pub(crate) async fn dispatch(
                 messages,
                 workspace_root,
                 run_id,
+                delegate_session,
                 allowed_commands,
                 mcp,
                 on_chunk,
