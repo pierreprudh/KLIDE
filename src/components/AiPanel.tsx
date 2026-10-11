@@ -1290,8 +1290,8 @@ export function AiPanel({
       }
       // Work still happening: the line is the heartbeat — "Working" with a
       // clock ticking from the turn's send time (`ToolRunRow`) — and under
-      // it only the step in flight stays in view, in full ink: the call
-      // that is running, the thought being written. Nothing else moves; the
+      // it only the step in flight stays in view, drawn like any other row:
+      // the call that is running, the thought being written. Nothing else moves; the
       // Working row at the foot of the conversation stays away while a run
       // has this line. Each step folds under the line the moment it is
       // done, so the operator sees what is going on without the finished
