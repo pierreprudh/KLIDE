@@ -758,10 +758,11 @@ function ToolResultRow({
           color: isError ? "var(--danger)" : "var(--fg-dim)",
         }}
       >
-        {/* A running call wears the same elbow as a finished one: the Working
-            row at the foot of the conversation is the one heartbeat, and a
-            loader here would beat beside it. */}
-        {(
+        {/* A call still running wears the loader the rest of the panel uses
+            in place of the elbow — a static "running" reads as stuck. */}
+        {pending ? (
+          <DotGridLoader size={11} label="Tool running" />
+        ) : (
           <span
             aria-hidden
             style={{
