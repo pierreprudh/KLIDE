@@ -630,21 +630,17 @@ export function ToolRunRow({
   names,
   expanded,
   onToggle,
-  working,
 }: {
   /** "Worked for 19.4s" / "Thought for 6.3s" — or the count, when nothing
-   *  was timed. */
+   *  was timed. Mid-run the caller passes the count: the line stays quiet,
+   *  the step in flight under it is what is happening, and the Working row
+   *  at the foot of the conversation is the one heartbeat. */
   label: string;
   count: string;
   /** Every distinct tool, comma-separated; shown on hover only. */
   names: string;
   expanded: boolean;
   onToggle: () => void;
-  /** The run is still going: the line reads "Working" with a clock that
-   *  ticks from the turn's send time (`since`, epoch ms; absent → from
-   *  mount), the way the thinking header does. The settled label replaces
-   *  it once the answer arrives. */
-  working?: { since?: number };
 }) {
   const hover = [label === count ? null : count, names || null].filter(Boolean).join(" · ");
   return (
@@ -678,7 +674,7 @@ export function ToolRunRow({
           ) : null
         }
       >
-        {working ? <LiveLabel label="Working" startedAt={working.since} /> : label}
+        {label}
       </FoldLine>
     </button>
   );
@@ -757,9 +753,10 @@ function ToolResultRow({
           color: isError ? "var(--danger)" : "var(--fg-dim)",
         }}
       >
-        {pending ? (
-          <DotGridLoader size={11} label="Tool running" />
-        ) : (
+        {/* A running call wears the same elbow as a finished one: the Working
+            row at the foot of the conversation is the one heartbeat, and a
+            loader here would beat beside it. */}
+        {(
           <span
             aria-hidden
             style={{

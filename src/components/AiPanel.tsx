@@ -1288,13 +1288,15 @@ export function AiPanel({
         cursor = run.end;
         continue;
       }
-      // Work still happening: the line reads "Working" with a clock ticking
-      // from the turn's send time (`ToolRunRow`), and under it only the step
-      // in flight stays in view — the call that is running, the thought
-      // being written. Each step folds under the line the moment it is
-      // done, so the operator sees what is going on without the finished
-      // rows piling up; a click opens the finished ones. When the answer
-      // arrives the last step folds too and "Worked for" takes the line.
+      // Work still happening: the line stays quiet — the count so far — and
+      // under it only the step in flight stays in view, in full ink: the
+      // call that is running, the thought being written. Nothing on the
+      // line moves; the Working row at the foot of the conversation is the
+      // one heartbeat, clock included. Each step folds under the line the
+      // moment it is done, so the operator sees what is going on without
+      // the finished rows piling up; a click opens the finished ones. When
+      // the answer arrives the last step folds too and "Worked for" takes
+      // the line.
       const working = streaming && run.end === msgs.length;
       const open = openToolRuns.has(run.start);
       // Where the live step starts: the run's last message, or — when that
@@ -1303,13 +1305,6 @@ export function AiPanel({
       if (working) {
         const last = run.end - 1;
         liveStart = toolPairing.claimed.get(last) ?? last;
-      }
-      let turnStartedAt: number | undefined;
-      if (working) {
-        for (let i = run.start - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.role === "user") { turnStartedAt = m.ts; break; }
-        }
       }
       const { label, count, names } = toolRunLabel(run);
       // When a turn opens with tool work, the message wearing the agent's mark
@@ -1347,12 +1342,11 @@ export function AiPanel({
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <ToolRunRow
-              label={label}
+              label={working ? count : label}
               count={count}
               names={names}
               expanded={open}
               onToggle={() => toggleToolRun(run.start)}
-              working={working ? { since: turnStartedAt } : undefined}
             />
           </div>
         </div>,
@@ -4422,18 +4416,19 @@ This user request requires workspace inspection. Before answering, you MUST call
           controller.attach({ conversationId: currentId, provider });
           return true;
         }} />
-        {/* "Working" heartbeat — shown while a run is in progress but nothing
-            else is animating. Covers the gap where the model is generating the
-            next turn (esp. providers that don't stream token deltas, so there's
-            no typing caret): without this the completed tool calls just sit
-            there and the agent looks stuck. Hidden when a tool is mid-run, a
-            placeholder/caret is already animating, or we're waiting on the user
-            (diff / permission / question). */}
+        {/* "Working" heartbeat — the one animation of a live run, shown while
+            the run is in progress. Covers the gap where the model is
+            generating the next turn (esp. providers that don't stream token
+            deltas, so there's no typing caret): without this the completed
+            tool calls just sit there and the agent looks stuck. A running
+            tool shows it too — its row only reads "running", in ink, and this
+            is what moves. Hidden when a placeholder/caret is already
+            animating, the thinking header carries its own clock, or we're
+            waiting on the user (diff / permission / question). */}
         {(() => {
           // The exchange's tail, not the array's: turns typed ahead park below
           // it and say nothing about whether the run is alive.
           const last = msgs[lastExchangeIndex];
-          const tailPendingTool = last?.role === "tool" && /^Running /.test(last.content);
           const tailPlaceholder = last?.role === "assistant" && !last.content && !last.thinking && !last.toolCalls;
           const tailStreamingText = last?.role === "assistant" && !!last.content;
           // A reasoning-only tail already wears its own shimmer + timer in the
@@ -4444,7 +4439,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           const tailQueuedUser = last?.role === "user" && !!last.queueState;
           const showWorking =
             streaming && !pendingDiff && !pendingPermission && !pendingQuestion &&
-            !tailPendingTool && !tailPlaceholder && !tailStreamingText && !tailThinking && !tailQueuedUser;
+            !tailPlaceholder && !tailStreamingText && !tailThinking && !tailQueuedUser;
           if (!showWorking) return null;
           // The timer counts from the turn's own send time, so it survives the
           // row unmounting while a tool runs and remounting after.

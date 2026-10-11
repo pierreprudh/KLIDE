@@ -2373,6 +2373,13 @@ textarea.klide-diff-comment-input:focus-visible {
   padding-bottom: 0;
   border-bottom: none;
 }
+/* The step in flight — the one row outside the fold while a run works — is
+   in full ink, so the eye lands on what is happening. Tool rows paint their
+   name in --fg-subtle inline; redefining the token on the wrapper is the one
+   way to reach them without threading a prop through the message body. */
+.klide-tool-run-live {
+  --fg-subtle: var(--fg-strong);
+}
 .klide-think[open] > summary .klide-fold-chev {
   transform: rotate(90deg);
 }
