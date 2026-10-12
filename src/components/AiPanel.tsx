@@ -473,6 +473,10 @@ type Props = {
    *  panel's own mode setting, as for any typed task. */
   initialMode?: AgentMode | null;
   onInitialMessageConsumed?: () => void;
+  /** The host's "start over". When set, `/clear` leaves through it instead of
+   *  emptying the conversation in place — Focus has one launching screen,
+   *  the start stage, and that is where a cleared conversation must land. */
+  onNewChat?: () => void;
   /** A message to send into the CURRENT conversation as a follow-up turn —
    *  the race "ask both" composer fans one text out to every racer's panel
    *  with this. Unlike `initialMessage` it never starts a new chat, and the
@@ -718,6 +722,7 @@ export function AiPanel({
   initialAttachments,
   initialMode,
   onInitialMessageConsumed,
+  onNewChat,
   followUpMessage,
   onFollowUpConsumed,
   onSendToRace,
@@ -1606,7 +1611,14 @@ export function AiPanel({
     { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
     { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
     { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
-    { name: "clear", desc: SLASH_DESC.clear, run: () => newConversation() },
+    { name: "clear", desc: SLASH_DESC.clear, run: () => {
+      // One launching screen per surface: where the host owns it (Focus's
+      // start stage), leave to it — the same door as "New task". The next
+      // submit starts the fresh conversation; the Run, if any, keeps going
+      // in Rust and the unmount lets go of it like any other exit.
+      if (onNewChat) { setInput(""); setSlash(null); onNewChat(); return; }
+      newConversation();
+    } },
     { name: "compact", desc: SLASH_DESC.compact, run: () => {
       setInput(""); setSlash(null);
       if (!canCompact) {

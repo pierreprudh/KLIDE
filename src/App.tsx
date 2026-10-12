@@ -1671,6 +1671,7 @@ function App() {
         initialMessage={opts?.initialMessage ?? null}
         initialAttachments={opts?.initialAttachments ?? null}
         initialMode={opts?.initialMode ?? null}
+        onNewChat={opts?.onNewChat}
         onInitialMessageConsumed={() => {
           setFocusInitialMessage(null);
           setFocusInitialAttachments([]);
@@ -2111,6 +2112,10 @@ function App() {
           initialAttachments:
             opts?.aiVariant === "focus" ? focusInitialAttachments : null,
           initialMode: opts?.aiVariant === "focus" ? focusInitialMode : null,
+          // `/clear` in a Focus conversation goes where "New task" goes: the
+          // start stage, the one launching screen — never the panel's own
+          // empty placeholder.
+          onNewChat: opts?.aiVariant === "focus" ? startFocusTask : undefined,
         });
       default:
         return (

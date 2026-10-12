@@ -206,6 +206,11 @@ export type AiPanelRenderOptions = {
   /** The mode a start-stage slash command pinned to that first turn; null
    *  lets the panel's own mode setting decide. */
   initialMode?: AgentMode | null;
+  /** Where "start over" leads on this surface. Focus passes its start stage:
+   *  `/clear` there must land on the same screen "New task" does, not on the
+   *  panel's own empty placeholder under a conversation that was just
+   *  emptied. Unset, the panel starts a fresh conversation in place. */
+  onNewChat?: () => void;
   /** Honour a per-panel worktree cwd (free-floating surfaces only). */
   respectWorktree?: boolean;
   /** Show the close action (surfaces with more than one panel). */
