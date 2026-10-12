@@ -628,15 +628,15 @@ pub fn catalog() -> Vec<DelegateFacts> {
 pub fn find_run(env: &dyn Env, provider: &str, session_id: &str) -> Option<AgentRun> {
     let delegate = ALL.iter().find(|d| d.id() == provider)?;
     let stamp = delegate.parse_inputs_stamp(env);
-    let candidate = delegate.discover_runs(env).into_iter().find(|c| {
-        c.key == session_id
-            || std::path::Path::new(&c.key)
-                .file_stem()
-                .is_some_and(|stem| stem == session_id)
-    })?;
-    PARSED_RUNS.get_or_compute(std::path::Path::new(&candidate.key), stamp, |_| {
-        delegate.run_parser(env).parse(&candidate.key)
-    })
+    let parser = delegate.run_parser(env);
+    delegate.discover_runs(env).into_iter().filter(|c| {
+        c.key == session_id || std::path::Path::new(&c.key).file_stem().is_some_and(|stem| {
+            let stem = stem.to_string_lossy();
+            stem == session_id || stem.ends_with(&format!("-{session_id}")) || stem.ends_with(&format!("_{session_id}"))
+        })
+    }).filter_map(|candidate| {
+        PARSED_RUNS.get_or_compute(std::path::Path::new(&candidate.key), stamp, |_| parser.parse(&candidate.key))
+    }).find(|run| run.id == session_id)
 }
 
 /// The session of one delegate that `workspace_root` saw last — what a
@@ -660,7 +660,7 @@ pub fn find_latest_run(env: &dyn Env, provider: &str, workspace_root: &str) -> O
 /// is cheap; only the requested page (offset..offset+limit) is parsed, so big
 /// histories stay fast and the UI can lazily page in older runs.
 pub fn list_runs(env: &dyn Env, limit: usize, offset: usize) -> Vec<AgentRun> {
-    list_runs_matching(env, limit, offset, None)
+    list_runs_matching(env, limit, offset, None, None)
 }
 
 /// One page of recent runs constrained to a workspace. Unlike frontend
@@ -672,7 +672,17 @@ pub fn list_runs_for_workspace(
     offset: usize,
     workspace_root: &str,
 ) -> Vec<AgentRun> {
-    list_runs_matching(env, limit, offset, Some(workspace_root))
+    list_runs_matching(env, limit, offset, Some(workspace_root), None)
+}
+
+/// Filter before limiting, so unrelated recent sessions cannot hide a match.
+pub fn list_runs_filtered(
+    env: &dyn Env,
+    limit: usize,
+    workspace_root: Option<&str>,
+    matches: &dyn Fn(&AgentRun) -> bool,
+) -> Vec<AgentRun> {
+    list_runs_matching(env, limit, 0, workspace_root, Some(matches))
 }
 
 pub(crate) fn normalize_path(path: &str) -> String {
@@ -709,6 +719,7 @@ fn list_runs_matching(
     limit: usize,
     offset: usize,
     workspace_root: Option<&str>,
+    matches: Option<&dyn Fn(&AgentRun) -> bool>,
 ) -> Vec<AgentRun> {
     let stamps: Vec<u64> = ALL.iter().map(|d| d.parse_inputs_stamp(env)).collect();
     let mut candidates: Vec<(usize, RunCandidate)> = Vec::new();
@@ -744,6 +755,9 @@ fn list_runs_matching(
                 continue;
             }
         }
+        if matches.is_some_and(|predicate| !predicate(&run)) {
+            continue;
+        }
         if matched < offset {
             matched += 1;
             continue;
@@ -769,6 +783,22 @@ mod tests {
     // The resume-flag matrix is the easiest thing in the app to break by
     // accident — three CLIs, three spellings. These tests pin the exact
     // command strings the PTY runs.
+
+    #[test]
+    fn session_lookup_resolves_timestamped_provider_files() {
+        let home = std::env::temp_dir().join(format!("klide-session-lookup-{}", std::process::id()));
+        let codex = home.join(".codex/sessions/2026/10/11");
+        let omp = home.join(".omp/agent/sessions/--tmp-work--");
+        std::fs::create_dir_all(&codex).unwrap();
+        std::fs::create_dir_all(&omp).unwrap();
+        std::fs::write(codex.join("rollout-2026-10-11T01-00-00-codex-id.jsonl"), r#"{"type":"session_meta","payload":{"id":"codex-id","cwd":"/tmp/work","timestamp":"2026-10-11T01:00:00Z"}}"#).unwrap();
+        std::fs::write(omp.join("2026-10-11T01-00-00_omp-id.jsonl"), r#"{"type":"session","id":"omp-id","cwd":"/tmp/work","timestamp":"2026-10-11T01:00:00Z"}"#).unwrap();
+        let env = home::test_env(&home);
+        assert_eq!(find_run(&env, "codex", "codex-id").unwrap().id, "codex-id");
+        assert_eq!(find_run(&env, "omp", "omp-id").unwrap().id, "omp-id");
+        assert!(find_run(&env, "codex", "id").is_none());
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn claude_dispatch_with_task_and_model() {
@@ -1112,6 +1142,13 @@ mod tests {
             global_first_page.iter().all(|r| r.source != "claude-code"),
             "the old global-first page would miss the KIDE Claude run"
         );
+
+        let by_provider = list_runs_filtered(&env, 1, None, &|r| r.source == "claude-code");
+        assert_eq!(by_provider.len(), 1);
+        assert_eq!(by_provider[0].id, "c-scoped");
+        let by_topic = list_runs_filtered(&env, 1, None, &|r| r.title.contains("scoped claude"));
+        assert_eq!(by_topic.len(), 1);
+        assert_eq!(by_topic[0].id, "c-scoped");
 
         let scoped = list_runs_for_workspace(&env, 20, 0, workspace.to_str().unwrap());
         assert_eq!(scoped.len(), 1);

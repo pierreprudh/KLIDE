@@ -379,19 +379,15 @@ fn run_list_cli_sessions(
     let anywhere = input.get("anywhere").and_then(|v| v.as_bool()).unwrap_or(false);
     let limit = input.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
     let env = crate::delegate::ProcessEnv;
-    // A page wide enough that a provider or title filter still fills the ask.
-    let page = (limit * 8).max(40);
-    let runs = if anywhere {
-        crate::delegate::list_runs(&env, page, 0)
-    } else {
-        crate::delegate::list_runs_for_workspace(&env, page, 0, &ws.root().to_string_lossy())
-    };
-    let hits: Vec<_> = runs
-        .into_iter()
-        .filter(|r| provider.is_none_or(|p| r.source == p))
-        .filter(|r| query.is_empty() || r.title.to_lowercase().contains(&query) || r.cwd.as_deref().is_some_and(|c| c.to_lowercase().contains(&query)))
-        .take(limit)
-        .collect();
+    let workspace_root = ws.root().to_string_lossy();
+    let hits = crate::delegate::list_runs_filtered(
+        &env,
+        limit,
+        if anywhere { None } else { Some(workspace_root.as_ref()) },
+        &|r| provider.is_none_or(|p| r.source == p)
+            && (query.is_empty() || r.title.to_lowercase().contains(&query)
+                || r.cwd.as_deref().is_some_and(|c| c.to_lowercase().contains(&query))),
+    );
     if hits.is_empty() {
         let scope = if anywhere { "on this machine" } else { "in this workspace" };
         return ok(format!(

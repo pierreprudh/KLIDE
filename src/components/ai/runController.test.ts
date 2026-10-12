@@ -165,6 +165,7 @@ function harness(opts: { delegateStyle?: "console" | "headless"; initial?: Msg[]
   let clock = 0;
   const session = { runStarted: vi.fn(), runSettled: vi.fn() };
   const hooks = {
+    onOpenCliSession: vi.fn(),
     onTurnQueued: vi.fn(),
     onTurnStarted: vi.fn(),
     onMeasuredPromptTokens: vi.fn(),
@@ -581,6 +582,21 @@ describe("createRunController — leaving", () => {
 // ── Attaching ──
 
 describe("createRunController — attach", () => {
+  it("opens new session requests after reattach once, without reopening history", async () => {
+    const h = harness();
+    const opening = { type: "tool_call_finished", runId: CONVO, toolCallId: "open", result: { ok: true, content: "opened", metadata: { openSession: { provider: "codex", session: "s1" } } }, ts } as unknown as AgentEvent;
+    h.backend.backend({ status: "running", fromSeq: 0, transcript: [started(), opening] });
+    h.controller.attach({ conversationId: CONVO, provider: "ollama" });
+    await flush(10);
+    expect(h.hooks.onOpenCliSession).not.toHaveBeenCalled();
+    h.backend.followers[0].emit(opening, 2);
+    h.backend.followers[0].emit(opening, 2);
+    expect(h.hooks.onOpenCliSession).toHaveBeenCalledTimes(1);
+    h.moveTo("other");
+    h.backend.followers[0].emit(opening, 3);
+    expect(h.hooks.onOpenCliSession).toHaveBeenCalledTimes(1);
+  });
+
   it("adopts a finished transcript and does not follow", async () => {
     const h = harness({ initial: [{ role: "user", content: "hi" }] });
     h.backend.backend({ status: null, fromSeq: null, transcript: [started(), userSaid("hi"), message("hello"), finished()] });

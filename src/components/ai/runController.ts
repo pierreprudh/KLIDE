@@ -839,7 +839,16 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
         if (activeRunId === conversationId) setActiveRun(null);
         dropFollower();
       };
-      const reattached = await client.reattachAgentRun(conversationId, snapshot.len, (event) => {
+      let lastOpeningSeq = snapshot.len - 1;
+      const reattached = await client.reattachAgentRun(conversationId, snapshot.len, (event, seq) => {
+        if (deps().conversationId() !== conversationId || activeRunId !== conversationId) return;
+        if (event.type === "tool_call_finished" && seq > lastOpeningSeq) {
+          const open = cliSessionToOpen(event.result);
+          if (open) {
+            lastOpeningSeq = seq;
+            deps().hooks.onOpenCliSession?.(open);
+          }
+        }
         void adopt().then((next) => restoreGates(next.events)).catch(() => {});
         if (event.type === "run_result" || event.type === "run_error") settle();
       });
