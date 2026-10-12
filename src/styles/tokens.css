@@ -8792,21 +8792,20 @@ button:focus-visible .menu-leadout {
    beside it; it starts below the mark instead. */
 .inline-visual-page:first-child { margin-top: 30px; }
 
-/* A drawing still arriving. The frame is the hairline the finished figure
-   never needs — it stands in for a size the picture has not declared yet —
-   and the mosaic inside is the Welcome film's big pixel at ink weight: each
-   cell breathes between near-nothing and a faint tint on a fixed per-cell
-   delay (set inline from markdown.tsx), so a diagonal front keeps crossing
-   the frame while the model writes. No shimmer, no spinner, no progress —
+/* A drawing still arriving: the Welcome film's big pixel at ink weight,
+   bare on the page like the finished picture will be — no frame, no tray.
+   Each cell breathes between near-nothing and a faint tint on a fixed
+   per-cell delay (set inline from markdown.tsx), so a diagonal front keeps
+   crossing the column while the model writes. No spinner, no progress —
    the block has no idea how far along the fence is. */
 .inline-visual-draft {
-  box-sizing: border-box;
   width: 100%;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   color: var(--fg-dim);
 }
+/* The mosaic is the caret while it is the last thing on the page: the bar
+   that marks where the next word lands has nothing to mark under a picture
+   still being drawn. */
+:has(> .inline-visual-drafting:last-child) ~ .ai-caret { display: none; }
 .inline-visual-draft-grid {
   display: grid;
   grid-template-columns: repeat(40, minmax(0, 1fr));
