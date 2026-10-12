@@ -1,6 +1,7 @@
 // ── Pixel nature ───────────────────────────────────────────────────────────
-// A looping big-pixel film for the Welcome screen:
-//   dawn → forest → lake → under the surface → meadow.
+// A looping big-pixel film for the Welcome screen, five landscapes —
+//   dawn, forest, lake, under the surface, meadow —
+// dealt in a fresh order every time the film is created (see `order`).
 // Each scene is a pure function of (cell, time) returning an RGB int, written
 // into a tiny cols×rows buffer, then scaled up crisp. A tile texture (hairline
 // seams) and a drifting film grain sit on top, so cells read as mosaic tiles.
@@ -827,14 +828,32 @@ export type PixelNatureOptions = {
   still?: boolean;
   /** Film clock rate: 1 = real time. Slows holds, cuts and motion alike. */
   speed?: number;
+  /**
+   * Scene order. `shuffle` (the default) deals the five landscapes anew every
+   * time the film is created, so Welcome opens on a different scene each
+   * launch; `fixed` keeps the authored order (dawn, forest, lake, deep, meadow).
+   */
+  order?: "shuffle" | "fixed";
 };
+
+/** Fisher–Yates over a copy; the authored list is never reordered in place. */
+function shuffled<T>(items: readonly T[]): T[] {
+  const out = items.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
 
 const GLYPHS = "{}[]<>()/=+*;:#01fnletmutpub&|~$";
 const FRAME_MS = 1000 / 30;
 
 export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOptions = {}) {
   const ctx = canvas.getContext("2d", { alpha: false })!;
-  const scenes: Scene[] = [new Dawn(), new Forest(), new Lake(), new Deep(), new Meadow()];
+  const meadow = new Meadow();
+  const authored: Scene[] = [new Dawn(), new Forest(), new Lake(), new Deep(), meadow];
+  const scenes = opts.order === "fixed" ? authored : shuffled(authored);
   const HOLD = opts.sceneSeconds ?? 8;
   const TRANS = opts.transitionSeconds ?? 1.7;
   const cellCss = opts.cell ?? 13;
@@ -1003,7 +1022,7 @@ export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOp
   function start() {
     if (raf) return;
     if (still) {
-      clock = HOLD * 4 + 6.8; // the meadow, every flower open
+      clock = HOLD * scenes.indexOf(meadow) + 6.8; // the meadow, every flower open
       draw();
       return;
     }
