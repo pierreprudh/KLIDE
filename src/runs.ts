@@ -662,6 +662,19 @@ export async function fetchCliSessionRun(provider: DelegateId, session: string):
   return dto ? fromDto(dto) : null;
 }
 
+/** One tick of following a CLI session a terminal is driving. `messages`
+ *  comes back only when the transcript moved since `seen`; `null` means the
+ *  session can no longer be found and the follower should stop. */
+export type CliSessionTail = {
+  stamp: string;
+  status: "running" | "waiting" | "done";
+  messages?: RunMessage[];
+};
+
+export async function tailCliSession(provider: DelegateId, session: string, seen: string | null): Promise<CliSessionTail | null> {
+  return invoke<CliSessionTail | null>("delegate_session_tail", { provider, session, seen });
+}
+
 export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {
   if (run.source === "klide") {
     const events = await readAgentRunEvents(run.id);

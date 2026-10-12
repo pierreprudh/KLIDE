@@ -682,6 +682,15 @@ async fn delegate_run_lookup(provider: String, session: String) -> Result<Option
     blocking::run(move || Ok(delegate::find_run(&delegate::ProcessEnv, &provider, &session))).await
 }
 
+/// One tick of following a CLI session a terminal is driving, for the
+/// conversation that carried it in (`continueRunInFocus`): status against the
+/// clock, and the folded transcript only when it moved since `seen`. A stat
+/// per tick, a parse when the file grew, on the blocking pool.
+#[tauri::command]
+async fn delegate_session_tail(provider: String, session: String, seen: Option<String>) -> Result<Option<delegate::SessionTail>, String> {
+    blocking::run(move || delegate::session_tail(&delegate::ProcessEnv, &provider, &session, seen.as_deref())).await
+}
+
 /// The `/` commands a delegate CLI answers itself in this workspace, for the
 /// composer's menu. Async and non-blocking: the one probe is a tokio child.
 #[tauri::command]
@@ -1050,6 +1059,7 @@ pub fn run() {
             delegate_slash_commands,
             delegate_catalog,
             delegate_run_lookup,
+            delegate_session_tail,
             claude_code_settings,
             providers::ai_list_providers,
             models::ai_provider_models,

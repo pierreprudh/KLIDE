@@ -95,6 +95,8 @@ import {
   providerName,
 } from "../agent/providers";
 import { DELEGATE_IDS, isDelegateId } from "../delegates";
+import { tailCliSession } from "../runs";
+import { runMessagesToMsgs } from "./ai/replayConversation";
 import { providerCaps } from "../agent/providerCatalog";
 import {
   isCustomProvider,
@@ -755,6 +757,9 @@ export function AiPanel({
   // the one transition function below.
   const conversationSessionRef = useRef(conversationSession);
   const msgsRef = useRef<Msg[]>(conversationSession.messages);
+  // The conversation Klide last started a Run in — once it has, a CLI
+  // session carried in from a terminal is no longer followed (below).
+  const klideRanForRef = useRef<string | null>(null);
   function transitionConversation(action: ConversationSessionAction) {
     // The apply carries the durable panel-binding write for identity-changing
     // transitions; the pure reducer below only mirrors the same action into
@@ -766,6 +771,7 @@ export function AiPanel({
     );
     conversationSessionRef.current = next;
     msgsRef.current = next.messages;
+    if (action.type === "run-started") klideRanForRef.current = next.conversationId;
     dispatchConversationSession(action);
     return next;
   }
@@ -813,6 +819,48 @@ export function AiPanel({
     void read();
     return () => { live = false; clearTimeout(timer); };
   }, [workspaceRoot, currentId]);
+  // A thread carried in from a CLI session a terminal is still driving
+  // (`continueRunInFocus`) follows that session: one stat per tick, the
+  // transcript re-folded when it grew, the terminal's turn worn as this
+  // conversation's working row, and the composer held while it runs — a
+  // headless `--resume` on top of a live turn would drive one session from
+  // two sides. It stops for good once Klide takes its first turn here: from
+  // then on the Harness transcript is the record and the file is not read.
+  const followedSession =
+    variant === "focus" && isDelegateId(provider) ? conversationSession.delegateSession ?? null : null;
+  const [terminalTurn, setTerminalTurn] = useState<"running" | "waiting" | null>(null);
+  useEffect(() => {
+    setTerminalTurn(null);
+    if (!followedSession || !isDelegateId(provider) || klideRanForRef.current === currentId) return;
+    // A thread Klide has already answered in carries timed messages the fold
+    // never writes; a reopened one is recognised the same way.
+    if (msgsRef.current.some((m) => m.role === "assistant" && m.ts !== undefined)) return;
+    let live = true;
+    let stopped = false;
+    let seen: string | null = null;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      let delay = 2500;
+      try {
+        if (conversationSessionRef.current.run.active) { stopped = true; setTerminalTurn(null); return; }
+        const tail = await tailCliSession(provider, followedSession, seen);
+        if (!live || conversationSessionRef.current.conversationId !== currentId) return;
+        if (!tail) { stopped = true; setTerminalTurn(null); return; }
+        seen = tail.stamp;
+        setTerminalTurn(tail.status === "done" ? null : tail.status);
+        if (tail.messages && !conversationSessionRef.current.run.active) {
+          const next = runMessagesToMsgs(tail.messages, provider);
+          const prev = msgsRef.current;
+          const same = next.length === prev.length && next.every((m, i) => m.content === prev[i].content && m.role === prev[i].role);
+          if (!same) setMsgs(next);
+        }
+        if (tail.status === "running") delay = 1000;
+      } catch (error) { console.warn("Following the CLI session failed", error); }
+      finally { if (live && !stopped) timer = setTimeout(() => void tick(), delay); }
+    };
+    void tick();
+    return () => { live = false; clearTimeout(timer); };
+  }, [followedSession, provider, currentId]);
   const currentForkedFrom = conversationSession.forkedFrom;
   // The mark for a response whose own turn carries no stamp — everything
   // stored before the fold started recording one. The thread's origin is the
@@ -1301,7 +1349,7 @@ export function AiPanel({
       // the answer arrives "Worked for" takes the line and a click gives the
       // real rows back; a click while it works opens them early, and the
       // digest stands down so nothing is drawn twice.
-      const working = streaming && run.end === msgs.length;
+      const working = (streaming || terminalTurn === "running") && run.end === msgs.length;
       const open = openToolRuns.has(run.start);
       const digest = working && !open;
       // Where the live step starts: the run's last message, or — when that
@@ -3389,6 +3437,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   async function send(opts?: { text?: string; mode?: AgentMode; attachments?: Attachment[] }) {
+    // The terminal is mid-turn in this session; a headless turn now would
+    // drive it from two sides. The composer says so in its placeholder.
+    if (terminalTurn === "running") return;
     const rawText = opts?.text ?? input;
     const stagedFiles = opts?.attachments ?? pendingAttachments;
     const selectedOutput = opts?.text === undefined ? artifactOutput : null;
@@ -3697,7 +3748,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   // ── RENDER ──
 
-  const canSend = !!(skillToken ? draftBody.trim() : input.trim()) && !serverStarting && !compacting;
+  const canSend = !!(skillToken ? draftBody.trim() : input.trim()) && !serverStarting && !compacting && terminalTurn !== "running";
   // Hover-revealed "Send to both" over the send button (race panels only).
   const [raceSendHover, setRaceSendHover] = useState(false);
   const acceptanceMode = modificationAcceptanceMode(
@@ -4469,9 +4520,10 @@ This user request requires workspace inspection. Before answering, you MUST call
           // heartbeat under it is just noise.
           const tailQueuedUser = last?.role === "user" && !!last.queueState;
           const showWorking =
-            streaming && !pendingDiff && !pendingPermission && !pendingQuestion &&
+            (streaming || terminalTurn !== null) && !pendingDiff && !pendingPermission && !pendingQuestion &&
             !tailInRun && !tailPlaceholder && !tailStreamingText && !tailThinking && !tailQueuedUser;
           if (!showWorking) return null;
+          if (!streaming) return <WorkingRow label={terminalTurn === "waiting" ? "Waiting for you in the terminal" : "Working in the terminal"} />;
           // The timer counts from the turn's own send time, so it survives the
           // row unmounting while a tool runs and remounting after.
           let turnStartedAt: number | undefined;
@@ -4929,7 +4981,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onPaste={onComposerPaste}
             onDrop={onComposerDrop}
             onDragOver={(e) => { if (canAttachFiles && Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === "file")) e.preventDefault(); }}
-            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : pendingPermission ? "↵ runs the command, Esc denies it — or queue a message…" : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
+            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : terminalTurn === "running" ? "Working in the terminal — your turn when it finishes…" : pendingPermission ? "↵ runs the command, Esc denies it — or queue a message…" : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
             style={{ width: "100%", minHeight: 40, maxHeight: "max(168px, 40vh)", resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}

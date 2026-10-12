@@ -685,6 +685,94 @@ pub fn list_runs_filtered(
     list_runs_matching(env, limit, 0, workspace_root, Some(matches))
 }
 
+/// What a conversation following a session it did not start learns each
+/// tick (`delegate_session_tail`): the session's status, re-read against
+/// the clock so a turn the CLI abandoned settles to `done`, and — only when
+/// the transcript moved since `seen` — its messages, folded afresh.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTail {
+    /// Where the transcript stands: mtime + length for a file-backed session,
+    /// last write + message count for one the adapter reads from a database.
+    /// Opaque to the caller — it hands the stamp back as `seen` next tick.
+    pub stamp: String,
+    /// `running` / `waiting` / `done`, the same vocabulary as `AgentRun.status`.
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Vec<RunMessage>>,
+}
+
+/// `(provider, session) → run key`, so a follower pays the sessions-dir walk
+/// of `find_run` once and a stat per tick after that.
+static SESSION_KEYS: std::sync::Mutex<Option<std::collections::HashMap<(String, String), String>>> =
+    std::sync::Mutex::new(None);
+
+fn remembered_session_key(provider: &str, session: &str) -> Option<String> {
+    SESSION_KEYS.lock().ok()?.as_ref()?.get(&(provider.to_string(), session.to_string())).cloned()
+}
+
+fn remember_session_key(provider: &str, session: &str, key: Option<String>) {
+    if let Ok(mut guard) = SESSION_KEYS.lock() {
+        let map = guard.get_or_insert_with(Default::default);
+        match key {
+            Some(key) => { map.insert((provider.to_string(), session.to_string()), key); }
+            None => { map.remove(&(provider.to_string(), session.to_string())); }
+        }
+    }
+}
+
+/// One tick of following a CLI session from outside: `Ok(None)` when no such
+/// session can be found any more (the follower stops), `Err` when its
+/// transcript cannot be read. `seen` is the stamp of the previous tick; the
+/// messages come back only when the stamp moved, so an idle session costs
+/// one `stat`.
+pub fn session_tail(
+    env: &dyn Env,
+    provider: &str,
+    session: &str,
+    seen: Option<&str>,
+) -> Result<Option<SessionTail>, String> {
+    let delegate = lookup(provider).ok_or_else(|| format!("No delegate adapter for {provider}"))?;
+    let key = match remembered_session_key(provider, session) {
+        Some(key) => key,
+        None => {
+            let Some(run) = find_run(env, provider, session) else { return Ok(None) };
+            remember_session_key(provider, session, Some(run.path.clone()));
+            run.path
+        }
+    };
+    let path = std::path::Path::new(&key);
+    let file_stamp = if delegate.run_key_is_path() {
+        match std::fs::metadata(path) {
+            Ok(meta) => Some(format!("{}:{}", crate::file_memo::mtime_epoch(path), meta.len())),
+            Err(_) => {
+                // Moved or deleted under us: forget the key so the next tick
+                // looks the session up again, and report it gone for now.
+                remember_session_key(provider, session, None);
+                return Ok(None);
+            }
+        }
+    } else {
+        None
+    };
+    let stamp_epoch = delegate.parse_inputs_stamp(env);
+    let parser = delegate.run_parser(env);
+    let Some(run) = PARSED_RUNS.get_or_compute(path, stamp_epoch, |_| parser.parse(&key)) else {
+        remember_session_key(provider, session, None);
+        return Ok(None);
+    };
+    let stamp = file_stamp.unwrap_or_else(|| format!("{}:{}", run.updated_ms, run.message_count));
+    // The parse is memoised on the file, so its `running` was judged against
+    // the clock of the tick that parsed it. Judge it again now.
+    let status = if run.status == "running" && runs::now_ms() - run.updated_ms >= runs::DELEGATE_RECENCY_MS {
+        "done".to_string()
+    } else {
+        run.status.clone()
+    };
+    let messages = if seen == Some(stamp.as_str()) { None } else { Some(delegate.read_run(env, &key)?) };
+    Ok(Some(SessionTail { stamp, status, messages }))
+}
+
 pub(crate) fn normalize_path(path: &str) -> String {
     path.trim().trim_end_matches('/').to_string()
 }
@@ -779,6 +867,7 @@ pub(crate) fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     // The resume-flag matrix is the easiest thing in the app to break by
     // accident — three CLIs, three spellings. These tests pin the exact
@@ -797,6 +886,36 @@ mod tests {
         assert_eq!(find_run(&env, "codex", "codex-id").unwrap().id, "codex-id");
         assert_eq!(find_run(&env, "omp", "omp-id").unwrap().id, "omp-id");
         assert!(find_run(&env, "codex", "id").is_none());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn session_tail_reports_movement_and_settles_abandoned_turns() {
+        let home = std::env::temp_dir().join(format!("klide-session-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let proj = home.join(".claude/projects/-tmp-work");
+        std::fs::create_dir_all(&proj).unwrap();
+        let log = proj.join("tail-id.jsonl");
+        std::fs::write(&log, r#"{"type":"user","ts":1,"cwd":"/tmp/work","sessionId":"tail-id","message":{"content":"first ask"}}"#).unwrap();
+        let env = home::test_env(&home);
+
+        let first = session_tail(&env, "claude-code", "tail-id", None).unwrap().unwrap();
+        assert_eq!(first.status, "running", "a fresh user turn with no answer yet is in flight");
+        assert_eq!(first.messages.as_ref().map(|m| m.len()), Some(1), "the first tick carries the transcript");
+
+        let quiet = session_tail(&env, "claude-code", "tail-id", Some(&first.stamp)).unwrap().unwrap();
+        assert_eq!(quiet.stamp, first.stamp);
+        assert!(quiet.messages.is_none(), "an unchanged transcript sends no messages");
+
+        std::fs::OpenOptions::new().append(true).open(&log).unwrap()
+            .write_all(b"\n{\"type\":\"assistant\",\"ts\":2,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}").unwrap();
+        let moved = session_tail(&env, "claude-code", "tail-id", Some(&first.stamp)).unwrap().unwrap();
+        assert_ne!(moved.stamp, first.stamp);
+        assert_eq!(moved.messages.as_ref().map(|m| m.len()), Some(2), "a grown transcript comes back folded");
+        assert_eq!(moved.status, "done", "a plain answer closes the turn");
+
+        std::fs::remove_file(&log).unwrap();
+        assert!(session_tail(&env, "claude-code", "tail-id", Some(&moved.stamp)).unwrap().is_none(), "a vanished session stops the follower");
         std::fs::remove_dir_all(home).unwrap();
     }
 
