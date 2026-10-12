@@ -209,6 +209,7 @@ import {
   COMPACT_PROMPT_RATIO,
   conversationTokenEstimate,
 } from "./ai/contextBudget";
+import { TweenedNumber } from "./ai/TweenedNumber";
 import {
   contextCeiling,
   contextSizeLabel,
@@ -539,8 +540,13 @@ function menuActionStyle(disabled: boolean): CSSProperties {
 function formatContextTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
-  return tokens.toLocaleString();
+  return Math.round(tokens).toLocaleString();
 }
+// The gauge's numbers tween while a turn streams, so each formatter rounds
+// an in-flight value the same way it rounds a settled one.
+const formatWholeTokens = (n: number) => Math.round(n).toLocaleString();
+const formatPercentWhole = (n: number) => String(Math.round(n));
+const formatPercentRow = (pct: number) => pct.toFixed(pct >= 10 || pct < 0.05 ? 0 : 1);
 
 const REFLECTION_BAR_HEIGHTS = [4, 7, 10, 13];
 const XHIGH_BAR_INDEX = REFLECTION_BAR_HEIGHTS.length - 1;
@@ -5187,7 +5193,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: Z.tooltip }}>
                     <div style={{ display: "flex", alignItems: contextTooltipPos.compact ? "start" : "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9 }}>
                       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>Context window</span>
-                      <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}>{formatContextTokens(contextUsed)} / {formatContextTokens(effectiveContextLimit)} ({Math.round(contextRatio * 100)}%)</span>
+                      <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}><TweenedNumber value={contextUsed} format={formatContextTokens} /> / {formatContextTokens(effectiveContextLimit)} (<TweenedNumber value={contextRatio * 100} format={formatPercentWhole} />%)</span>
                     </div>
                     <div style={{ height: 7, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", marginBottom: 11, display: "flex", gap: 1 }}>
                       {contextBreakdownRows.filter((row) => row.id !== "free" && row.tokens > 0).map((row) => (
@@ -5200,6 +5206,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                             height: "100%",
                             background: row.color,
                             opacity: row.muted ? 0.7 : 1,
+                            transition: "width var(--motion-slower) var(--ease-out), max-width var(--motion-slower) var(--ease-out)",
                           }}
                         />
                       ))}
@@ -5211,8 +5218,8 @@ This user request requires workspace inspection. Before answering, you MUST call
                           <div key={row.id} style={{ display: "grid", gridTemplateColumns: contextTooltipPos.compact ? "12px minmax(0, 1fr) 58px 42px" : "14px minmax(0, 1fr) 70px 54px", alignItems: "center", gap: contextTooltipPos.compact ? 6 : 8, opacity: row.muted ? 0.72 : 1 }}>
                             <span style={{ width: 8, height: 8, borderRadius: 2, background: row.color, boxShadow: row.id === "free" ? "inset 0 0 0 1px var(--border)" : undefined }} />
                             <span style={{ color: row.id === "free" ? "var(--fg-dim)" : "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
-                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11 : 12 }}>{formatContextTokens(row.tokens)}</span>
-                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)" }}>{pct.toFixed(pct >= 10 || pct === 0 ? 0 : 1)}%</span>
+                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11 : 12 }}><TweenedNumber value={row.tokens} format={formatContextTokens} /></span>
+                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)" }}><TweenedNumber value={pct} format={formatPercentRow} />%</span>
                           </div>
                         );
                       })}
@@ -5221,7 +5228,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     <div style={{ display: "grid", gap: 4, color: "var(--fg-dim)", fontSize: 10.5, lineHeight: 1.35 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                         <span>Prompt + draft</span>
-                        <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{budget.promptUsed.toLocaleString()}</span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}><TweenedNumber value={budget.promptUsed} format={formatWholeTokens} /></span>
                       </div>
                       <div>
                         {measuredPromptTokens !== null && !streaming ? "Headline measured from provider usage; category split is estimated." : "Estimated before the next turn."}

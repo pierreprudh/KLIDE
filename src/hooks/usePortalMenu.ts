@@ -47,17 +47,20 @@ export function usePortalMenu<P extends { left: number }>(opts: {
   }, []);
 
   // The portal can't follow the trigger across scroll/resize — close rather
-  // than let it drift. Scrolls that originate inside the menu itself are the
-  // menu's own list scrolling, not the trigger moving — leave it open.
+  // than let it drift. But only a scroll that *moves the trigger* drifts it:
+  // the scrolled element has to be an ancestor of the trigger (or the
+  // document). The menu's own list scrolling, and a sibling scroller — the
+  // conversation auto-scrolling under a streaming turn, which fires one
+  // scroll event per delta — leave the trigger where it is, so they leave the
+  // menu open. Without this rule the context gauge closed on every thought.
   useEffect(() => {
     if (!open) return;
     const onMove = (e?: Event) => {
-      if (
-        e?.type === "scroll" &&
-        e.target instanceof Node &&
-        menuRef.current?.contains(e.target)
-      )
-        return;
+      if (e?.type === "scroll" && e.target instanceof Node) {
+        if (menuRef.current?.contains(e.target)) return;
+        const trigger = triggerRef.current;
+        if (trigger && !e.target.contains(trigger)) return;
+      }
       close();
     };
     window.addEventListener("scroll", onMove, true);
