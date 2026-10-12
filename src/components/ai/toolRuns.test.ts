@@ -248,3 +248,57 @@ describe("pairToolResults", () => {
     expect(groupToolRuns(msgs, pairToolResults(msgs))[0].calls).toBe(3);
   });
 });
+
+import { liveWorkLine, liveWorkSteps, workSummary } from "./toolRuns";
+
+describe("liveWorkSteps — the run read as a thread while it works", () => {
+  const pending = (name: string): Msg => ({ role: "tool", content: `Running ${name}...`, toolName: name });
+
+  it("keeps every sentence, folds the finished calls between them to one step, and names the call in flight", () => {
+    const msgs: Msg[] = [
+      asks("how do they relate?"),
+      reasoningCall("read_file", "I'll read both files.", "hm"),
+      result("read_file"),
+      call("grep"),
+      result("grep"),
+      reasoningCall("run_command", "Let me check how they're consumed.", "hm"),
+      pending("run_command"),
+    ];
+    const steps = liveWorkSteps(msgs, 1, msgs.length);
+    expect(steps).toEqual([
+      { kind: "prose", index: 1 },
+      { kind: "work", names: ["read_file", "grep"], calls: 2 },
+      { kind: "prose", index: 5 },
+      { kind: "work", names: ["run_command"], calls: 1, live: { name: "run_command", args: {} } },
+    ]);
+  });
+
+  it("a call with no result yet is the live one; a stretch with none running has no live call", () => {
+    const msgs: Msg[] = [call("read_file"), result("read_file"), call("grep")];
+    const steps = liveWorkSteps(msgs, 0, msgs.length);
+    expect(steps).toEqual([{ kind: "work", names: ["read_file", "grep"], calls: 2, live: { name: "grep", args: {} } }]);
+    expect(liveWorkSteps(msgs, 0, 2)).toEqual([{ kind: "work", names: ["read_file"], calls: 1 }]);
+  });
+
+  it("a thought alone is not a step — thinking folds with the rows", () => {
+    const msgs: Msg[] = [{ role: "assistant", content: "", thinking: "deciding" }, call("grep")];
+    expect(liveWorkSteps(msgs, 0, msgs.length).map((s) => s.kind)).toEqual(["work"]);
+  });
+});
+
+describe("the one line a stretch of calls reads as", () => {
+  it("summarises finished work as verbs, deduplicated, in first-appearance order", () => {
+    expect(workSummary(["read_file", "peek_value", "grep", "run_command", "web_search"])).toBe("Read files, searched files, ran commands, searched the web");
+    expect(workSummary(["Bash", "Read", "Edit"])).toBe("Ran commands, read files, edited files");
+    expect(workSummary(["frobnicate"])).toBe("Used frobnicate");
+  });
+
+  it("says what the running call does, with its one interesting argument", () => {
+    expect(liveWorkLine({ name: "run_command", args: { command: "curl -L  https://x" } })).toBe("Running curl -L https://x");
+    expect(liveWorkLine({ name: "read_file", args: { path: "src/toast.ts" } })).toBe("Reading src/toast.ts");
+    expect(liveWorkLine({ name: "web_search", args: { query: "opencode v2" } })).toBe("Searching the web for opencode v2");
+    expect(liveWorkLine({ name: "Bash", args: '{"command":"ls"}' })).toBe("Running ls");
+    expect(liveWorkLine({ name: "memory_search", args: { query: "routing" } })).toBe("memory_search routing");
+    expect(liveWorkLine({ name: "get_git_status", args: {} })).toBe("get_git_status…");
+  });
+});

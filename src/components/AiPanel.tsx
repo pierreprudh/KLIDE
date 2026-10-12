@@ -127,6 +127,7 @@ import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
 import { groupToolRuns, pairToolResults, toolRunLabel } from "./ai/toolRuns";
+import { LiveWork } from "./ai/LiveWork";
 import type { AttachedResult } from "./ai/ChatMessage";
 import { MessageActions } from "./ai/MessageActions";
 import { ConversationHistory } from "./ai/ConversationHistory";
@@ -1266,12 +1267,13 @@ export function AiPanel({
     }
     return { inRun, answers };
   }, [toolRuns]);
-  // The operator's explicit open/closed choice per run, keyed by its start.
-  // A run with no choice follows the default: open while it is working,
-  // folded once the answer has arrived.
-  const [toolRunChoice, setToolRunChoice] = useState<Map<number, boolean>>(() => new Map());
-  function toggleToolRun(start: number, open: boolean) {
-    setToolRunChoice((prev) => new Map(prev).set(start, !open));
+  const [openToolRuns, setOpenToolRuns] = useState<Set<number>>(() => new Set());
+  function toggleToolRun(start: number) {
+    setOpenToolRuns((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(start)) next.add(start);
+      return next;
+    });
   }
   function stackToolRuns(nodes: ReactNode[]): ReactNode[] {
     if (toolRuns.length === 0) return nodes;
@@ -1290,17 +1292,18 @@ export function AiPanel({
       }
       // Work still happening: the line is the heartbeat — "Working" with a
       // clock ticking from the turn's send time (`ToolRunRow`) — and under
-      // it the whole run stays in view as it happens: the sentence the model
-      // wrote before a call, the call, the next sentence. A step that folded
-      // away the moment it finished read as the model writing and then
-      // losing what it wrote; the work is a thread, and the operator follows
-      // it by reading down. The Working row at the foot of the conversation
-      // stays away while a run has this line. When the answer arrives the
-      // run folds — "Worked for" takes the line and the body slides shut —
-      // unless the operator opened or closed it by hand, in which case the
-      // choice stands.
+      // it the run is read as a thread, not opened (`LiveWork`): every
+      // sentence the model wrote stays, each stretch of calls between them
+      // is one quiet line, the call in flight is one line saying what it
+      // does. A step that folded away the moment it finished read as the
+      // model writing and then losing what it wrote. The Working row at the
+      // foot of the conversation stays away while a run has this line. When
+      // the answer arrives "Worked for" takes the line and a click gives the
+      // real rows back; a click while it works opens them early, and the
+      // digest stands down so nothing is drawn twice.
       const working = streaming && run.end === msgs.length;
-      const open = toolRunChoice.get(run.start) ?? working;
+      const open = openToolRuns.has(run.start);
+      const digest = working && !open;
       // Where the live step starts: the run's last message, or — when that
       // is a result drawn under its call — the call's own turn.
       let liveStart = run.end;
@@ -1355,7 +1358,7 @@ export function AiPanel({
               count={count}
               names={names}
               expanded={open}
-              onToggle={() => toggleToolRun(run.start, open)}
+              onToggle={() => toggleToolRun(run.start)}
               working={working ? { since: turnStartedAt } : undefined}
             />
           </div>
@@ -1389,9 +1392,16 @@ export function AiPanel({
           </div>
         </div>,
       );
-      // The step in flight, outside the fold so it is in view whatever the
-      // fold's state. It joins the body — and folds — once it is done.
-      if (liveStart < run.end) {
+      // What is in view while the run works: the digest, or — when the
+      // operator opened the rows early — the step in flight drawn in full
+      // under the open body, which it joins once it is done.
+      if (digest) {
+        out.push(
+          <div key={`tool-run-live-${run.start}`} className="klide-tool-run-live">
+            <LiveWork msgs={msgs} start={run.start} end={run.end} pairing={toolPairing} />
+          </div>,
+        );
+      } else if (liveStart < run.end) {
         out.push(
           <div key={`tool-run-live-${run.start}`} className="klide-tool-run-live">
             {nodes.slice(liveStart, run.end)}

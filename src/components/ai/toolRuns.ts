@@ -64,7 +64,7 @@ export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "
 /** What a turn would show the reader: its content with every reasoning
  *  encoding taken out — the structured `thinking` field is already absent,
  *  an inline <think> block and the plan-JSON fallback are not. */
-function visibleProse(m: Extract<Msg, { role: "assistant" }>): string {
+export function visibleProse(m: Extract<Msg, { role: "assistant" }>): string {
   const { content: withoutInlineThinking } = splitThinking(m.content);
   const { content } = stripPlanJson(withoutInlineThinking);
   return content.trim();
@@ -230,4 +230,143 @@ export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs"
     count,
     names: run.names.join(", "),
   };
+}
+
+// ── The run while it is still going ─────────────────────────────────────────
+//
+// A run in flight is read, not opened. The operator follows the thread of
+// what the model is doing — the sentence it wrote before a call, the next
+// sentence after — and the calls between are machinery: finished, they are
+// one quiet line ("Read files, searched files"); the one running is one
+// line too ("Running curl …"). Thinking folds away with the rows. When the
+// answer lands the whole run folds to "Worked for" and a click gives every
+// row back (`groupToolRuns` / `ToolRunRow`); this digest is only for the
+// time before that.
+
+export type LiveStep =
+  | { kind: "prose"; index: number }
+  | {
+      kind: "work";
+      /** Distinct tool names, in first-appearance order. */
+      names: string[];
+      calls: number;
+      /** The call still running, when one is — the line reads what it is
+       *  doing rather than what the finished ones did. */
+      live?: { name: string; args: unknown };
+    };
+
+function resultPending(r: Msg | undefined): boolean {
+  return !r || (r.role === "tool" && /^Running /.test(r.content));
+}
+
+export function liveWorkSteps(msgs: Msg[], start: number, end: number, pairing: ToolResultPairing = pairToolResults(msgs)): LiveStep[] {
+  const steps: LiveStep[] = [];
+  let group: Extract<LiveStep, { kind: "work" }> | null = null;
+  const note = (name: string) => {
+    if (!group) group = { kind: "work", names: [], calls: 0 };
+    if (!group.names.includes(name)) group.names.push(name);
+    group.calls++;
+  };
+  const flush = () => {
+    if (group) steps.push(group);
+    group = null;
+  };
+  for (let i = start; i < end; i++) {
+    const m = msgs[i];
+    if (m.role === "assistant") {
+      if (visibleProse(m) !== "") {
+        flush();
+        steps.push({ kind: "prose", index: i });
+      }
+      const results = pairing.byCall.get(i);
+      (m.toolCalls ?? []).forEach((call, index) => {
+        note(call.name);
+        const r = results?.get(toolCallKey(call, index));
+        if (resultPending(r === undefined ? undefined : msgs[r])) {
+          group!.live = { name: call.name, args: call.args };
+        } else if (group!.live?.name === call.name && group!.live.args === call.args) {
+          group!.live = undefined;
+        }
+      });
+      continue;
+    }
+    // A result its call already counted; or a stray one (the call was
+    // compacted away), which still counts as a step of work.
+    if (m.role === "tool" && !pairing.claimed.has(i)) note(m.toolName ?? "tool");
+  }
+  flush();
+  return steps;
+}
+
+/** What a tool does, as a verb phrase the summary line joins: "read files,
+ *  searched files, ran commands". Harness names and the delegate CLIs' own
+ *  (`Read`, `Bash`, `Grep`, `Edit`) both land. */
+export function workVerb(name: string): string {
+  const n = name.toLowerCase();
+  if (/^(read_file|peek_value|list_dir|read|list|ls|cat|notebookread)$/.test(n)) return "read files";
+  if (/^(grep|glob|search_conversations|rg|find)$/.test(n)) return "searched files";
+  if (/^(run_command|read_command_output|kill_command|bash|shell|exec)$/.test(n)) return "ran commands";
+  if (/^(web_search|web_fetch|websearch|webfetch|fetch)$/.test(n)) return "searched the web";
+  if (/^(write_file|create_file|edit|write|multiedit|notebookedit|write_spreadsheet)$/.test(n)) return "edited files";
+  if (/^(inspect_spreadsheet)$/.test(n)) return "inspected a workbook";
+  if (/^get_git_/.test(n)) return "checked git";
+  if (/^memory_/.test(n)) return "recalled memory";
+  if (/^(update_todo_list|get_todo_list|todowrite|todoread)$/.test(n)) return "updated the plan";
+  if (/^(lint)$/.test(n)) return "ran lint";
+  if (/^(consult_advisor)$/.test(n)) return "asked the advisor";
+  if (/^(connector_call|connector_tools)$/.test(n)) return "used a connector";
+  return `used ${name}`;
+}
+
+/** The one line for a finished stretch of calls: "Read files, searched
+ *  files, ran commands". */
+export function workSummary(names: string[]): string {
+  const verbs: string[] = [];
+  for (const name of names) {
+    const v = workVerb(name);
+    if (!verbs.includes(v)) verbs.push(v);
+  }
+  const line = verbs.join(", ");
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+function firstStringArg(args: unknown, keys: string[]): string {
+  let v: unknown = args;
+  if (typeof v === "string") {
+    const raw: string = v;
+    try { v = JSON.parse(raw); } catch { return raw.trim(); }
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return "";
+  const o = v as Record<string, unknown>;
+  for (const key of keys) {
+    const val = o[key];
+    if (typeof val === "string" && val.trim()) return val.trim();
+  }
+  const first = Object.values(o).find((x) => typeof x === "string" && (x as string).trim()) as string | undefined;
+  return first?.trim() ?? "";
+}
+
+/** The one line for the call that is running: "Running curl -L …",
+ *  "Reading src/toast.ts", "Searching the web for opencode v2". */
+export function liveWorkLine(call: { name: string; args: unknown }): string {
+  const n = call.name.toLowerCase();
+  const arg = firstStringArg(call.args, ["command", "path", "pattern", "query", "url", "file_path", "title"]).replace(/\s+/g, " ");
+  const what = arg.length > 120 ? arg.slice(0, 119) + "…" : arg;
+  const verb = /^(run_command|bash|shell|exec)$/.test(n)
+    ? "Running"
+    : /^(read_file|peek_value|read|cat|notebookread)$/.test(n)
+      ? "Reading"
+      : /^(list_dir|list|ls)$/.test(n)
+        ? "Listing"
+        : /^(grep|glob|rg|find|search_conversations)$/.test(n)
+          ? "Searching"
+          : /^(web_search|websearch)$/.test(n)
+            ? "Searching the web for"
+            : /^(web_fetch|webfetch|fetch)$/.test(n)
+              ? "Fetching"
+              : /^(write_file|create_file|edit|write|multiedit|notebookedit|write_spreadsheet)$/.test(n)
+                ? "Editing"
+                : null;
+  if (verb) return what ? `${verb} ${what}` : `${verb}…`;
+  return what ? `${call.name} ${what}` : `${call.name}…`;
 }
