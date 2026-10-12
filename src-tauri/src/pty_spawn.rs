@@ -296,7 +296,7 @@ mod tests {
         req.mcp = delegate::lookup("opencode").unwrap().mcp_wiring(&spec());
         let files = req.mcp.as_ref().unwrap().files.clone();
         let spec = spawn_spec_for(req).unwrap();
-        assert_eq!(spec.command, "opencode run 'fix the bug'", "no flag: OpenCode has none");
+        assert_eq!(spec.command.replacen(" --standalone", "", 1), "opencode run 'fix the bug'", "MCP wiring uses an environment variable");
         assert_eq!(
             spec.env,
             vec![(
@@ -356,7 +356,7 @@ mod tests {
             req.task = Some("fix the bug".to_string());
             req.model = Some("m-1".to_string());
             let spec = spawn_spec_for(req).unwrap();
-            assert_eq!(spec.command, command, "{provider}");
+            assert_eq!(spec.command.replacen(" --standalone", "", 1), command, "{provider}");
             assert!(
                 spec.detect_session_id,
                 "{provider}: adapters watch for the CLI's own session id"
@@ -383,7 +383,7 @@ mod tests {
             req.task = Some("fix the bug".to_string());
             req.model = Some("gpt-6-astra".to_string());
             req.effort = Some("max".to_string());
-            assert_eq!(spawn_spec_for(req).unwrap().command, command, "{provider}");
+            assert_eq!(spawn_spec_for(req).unwrap().command.replacen(" --standalone", "", 1), command, "{provider}");
         }
     }
 
@@ -428,7 +428,7 @@ mod tests {
         for (provider, command) in expect {
             let mut req = request(provider);
             req.resume_session_id = Some("sess-9".to_string());
-            assert_eq!(spawn_spec_for(req).unwrap().command, command, "{provider}");
+            assert_eq!(spawn_spec_for(req).unwrap().command.replacen(" --standalone", "", 1), command, "{provider}");
         }
     }
 
@@ -450,7 +450,7 @@ mod tests {
             let mut req = request(provider);
             req.task = Some("fix the bug".to_string());
             req.one_shot = true;
-            assert_eq!(spawn_spec_for(req).unwrap().command, command, "{provider}");
+            assert_eq!(spawn_spec_for(req).unwrap().command.replacen(" --standalone", "", 1), command, "{provider}");
         }
     }
 

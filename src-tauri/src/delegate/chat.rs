@@ -315,7 +315,7 @@ pub async fn run_subscription_chat(
 async fn run_stream_turn(
     adapter: &dyn Delegate,
     spec: &ChatSpec<'_>,
-    command: TokioCommand,
+    mut command: TokioCommand,
     prompt: String,
     label: &str,
     cwd: &str,
@@ -327,7 +327,7 @@ async fn run_stream_turn(
         match super::chat_server::run_via_server(
             adapter,
             server,
-            copy_command(&command),
+            &mut command,
             prompt.clone(),
             label,
             cwd,
@@ -344,25 +344,6 @@ async fn run_stream_turn(
         }
     }
     run_cli_streaming(adapter, command, prompt, label, cwd, session_key, emitted, on_chunk).await
-}
-
-/// A fresh command with the same program, arguments, directory and
-/// environment — a Command cannot be cloned, and the fallback needs the
-/// original untouched.
-fn copy_command(command: &TokioCommand) -> TokioCommand {
-    let std = command.as_std();
-    let mut copy = TokioCommand::new(std.get_program());
-    copy.args(std.get_args());
-    if let Some(dir) = std.get_current_dir() {
-        copy.current_dir(dir);
-    }
-    for (k, v) in std.get_envs() {
-        match v {
-            Some(v) => copy.env(k, v),
-            None => copy.env_remove(k),
-        };
-    }
-    copy
 }
 
 /// Drive a CLI that reports itself line by line: prompt on stdin, one JSON

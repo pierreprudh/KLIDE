@@ -75,7 +75,10 @@ fn background_chat_survives_all_clients_disconnecting_and_finishes_once() {
     // the turn falls back to a plain `run` without waiting out SERVE_READY —
     // on a slow runner that wait alone exceeded this test's 15 s patience.
     std::fs::write(&script, r##"#!/bin/sh
-case "$1" in serve) echo "fixture has no server" >&2; exit 1;; esac
+case "$1" in
+  --version) echo "1.19.0"; exit 0;;
+  serve) echo "fixture has no server" >&2; exit 1;;
+esac
 printf '%s\n' "$@" > args.txt
 cat > prompt.txt
 printf '%s\n' '{"type":"step_start","sessionID":"ses_background_fixture","part":{"id":"start","type":"step-start"}}'

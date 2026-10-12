@@ -334,14 +334,15 @@ impl AccountProvider for ClaudeProvider {
     }
 }
 
-/// Every backend — one per Delegate whose `supports_accounts` is true.
+/// Every implemented snapshot backend. Installed CLI versions may disable
+/// a backend whose file format no longer matches their live credentials.
 const BACKENDS: [&dyn AccountProvider; 3] = [&CodexProvider, &ClaudeProvider, &OpenCodeProvider];
 
 /// Resolve a provider id to its backend. Ids are never matched here: each
 /// backend names its adapter, and the adapter's id is the key — so the
 /// account switcher and `delegate::lookup` cannot disagree on a spelling.
 fn provider(id: &str) -> Option<&'static dyn AccountProvider> {
-    BACKENDS.into_iter().find(|b| b.delegate().id() == id)
+    BACKENDS.into_iter().find(|b| b.delegate().id() == id && b.delegate().account_snapshots_available())
 }
 
 // --- index records ---------------------------------------------------------
@@ -384,6 +385,8 @@ pub struct AccountsView {
     pub current_unsaved: Option<AccountIdentity>,
     /// Whether the CLI is logged in at all.
     pub present: bool,
+    /// False when the installed CLI owns credentials in a different format.
+    pub snapshots_supported: bool,
 }
 
 // --- store I/O -------------------------------------------------------------
@@ -494,6 +497,7 @@ pub fn list(provider_id: &str) -> AccountsView {
         accounts: rows,
         current_unsaved,
         present,
+        snapshots_supported: true,
     }
 }
 
@@ -1134,7 +1138,7 @@ mod tests {
         for delegate in crate::delegate::ALL {
             let id = delegate.id();
             let has_provider = provider(id).is_some();
-            match (has_provider, delegate.supports_accounts()) {
+            match (has_provider, delegate.account_snapshots_available()) {
                 (true, true) | (false, false) => {}
                 (false, true) => panic!(
                     "delegate {id:?} says supports_accounts but has no backend in \
@@ -1160,7 +1164,9 @@ supports_accounts() == false — the frontend would hide the switcher"
         }
         // The disagreement that prompted this: OpenCode's hint said
         // `opencode auth login` here while the adapter said `opencode`.
-        assert_eq!(provider("opencode").unwrap().login_cmd(), "opencode auth login");
+        // The V1 backend's metadata stays defined even when V2 disables its
+        // file-snapshot operations on this machine.
+        assert_eq!(OpenCodeProvider.login_cmd(), "opencode auth login");
         assert_eq!(provider("codex").unwrap().login_cmd(), "codex login");
     }
 }

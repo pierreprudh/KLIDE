@@ -1,0 +1,63 @@
+{
+  "data": [
+    {
+      "id": "msg_130f03cf3001Uje6XjS45wyosO",
+      "time": {
+        "created": 1791822413115
+      },
+      "text": "hello",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_130f03d410014xRkMDogqk3R7p",
+      "time": {
+        "created": 1791822413125,
+        "streamed": 1791822413739,
+        "completed": 1791822413762
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "mock",
+        "providerID": "mock",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello from V2."
+        }
+      ],
+      "snapshot": {
+        "start": "6a0c621538979dbae4df89d18974854b09753365",
+        "end": "6a0c621538979dbae4df89d18974854b09753365",
+        "files": []
+      },
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_130f03fc3002M55cIlYrrMPs87",
+      "time": {
+        "created": 1791822413763
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ],
+  "cursor": {
+    "previous": "eyJpZCI6Im1zZ18xMzBmMDNjZjMwMDFVamU2WGpTNDV3eW9zTyIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoicHJldmlvdXMifQ",
+    "next": "eyJpZCI6Im1zZ18xMzBmMDNmYzMwMDJNNTVjSWxZcnJNUHM4NyIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoibmV4dCJ9"
+  }
+}

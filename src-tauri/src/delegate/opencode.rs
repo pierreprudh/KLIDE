@@ -7,6 +7,9 @@ use super::chat_stream::{result_text, StreamItem};
 use super::{shell_quote, AgentRun, ChatSpec, Delegate, Env, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
 use std::collections::{HashMap, HashSet};
 
+#[path = "opencode_v2.rs"]
+mod v2;
+
 /// OpenCode — the SST CLI. The quirkiest of the three:
 ///
 /// - Its TUI treats the first positional arg as a project path
@@ -79,6 +82,12 @@ impl Delegate for OpenCode {
         true
     }
 
+    fn account_snapshots_available(&self) -> bool {
+        // V2 owns credentials in SQLite. The file-snapshot account switcher
+        // must not pretend restoring V1 auth.json changes a V2 credential.
+        !installed_v2()
+    }
+
     /// Keys are session ids looked up in the DB, not files.
     fn run_key_is_path(&self) -> bool {
         false
@@ -95,11 +104,7 @@ impl Delegate for OpenCode {
     }
 
     fn spawn_prefix(&self, has_task: bool, resuming: bool) -> String {
-        if has_task && !resuming {
-            format!("{} run", self.binary())
-        } else {
-            self.binary().to_string()
-        }
+        launch_prefix(has_task, resuming, installed_v2())
     }
 
     fn model_arg(&self, model: &str) -> String {
@@ -138,7 +143,8 @@ impl Delegate for OpenCode {
     fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
         let task = self.mission_task(task)?;
         let model_arg = self.mission_model_arg(model);
-        Ok(format!("opencode run{model_arg} {}", shell_quote(task)))
+        let private = if installed_v2() { " --standalone" } else { "" };
+        Ok(format!("opencode run{private}{model_arg} {}", shell_quote(task)))
     }
 
     /// `opencode run` with no message argument reads the prompt from stdin and
@@ -215,7 +221,8 @@ impl Delegate for OpenCode {
 
     fn probe_fetch_url(&self, line: &str) -> Option<String> {
         let url = line.split_once("listening on ")?.1.split_whitespace().next()?;
-        url.starts_with("http://127.0.0.1:").then(|| format!("{}/command", url.trim_end_matches('/')))
+        let path = if line.starts_with("server listening on ") { "/api/command" } else { "/command" };
+        url.starts_with("http://127.0.0.1:").then(|| format!("{}{path}", url.trim_end_matches('/')))
     }
 
     fn parse_probe_body(&self, body: &str) -> Option<CliCommands> {
@@ -366,6 +373,10 @@ impl Delegate for OpenCode {
     /// Keys from the shell environment still work without one — the detail
     /// says so rather than calling that state broken.
     fn check_auth(&self, _command_path: &str) -> Result<(bool, String), String> {
+        if installed_v2() {
+            let count = self.connect(&super::ProcessEnv).and_then(|conn| conn.query_row("SELECT COUNT(*) FROM credential", [], |row| row.get::<_, i64>(0)).ok()).unwrap_or(0);
+            return Ok((count > 0, if count > 0 { format!("Logged in — {count} provider credentials saved by OpenCode 2.") } else { "No saved login yet; keys from your shell environment still work.".into() }));
+        }
         Ok(auth_state(&self.auth_files(&super::ProcessEnv)))
     }
 
@@ -383,7 +394,7 @@ impl Delegate for OpenCode {
     }
 
     fn release_package(&self) -> Option<&'static str> {
-        Some("opencode-ai")
+        Some(if installed_v2() { "@opencode/cli" } else { "opencode-ai" })
     }
 
     /// One candidate per session row. The mtime is the session's own
@@ -393,6 +404,7 @@ impl Delegate for OpenCode {
     fn discover_runs(&self, env: &dyn Env) -> Vec<RunCandidate> {
         let mut out = Vec::new();
         if let Some(conn) = self.connect(env) {
+            out.extend(v2::discover(&conn, None));
             if let Ok(mut stmt) = conn.prepare("SELECT id, time_updated FROM session") {
                 if let Ok(rows) = stmt.query_map([], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -417,6 +429,7 @@ impl Delegate for OpenCode {
         let want = crate::delegate::normalize_path(workspace_root);
         let mut out = Vec::new();
         if let Some(conn) = self.connect(env) {
+            out.extend(v2::discover(&conn, Some(&want)));
             if let Ok(mut stmt) = conn.prepare(
                 "SELECT id, time_updated FROM session \
                  WHERE directory IS NULL OR rtrim(directory, '/') = ?1",
@@ -448,6 +461,7 @@ impl Delegate for OpenCode {
         let conn = self
             .connect(env)
             .ok_or_else(|| "OpenCode session database is unavailable".to_string())?;
+        if v2::has_session(&conn, key) { return v2::read_run(&conn, key); }
 
         let mut msg_stmt = conn
             .prepare(
@@ -578,6 +592,7 @@ fn model_label(raw: &str) -> Option<String> {
 /// prompt comes back as a text part too), and text parts only (reasoning
 /// streams through the same delta event).
 struct OpenCodeServer {
+    v2: Option<v2::Turn>,
     session: Option<String>,
     assistant_messages: HashSet<String>,
     part_types: HashMap<String, String>,
@@ -592,6 +607,7 @@ struct OpenCodeServer {
 impl OpenCodeServer {
     fn new(resume: Option<&str>) -> Self {
         Self {
+            v2: None,
             session: resume.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
             assistant_messages: Default::default(),
             part_types: HashMap::new(),
@@ -602,6 +618,41 @@ impl OpenCodeServer {
 }
 
 impl super::chat_server::ChatServer for OpenCodeServer {
+    fn configure_version(&mut self, version: &str) {
+        if super::first_version_token(version).is_some_and(|v| v.starts_with("2.")) {
+            self.v2 = Some(v2::Turn::new(self.session.clone()));
+        }
+    }
+
+    fn standalone_args(&self) -> Vec<String> {
+        if self.v2.is_some() { vec!["--standalone".into()] } else { Vec::new() }
+    }
+
+    fn native_commands(&self) -> bool { self.v2.is_some() }
+
+    fn run_command<'a>(&'a mut self, turn: super::chat_server::CommandTurn<'a>) -> super::chat_server::CommandFuture<'a> {
+        Box::pin(v2::run_command(self, turn))
+    }
+
+    fn feed_stdout(&mut self, line: &str) -> Option<Vec<StreamItem>> {
+        self.v2.as_mut().map(|turn| turn.feed_stdout(line))
+    }
+
+    fn history_path(&self) -> Option<String> {
+        self.v2.as_ref()?.history_path()
+    }
+
+    fn set_history_boundary(&mut self, id: Option<String>) {
+        if let Some(turn) = &mut self.v2 { turn.boundary = id; }
+    }
+
+    fn history_boundary(&self) -> Option<&str> {
+        self.v2.as_ref()?.boundary.as_deref()
+    }
+
+    fn recover_history(&mut self, messages: &[serde_json::Value]) -> Vec<StreamItem> {
+        self.v2.as_mut().map(|turn| turn.recover(messages)).unwrap_or_default()
+    }
     fn serve_args(&self) -> Vec<String> {
         ["serve", "--port", "0", "--hostname", "127.0.0.1"].map(String::from).to_vec()
     }
@@ -614,11 +665,11 @@ impl super::chat_server::ChatServer for OpenCodeServer {
     /// `run --attach` reads the password from the same env var the server
     /// does, so it never appears in an argument list.
     fn attach_args(&self, url: &str) -> Vec<String> {
-        vec!["--attach".to_string(), url.to_string()]
+        vec![if self.v2.is_some() { "--server" } else { "--attach" }.to_string(), url.to_string()]
     }
 
     fn events_url(&self, url: &str) -> String {
-        format!("{url}/event")
+        format!("{url}{}", if self.v2.is_some() { "/api/event" } else { "/event" })
     }
 
     fn username(&self) -> &'static str {
@@ -633,6 +684,7 @@ impl super::chat_server::ChatServer for OpenCodeServer {
     }
 
     fn feed(&mut self, data: &str) -> Vec<StreamItem> {
+        if let Some(turn) = &mut self.v2 { return turn.feed(data); }
         let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
             return Vec::new();
         };
@@ -735,7 +787,7 @@ impl super::chat_server::ChatServer for OpenCodeServer {
     }
 
     fn settled(&self) -> bool {
-        self.settled
+        self.v2.as_ref().map(|turn| turn.settled).unwrap_or(self.settled)
     }
 }
 
@@ -753,7 +805,8 @@ struct OpenCodeRunParser {
 
 impl RunParser for OpenCodeRunParser {
     fn parse(&self, key: &str) -> Option<AgentRun> {
-        parse_run(self.conn.as_ref()?, key)
+        let conn = self.conn.as_ref()?;
+        v2::parse_run(conn, key).or_else(|| parse_run(conn, key))
     }
 }
 
@@ -991,7 +1044,8 @@ fn probe_password() -> Result<String, String> {
 /// `GET /command`: every command with its description. Each runs headless
 /// through `--command`, so none is terminal-only.
 fn parse_command_list(body: &str) -> Option<CliCommands> {
-    let list: Vec<serde_json::Value> = serde_json::from_str(body).ok()?;
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let list = value.as_array().or_else(|| value.get("data").and_then(|v| v.as_array()))?;
     let mut out = CliCommands::default();
     for command in list {
         let Some(name) = command.get("name").and_then(|v| v.as_str()) else { continue };
@@ -1001,6 +1055,18 @@ fn parse_command_list(body: &str) -> Option<CliCommands> {
         }
     }
     Some(out)
+}
+
+/// PTY/mission launches also need a private V2 service: their MCP bridge and
+/// status callback belong to this launch's environment, never a shared host.
+fn installed_v2() -> bool {
+    crate::cli_update::version_of(&OpenCode).version
+        .is_some_and(|version| version.starts_with("2."))
+}
+
+fn launch_prefix(has_task: bool, resuming: bool, v2: bool) -> String {
+    let private = if v2 { " --standalone" } else { "" };
+    format!("opencode{}{private}", if has_task && !resuming { " run" } else { "" })
 }
 
 #[cfg(test)]
@@ -1029,6 +1095,42 @@ mod tests {
         assert!(got.runs("init") && got.runs("tdd"));
         assert_eq!(got.descriptions.get("init").map(String::as_str), Some("guided AGENTS.md setup"));
         assert!(!got.descriptions.contains_key("tdd"));
+    }
+
+    #[test]
+    fn v2_selects_its_private_server_and_native_command_contract() {
+        use super::super::chat_server::ChatServer;
+        let mut server = OpenCodeServer::new(Some("ses_resume"));
+        server.configure_version("opencode v2.0.27");
+        assert_eq!(server.standalone_args(),["--standalone"]);
+        assert_eq!(server.attach_args("http://127.0.0.1:1234"),["--server","http://127.0.0.1:1234"]);
+        assert_eq!(server.events_url("http://127.0.0.1:1234"),"http://127.0.0.1:1234/api/event");
+        assert!(server.native_commands());
+        assert!(server.history_path().unwrap().contains("ses_resume"));
+        assert_eq!(OpenCode.probe_fetch_url("server listening on http://127.0.0.1:1234"),Some("http://127.0.0.1:1234/api/command".into()));
+        let commands = OpenCode.parse_probe_body(r#"{"location":{"directory":"/workspace"},"data":[{"name":"review","description":"Review changes"}]}"#).unwrap();
+        assert!(commands.runs("review"));
+    }
+
+    #[test]
+    fn v1_keeps_its_original_server_contract() {
+        use super::super::chat_server::ChatServer;
+        let mut server = OpenCodeServer::new(None);
+        server.configure_version("1.19.0");
+        assert!(server.standalone_args().is_empty());
+        assert_eq!(server.attach_args("http://127.0.0.1:1234"),["--attach","http://127.0.0.1:1234"]);
+        assert_eq!(server.events_url("http://127.0.0.1:1234"),"http://127.0.0.1:1234/event");
+        assert!(!server.native_commands());
+        assert!(server.history_path().is_none());
+    }
+
+    #[test]
+    fn v2_pty_launches_keep_their_environment_on_a_private_host() {
+        assert_eq!(launch_prefix(true,false,true),"opencode run --standalone");
+        assert_eq!(launch_prefix(true,true,true),"opencode --standalone");
+        assert_eq!(launch_prefix(false,false,true),"opencode --standalone");
+        assert_eq!(launch_prefix(true,false,false),"opencode run");
+        assert_eq!(launch_prefix(true,true,false),"opencode");
     }
 
     #[test]

@@ -497,7 +497,7 @@ pub fn install_codex_hooks(
 const OPENCODE_PLUGIN_SOURCE: &str = r#"// Klide delegate status plugin — auto-managed by Klide, safe to delete.
 // Env-guarded: outside a Klide-spawned session (no KLIDE_HOOK_URL) it is
 // inert, so opencode runs from a plain terminal are unaffected.
-export const KlideStatus = async () => {
+const KlideStatus = async () => {
   const base = process.env.KLIDE_HOOK_URL
   if (!base) return {}
   let last = ""
@@ -514,6 +514,35 @@ export const KlideStatus = async () => {
       else if (type.startsWith("message.") || type === "session.status") post("working")
     },
   }
+}
+// The object entrypoint is supported by V1 >= 1.18.29 and V2. Each side
+// uses its own event vocabulary; no dependency install is needed.
+export default {
+  id: "klide-status",
+  server: KlideStatus,
+  setup(ctx) {
+    const base = process.env.KLIDE_HOOK_URL
+    if (!base) return
+    const controller = new AbortController()
+    let session, last = ""
+    const post = (state) => {
+      if (state === last) return
+      last = state
+      fetch(`${base}/${state}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionID: session }) }).catch(() => {})
+    }
+    void (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        const data = event.data ?? {}
+        if ((!session || last === "waiting") && event.type === "session.execution.started") session = data.sessionID
+        if (data.sessionID !== session || !session) continue
+        if (event.type === "session.execution.started") post("working")
+        else if (["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].includes(event.type)) post("waiting")
+        else if (event.type === "permission.asked") post("blocked")
+        else if (event.type === "permission.replied") post("working")
+      }
+    })().catch(() => {})
+    return () => controller.abort()
+  },
 }
 "#;
 

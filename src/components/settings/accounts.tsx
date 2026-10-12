@@ -30,6 +30,7 @@ export type AccountsView = {
   accounts: AccountRow[];
   currentUnsaved?: AccountIdentity;
   present: boolean;
+  snapshotsSupported?: boolean;
 };
 
 export { GitHubAccountRow } from "../GitHubAccountRow";
@@ -224,6 +225,10 @@ export function AccountControl({
     }
   }
   const swapControl = canSwap ? <AccountSwapButton label={`Switch ${title} account`} busy={busy !== null || saving} onClick={() => void swap()} /> : null;
+
+  if (view?.snapshotsSupported === false) {
+    return compact ? null : <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>Manage accounts in {title}</span>;
+  }
 
   // Compact: only the trailing cluster — the saved account's name and the
   // swap — for a row the account menu draws itself.

@@ -195,6 +195,13 @@ pub trait Delegate: Sync {
         false
     }
 
+    /// Whether the installed CLI still uses this backend's credential format.
+    /// Kept separate from the static catalog so live account controls can
+    /// disable snapshots after a major CLI upgrade.
+    fn account_snapshots_available(&self) -> bool {
+        self.supports_accounts()
+    }
+
     /// Whether a run's `key` is a transcript path under `sessions_dir` (so a
     /// read must be contained there) rather than an id the parser looks up
     /// itself. Default: a path — three of the four keep JSONL on disk.
@@ -981,7 +988,7 @@ mod tests {
         // Bare `opencode '<task>'` treats the arg as a project path and dies;
         // only `run` accepts a message.
         let cmd = OpenCode.spawn_command(Some("add a feature"), Some("minimax-m3"), None, None);
-        assert_eq!(cmd, "opencode run -m 'minimax-m3' 'add a feature'");
+        assert_eq!(cmd.replacen(" --standalone", "", 1), "opencode run -m 'minimax-m3' 'add a feature'");
     }
 
     #[test]
@@ -989,14 +996,14 @@ mod tests {
         // In resume mode the TUI must come up interactive — `run` would make
         // it one-shot. The task still lands as the first prompt.
         let cmd = OpenCode.spawn_command(Some("continue"), None, Some("oss-42"), None);
-        assert_eq!(cmd, "opencode -s 'oss-42' 'continue'");
+        assert_eq!(cmd.replacen(" --standalone", "", 1), "opencode -s 'oss-42' 'continue'");
     }
 
     #[test]
     fn opencode_without_task_stays_bare_tui() {
         // `opencode run` with no message errors out — no task means no `run`.
         let cmd = OpenCode.spawn_command(None, None, None, None);
-        assert_eq!(cmd, "opencode");
+        assert_eq!(cmd.replacen(" --standalone", "", 1), "opencode");
     }
 
     #[test]
@@ -1022,7 +1029,7 @@ mod tests {
         assert_eq!(
             OpenCode
                 .mission_command(Some("fix the bug"), Some("opencode/minimax-m3"))
-                .unwrap(),
+                .unwrap().replacen(" --standalone", "", 1),
             "opencode run -m 'opencode/minimax-m3' 'fix the bug'"
         );
         assert_eq!(
