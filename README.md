@@ -36,19 +36,19 @@ Klide opens on the surface that matches the task, and all three share the same r
 
 Open a folder, start a new project, or clone a repository from one quiet page, with your recent workspaces numbered underneath. `⌘O`, `⌘N`, and `⌘⇧N` reach the three actions, and `⌘1`–`⌘5` reopen a recent workspace without touching the mouse. Beside the list, a framed big-pixel nature film drifts through five scenes; it holds a single still when the system asks for reduced motion.
 
-<img src=".github/assets/welcome.png" alt="Klide welcome screen: wordmark, Welcome back, Open folder, New project, Clone and Settings actions, numbered recent folders, and a framed pixel-art sunset over hills" width="900" />
+<img src=".github/assets/welcome.png" alt="Klide welcome screen: wordmark, Welcome back, Open folder, New project, Clone and Settings actions, numbered recent folders, and a framed pixel-art moonlit lake at night" width="900" />
 
 ### Focus — one task, one conversation
 
-A rail of projects, providers, and past conversations on the left; a single centered conversation in the middle. Resume any thread, see the branch you are on, and keep the Git strip in the corner.
+A rail of projects, providers, and past conversations on the left; a single centered conversation in the middle. Everything a run did before its answer folds to one line, an answer can draw a diagram in place, and the branch and edit policy sit under the composer.
 
-<img src=".github/assets/focus.png" alt="Klide focus mode with the conversation rail and a centered task prompt" width="900" />
+<img src=".github/assets/focus.png" alt="Klide focus mode: the project and conversation rail on the left, one centered conversation where the answer folds its work to a single line and draws an inline diagram of how two files relate" width="900" />
 
 ### Free mode — every agent on one canvas
 
-Floating, resizable panels over the editor. Run several providers and delegate CLIs side by side, compare their answers, and keep the file you are reviewing open behind them.
+Floating, resizable panels over the editor. Run a hosted model and the delegate CLIs side by side, each in its own live terminal, compare their answers, and keep the file you are reviewing open behind them.
 
-<img src=".github/assets/free-mode.png" alt="Klide free mode with three agent panels and the editor" width="900" />
+<img src=".github/assets/free-mode.png" alt="Klide free mode: an OpenRouter conversation beside three delegate panels running Oh My Pi, OpenCode and Claude Code as live terminals" width="900" />
 
 ## Why Klide
 
