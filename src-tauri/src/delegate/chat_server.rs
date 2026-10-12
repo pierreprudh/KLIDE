@@ -490,7 +490,9 @@ mod tests {
             let answer = match result { ServerTurn::Ran(answer) => answer.unwrap(), ServerTurn::Unavailable(why) => panic!("{why}") };
             assert_eq!(answer,"Hello from V2.","turn {turn}");
             assert_eq!(chunks.lock().unwrap().concat(),answer);
-            assert!(chunks.lock().unwrap().len() >= 3,"turn {turn} did not stream: {:?}", chunks.lock().unwrap());
+            // Providers may coalesce adjacent mock deltas. Require an
+            // incremental answer, not one callback per HTTP chunk.
+            assert!(chunks.lock().unwrap().len() > 1,"turn {turn} did not stream: {:?}", chunks.lock().unwrap());
             let db = rusqlite::Connection::open_with_flags(format!("{root}/data/opencode/opencode.db"),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
             let table = if v2 { "session_v2" } else { "session" };
             let session: String = db.query_row(&format!("SELECT id FROM {table} ORDER BY time_created DESC LIMIT 1"),[],|row| row.get(0)).unwrap();
