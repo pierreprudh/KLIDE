@@ -2144,36 +2144,6 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
-/* Working-row label — a soft highlight sweeps through the text while the
-   model is generating. Text is painted by the gradient (background-clip), so
-   the colour stays on-palette: subtle → strong → subtle. Reduced motion
-   settles the label to plain subtle text. */
-.ai-working-label {
-  color: transparent;
-  -webkit-background-clip: text;
-  background-clip: text;
-  background-image: linear-gradient(90deg, var(--fg-subtle) 35%, var(--fg-strong) 50%, var(--fg-subtle) 65%);
-  background-size: 200% 100%;
-  animation: ai-shimmer-text 1.4s linear infinite;
-}
-
-@keyframes ai-shimmer-text {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: -100% 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ai-working-label {
-    animation: none;
-    background-image: none;
-    color: var(--fg-subtle);
-  }
-}
-
 .ai-caret {
   display: inline-block;
   width: 2px;
@@ -8854,12 +8824,12 @@ button:focus-visible .menu-leadout {
   0%, 100% { opacity: 0.07; }
   38% { opacity: 0.34; }
 }
-/* The word sits where the figure's controls will, in the same ink, so the
-   foot of the block does not jump when the picture lands. */
+/* The word sits where the figure's controls will, so the foot of the block
+   does not jump when the picture lands. It wears the Working row's shimmer
+   (`.ai-working-label`): one "still alive" cue across the panel. */
 .inline-visual-draft-label {
   margin-right: 6px;
   font-size: var(--fs-xs);
-  color: var(--fg-subtle);
 }
 @media (prefers-reduced-motion: reduce) {
   .inline-visual-draft-cell { animation: none; opacity: 0.14; }

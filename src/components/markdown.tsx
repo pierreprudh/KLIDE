@@ -498,7 +498,7 @@ function VisualBlock({ code, lang, closed, streaming }: { code: string; lang: st
       <figure className="inline-visual inline-visual-drafting" style={{ minWidth: 0 }}>
         <VisualDraft />
         <div className="inline-visual-actions" role="group" aria-label="Visual controls">
-          <span className="inline-visual-draft-label">Drawing</span>
+          <span className="inline-visual-draft-label ai-working-label">Drawing</span>
           <VisualControl label="Show code" onClick={() => setChosen("code")}><CodeIcon size={15} /><span className="visual-sr-only">Code</span></VisualControl>
         </div>
       </figure>
