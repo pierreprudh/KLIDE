@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useRef, useId, useMemo, useState, useSyncExternalStore, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { prepareVisual, type VisualHtml } from "./visualHtml";
+import { growVisual, hasDrawingRoot, settledMarkup } from "./visualStream";
 import { typesetVisual } from "./visualTypeset";
 
 import { createPortal } from "react-dom";
@@ -271,9 +272,19 @@ const VISUAL_LANGS = new Set(["html", "svg", "visual", "visualizer", "viz", "pre
 // what earns the block its theme, its fonts and its tokens for free — and the
 // stylesheet the model wrote is re-anchored to this one block so it cannot
 // reach the app around it. See `visualHtml.ts` for the rules.
-export const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: VisualHtml; scope: string }) {
+export const VisualSurface = memo(function VisualSurface({ visual, scope, growing = false }: { visual: VisualHtml; scope: string; growing?: boolean }) {
   const content = useRef<HTMLDivElement>(null);
+  // Still arriving: the tree is grown in place (`visualStream.ts`) so every
+  // piece already on the page keeps standing while the next one fades in.
+  // React owns none of these children — the div has no `children` and no
+  // `dangerouslySetInnerHTML` while growing, so a re-render leaves them be.
   useLayoutEffect(() => {
+    if (growing && content.current) growVisual(content.current, visual.html);
+  }, [visual, growing]);
+  useLayoutEffect(() => {
+    // The authored canvas holds still while the drawing is on its way; the
+    // fit to content is one settle, when the last piece has landed.
+    if (growing) return;
     let active = true;
     // Two passes that both need the drawing measured rather than described:
     // canvases sized to their box, and labels — placed by a model that could
@@ -289,7 +300,7 @@ export const VisualSurface = memo(function VisualSurface({ visual, scope }: { vi
     const ro = new ResizeObserver(() => fit());
     if (content.current) ro.observe(content.current);
     return () => { active = false; ro.disconnect(); };
-  }, [visual]);
+  }, [visual, growing]);
   return (
     // `klide-viz` carries the visual palette (tokens.css): the neutrals follow
     // the theme, the chroma is fixed and readable on either ground, and
@@ -325,7 +336,7 @@ export const VisualSurface = memo(function VisualSurface({ visual, scope }: { vi
           e.preventDefault();
           void openExternal(anchor.getAttribute("href") ?? "");
         }}
-        dangerouslySetInnerHTML={{ __html: visual.html }}
+        {...(growing ? {} : { dangerouslySetInnerHTML: { __html: visual.html } })}
       />
       {visual.dropped.length > 0 ? (
         <div
@@ -485,18 +496,25 @@ function VisualBlock({ code, lang, closed, streaming }: { code: string; lang: st
   // `useId` is per-instance and stable across re-renders; the punctuation it
   // carries is not valid in a class name or an id.
   const scope = `kv${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
-  const visual = useMemo(() => prepareVisual(code, scope), [code, scope]);
+  // Still arriving: only what has landed whole is parsed — never a tag the
+  // model is halfway through writing.
+  const arriving = !closed && streaming;
+  const source = arriving ? settledMarkup(code) : code;
+  const visual = useMemo(() => prepareVisual(source, scope), [source, scope]);
   // Nothing survived the allowlist (or the fence held prose, not markup):
   // there is no visual to offer and the block is an ordinary code block.
   const renderable = /<[A-Za-z]/.test(visual.html);
   const showVisual = renderable && (chosen ?? (closed ? "visual" : "code")) === "visual";
-  // Still arriving and nobody asked for the source: hold the picture's place.
-  // A finished message whose fence never closed is not drafting anything —
-  // it stays source, as before.
-  if (!closed && streaming && chosen !== "code") {
+  // Still arriving and nobody asked for the source. A drawing comes to life
+  // piece by piece once its `<svg>` root is here; until then — and for a
+  // page, whose layout would only lurch as it grew — the block holds the
+  // picture's place. A finished message whose fence never closed is not
+  // drafting anything — it stays source, as before.
+  if (arriving && chosen !== "code") {
+    const alive = visual.kind === "drawing" && hasDrawingRoot(source);
     return (
       <figure className="inline-visual inline-visual-drafting" style={{ minWidth: 0 }}>
-        <VisualDraft />
+        {alive ? <VisualSurface visual={visual} scope={scope} growing /> : <VisualDraft />}
         <div className="inline-visual-actions" role="group" aria-label="Visual controls">
           <span className="inline-visual-draft-label ai-working-label">Drawing</span>
           <VisualControl label="Show code" onClick={() => setChosen("code")}><CodeIcon size={15} /><span className="visual-sr-only">Code</span></VisualControl>

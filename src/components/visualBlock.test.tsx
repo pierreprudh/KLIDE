@@ -22,11 +22,28 @@ describe("the inline visualizer", () => {
     expect(html).not.toContain(">Preview<");
   });
 
-  it("holds the picture's place while the fence is still arriving", () => {
-    const html = renderToStaticMarkup(<>{renderMarkdown("```svg\n<svg><rect", { visuals: true, streaming: true })}</>);
-    expect(html).toContain("inline-visual-draft");
+  it("holds the picture's place until the drawing's root has arrived", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("```svg\n<svg viewBox=\"0 0 1", { visuals: true, streaming: true })}</>);
+    expect(html).toContain("inline-visual-draft-grid");
     expect(html).toContain(">Drawing<");
-    expect(html).not.toContain("&lt;svg&gt;");
+    expect(html).not.toContain("&lt;svg");
+    expect(html).not.toContain("klide-viz");
+  });
+
+  it("brings a drawing to life piece by piece once its root is here", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("```svg\n<svg viewBox=\"0 0 10 10\"><rect x=\"1", { visuals: true, streaming: true })}</>);
+    // The live surface is mounted (its tree is grown in the browser, not
+    // serialized), the mosaic is gone, and the foot still says Drawing.
+    expect(html).toContain("klide-viz");
+    expect(html).toContain("inline-visual-drafting");
+    expect(html).not.toContain("inline-visual-draft-grid");
+    expect(html).toContain(">Drawing<");
+  });
+
+  it("keeps a page on the mosaic while it streams — its layout would only lurch", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("```html\n<!doctype html><html><body><div>hi</div><p", { visuals: true, streaming: true })}</>);
+    expect(html).toContain("inline-visual-draft-grid");
+    expect(html).not.toContain("klide-viz");
   });
 
   it("keeps an unclosed fence as source once the message has finished", () => {

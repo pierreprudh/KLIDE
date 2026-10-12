@@ -8833,6 +8833,15 @@ button:focus-visible .menu-leadout {
 @media (prefers-reduced-motion: reduce) {
   .inline-visual-draft-cell { animation: none; opacity: 0.14; }
 }
+/* A piece of a drawing that just landed (`visualStream.ts`): it fades up
+   to whatever opacity its author gave it — the keyframe names no end
+   value, so an authored `opacity` is the destination, not a casualty — and
+   leaves no fill behind. Pieces already standing never replay. */
+.klide-viz .kv-born { animation: klide-visual-born 420ms var(--ease-soft) backwards; }
+@keyframes klide-visual-born { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .klide-viz .kv-born { animation: none; }
+}
 
 /* One quiet set of controls, shared by inline figures and the expanded viewer. */
 .inline-visual-actions, .visual-viewer-toolbar {
