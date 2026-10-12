@@ -22,10 +22,18 @@ describe("the inline visualizer", () => {
     expect(html).not.toContain(">Preview<");
   });
 
-  it("holds an unclosed fence as source while it streams", () => {
+  it("holds the picture's place while the fence is still arriving", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("```svg\n<svg><rect", { visuals: true, streaming: true })}</>);
+    expect(html).toContain("inline-visual-draft");
+    expect(html).toContain(">Drawing<");
+    expect(html).not.toContain("&lt;svg&gt;");
+  });
+
+  it("keeps an unclosed fence as source once the message has finished", () => {
     const html = render("```html\n<div>half");
     expect(html).toContain(">Preview<");
     expect(html).toContain("&lt;div&gt;half");
+    expect(html).not.toContain("inline-visual-draft");
   });
 
   it("renders nothing a hostile block asked for", () => {
@@ -74,10 +82,10 @@ describe("the inline visualizer", () => {
     expect(html).not.toContain("&lt;/svg");
   });
 
-  it("holds a bare <svg> as source while it is still streaming", () => {
+  it("holds a bare <svg>'s place while it is still streaming", () => {
     const html = renderToStaticMarkup(<>{renderMarkdown("<svg viewBox=\"0 0 10 10\"><circle", { streaming: true, visuals: true })}</>);
-    expect(html).toContain(">Preview<");
-    expect(html).toContain("&lt;svg");
+    expect(html).toContain("inline-visual-draft");
+    expect(html).not.toContain("&lt;svg");
   });
 
   it("leaves an <svg> quoted mid-sentence, or in a source fence, as text", () => {

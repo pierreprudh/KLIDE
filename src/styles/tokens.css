@@ -8822,6 +8822,49 @@ button:focus-visible .menu-leadout {
    beside it; it starts below the mark instead. */
 .inline-visual-page:first-child { margin-top: 30px; }
 
+/* A drawing still arriving. The frame is the hairline the finished figure
+   never needs — it stands in for a size the picture has not declared yet —
+   and the mosaic inside is the Welcome film's big pixel at ink weight: each
+   cell breathes between near-nothing and a faint tint on a fixed per-cell
+   delay (set inline from markdown.tsx), so a diagonal front keeps crossing
+   the frame while the model writes. No shimmer, no spinner, no progress —
+   the block has no idea how far along the fence is. */
+.inline-visual-draft {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-dim);
+}
+.inline-visual-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(40, minmax(0, 1fr));
+  gap: 3px;
+}
+.inline-visual-draft-cell {
+  aspect-ratio: 1;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.07;
+  animation: klide-pixel-draft 2.8s var(--ease-soft) infinite;
+  animation-delay: var(--draft-delay, 0ms);
+}
+@keyframes klide-pixel-draft {
+  0%, 100% { opacity: 0.07; }
+  38% { opacity: 0.34; }
+}
+/* The word sits where the figure's controls will, in the same ink, so the
+   foot of the block does not jump when the picture lands. */
+.inline-visual-draft-label {
+  margin-right: 6px;
+  font-size: var(--fs-xs);
+  color: var(--fg-subtle);
+}
+@media (prefers-reduced-motion: reduce) {
+  .inline-visual-draft-cell { animation: none; opacity: 0.14; }
+}
+
 /* One quiet set of controls, shared by inline figures and the expanded viewer. */
 .inline-visual-actions, .visual-viewer-toolbar {
   display: flex; align-items: center; justify-content: flex-end; gap: 2px;

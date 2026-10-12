@@ -449,7 +449,33 @@ function VisualSaveButton({ content }: { content: { current: HTMLDivElement | nu
   </>;
 }
 
-function VisualBlock({ code, lang, closed }: { code: string; lang: string; closed: boolean }) {
+// A drawing on its way. While the fence is still arriving the source would
+// only scroll past as noise, so the block holds the picture's place instead:
+// a hairline frame the size a drawing tends to be, and a big-pixel mosaic
+// that resolves across it the way the Welcome film does. Nothing is parsed
+// mid-stream — a half-written tag is not a picture — and the mosaic never
+// re-renders: it is drawn once, the delays are fixed, and CSS does the rest.
+const DRAFT_COLS = 40;
+const DRAFT_ROWS = 8;
+const DRAFT_CELLS = Array.from({ length: DRAFT_COLS * DRAFT_ROWS }, (_, i) => {
+  const col = i % DRAFT_COLS;
+  const row = Math.floor(i / DRAFT_COLS);
+  // A diagonal sweep, jittered per cell so it reads as a mosaic settling and
+  // not a wipe. The jitter is a fixed hash, so every render agrees.
+  const jitter = ((col * 7919 + row * 104729) % 23) * 11;
+  return `${(col + row) * 55 + jitter}ms`;
+});
+const VisualDraft = memo(function VisualDraft() {
+  return (
+    <div className="inline-visual-draft" role="img" aria-label="Drawing in progress">
+      <div className="inline-visual-draft-grid" aria-hidden="true">
+        {DRAFT_CELLS.map((delay, i) => <span key={i} className="inline-visual-draft-cell" style={{ "--draft-delay": delay } as CSSProperties} />)}
+      </div>
+    </div>
+  );
+});
+
+function VisualBlock({ code, lang, closed, streaming }: { code: string; lang: string; closed: boolean; streaming: boolean }) {
   const content = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [copied, copy] = useCopy(code);
@@ -464,6 +490,20 @@ function VisualBlock({ code, lang, closed }: { code: string; lang: string; close
   // there is no visual to offer and the block is an ordinary code block.
   const renderable = /<[A-Za-z]/.test(visual.html);
   const showVisual = renderable && (chosen ?? (closed ? "visual" : "code")) === "visual";
+  // Still arriving and nobody asked for the source: hold the picture's place.
+  // A finished message whose fence never closed is not drafting anything —
+  // it stays source, as before.
+  if (!closed && streaming && chosen !== "code") {
+    return (
+      <figure className="inline-visual inline-visual-drafting" style={{ minWidth: 0 }}>
+        <VisualDraft />
+        <div className="inline-visual-actions" role="group" aria-label="Visual controls">
+          <span className="inline-visual-draft-label">Drawing</span>
+          <VisualControl label="Show code" onClick={() => setChosen("code")}><CodeIcon size={15} /><span className="visual-sr-only">Code</span></VisualControl>
+        </div>
+      </figure>
+    );
+  }
   const actions = (
     <>
       {renderable ? (
@@ -1298,7 +1338,7 @@ function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
       const closed = idx < segments.length - 1;
       out.push(
         visuals && VISUAL_LANGS.has(lang.toLowerCase())
-          ? <VisualBlock key={`code-${idx}`} code={code} lang={lang} closed={closed} />
+          ? <VisualBlock key={`code-${idx}`} code={code} lang={lang} closed={closed} streaming={options?.streaming === true} />
           : <CodeBlock key={`code-${idx}`} code={code} lang={lang} />,
       );
     } else if (seg) {
