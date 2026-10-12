@@ -212,6 +212,7 @@ impl Delegate for OpenCode {
             let mut command = tokio::process::Command::new(cli);
             command
                 .current_dir(cwd)
+                .env("PWD", cwd)
                 .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
                 .env("OPENCODE_SERVER_USERNAME", "opencode")
                 .env("OPENCODE_SERVER_PASSWORD", &password);

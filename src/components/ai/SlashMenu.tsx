@@ -9,6 +9,7 @@
 // two kinds of command look like one kind.
 
 import { SkillMarkGlyph } from "./skillMarks";
+import { Fragment } from "react";
 import type { SkillLedes } from "./skillToken";
 import type { SlashCommand } from "./slashCommands";
 
@@ -20,7 +21,7 @@ export function SlashMenu({
   maxHeight = 240,
   ledes,
 }: {
-  matches: readonly Pick<SlashCommand, "name" | "desc">[];
+  matches: readonly Pick<SlashCommand, "name" | "desc" | "group">[];
   activeIdx: number;
   onHover: (idx: number) => void;
   onAccept: (idx: number) => void;
@@ -52,8 +53,11 @@ export function SlashMenu({
       {matches.map((cmd, idx) => {
         const lede = ledes?.get(cmd.name);
         return (
+        <Fragment key={cmd.name}>
+        {cmd.group && matches[idx - 1]?.group !== cmd.group && (
+          <div style={{ padding: "6px 8px 3px", color: "var(--fg-dim)", fontSize: 10 }}>{cmd.group}</div>
+        )}
         <div
-          key={cmd.name}
           role="option"
           aria-selected={idx === activeIdx}
           // mousedown, not click: the textarea keeps focus, so its onBlur
@@ -80,6 +84,7 @@ export function SlashMenu({
           )}
           <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cmd.desc}</span>
         </div>
+        </Fragment>
         );
       })}
     </div>

@@ -2880,6 +2880,9 @@ This user request requires workspace inspection. Before answering, you MUST call
         if (isDelegateId(provider) && !next.includes(CLI_DEFAULT_MODEL)) {
           next.unshift(CLI_DEFAULT_MODEL);
         }
+        // Delegate caches/defaults are partial, not a declaration that a
+        // saved model was retired. Let the CLI validate its own model id.
+        if (isDelegateId(provider) && model && !next.includes(model)) next.push(model);
         onAvailableModelsChange(next);
         // The Provider does not serve the current pick, so it has to move —
         // but to the best-evidenced model, not to whichever star is oldest

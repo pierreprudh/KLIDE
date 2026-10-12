@@ -69,5 +69,5 @@ export function withCliCommands(
   const added = cliCommands
     .filter((c) => !taken.has(c.name))
     .map(({ name, desc }) => ({ name, desc: desc || `${cliLabel} command`, run: () => insert(`/${name} `) }));
-  return [...kept, ...added];
+  return [...added.map((command) => ({ ...command, group: cliLabel })), ...kept.map((command) => ({ ...command, group: "Klide" }))];
 }

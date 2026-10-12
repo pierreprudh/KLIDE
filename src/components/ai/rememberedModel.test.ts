@@ -3,6 +3,7 @@ import { memoryStorage } from "../../testStorage";
 import { toggleFavModel } from "../../favModels";
 import { defaultModelForProvider } from "../../agent/providers";
 import {
+  rememberModelForProvider,
   rememberedModelForProvider,
   storedModelForProvider,
   switchModelForProvider,
@@ -20,6 +21,15 @@ describe("switchModelForProvider — what a provider switch lands on", () => {
   it("lands on the last human pick, not the row's default (the Focus hero used to reset)", () => {
     localStorage.setItem("klide.model.openrouter", "anthropic/claude-sonnet-5");
     expect(switchModelForProvider("openrouter")).toBe("anthropic/claude-sonnet-5");
+  });
+
+  it("restores the Focus picker choice after switching providers", () => {
+    rememberModelForProvider("openrouter", "deepseek/deepseek-v4.1-flash");
+    rememberModelForProvider("opencode", "opencode-go/glm-5.3-flash");
+    expect(switchModelForProvider("openrouter")).toBe("deepseek/deepseek-v4.1-flash");
+    rememberModelForProvider("openrouter", "anthropic/claude-sonnet-5");
+    expect(switchModelForProvider("openrouter")).toBe("anthropic/claude-sonnet-5");
+    expect(switchModelForProvider("opencode")).toBe("opencode-go/glm-5.3-flash");
   });
 
   it("prefers the newest star over the default when nothing was picked yet", () => {

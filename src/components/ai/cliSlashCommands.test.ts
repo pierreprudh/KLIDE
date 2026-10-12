@@ -8,13 +8,14 @@ describe("withCliCommands", () => {
     const inserted: string[] = [];
     const merged = withCliCommands(klide, ["compact", "init", "clear", "tdd", "context"].map((name) => ({ name })), "Claude Code", (p) => inserted.push(p));
     expect(merged.map((c) => [c.name, c.desc])).toEqual([
-      ["clear", "klide clear"],
-      ["handoff", "klide handoff"],
-      ["tdd", "klide tdd"],
       ["compact", "Claude Code command"],
       ["init", "Claude Code command"],
       ["context", "Claude Code command"],
+      ["clear", "klide clear"],
+      ["handoff", "klide handoff"],
+      ["tdd", "klide tdd"],
     ]);
+    expect(merged.map((c) => c.group)).toEqual(["Claude Code", "Claude Code", "Claude Code", "Klide", "Klide", "Klide"]);
     merged.find((c) => c.name === "context")!.run();
     expect(inserted).toEqual(["/context "]);
   });

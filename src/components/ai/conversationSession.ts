@@ -31,8 +31,7 @@ export type ConversationSession = {
    *  dispatch target, not a claim about the messages already on screen. */
   provider: ProviderId;
   model: string;
-  /** Where the turns already on screen actually came from — stamped by the
-   *  first Run of this identity and then frozen. This, not `provider`, is
+  /** The latest dispatched Run's pair. This, not the unsent picker, is
    *  what the Stored conversation records, so moving the picker to another
    *  Provider cannot retroactively relabel a thread it never ran. Undefined
    *  until a Run stamps it (or a restore/resume carries one in). */
@@ -86,8 +85,7 @@ export type ConversationSessionAction =
   | {
       type: "run-started";
       activity?: ConversationRunActivity;
-      /** The pair this Run actually dispatched with. Stamps the thread's
-       *  origin on its first Run; later Runs never restamp it. */
+      /** The pair this Run actually dispatched with. */
       provider?: ProviderId;
       model?: string;
     }
@@ -161,18 +159,22 @@ export function restoreConversationSession({
 
   // The binding records where this panel last dispatched THIS conversation, so
   // it outranks the stored record for the next turn — a mid-thread Provider
-  // switch survives a remount. The stored record still owns the thread's
-  // origin below.
+  // switch survives a remount. Explicitly opening a saved conversation uses
+  // its latest dispatched pair instead of an older panel preference.
   const bindingProvider =
-    canUsePanelBinding && panelBinding?.convoId === conversationId
+    !explicitId && canUsePanelBinding && panelBinding?.convoId === conversationId
       ? panelBinding.provider
       : undefined;
 
+  const restoredProvider = bindingProvider ?? saved?.provider ?? provider;
+  const restoredModel = saved?.provider && saved.provider !== restoredProvider
+    ? switchModelForProvider(restoredProvider)
+    : saved?.model || model;
   return {
     conversationId,
     messages: saved?.msgs ?? [],
-    provider: bindingProvider ?? saved?.provider ?? provider,
-    model: saved?.model || model,
+    provider: restoredProvider,
+    model: restoredModel,
     originProvider: saved?.provider,
     originModel: saved?.model ?? undefined,
     workspaceRoot,
@@ -265,13 +267,10 @@ export function conversationSessionReducer(
     case "run-started":
       return {
         ...session,
-        // First Run of this identity stamps what produced its turns; a later
-        // Run on another Provider continues the thread without rewriting it.
-        originProvider: session.originProvider ?? action.provider ?? session.provider,
-        originModel:
-          session.originProvider !== undefined
-            ? session.originModel
-            : action.model ?? session.model,
+        // Continue from the latest dispatched pair. Earlier messages retain
+        // their own stamps; moving an unsent picker still changes no history.
+        originProvider: action.provider ?? session.provider,
+        originModel: action.model ?? session.model,
         run: { active: true, activity: action.activity ?? null },
       };
     case "run-settled":

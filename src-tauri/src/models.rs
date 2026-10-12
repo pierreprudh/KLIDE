@@ -517,23 +517,31 @@ pub(crate) fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<
 
 pub(crate) fn opencode_cached_models() -> Option<Vec<String>> {
     let cli = resolve_command(crate::delegate::OpenCode.binary()).ok()?;
-    let output = std::process::Command::new(cli)
-        .arg("models")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let models: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    if models.is_empty() {
-        None
-    } else {
-        Some(models)
-    }
+    opencode_models_from(&cli)
+}
+
+/// Called off the async runtime by subscription discovery. V2's shared
+/// service can outlive its config and binary; a private query reads today's
+/// providers and credentials without depending on that service's health.
+pub(crate) fn opencode_models_from(cli: &str) -> Option<Vec<String>> {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+    runtime.block_on(async {
+        let mut version = tokio::process::Command::new(cli);
+        version.arg("--version").kill_on_drop(true);
+        let version = tokio::time::timeout(Duration::from_secs(3), version.output()).await.ok()?.ok()?;
+        if !version.status.success() { return None; }
+        let v2 = crate::delegate::first_version_token(&String::from_utf8_lossy(&version.stdout))?.starts_with("2.");
+        let mut query = tokio::process::Command::new(cli);
+        query.arg("models").kill_on_drop(true);
+        if v2 { query.arg("--standalone"); }
+        let output = tokio::time::timeout(Duration::from_secs(20), query.output()).await.ok()?.ok()?;
+        if !output.status.success() { return None; }
+        let mut models: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
+        models.sort();
+        models.dedup();
+        (!models.is_empty()).then_some(models)
+    })
 }
 
 pub(crate) fn omp_cached_models() -> Option<Vec<String>> {

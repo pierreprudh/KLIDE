@@ -10,6 +10,15 @@
 - `klide://resume` without a session id takes the newest session of that CLI in `project=`, so Codex, OpenCode and Oh My Pi can hand a session to Klide too; the From other apps toggle now installs a second `/klide` skill in `~/.agents/skills` for them.
 - Continue a Claude Code terminal session in Klide. `klide://resume?provider=claude-code&session=<id>` resumes that CLI session in an AI panel, in the project its transcript names; Settings › From other apps installs a `/klide` skill so "open this conversation in Klide", said to Claude Code, opens that link with the shell's own session id. Links also carry an explicit `project=`, and any Delegate with a resume flag is accepted.
 
+## 0.6.9 (2026-10-12)
+
+- Added OpenCode 2 support across Focus, interactive sessions, and Missions while retaining OpenCode 1 compatibility. Private local servers stream native answers, reasoning, and tool activity, recover interrupted event delivery from durable history, and support resumed turns and native slash commands.
+- Fixed duplicate OpenCode answers when reasoning preceded text. Reasoning now appears separately in the thinking display and remains in completed conversations.
+- OpenCode V2 model discovery uses a private query, so an unavailable shared service cannot hide Go, free, or configured local models. Credentials remain managed by OpenCode.
+- Provider commands appear before Klide commands in the slash menu, with section labels.
+- Reopened conversations use their latest dispatched provider/model pair while earlier responses keep their own labels. Focus's New task picker remembers human model choices per provider, and partial delegate model lists no longer replace saved choices.
+- Added an isolated OpenCode smoke test covering model discovery, reasoning and answer streaming, resume, commands, and status callbacks without paid inference.
+
 ## 0.6.8 (2026-10-07)
 
 - Sight lets a model without image support borrow another model's vision. Settings can select the Eyes model; automatic selection prefers an installed local vision model. Descriptions, attribution, and usage are retained in the conversation.

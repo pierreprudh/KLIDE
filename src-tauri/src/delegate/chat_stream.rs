@@ -39,6 +39,8 @@ pub(crate) enum StreamItem {
     /// what it has already emitted per `id` and streams only the new suffix, so
     /// the same handling is correct whether a part arrives once or repeatedly.
     TextPart { id: String, text: String },
+    /// Provider reasoning, kept separate from the answer.
+    ThinkingPart { id: String, text: String },
     /// A tool the CLI called on its own.
     ToolCall {
         id: String,

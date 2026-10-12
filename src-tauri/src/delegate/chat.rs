@@ -169,6 +169,20 @@ pub async fn run_subscription_chat(
     mcp: Option<super::McpWiring>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
+    // Keep streamed reasoning in the authoritative completed message too;
+    // otherwise the final fold would erase the live thinking display.
+    let thinking = std::sync::Arc::new(Mutex::new(String::new()));
+    let thinking_sink = thinking.clone();
+    let downstream = on_chunk.clone();
+    let channel = Channel::new(move |body| {
+        if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+            let chunk: StreamChunk = serde_json::from_str(&json).map_err(|e| tauri::Error::Anyhow(e.into()))?;
+            thinking_sink.lock().unwrap().push_str(&chunk.thinking);
+            downstream.send(chunk)?;
+        }
+        Ok(())
+    });
+    let on_chunk = &channel;
     let cwd = workspace_root.unwrap_or_else(|| ".".to_string());
     // The "default" sentinel means "no model picked" — hand the adapter an
     // empty model so it omits its model flag and the CLI uses its own default.
@@ -297,7 +311,10 @@ pub async fn run_subscription_chat(
     }
     Ok(AiChatResponse {
         content,
-        thinking: None,
+        thinking: {
+            let text = thinking.lock().unwrap().clone();
+            (!text.is_empty()).then_some(text)
+        },
         // Empty on purpose: a delegate has *already run* its tools. Reporting
         // them here would make the harness queue them for execution a second
         // time. They reach the UI as observed activity instead.
@@ -525,6 +542,18 @@ impl<'a> Emitter<'a> {
                     let _ = self.on_chunk.send(StreamChunk::text(suffix.to_string()));
                 }
                 self.emitted_parts.insert(id, text.len());
+            }
+            StreamItem::ThinkingPart { id, text } => {
+                let key = format!("thinking:{id}");
+                let already = self.emitted_parts.get(&key).copied().unwrap_or(0);
+                if text.len() > already && text.is_char_boundary(already) {
+                    self.emitted.store(true, Ordering::Relaxed);
+                    let _ = self.on_chunk.send(StreamChunk {
+                        thinking: text[already..].to_string(),
+                        ..Default::default()
+                    });
+                }
+                self.emitted_parts.insert(key, text.len());
             }
             StreamItem::Text(text) if self.saw_delta => {
                 // Already streamed, character for character.

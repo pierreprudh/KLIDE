@@ -520,7 +520,7 @@ describe("snapshotConversationSession", () => {
 });
 
 describe("a thread records the Provider that produced it, not the picker", () => {
-  it("stamps the origin from the Run that dispatched, once", () => {
+  it("records the latest dispatched pair while each message keeps its own stamp", () => {
     const started = conversationSessionReducer(
       session({ provider: "claude-code", model: "default" }),
       { type: "run-started", activity: "thinking", provider: "claude-code", model: "default" },
@@ -540,8 +540,25 @@ describe("a thread records the Provider that produced it, not the picker", () =>
       model: "deepseek/deepseek-v4",
     });
     expect(secondRun.provider).toBe("openrouter");
-    expect(secondRun.originProvider).toBe("claude-code");
-    expect(secondRun.originModel).toBe("default");
+    expect(secondRun.originProvider).toBe("openrouter");
+    expect(secondRun.originModel).toBe("deepseek/deepseek-v4");
+  });
+
+  it("reopens an older mixed-provider thread with its latest answer's pair", () => {
+    const saved: Conversation = {
+      id: "mixed", title: "Count", cwd: "/workspace", updatedAt: 100,
+      provider: "openrouter", model: "opencode-go/glm-5.3",
+      msgs: [userMessage,
+        { role: "assistant", content: "error", provider: "openrouter", model: "opencode-go/glm-5.3" },
+        { role: "assistant", content: "1\n2", provider: "opencode", model: "opencode-go/glm-5.3-flash" }],
+    };
+    localStorage.setItem("klide-conversations", JSON.stringify([saved]));
+    localStorage.setItem("klide.panelSession.ai-main", JSON.stringify({ convoId: saved.id, provider: "openrouter", workspaceRoot: "/workspace" }));
+    const restored = restoreConversationSession({ panelId: "ai-main", initialConversationId: saved.id, provider: "openrouter", model: "gpt-4o", workspaceRoot: "/workspace" });
+    expect(restored.provider).toBe("opencode");
+    expect(restored.model).toBe("opencode-go/glm-5.3-flash");
+    expect(snapshotConversationSession(restored)?.provider).toBe("opencode");
+    expect(restored.messages).toEqual(saved.msgs);
   });
 
   it("persists the origin, so moving the picker cannot relabel history", () => {

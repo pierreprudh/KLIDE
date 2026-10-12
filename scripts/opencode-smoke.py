@@ -30,6 +30,13 @@ class Model(BaseHTTPRequestHandler):
             }).encode())
             return
         try:
+            reasoning = {
+                "id": "mock", "object": "chat.completion.chunk", "created": 1, "model": "mock",
+                "choices": [{"index": 0, "delta": {"reasoning_content": "Thinking about the answer."}, "finish_reason": None}],
+            }
+            self.wfile.write(("data: " + json.dumps(reasoning) + "\n\n").encode())
+            self.wfile.flush()
+            time.sleep(0.4)
             for text in ["Hello ", "from ", "V2."]:
                 message = {
                     "id": "mock", "object": "chat.completion.chunk", "created": 1, "model": "mock",

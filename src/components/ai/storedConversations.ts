@@ -82,12 +82,20 @@ export function loadConversations<T>(key?: string): T[] {
     // any null/non-object messages from the arrays we keep.
     return parsed
       .filter((c) => c && typeof c === "object" && Array.isArray((c as { msgs?: unknown }).msgs))
-      .map((c) => ({
-        ...(c as object),
-        msgs: ((c as { msgs: unknown[] }).msgs).filter(
+      .map((c) => {
+        const msgs = ((c as { msgs: unknown[] }).msgs).filter(
           (m) => m && typeof m === "object"
-        ),
-      })) as T[];
+        ) as Msg[];
+        // Older records pinned the thread to its first provider even after
+        // a later turn switched. The actual answer stamps repair that pair
+        // for every reader (rail, resume, and Mission Control) without losing
+        // the earlier messages or inferring from today's picker preferences.
+        const latest = [...msgs].reverse().find((m) => m.role === "assistant" && !m.subagent && m.provider && m.model);
+        return {
+          ...(c as object), msgs,
+          ...(latest?.role === "assistant" ? { provider: latest.provider, model: latest.model } : {}),
+        };
+      }) as T[];
   } catch {
     return [];
   }

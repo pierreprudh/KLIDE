@@ -12,6 +12,12 @@ import { defaultModelForProvider } from "../../agent/providers";
 import { favModelsFor } from "../../favModels";
 import { providerSwitchModel } from "./modelSelection";
 
+/** A human model pick, shared by the Focus start stage and conversation
+ *  picker. Automatic list fallbacks must not pass through this function. */
+export function rememberModelForProvider(id: ProviderId, model: string): void {
+  localStorage.setItem(`klide.model.${id}`, model);
+}
+
 /** `klide.model.<provider>`, or the Provider's default when unset — with the
  *  guards that reject another Provider's id that leaked in. */
 /** Whether `model` plainly belongs to some other Provider than `id`. Claude

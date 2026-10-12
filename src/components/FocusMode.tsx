@@ -70,6 +70,7 @@ import { eyesSettingOf, photoGate as photoGateOf, type Eyes } from "./ai/sight";
 import { SETTINGS, useSetting } from "../settingsStore";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
+import { rememberModelForProvider } from "./ai/rememberedModel";
 import { SlashMenu } from "./ai/SlashMenu";
 import { MentionMenu } from "./ai/MentionMenu";
 import { mentionKeyAction, mentionQueryAt, replaceMention, type MentionQuery } from "./ai/mentions";
@@ -2192,7 +2193,10 @@ function FocusComposer({
               availableModels={models}
               disabled={false}
               bareHover
-              onChange={onModelChange}
+              onChange={(nextModel) => {
+                rememberModelForProvider(provider, nextModel);
+                onModelChange(nextModel);
+              }}
             />
             {effortLevels.length > 0 && (
               <InlineMenu

@@ -460,6 +460,9 @@ mod tests {
         let binary = std::env::var("KLIDE_OPENCODE_TEST_BINARY").expect("test binary");
         let root = std::env::var("KLIDE_OPENCODE_TEST_ROOT").expect("disposable test root");
         let adapter = super::super::lookup("opencode").unwrap();
+        let model_binary = binary.clone();
+        let models = tokio::task::spawn_blocking(move || crate::models::opencode_models_from(&model_binary)).await.unwrap().expect("CLI model discovery");
+        assert!(models.iter().any(|model| model == "mock/mock"), "configured model missing: {models:?}");
         super::super::status::install_opencode_hooks(&std::path::Path::new(&root).join("config/opencode/plugin")).unwrap();
         let states: Arc<Mutex<Vec<(String, Option<String>)>>> = Arc::default();
         let sink = states.clone();
@@ -478,10 +481,23 @@ mod tests {
             if turn == 2 { command.args(["--command","review"]); }
             let chunks: Arc<Mutex<Vec<String>>> = Arc::default();
             let sink = chunks.clone();
+            let thinking: Arc<Mutex<Vec<String>>> = Arc::default();
+            let thinking_sink = thinking.clone();
+            let first_thinking: Arc<Mutex<Option<Instant>>> = Arc::default();
+            let thinking_time = first_thinking.clone();
+            let first_text: Arc<Mutex<Option<Instant>>> = Arc::default();
+            let text_time = first_text.clone();
             let channel: Channel<StreamChunk> = Channel::new(move |body| {
                 if let tauri::ipc::InvokeResponseBody::Json(json) = body {
                     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-                    if let Some(text) = value.get("content").and_then(|v| v.as_str()) { sink.lock().unwrap().push(text.into()); }
+                    if let Some(text) = value.get("content").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                        text_time.lock().unwrap().get_or_insert_with(Instant::now);
+                        sink.lock().unwrap().push(text.into());
+                    }
+                    if let Some(text) = value.get("thinking").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                        thinking_time.lock().unwrap().get_or_insert_with(Instant::now);
+                        thinking_sink.lock().unwrap().push(text.into());
+                    }
                 }
                 Ok(())
             });
@@ -490,6 +506,10 @@ mod tests {
             let answer = match result { ServerTurn::Ran(answer) => answer.unwrap(), ServerTurn::Unavailable(why) => panic!("{why}") };
             assert_eq!(answer,"Hello from V2.","turn {turn}");
             assert_eq!(chunks.lock().unwrap().concat(),answer);
+            if v2 {
+                assert_eq!(thinking.lock().unwrap().concat(), "Thinking about the answer.");
+                assert!(first_text.lock().unwrap().unwrap().duration_since(first_thinking.lock().unwrap().unwrap()) > Duration::from_millis(100), "reasoning must stream before the answer, not arrive during recovery");
+            }
             // Providers may coalesce adjacent mock deltas. Require an
             // incremental answer, not one callback per HTTP chunk.
             assert!(chunks.lock().unwrap().len() > 1,"turn {turn} did not stream: {:?}", chunks.lock().unwrap());

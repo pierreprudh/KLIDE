@@ -8,7 +8,7 @@ A local-first coding workspace for running local models and subscription coding 
 
 <br/>
 
-![Version](https://img.shields.io/badge/version-0.6.8-7A9F4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.9-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
 [![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
 
@@ -308,7 +308,7 @@ Since v0.6.5, main has gained the following, each under the name it shipped with
 
 Underneath, the September architecture review landed as nine merged pull requests: **one Gate subject** every permission check reads, **a Run lease** that releases everything it holds however the loop ends, **one fenced delivery** for everything the operator did not type, **a per-session bridge secret** for Delegate CLIs, **a real CSS tokenizer** in the visual sanitizer, **Rust deciding Open / Reveal / Refuse** for documents, **one process module** for every command a Run starts, **the Mission supervisor as the only dispatcher**, and **a coordination journal store that is safe across processes**.
 
-v0.6.8 — Sight and Recovery (2026-10-07) adds image descriptions for models without vision, shared run management and crash cleanup, a calmer Memory window, terminal environment-aware agent commands, and local inference improvements.
+v0.6.9 — OpenCode 2 (2026-10-12) adds native answer and reasoning streaming, durable recovery, session resume, native commands, and complete model discovery. Provider commands lead the slash menu, and conversations and new tasks retain the correct provider/model pair.
 
 v0.6.4 — Workers, Connectors, Visuals (2026-09-20) precedes it. A Harness Run can hand a task to another CLI agent as a worker — a dispatch the operator approves, an isolated worktree, a Run of its own — instead of shelling out to `claude -p`. Klide connects to the MCP servers already configured in the tools you use. And an answer can draw: an `html` or `svg` fence renders as a sanitized, themed picture in the conversation.
 

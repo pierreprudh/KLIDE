@@ -13,6 +13,7 @@ export { skillSlashName };
 export type SlashCommand = {
   name: string;
   desc: string;
+  group?: string;
   run: () => void | Promise<void>;
 };
 

@@ -23,7 +23,10 @@ can select the directory from which Klide was launched instead.
 
 ## Streaming and recovery
 
-V2's native events identify text by assistant message and content ordinal.
+V2's native events identify text by assistant message and the ordinal within
+that content kind. Reasoning is streamed separately through Klide's thinking
+display; it never becomes answer text. Recovery counts text and reasoning
+blocks separately so a reasoning block cannot duplicate the answer.
 Its CLI compatibility output uses different part IDs, so the transport reads
 answer/tool content from the native stream and session/error information from
 the CLI. This avoids displaying the same answer twice.
@@ -44,6 +47,11 @@ Tools. Klide's MCP capabilities still pass through the existing Rust permission
 and coordination boundaries.
 
 ## History and credentials
+
+Model discovery uses `opencode models --standalone` on V2, so a stale or
+unavailable shared service cannot hide models from Klide's picker. V1 retains
+`opencode models`. Both queries have a deadline; discovery sends no inference
+request and lists the models OpenCode makes available through its providers.
 
 Mission Control reads V1's `session`/`message`/`part` tables and V2's
 `session_v2`/`session_message` projections using read-only SQLite connections.
@@ -67,9 +75,11 @@ mock model. Tests cover native streaming, transcript recovery, pagination,
 resume boundaries, reasoning/peer isolation, tool deduplication, failure
 outcomes and the V2 history projections.
 
-A reproducible smoke test starts a disposable local model and isolated CLI
+A reproducible smoke test starts a disposable local model that streams
+reasoning before answer text, with isolated CLI
 configuration, then runs the Rust transport through a new turn, a resumed
-turn and a native command, including real status-plugin callbacks:
+turn and a native command, including real status-plugin callbacks. It checks
+that reasoning arrives before the answer and neither is duplicated:
 
 ```sh
 python3 scripts/opencode-smoke.py --binary /path/to/opencode

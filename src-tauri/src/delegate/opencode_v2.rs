@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 pub(super) struct Turn {
     session: Option<String>,
     text: HashMap<String, String>,
+    reasoning: HashMap<String, String>,
     tool_names: HashMap<String, String>,
     calls: HashSet<String>,
     results: HashSet<String>,
@@ -22,6 +23,7 @@ impl Turn {
         Self {
             session,
             text: HashMap::new(),
+            reasoning: HashMap::new(),
             tool_names: HashMap::new(),
             calls: HashSet::new(),
             results: HashSet::new(),
@@ -82,7 +84,7 @@ impl Turn {
             return Vec::new();
         }
         match kind {
-            "session.text.delta" | "session.text.ended" => {
+            "session.text.delta" | "session.text.ended" | "session.reasoning.delta" | "session.reasoning.ended" => {
                 let (Some(message), Some(ordinal)) = (
                     data.get("assistantMessageID").and_then(Value::as_str),
                     data.get("ordinal").and_then(Value::as_u64),
@@ -90,8 +92,9 @@ impl Turn {
                     return Vec::new();
                 };
                 let id = format!("{message}:{ordinal}");
-                let known = self.text.entry(id.clone()).or_default();
-                if kind == "session.text.delta" {
+                let reasoning = kind.starts_with("session.reasoning.");
+                let known = if reasoning { &mut self.reasoning } else { &mut self.text }.entry(id.clone()).or_default();
+                if kind.ends_with(".delta") {
                     known.push_str(
                         data.get("delta")
                             .and_then(Value::as_str)
@@ -100,10 +103,12 @@ impl Turn {
                 } else if let Some(text) = data.get("text").and_then(Value::as_str) {
                     *known = text.into();
                 }
-                vec![StreamItem::TextPart {
+                vec![if reasoning { StreamItem::ThinkingPart {
+                    id, text: known.clone(),
+                } } else { StreamItem::TextPart {
                     id,
                     text: known.clone(),
-                }]
+                } }]
             }
             "session.tool.input.started" => {
                 if let (Some(id), Some(name)) = (
@@ -187,7 +192,11 @@ impl Turn {
                     let Some(content) = message.get("content").and_then(Value::as_array) else {
                         continue;
                     };
-                    for (ordinal, part) in content.iter().enumerate() {
+                    // Native ordinals count blocks of each kind, not their
+                    // position in the mixed reasoning/text/tool projection.
+                    let mut text_ordinal = 0;
+                    let mut reasoning_ordinal = 0;
+                    for part in content {
                         match part.get("type").and_then(Value::as_str) {
                             Some("text") => {
                                 let text = part
@@ -195,9 +204,17 @@ impl Turn {
                                     .and_then(Value::as_str)
                                     .unwrap_or_default()
                                     .to_string();
-                                let key = format!("{id}:{ordinal}");
+                                let key = format!("{id}:{text_ordinal}");
+                                text_ordinal += 1;
                                 self.text.insert(key.clone(), text.clone());
                                 out.push(StreamItem::TextPart { id: key, text });
+                            }
+                            Some("reasoning") => {
+                                let text = part.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+                                let key = format!("{id}:{reasoning_ordinal}");
+                                reasoning_ordinal += 1;
+                                self.reasoning.insert(key.clone(), text.clone());
+                                out.push(StreamItem::ThinkingPart { id: key, text });
                             }
                             Some("tool") => {
                                 let (Some(id), Some(name), Some(state)) = (
@@ -536,12 +553,11 @@ mod tests {
     #[test]
     fn reasoning_and_peer_sessions_never_enter_the_answer() {
         let mut turn = Turn::new(Some(session()));
-        assert!(event(
+        assert_eq!(event(
             &mut turn,
             "session.reasoning.delta",
             json!({"assistantMessageID":"m","ordinal":0,"delta":"private reasoning"})
-        )
-        .is_empty());
+        ), [StreamItem::ThinkingPart { id: "m:0".into(), text: "private reasoning".into() }]);
         assert!(turn.feed(&json!({"type":"session.text.delta","data":{"sessionID":"child","assistantMessageID":"m","ordinal":0,"delta":"peer text"}}).to_string()).is_empty());
         assert!(turn
             .feed(
@@ -553,8 +569,8 @@ mod tests {
         let recovered = turn.recover(&[json!({"type":"assistant","id":"m","content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"answer"}]})]);
         assert_eq!(
             recovered,
-            [StreamItem::TextPart {
-                id: "m:1".into(),
+            [StreamItem::ThinkingPart { id: "m:0".into(), text: "hidden".into() }, StreamItem::TextPart {
+                id: "m:0".into(),
                 text: "answer".into()
             }]
         );
