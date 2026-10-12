@@ -1,7 +1,16 @@
 const authoredFrames = new WeakMap<SVGSVGElement, string>();
 
-/** Trim only unused outer SVG canvas; never reposition authored nodes. */
-export function fitVisualCanvases(root: HTMLElement): void {
+// The settle in flight for a drawing, so a second fit asked for while it is
+// still gliding toward the same frame lets it finish instead of cutting in.
+const settling = new WeakMap<SVGSVGElement, { target: string; cancel: () => void }>();
+const SETTLE_MS = 640;
+// Apple's ease-out: fast off the mark, long soft landing.
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 4);
+
+/** Trim only unused outer SVG canvas; never reposition authored nodes.
+ *  With `animate`, a drawing that was still growing a moment ago glides
+ *  from its authored frame to the fitted one rather than snapping. */
+export function fitVisualCanvases(root: HTMLElement, animate = false): void {
   root.querySelectorAll<SVGSVGElement>(":scope > svg").forEach(svg => {
     if (!svg.hasAttribute("viewBox") || svg.querySelector("filter, mask")) return;
     try {
@@ -21,12 +30,37 @@ export function fitVisualCanvases(root: HTMLElement): void {
       const right = Math.min(frame.x + frame.width, box.x + box.width + pad);
       const bottom = Math.min(frame.y + frame.height, box.y + box.height + pad);
       if (right <= x || bottom <= y) return;
-      svg.setAttribute("viewBox", `${x} ${y} ${right - x} ${bottom - y}`);
-      svg.style.display = "block";
-      svg.style.width = "100%";
-      svg.style.maxWidth = `${right - x}px`;
-      svg.style.minWidth = `${Math.min(right - x, 520)}px`;
-      svg.style.height = "auto";
+      const target = `${x} ${y} ${right - x} ${bottom - y}`;
+      const inFlight = settling.get(svg);
+      if (inFlight?.target === target) return;
+      inFlight?.cancel();
+      const place = (frame: string, w: number) => {
+        svg.setAttribute("viewBox", frame);
+        svg.style.display = "block";
+        svg.style.width = "100%";
+        svg.style.maxWidth = `${w}px`;
+        svg.style.minWidth = `${Math.min(w, 520)}px`;
+        svg.style.height = "auto";
+      };
+      const current = (svg.getAttribute("viewBox") ?? authored).trim().split(/[\s,]+/).map(Number);
+      const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!animate || reduced || current.length !== 4 || current.some(Number.isNaN)) {
+        place(target, right - x);
+        return;
+      }
+      const from = current as [number, number, number, number];
+      const to = [x, y, right - x, bottom - y];
+      const start = performance.now();
+      let raf = 0;
+      const step = (now: number) => {
+        const t = easeOut(Math.min(1, (now - start) / SETTLE_MS));
+        const f = to.map((v, i) => from[i] + (v - from[i]) * t);
+        place(f.join(" "), f[2]);
+        if (t < 1) raf = requestAnimationFrame(step);
+        else { place(target, right - x); settling.delete(svg); }
+      };
+      settling.set(svg, { target, cancel: () => cancelAnimationFrame(raf) });
+      raf = requestAnimationFrame(step);
     } catch { /* Unsupported SVG geometry keeps the authored canvas. */ }
   });
 }

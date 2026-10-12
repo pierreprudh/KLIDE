@@ -4,12 +4,19 @@ import { hasDrawingRoot, settledMarkup } from "./visualStream";
 describe("a drawing still arriving", () => {
   it("keeps every whole tag and cuts the one being written", () => {
     expect(settledMarkup('<svg viewBox="0 0 10 10"><rect x="1" y="1"/><circle cx="')).toBe('<svg viewBox="0 0 10 10"><rect x="1" y="1"/>');
-    expect(settledMarkup("<svg><g><rect/></g><text>Hel")).toBe("<svg><g><rect/></g><text>Hel");
-    expect(settledMarkup("<svg><text>Hello</te")).toBe("<svg><text>Hello");
+    expect(settledMarkup("<svg><text>Hello</text><rect/>")).toBe("<svg><text>Hello</text><rect/>");
+  });
+
+  it("holds a label back until it is whole, so it lands once instead of typing in", () => {
+    expect(settledMarkup("<svg><g><rect/></g><text>Hel")).toBe("<svg><g><rect/></g>");
+    expect(settledMarkup("<svg><text>Hello</te")).toBe("<svg>");
+    expect(settledMarkup("<svg><text>Hello</text>Wor")).toBe("<svg><text>Hello</text>");
+    // Whitespace between tags is layout, not a label on its way.
+    expect(settledMarkup("<svg>\n  <rect/>\n  ")).toBe("<svg>\n  <rect/>\n  ");
   });
 
   it("does not mistake a > inside a quoted attribute for the end of a tag", () => {
-    expect(settledMarkup('<svg><text data-x="a>b">hi')).toBe('<svg><text data-x="a>b">hi');
+    expect(settledMarkup('<svg><text data-x="a>b">hi</text>')).toBe('<svg><text data-x="a>b">hi</text>');
     expect(settledMarkup('<svg><text data-x="a>b')).toBe("<svg>");
   });
 

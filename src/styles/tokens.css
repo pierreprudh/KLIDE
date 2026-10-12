@@ -8837,7 +8837,10 @@ button:focus-visible .menu-leadout {
    to whatever opacity its author gave it — the keyframe names no end
    value, so an authored `opacity` is the destination, not a casualty — and
    leaves no fill behind. Pieces already standing never replay. */
-.klide-viz .kv-born { animation: klide-visual-born 420ms var(--ease-soft) backwards; }
+.klide-viz .kv-born {
+  animation: klide-visual-born 720ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: var(--born-delay, 0ms);
+}
 @keyframes klide-visual-born { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .klide-viz .kv-born { animation: none; }

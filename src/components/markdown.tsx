@@ -278,20 +278,32 @@ export const VisualSurface = memo(function VisualSurface({ visual, scope, growin
   // piece already on the page keeps standing while the next one fades in.
   // React owns none of these children — the div has no `children` and no
   // `dangerouslySetInnerHTML` while growing, so a re-render leaves them be.
+  // A surface that grew its picture keeps the tree it grew, for good: the
+  // close brings the last pieces the same way (their fade is not cut short
+  // by a wholesale re-parse), and its one fit to content glides rather than
+  // snaps. Read at render to pick the path — it only ever turns true, in the
+  // commit before the first render that could read it.
+  const grew = useRef(false);
+  const settled = useRef(false);
   useLayoutEffect(() => {
-    if (growing && content.current) growVisual(content.current, visual.html);
+    if (!content.current) return;
+    if (growing) { grew.current = true; settled.current = false; }
+    if (grew.current) growVisual(content.current, visual.html);
   }, [visual, growing]);
   useLayoutEffect(() => {
     // The authored canvas holds still while the drawing is on its way; the
     // fit to content is one settle, when the last piece has landed.
     if (growing) return;
     let active = true;
+    let settle = grew.current && !settled.current;
+    settled.current = true;
     // Two passes that both need the drawing measured rather than described:
     // canvases sized to their box, and labels — placed by a model that could
     // not know how wide they would render — nudged off each other.
     const fit = () => {
       if (!active || !content.current) return;
-      fitVisualCanvases(content.current);
+      fitVisualCanvases(content.current, settle);
+      settle = false;
       typesetVisual(content.current);
     };
     fit();
@@ -336,7 +348,7 @@ export const VisualSurface = memo(function VisualSurface({ visual, scope, growin
           e.preventDefault();
           void openExternal(anchor.getAttribute("href") ?? "");
         }}
-        {...(growing ? {} : { dangerouslySetInnerHTML: { __html: visual.html } })}
+        {...(growing || grew.current ? {} : { dangerouslySetInnerHTML: { __html: visual.html } })}
       />
       {visual.dropped.length > 0 ? (
         <div
@@ -514,7 +526,7 @@ function VisualBlock({ code, lang, closed, streaming }: { code: string; lang: st
     const alive = visual.kind === "drawing" && hasDrawingRoot(source);
     return (
       <figure className="inline-visual inline-visual-drafting" style={{ minWidth: 0 }}>
-        {alive ? <VisualSurface visual={visual} scope={scope} growing /> : <VisualDraft />}
+        {alive ? <div ref={content}><VisualSurface visual={visual} scope={scope} growing /></div> : <VisualDraft />}
         <div className="inline-visual-actions" role="group" aria-label="Visual controls">
           <span className="inline-visual-draft-label ai-working-label">Drawing</span>
           <VisualControl label="Show code" onClick={() => setChosen("code")}><CodeIcon size={15} /><span className="visual-sr-only">Code</span></VisualControl>

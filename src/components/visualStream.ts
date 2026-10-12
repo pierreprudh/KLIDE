@@ -21,12 +21,30 @@
 /** The class a newly landed node wears for its entrance (tokens.css). */
 export const BORN_CLASS = "kv-born";
 
+/** The inline custom property that staggers pieces landing together. */
+export const BORN_DELAY = "--born-delay";
+const STAGGER_MS = 70;
+const STAGGER_MAX = 8;
+
 /**
- * The longest prefix of `source` that ends on a whole tag (or on text after
- * one). A tag still being written — a `<` with no closing `>` outside quotes —
- * is cut, along with everything after it.
+ * The longest prefix of `source` that ends on a whole tag. A tag still being
+ * written — a `<` with no closing `>` outside quotes — is cut, along with
+ * everything after it. So is an element still receiving its text: a label
+ * lands whole and fades in once, rather than typing itself out.
  */
 export function settledMarkup(source: string): string {
+  const whole = wholeTags(source);
+  const lastGt = whole.lastIndexOf(">");
+  if (lastGt < 0 || !whole.slice(lastGt + 1).trim()) return whole;
+  // Text is still arriving after the last tag. If that tag opened the
+  // element holding it, hold the element back too.
+  const lastLt = whole.lastIndexOf("<", lastGt);
+  const tag = whole.slice(lastLt, lastGt + 1);
+  const opens = lastLt >= 0 && !tag.startsWith("</") && !tag.endsWith("/>") && !tag.startsWith("<!");
+  return opens ? whole.slice(0, lastLt) : whole.slice(0, lastGt + 1);
+}
+
+function wholeTags(source: string): string {
   let i = 0;
   let cut = source.length;
   while (i < source.length) {
@@ -78,22 +96,24 @@ export function growVisual(host: Element, html: string): number {
   return grow(host, template.content);
 }
 
-function grow(oldParent: Node, newParent: Node): number {
-  let born = 0;
+// Pieces that land in the same tick do not pop in at once: each waits a beat
+// longer than the one before it, so a burst reads as a cascade. The count is
+// per call — the next tick starts its own cascade from zero.
+function grow(oldParent: Node, newParent: Node, tally = { born: 0 }): number {
   const oldKids = Array.from(oldParent.childNodes);
   const newKids = Array.from(newParent.childNodes);
   for (let i = 0; i < newKids.length; i++) {
     const next = newKids[i];
     const have = oldKids[i];
     if (!have) {
-      born += adopt(oldParent, next, null);
+      adopt(oldParent, next, tally);
       continue;
     }
     if (sameShape(have, next)) {
       if (have.nodeType === Node.TEXT_NODE) {
         if (have.nodeValue !== next.nodeValue) have.nodeValue = next.nodeValue;
       } else {
-        born += grow(have, next);
+        grow(have, next, tally);
       }
       continue;
     }
@@ -101,18 +121,22 @@ function grow(oldParent: Node, newParent: Node): number {
     // already said, so this is the parser reading an earlier auto-closed tail
     // differently now that more has arrived. Replace from here on.
     for (let k = i; k < oldKids.length; k++) oldParent.removeChild(oldKids[k]);
-    for (let k = i; k < newKids.length; k++) born += adopt(oldParent, newKids[k], null);
-    return born;
+    for (let k = i; k < newKids.length; k++) adopt(oldParent, newKids[k], tally);
+    return tally.born;
   }
   for (let k = newKids.length; k < oldKids.length; k++) oldParent.removeChild(oldKids[k]);
-  return born;
+  return tally.born;
 }
 
-function adopt(parent: Node, node: Node, before: Node | null): number {
+function adopt(parent: Node, node: Node, tally: { born: number }): void {
   const clone = parent.ownerDocument!.importNode(node, true);
-  if (clone instanceof Element) clone.classList.add(BORN_CLASS);
-  parent.insertBefore(clone, before);
-  return 1;
+  if (clone instanceof Element) {
+    clone.classList.add(BORN_CLASS);
+    const beat = Math.min(tally.born, STAGGER_MAX) * STAGGER_MS;
+    if (beat && "style" in clone) (clone as HTMLElement | SVGElement).style.setProperty(BORN_DELAY, `${beat}ms`);
+  }
+  parent.appendChild(clone);
+  tally.born++;
 }
 
 // Same kind of node, and — for an element — the same tag and attributes. An
