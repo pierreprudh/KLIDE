@@ -1266,13 +1266,12 @@ export function AiPanel({
     }
     return { inRun, answers };
   }, [toolRuns]);
-  const [openToolRuns, setOpenToolRuns] = useState<Set<number>>(() => new Set());
-  function toggleToolRun(start: number) {
-    setOpenToolRuns((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(start)) next.add(start);
-      return next;
-    });
+  // The operator's explicit open/closed choice per run, keyed by its start.
+  // A run with no choice follows the default: open while it is working,
+  // folded once the answer has arrived.
+  const [toolRunChoice, setToolRunChoice] = useState<Map<number, boolean>>(() => new Map());
+  function toggleToolRun(start: number, open: boolean) {
+    setToolRunChoice((prev) => new Map(prev).set(start, !open));
   }
   function stackToolRuns(nodes: ReactNode[]): ReactNode[] {
     if (toolRuns.length === 0) return nodes;
@@ -1291,15 +1290,17 @@ export function AiPanel({
       }
       // Work still happening: the line is the heartbeat — "Working" with a
       // clock ticking from the turn's send time (`ToolRunRow`) — and under
-      // it only the step in flight stays in view, drawn like any other row:
-      // the call that is running, the thought being written. Nothing else moves; the
-      // Working row at the foot of the conversation stays away while a run
-      // has this line. Each step folds under the line the moment it is
-      // done, so the operator sees what is going on without the finished
-      // rows piling up; a click opens the finished ones. When the answer
-      // arrives the last step folds too and "Worked for" takes the line.
+      // it the whole run stays in view as it happens: the sentence the model
+      // wrote before a call, the call, the next sentence. A step that folded
+      // away the moment it finished read as the model writing and then
+      // losing what it wrote; the work is a thread, and the operator follows
+      // it by reading down. The Working row at the foot of the conversation
+      // stays away while a run has this line. When the answer arrives the
+      // run folds — "Worked for" takes the line and the body slides shut —
+      // unless the operator opened or closed it by hand, in which case the
+      // choice stands.
       const working = streaming && run.end === msgs.length;
-      const open = openToolRuns.has(run.start);
+      const open = toolRunChoice.get(run.start) ?? working;
       // Where the live step starts: the run's last message, or — when that
       // is a result drawn under its call — the call's own turn.
       let liveStart = run.end;
@@ -1354,7 +1355,7 @@ export function AiPanel({
               count={count}
               names={names}
               expanded={open}
-              onToggle={() => toggleToolRun(run.start)}
+              onToggle={() => toggleToolRun(run.start, open)}
               working={working ? { since: turnStartedAt } : undefined}
             />
           </div>
