@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { extractThinking, renderMessageBody, type AttachedResult } from "./ChatMessage";
+import { extractThinking, normalizeThinking, renderMessageBody, type AttachedResult } from "./ChatMessage";
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -214,5 +214,17 @@ describe("a delegation row while the child works", () => {
   it("offers the child's activity once the report has landed", () => {
     const report: AttachedResult = { msg: { role: "tool", content: "The fold has three stages.", toolName: "spawn_subagent" }, active: false };
     expect(delegation(report)).toContain("View activity");
+  });
+});
+
+describe("normalizeThinking", () => {
+  it("keeps a fence the model mentions as prose, not a code block", () => {
+    expect(normalizeThinking("the wrapper is ```html visualizer. I'll use ```svg fence. Hmm")).toBe(
+      "the wrapper is `html` visualizer. I'll use `svg` fence. Hmm",
+    );
+  });
+
+  it("drops a bare fence and folds the lines around it", () => {
+    expect(normalizeThinking("so:\n```\nconst a = 1\n```\ndone")).toBe("so: const a = 1 done");
   });
 });

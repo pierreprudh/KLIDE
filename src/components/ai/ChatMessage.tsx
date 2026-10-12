@@ -25,13 +25,22 @@ import { SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./Subage
 import { isWatchable } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
-// Premium thinking block. Renders as a soft card with a pulsing dot while the
-// agent is still streaming, a rotating chevron, and a markdown body so code
-// blocks inside the reasoning render properly. Open by default while the
-// message is still streaming (no content yet), collapsed once the answer
-// arrives — matches Claude Code's "thought process" disclosure.
-function normalizeThinking(text: string): string {
-  return text.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
+// The thinking block: a disclosure line and, under it, the reasoning as one
+// run of quiet prose. Open by default while the message is still streaming
+// (no content yet), collapsed once the answer arrives — matches Claude Code's
+// "thought process" disclosure.
+//
+// Reasoning is prose, never a document: its newlines fold to spaces, and a
+// fence the model *mentions* ("the wrapper is ```html") must not open a code
+// block in the middle of a sentence (DeepSeek, 2026-10-12 — every mention of
+// a fence cut the thought into boxes). A tagged fence becomes the language
+// word in code; a bare one disappears.
+export function normalizeThinking(text: string): string {
+  return text
+    .replace(/```(\w+)?/g, (_, lang: string | undefined) => (lang ? `\`${lang}\`` : ""))
+    .replace(/\n+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 /** The one disclosure line a conversation draws: a quiet label in the UI
