@@ -829,12 +829,30 @@ export type PixelNatureOptions = {
   /** Film clock rate: 1 = real time. Slows holds, cuts and motion alike. */
   speed?: number;
   /**
-   * Scene order. `shuffle` (the default) deals the five landscapes anew every
-   * time the film is created, so Welcome opens on a different scene each
-   * launch; `fixed` keeps the authored order (dawn, forest, lake, deep, meadow).
+   * Which scenes play, and in what order. `shuffle` (the default) deals the
+   * five landscapes anew every time the film is created, so Welcome opens on a
+   * different scene each launch; `fixed` keeps the authored order (dawn,
+   * forest, lake, deep, meadow); a scene id pins that one landscape — it still
+   * moves, it just never cuts away.
    */
-  order?: "shuffle" | "fixed";
+  order?: PixelNatureOrder;
 };
+
+export type PixelNatureSceneId = "dawn" | "forest" | "lake" | "deep" | "meadow";
+export type PixelNatureOrder = "shuffle" | "fixed" | PixelNatureSceneId;
+
+/** The five landscapes, in authored order, with the words Settings shows. */
+export const PIXEL_NATURE_SCENES: ReadonlyArray<{ id: PixelNatureSceneId; label: string }> = [
+  { id: "dawn", label: "Dawn" },
+  { id: "forest", label: "Forest" },
+  { id: "lake", label: "Lake" },
+  { id: "deep", label: "Under the surface" },
+  { id: "meadow", label: "Meadow" },
+];
+
+export function isPixelNatureOrder(v: unknown): v is PixelNatureOrder {
+  return v === "shuffle" || v === "fixed" || PIXEL_NATURE_SCENES.some((s) => s.id === v);
+}
 
 /** Fisher–Yates over a copy; the authored list is never reordered in place. */
 function shuffled<T>(items: readonly T[]): T[] {
@@ -852,8 +870,14 @@ const FRAME_MS = 1000 / 30;
 export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOptions = {}) {
   const ctx = canvas.getContext("2d", { alpha: false })!;
   const meadow = new Meadow();
-  const authored: Scene[] = [new Dawn(), new Forest(), new Lake(), new Deep(), meadow];
-  const scenes = opts.order === "fixed" ? authored : shuffled(authored);
+  const byId: Record<PixelNatureSceneId, Scene> = { dawn: new Dawn(), forest: new Forest(), lake: new Lake(), deep: new Deep(), meadow };
+  const authored = PIXEL_NATURE_SCENES.map((s) => byId[s.id]);
+  const order = opts.order ?? "shuffle";
+  const scenes: Scene[] = order === "fixed" ? authored : order === "shuffle" ? shuffled(authored) : [byId[order]];
+  // One pinned landscape never cuts: its clock runs on unwrapped, and every
+  // scene's entrance (sunrise, moon lift, blooms) is eased to a rest, so
+  // holding it for an hour is the same picture as holding it for a minute.
+  const pinned = scenes.length === 1;
   const HOLD = opts.sceneSeconds ?? 8;
   const TRANS = opts.transitionSeconds ?? 1.7;
   const cellCss = opts.cell ?? 13;
@@ -928,11 +952,11 @@ export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOp
   function draw() {
     if (!cols || !img) return;
     const n = scenes.length;
-    const idx = Math.floor(clock / HOLD) % n;
-    const t = clock % HOLD;
+    const idx = pinned ? 0 : Math.floor(clock / HOLD) % n;
+    const t = pinned ? clock : clock % HOLD;
     const cur = scenes[idx];
-    const inTrans = t < TRANS && !still;
-    const prev = clock < HOLD ? null : scenes[(idx - 1 + n) % n];
+    const inTrans = !pinned && t < TRANS && !still;
+    const prev = pinned || clock < HOLD ? null : scenes[(idx - 1 + n) % n];
     cur.prepare(frameFor(t));
     if (inTrans && prev) prev.prepare(frameFor(t + HOLD));
 
@@ -1022,7 +1046,10 @@ export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOp
   function start() {
     if (raf) return;
     if (still) {
-      clock = HOLD * scenes.indexOf(meadow) + 6.8; // the meadow, every flower open
+      // The meadow with every flower open — or, when one landscape is pinned,
+      // that landscape once its entrance has settled.
+      const at = scenes.indexOf(meadow);
+      clock = (at < 0 ? 0 : HOLD * at) + 6.8;
       draw();
       return;
     }

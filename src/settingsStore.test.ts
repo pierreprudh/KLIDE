@@ -65,6 +65,16 @@ describe("get/set/subscribe", () => {
     expect(getSetting(def)).toBe(20);
   });
 
+  it("welcome film accepts shuffle, the authored order or one scene, and nothing else", () => {
+    expect(getSetting(SETTINGS.welcomeFilm)).toBe("shuffle");
+    setSetting(SETTINGS.welcomeFilm, "lake");
+    expect(getSetting(SETTINGS.welcomeFilm)).toBe("lake");
+    setSetting(SETTINGS.welcomeFilm, "fixed");
+    expect(getSetting(SETTINGS.welcomeFilm)).toBe("fixed");
+    setSetting(SETTINGS.welcomeFilm, "volcano" as never);
+    expect(getSetting(SETTINGS.welcomeFilm)).toBe("shuffle");
+  });
+
   it("notifies subscribers on the same key only", () => {
     const hit = vi.fn();
     const other = vi.fn();

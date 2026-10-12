@@ -61,6 +61,7 @@ import {
   ThemeSwatch,
   Toggle,
 } from "./settings/controls";
+import { PIXEL_NATURE_SCENES, isPixelNatureOrder } from "./pixelNatureEngine";
 import { API_KEY_PROVIDERS, ApiKeyRow, ApiKeySummary, ProviderBalanceBlock } from "./settings/apiKeys";
 import { notify } from "../toast";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
@@ -454,6 +455,7 @@ export function SettingsPanel({
   const [showHiddenFiles, onShowHiddenFilesChange] = useSetting(SETTINGS.showHiddenFiles);
   const [confirmCloseDirty, onConfirmCloseDirtyChange] = useSetting(SETTINGS.confirmCloseDirty);
   const [showAskerAvatar, onShowAskerAvatarChange] = useSetting(SETTINGS.showAskerAvatar);
+  const [welcomeFilm, onWelcomeFilmChange] = useSetting(SETTINGS.welcomeFilm);
   const isSectionId = (value: string | null | undefined): value is SectionId =>
     sections.some((section) => section.id === value);
   const toolCatalogs = useToolCatalogs();
@@ -1129,6 +1131,26 @@ export function SettingsPanel({
                         checked={showAskerAvatar}
                         onChange={onShowAskerAvatarChange}
                         label="Your profile picture"
+                      />
+                    }
+                  />
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Welcome">
+                <Panel>
+                  <Row
+                    title="Nature film"
+                    description="The landscape beside the recent list. Shuffle deals the five scenes afresh each launch; In order plays them as written; pick one to keep it."
+                    control={
+                      <Segmented
+                        label="Nature film"
+                        value={welcomeFilm}
+                        options={[
+                          { label: "Shuffle", value: "shuffle" },
+                          { label: "In order", value: "fixed" },
+                          ...PIXEL_NATURE_SCENES.map((s) => ({ label: s.label, value: s.id })),
+                        ]}
+                        onChange={(v) => onWelcomeFilmChange(isPixelNatureOrder(v) ? v : "shuffle")}
                       />
                     }
                   />

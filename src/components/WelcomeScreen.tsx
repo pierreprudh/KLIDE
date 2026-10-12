@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { FolderIcon, GitIcon, NewTaskIcon, SettingsIcon } from "../icons";
 import { PixelNature } from "./PixelNature";
+import { SETTINGS, useSetting } from "../settingsStore";
 
 type Props = {
   recentFolders: string[];
@@ -41,6 +42,7 @@ export function WelcomeScreen({
   onOpenSettings,
 }: Props) {
   // Inline composer for the New-project / Clone flows (name or URL).
+  const [welcomeFilm] = useSetting(SETTINGS.welcomeFilm);
   const [composer, setComposer] = useState<null | "new" | "clone">(null);
   const [composerValue, setComposerValue] = useState("");
   const [composerBusy, setComposerBusy] = useState(false);
@@ -309,7 +311,7 @@ export function WelcomeScreen({
       {/* ── Right pane: big-pixel nature film ──────────────────────────── */}
       <div className="klide-welcome-stage">
         <div className="klide-welcome-card is-nature klide-welcome-rise" style={rise(90)}>
-          <PixelNature className="klide-nature-canvas" />
+          <PixelNature className="klide-nature-canvas" order={welcomeFilm} />
         </div>
       </div>
     </div>

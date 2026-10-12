@@ -14,6 +14,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { normalizeThemeId, type ThemeId } from "./theme";
 import { providerDefaultModel } from "./agent/providerCatalog";
+import { isPixelNatureOrder, type PixelNatureOrder } from "./components/pixelNatureEngine";
 
 export type HarnessSettings = {
   chatPrompt?: string;
@@ -277,6 +278,18 @@ export const SETTINGS = {
       keywords: "avatar profile picture photo conversation message mark chat me",
     },
   } as SettingDef<boolean>,
+  /** The Welcome screen's nature film: a fresh deal of the five landscapes
+   *  each launch (default), the authored order, or one landscape pinned. */
+  welcomeFilm: {
+    key: "klide-welcome-film",
+    fallback: () => "shuffle" as PixelNatureOrder,
+    normalize: (v) => (isPixelNatureOrder(v) ? v : "shuffle"),
+    search: {
+      label: "Welcome film",
+      section: "appearance",
+      keywords: "welcome film nature pixel landscape scene dawn forest lake meadow shuffle random animation",
+    },
+  } as SettingDef<PixelNatureOrder>,
   restoreLastProject: {
     key: "klide-restore-project",
     fallback: () => false,
