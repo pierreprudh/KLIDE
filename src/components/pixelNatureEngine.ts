@@ -934,7 +934,9 @@ export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOp
     const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
     canvas.width = w;
     canvas.height = h;
-    const target = Math.max(8, Math.min(cellCss, canvas.clientWidth / 40));
+    // Never finer than 8 CSS px on the big canvas (it would stop reading as
+    // mosaic), unless the caller asked for a finer cell — a thumbnail does.
+    const target = Math.max(Math.min(8, cellCss), Math.min(cellCss, canvas.clientWidth / 40));
     cs = Math.max(3, Math.round(target * dpr));
     cols = Math.ceil(w / cs);
     rows = Math.ceil(h / cs);

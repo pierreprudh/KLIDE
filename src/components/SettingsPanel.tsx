@@ -61,7 +61,7 @@ import {
   ThemeSwatch,
   Toggle,
 } from "./settings/controls";
-import { PIXEL_NATURE_SCENES, isPixelNatureOrder } from "./pixelNatureEngine";
+import { WelcomeFilmCards } from "./settings/welcomeFilm";
 import { API_KEY_PROVIDERS, ApiKeyRow, ApiKeySummary, ProviderBalanceBlock } from "./settings/apiKeys";
 import { notify } from "../toast";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
@@ -1138,22 +1138,7 @@ export function SettingsPanel({
               </SettingBlock>
               <SettingBlock title="Welcome">
                 <Panel>
-                  <Row
-                    title="Nature film"
-                    description="The landscape beside the recent list. Shuffle deals the five scenes afresh each launch; In order plays them as written; pick one to keep it."
-                    control={
-                      <Segmented
-                        label="Nature film"
-                        value={welcomeFilm}
-                        options={[
-                          { label: "Shuffle", value: "shuffle" },
-                          { label: "In order", value: "fixed" },
-                          ...PIXEL_NATURE_SCENES.map((s) => ({ label: s.label, value: s.id })),
-                        ]}
-                        onChange={(v) => onWelcomeFilmChange(isPixelNatureOrder(v) ? v : "shuffle")}
-                      />
-                    }
-                  />
+                  <WelcomeFilmCards value={welcomeFilm} onChange={onWelcomeFilmChange} />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Layout">
