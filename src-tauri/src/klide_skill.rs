@@ -98,8 +98,8 @@ mod tests {
         // Claude Code's copy is exact: its shell knows the session id.
         assert!(SKILL_CLAUDE.contains(r#"open "klide://resume?provider=claude-code&session=$CLAUDE_CODE_SESSION_ID""#));
         // The others name every Delegate id and lean on the folder.
-        for d in crate::delegate::catalog() {
-            assert!(SKILL_AGENTS.contains(&format!("`{}`", d.id)), "{} missing from the cross-agent skill", d.id);
+        for d in crate::delegate::ALL.iter().filter(|d| d.supports_session_import()) {
+            assert!(SKILL_AGENTS.contains(&format!("`{}`", d.id())), "{} missing from the cross-agent skill", d.id());
         }
         assert!(SKILL_AGENTS.contains("&project=$("));
     }

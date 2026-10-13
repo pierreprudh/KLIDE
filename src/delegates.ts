@@ -17,6 +17,10 @@ export const DELEGATES = [
   { id: "codex", label: "Codex", binary: "codex", supportsAccounts: true },
   { id: "opencode", label: "OpenCode", binary: "opencode", supportsAccounts: true },
   { id: "omp", label: "Oh My Pi", binary: "omp", supportsAccounts: false },
+  { id: "amp", label: "Amp", binary: "amp", supportsAccounts: false },
+  { id: "cursor", label: "Cursor", binary: "cursor-agent", supportsAccounts: false },
+  { id: "factory", label: "Factory", binary: "droid", supportsAccounts: false },
+  { id: "hermes", label: "Hermes", binary: "hermes", supportsAccounts: false },
 ] as const;
 
 export type DelegateId = (typeof DELEGATES)[number]["id"];

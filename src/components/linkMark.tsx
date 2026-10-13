@@ -18,6 +18,10 @@ const AS_PROVIDER: Partial<Record<LinkSite, ProviderId>> = {
   mistral: "mistral",
   xai: "xai",
   deepseek: "deepseek",
+  amp: "amp",
+  cursor: "cursor",
+  factory: "factory",
+  hermes: "hermes",
   openrouter: "openrouter",
 };
 

@@ -717,6 +717,54 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         caps: HOSTED_CAPS,
         context_window: None,
     },
+    ProviderEntry {
+        id: "amp", label: "Amp", short_label: None,
+        group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
+        key: KeySource::Local, models: ModelsHandler::Subscription,
+        subscription: Some(SubscriptionSpec {
+            delegate: &crate::delegate::AMP, default_models: &["default"],
+            cached_models: || None,
+        }),
+        default_model: None, presets: NO_PRESETS, brand: "amp",
+        credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
+        caps: HOSTED_CAPS, context_window: None,
+    },
+    ProviderEntry {
+        id: "cursor", label: "Cursor", short_label: None,
+        group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
+        key: KeySource::Local, models: ModelsHandler::Subscription,
+        subscription: Some(SubscriptionSpec {
+            delegate: &crate::delegate::CURSOR, default_models: &["default"],
+            cached_models: || None,
+        }),
+        default_model: None, presets: NO_PRESETS, brand: "cursor",
+        credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
+        caps: HOSTED_CAPS, context_window: None,
+    },
+    ProviderEntry {
+        id: "factory", label: "Factory", short_label: None,
+        group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
+        key: KeySource::Local, models: ModelsHandler::Subscription,
+        subscription: Some(SubscriptionSpec {
+            delegate: &crate::delegate::FACTORY, default_models: &["default"],
+            cached_models: || None,
+        }),
+        default_model: None, presets: NO_PRESETS, brand: "factory",
+        credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
+        caps: HOSTED_CAPS, context_window: None,
+    },
+    ProviderEntry {
+        id: "hermes", label: "Hermes", short_label: None,
+        group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
+        key: KeySource::Local, models: ModelsHandler::Subscription,
+        subscription: Some(SubscriptionSpec {
+            delegate: &crate::delegate::HERMES, default_models: &["default"],
+            cached_models: crate::hermes_settings::cached_models,
+        }),
+        default_model: None, presets: NO_PRESETS, brand: "hermes",
+        credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
+        caps: HOSTED_CAPS, context_window: None,
+    },
 ];
 
 /// Look up a provider by id. O(n) over a 10–20 row registry — the

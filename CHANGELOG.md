@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.10 (2026-10-13)
+
+- Added Amp, Cursor, Factory, and Hermes CLI providers, with official logos and documentation links. DeepSeek remains a native API provider.
+- Missing CLI providers are dimmed in the chat pickers; installed CLIs appear first.
+- Hermes can use a model provider and API key configured in Klide. Its model control now has nested intelligence-source, provider, and model menus, styled like the existing model selector and synchronized with shared model favorites.
+- Hermes uses the same provider catalog as the base selector. Supported API, local, and self-hosted endpoints can power Hermes; CLI subscription routes that still require an inference bridge are clearly marked.
+- Delegate prompts identify the selected harness instead of calling every agent Kit. The chosen model remains separate from the coding agent.
+- Recorded harness/model independence as a core product principle. New CLI adapters currently support terminal launches and plain-text Focus turns; imported history and structured tool events remain future work.
+
 ## Unreleased
 
 - Threads already saved with another Provider's model (a Claude Code thread on `deepseek/…`) are healed at boot: the model is dropped so the thread opens on the CLI's own default, the same rule a resume now applies when a recorded model is plainly foreign.

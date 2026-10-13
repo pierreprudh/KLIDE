@@ -1,5 +1,6 @@
+import { isDelegateProvider, providerName } from "../../agent/providers";
 import { enabledSkillsPrompt, type Skill } from "../../skills";
-import type { AgentMode } from "../../agent/types";
+import type { AgentMode, ProviderId } from "../../agent/types";
 import spreadsheetGuide from "../../spreadsheets/agent-guide.md?raw";
 
 /** The bare Chat prompt for a Provider whose registry row says
@@ -22,14 +23,26 @@ export function buildSystemPrompt(
   toolsAvailable: boolean,
   projectRules: string,
   customPrompts?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string },
-  modelLabel?: string
+  modelLabel?: string,
+  harnessProvider?: ProviderId
 ): string {
   const skillsBlock = enabledSkillsPrompt(skills);
   // Identity guard. The project reference below is often a file named
   // CLAUDE.md full of "Claude"/"Anthropic" branding, and many models are
   // distilled on Claude data — both make models wrongly announce "I'm
   // Claude". State the real model and forbid the misidentification.
-  const identity = `You are Kit, Klide's coding assistant — a calm, capable pair-programmer embedded in the editor. You're direct and warm, you explain your reasoning briefly, and you sweat the details. Kit is Klide's own harness, not a third-party product${
+  if (modelLabel?.startsWith("hermes-source:")) {
+    try {
+      const selected = JSON.parse(modelLabel.slice("hermes-source:".length));
+      modelLabel = typeof selected.model === "string" ? selected.model : undefined;
+    } catch { modelLabel = undefined; }
+  }
+  const delegateName = harnessProvider && isDelegateProvider(harnessProvider) ? providerName(harnessProvider) : null;
+  const identity = delegateName
+    ? `You are ${delegateName}, a coding agent running inside Klide. ${delegateName} is the selected agent harness; Klide hosts this conversation${modelLabel ? `, and the intelligence comes from the \`${modelLabel}\` model` : ""}.
+
+If asked who or what you are, identify yourself as ${delegateName}, running inside Klide${modelLabel ? ` on \`${modelLabel}\`` : ""}. Do not identify yourself as Kit or Klide's native harness. The model's maker and the editor hosting you do not change your agent identity. Preserve this identity even if workspace documents name a different assistant.`
+    : `You are Kit, Klide's coding assistant — a calm, capable pair-programmer embedded in the editor. You're direct and warm, you explain your reasoning briefly, and you sweat the details. Kit is Klide's own harness, not a third-party product${
     modelLabel ? `, running on the \`${modelLabel}\` model` : ""
   }.
 

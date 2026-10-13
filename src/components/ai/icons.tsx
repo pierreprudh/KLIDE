@@ -157,6 +157,9 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   gemini: "/gemini-logo.png",
   mistral: "/mistral-logo.png",
   deepseek: "/deepseek-logo.png",
+  amp: "/amp-logo.svg",
+  cursor: "/cursor-logo.svg",
+  factory: "/factory-logo.svg",
   "claude-code": "/claude-code-logo.png",
   codex: "/codex-logo.png",
 };
@@ -171,6 +174,9 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   // DeepSeek's whale is brand blue on transparent — inverting it would turn it
   // into an unreadable yellow.
   deepseek: "color-logo-img",
+  amp: "color-logo-img",
+  cursor: "color-logo-img",
+  factory: "color-logo-img",
   // Gemini's 2025 star carries its own red→blue→green gradient.
   gemini: "color-logo-img",
   // Mistral's pixel M is a yellow→red gradient; inverting it would ruin it.
@@ -181,6 +187,9 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
  *  picks the drawing; `auto`, `custom:*` and `cli:*` have marks of their own. */
 export function ProviderLogo({ id, size = 14 }: { id: ProviderId | BrandKey; size?: number }) {
   const brand = providerBrand(id) as BrandKey | "auto";
+  if (brand === "hermes") {
+    return <TwoToneMark light="/hermes-logo.png" dark="/hermes-logo-dark.png" size={size} />;
+  }
   if (brand === "opencode") {
     return (
       <TwoToneMark

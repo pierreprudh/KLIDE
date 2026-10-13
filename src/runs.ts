@@ -440,6 +440,10 @@ export const SOURCE_COLOR: Record<RunSource, string> = {
   // Oh My Pi's mark is a warm violet (the ⌥ glyph); a muted version keeps it
   // distinct from the others without shouting.
   omp: "#7C6BAE",
+  amp: "var(--fg-subtle)",
+  cursor: "var(--fg-subtle)",
+  factory: "var(--fg-subtle)",
+  hermes: "var(--fg-subtle)",
   klide: "var(--accent)",
 };
 

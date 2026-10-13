@@ -41,6 +41,7 @@ docs/*
 !docs/MODEL_ROUTING.md
 !docs/MISSION_ORCHESTRATION.md
 !docs/OPENCODE_DELEGATE.md
+!docs/PROVIDER_RESOURCES.md
 
 .vscode
 

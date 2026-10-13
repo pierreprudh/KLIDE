@@ -12,6 +12,8 @@
 // pieces that differ (flags, prefixes, session-id sniffing); the trait's
 // provided method does the assembly once.
 
+mod additional;
+pub use additional::{AMP, CURSOR, FACTORY, HERMES};
 mod chat;
 mod chat_server;
 pub(crate) mod chat_stream;
@@ -484,6 +486,10 @@ pub trait Delegate: Sync {
         0
     }
 
+    /// Whether Klide can import this CLI's recorded sessions. Launch-only
+    /// adapters opt out of session handoff instructions until they have a parser.
+    fn supports_session_import(&self) -> bool { true }
+
     /// The run's conversation for the Mission Control detail pane. `key` is
     /// the same value `discover_runs` produced — a transcript path or a
     /// session id, depending on the CLI.
@@ -597,7 +603,7 @@ pub trait RunParser {
 }
 
 /// The registry — one adapter per delegate CLI Klide can dispatch.
-pub const ALL: [&dyn Delegate; 4] = [&ClaudeCode, &Codex, &OpenCode, &Omp];
+pub const ALL: [&dyn Delegate; 8] = [&ClaudeCode, &Codex, &OpenCode, &Omp, &AMP, &CURSOR, &FACTORY, &HERMES];
 
 pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
     ALL.into_iter().find(|d| d.id() == provider)
@@ -819,6 +825,7 @@ fn list_runs_matching(
     let stamps: Vec<u64> = ALL.iter().map(|d| d.parse_inputs_stamp(env)).collect();
     let mut candidates: Vec<(usize, RunCandidate)> = Vec::new();
     for (i, delegate) in ALL.iter().enumerate() {
+        if !delegate.supports_session_import() { continue; }
         let found = match workspace_root {
             Some(root) => delegate.discover_runs_for_workspace(env, root),
             None => delegate.discover_runs(env),

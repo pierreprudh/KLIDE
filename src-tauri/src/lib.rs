@@ -6,6 +6,7 @@ mod usage;
 mod adapters;
 mod blocking;
 mod cli;
+mod hermes_settings;
 mod deep_link;
 mod cli_update;
 mod agent;
@@ -170,6 +171,24 @@ async fn ai_clear_provider_key_reference(provider: String) -> Result<(), String>
         providers::set_provider_reference(&provider, None)
     })
     .await
+}
+
+#[tauri::command]
+async fn hermes_read_settings() -> Result<Option<hermes_settings::HermesSettings>, String> {
+    blocking::run(hermes_settings::read).await
+}
+#[tauri::command]
+async fn hermes_save_settings(settings: hermes_settings::HermesSettings, key: Option<String>) -> Result<(), String> {
+    blocking::run(move || hermes_settings::save(settings, key)).await
+}
+#[tauri::command]
+async fn hermes_clear_settings() -> Result<(), String> {
+    blocking::run(hermes_settings::clear).await
+}
+
+#[tauri::command]
+async fn hermes_source_support(provider: String) -> Result<hermes_settings::SourceSupport, String> {
+    blocking::run(move || Ok(hermes_settings::source_support(&provider))).await
 }
 
 // ── Custom (self-hosted) providers ──────────────────────────────────────
@@ -1066,6 +1085,10 @@ pub fn run() {
             models::ai_provider_credits,
             models::ai_provider_model_meta,
             ai_subscription_status,
+            hermes_read_settings,
+            hermes_source_support,
+            hermes_save_settings,
+            hermes_clear_settings,
             cli_update::cli_versions,
             cli_update::cli_version,
             cli_update::cli_check_updates,

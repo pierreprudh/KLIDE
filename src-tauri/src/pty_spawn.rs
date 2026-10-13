@@ -88,7 +88,7 @@ pub fn validated_cwd(workspace_root: Option<String>) -> Result<Option<String>, S
 ///   registry at spawn.
 pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
     let adapter = delegate::lookup(&req.provider);
-    let command = if let Some(adapter) = adapter {
+    let mut command = if let Some(adapter) = adapter {
         let mut command = if req.one_shot {
             adapter.mission_command(req.task.as_deref(), req.model.as_deref())?
         } else {
@@ -151,6 +151,15 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
     };
 
     let mut env = Vec::new();
+    if req.provider == "hermes" {
+        if let Some(settings) = crate::hermes_settings::selection(req.model.as_deref())? {
+            for arg in settings.args(req.model.as_deref())? {
+                command.push(' ');
+                command.push_str(&delegate::shell_quote(&arg));
+            }
+            env.push((crate::hermes_settings::KEY_PROVIDER_ENV.into(), settings.provider));
+        }
+    }
     if let Some(url) = req.hook_url {
         env.push(("KLIDE_HOOK_URL".to_string(), url));
     }
@@ -218,6 +227,19 @@ mod tests {
 
     // ── Coordination wiring ───────────────────────────────────────────────
 
+    #[test]
+    fn hermes_model_choice_keeps_agent_and_routes_its_source() {
+        let mut req = request("hermes");
+        let settings = crate::hermes_settings::HermesSettings { provider: "ollama".into(), model: "qwen-test".into() };
+        req.model = Some(format!("{}{}", crate::hermes_settings::MODEL_PREFIX, serde_json::to_string(&settings).unwrap()));
+        let spec = spawn_spec_for(req).unwrap();
+        assert_eq!(spec.provider, "hermes");
+        assert!(spec.command.contains("--model 'qwen-test'"));
+        assert!(spec.command.contains("'--provider' 'openai'"));
+        assert!(!spec.command.contains("hermes-source:"));
+        assert!(spec.env.contains(&(crate::hermes_settings::KEY_PROVIDER_ENV.into(), "ollama".into())));
+        assert!(!spec.env.iter().any(|(key, _)| key.ends_with("API_KEY")));
+    }
     #[test]
     fn claude_gets_a_config_file_flag_and_the_server_env_inside_it() {
         let mut req = request("claude-code");

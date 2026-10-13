@@ -19,6 +19,10 @@ export type LinkSite =
   | "ollama"
   | "mistral"
   | "xai"
+  | "amp"
+  | "cursor"
+  | "factory"
+  | "hermes"
   | "deepseek"
   | "openrouter"
   | "npm";
@@ -55,6 +59,16 @@ const NAMED_HOSTS: Record<string, string> = {
 
 // host → the mark to draw, and the name to use when the path says nothing.
 const SITE_HOSTS: Record<string, [LinkSite, string]> = {
+  "ampcode.com": ["amp", "Amp"],
+  "cursor.com": ["cursor", "Cursor"],
+  "www.cursor.com": ["cursor", "Cursor"],
+  "docs.cursor.com": ["cursor", "Cursor docs"],
+  "factory.com": ["factory", "Factory"],
+  "factory.ai": ["factory", "Factory"],
+  "docs.factory.com": ["factory", "Factory docs"],
+  "docs.factory.ai": ["factory", "Factory docs"],
+  "hermes-agent.nousresearch.com": ["hermes", "Hermes docs"],
+  "api-docs.deepseek.com": ["deepseek", "DeepSeek docs"],
   "github.com": ["github", "GitHub"],
   "www.github.com": ["github", "GitHub"],
   "gist.github.com": ["github", "gist"],

@@ -19,6 +19,9 @@ import {
 import { sortReflectionLevels } from "../reflectionLevels";
 import { THEMES } from "../theme";
 import { ProviderLogo } from "./ai/icons";
+import { HermesSetup } from "./settings/HermesSetup";
+import { PROVIDER_DOCS } from "../agent/providerResources";
+import { openExternal } from "../externalLink";
 import type { AgentMode, ProviderId } from "../agent/types";
 import { toolCatalog, type ToolCatalogEntry } from "../agent/tools";
 import { PROVIDER_GROUPS, DEFAULT_MODELS } from "../agent/providers";
@@ -171,6 +174,22 @@ const DELEGATE_COPY: Record<DelegateId, { description: string; modelNote: string
   omp: {
     description: "Terminal coding agent routing 40+ providers — keys come from your shell environment.",
     modelNote: "Loaded from omp's model cache (providers it could actually reach).",
+  },
+  amp: {
+    description: "Coding agent with model routing managed by Amp. Sign in with amp login.",
+    modelNote: "Amp selects its own models; Klide uses the CLI default.",
+  },
+  cursor: {
+    description: "Cursor Agent CLI. Sign in with cursor-agent login.",
+    modelNote: "Uses the CLI default model; model overrides follow Cursor's model names.",
+  },
+  factory: {
+    description: "Factory's Droid CLI. Run droid to sign in.",
+    modelNote: "Uses Droid's configured default model.",
+  },
+  hermes: {
+    description: "Nous Research's Hermes agent. Configure credentials with hermes setup.",
+    modelNote: "Uses Hermes's configured provider and model.",
   },
 };
 
@@ -1859,6 +1878,14 @@ export function SettingsPanel({
                   ))}
                 </Panel>
               </SettingBlock>
+              <SettingBlock title="Documentation">
+                <Panel>
+                  <Row title="DeepSeek" description="Official API setup and reference."
+                    leading={<ProviderLogo id="deepseek" />}
+                    control={<LinkButton onClick={() => void openExternal(PROVIDER_DOCS.deepseek)}>Open docs</LinkButton>}
+                  />
+                </Panel>
+              </SettingBlock>
               <SettingBlock title="Balance">
                 <ProviderBalanceBlock />
               </SettingBlock>
@@ -1949,6 +1976,18 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              <SettingBlock title="Documentation">
+                <Panel>
+                  {subscriptionProviderEntries.filter((provider) => PROVIDER_DOCS[provider.id]).map((provider) => (
+                    <Row key={provider.id} title={provider.title}
+                      description="Official installation and CLI documentation."
+                      leading={<ProviderLogo id={provider.id as ProviderId} />}
+                      control={<LinkButton onClick={() => void openExternal(PROVIDER_DOCS[provider.id])}>Open docs</LinkButton>}
+                    />
+                  ))}
+                </Panel>
+              </SettingBlock>
+              <HermesSetup />
               <CliVersionsBlock />
               <SettingBlock title="Connection Options">
                 <Panel>

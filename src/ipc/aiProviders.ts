@@ -192,3 +192,16 @@ export async function selectLlamaModel(model: string): Promise<void> {
   localStorage.setItem("klide.model.llamacpp", model);
   window.dispatchEvent(new CustomEvent(LOCAL_MODEL_CHANGED_EVENT, { detail: { provider: "llamacpp", model } }));
 }
+
+export type SubscriptionStatus = {
+  provider: string;
+  installed: boolean;
+  connected: boolean;
+  detail: string;
+  commandPath?: string | null;
+  loginOptions: string[];
+};
+
+export function readSubscriptionStatus(provider: string): Promise<SubscriptionStatus> {
+  return invoke<SubscriptionStatus>("ai_subscription_status", { provider });
+}

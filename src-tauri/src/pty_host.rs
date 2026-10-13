@@ -577,7 +577,15 @@ impl SessionHost {
             cmd.cwd(path);
         }
         for (key, value) in &spec.env {
-            cmd.env(key, value);
+            if spec.provider == "hermes" && key == crate::hermes_settings::KEY_PROVIDER_ENV {
+                let env = crate::hermes_settings::runtime_env(value, spec.cwd.as_deref().map(std::path::Path::new))?;
+                crate::hermes_settings::check_environment_overrides(&env)?;
+                for (name, secret) in env {
+                    cmd.env(name, secret);
+                }
+            } else {
+                cmd.env(key, value);
+            }
         }
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);

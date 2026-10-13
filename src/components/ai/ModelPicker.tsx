@@ -1,3 +1,5 @@
+import { ModelPickerHeader, MODEL_FILTER_STYLE, StarIcon } from "./ModelPickerChrome";
+import { HermesModelPicker } from "./HermesModelPicker";
 // Premium model selector — replaces the cramped native <select> in the AI
 // panel composer. Glass surface, provider logo, filter input, keyboard nav.
 //
@@ -102,7 +104,11 @@ function modelsVerb(id: ProviderId): string {
   return providerGroup(id) === "local" ? "installed" : "available";
 }
 
-export function ModelPicker({
+export function ModelPicker(props: Props) {
+  return props.provider === "hermes" ? <HermesModelPicker {...props} /> : <StandardModelPicker {...props} />;
+}
+
+function StandardModelPicker({
   provider,
   model,
   availableModels,
@@ -441,50 +447,8 @@ export function ModelPicker({
           {/* Provider header — the logo lives here, the model count
               under it, so the menu has a clear "this is what we're
               listing" frame. */}
-          <div
-            style={{
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 9,
-              padding: "10px 12px 9px",
-              borderBottom: "1px solid var(--panel-border)",
-              background:
-                "color-mix(in srgb, var(--panel-highlight) 30%, transparent)",
-            }}
-          >
-            <span
-              style={{
-                display: "grid",
-                placeItems: "center",
-                width: 26,
-                height: 26,
-                borderRadius: 8,
-                background: "var(--bg-elevated)",
-                border: "1px solid var(--border)",
-                flexShrink: 0,
-              }}
-            >
-              <ProviderLogo id={provider} size={15} />
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 600,
-                  color: "var(--fg-strong)",
-                  letterSpacing: "-0.005em",
-                }}
-              >
-                {providerName(provider)}
-              </div>
-              <div style={{ fontSize: 10, color: "var(--fg-dim)", marginTop: 1 }}>
-                {availableModels.length > 0
-                  ? `${availableModels.length} ${availableModels.length === 1 ? "model" : "models"} ${modelsVerb(provider)}`
-                  : "No models detected"}
-              </div>
-            </div>
-          </div>
+          <ModelPickerHeader icon={<ProviderLogo id={provider} size={15} />} title={providerName(provider)}
+            caption={availableModels.length > 0 ? `${availableModels.length} ${availableModels.length === 1 ? "model" : "models"} ${modelsVerb(provider)}` : "No models detected"} />
           {/* Filter input — keeps the menu useful when Ollama lists run
               long. Quiet background, single accent border on focus. */}
           <div
@@ -512,20 +476,7 @@ export function ModelPicker({
               }}
               placeholder="Filter models…"
               aria-label="Filter models"
-              style={{
-                width: "100%",
-                height: 26,
-                padding: "0 8px",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                background: "var(--bg)",
-                color: "var(--fg-strong)",
-                font: "inherit",
-                fontSize: 11.5,
-                outline: "none",
-                transition:
-                  "border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
-              }}
+              style={MODEL_FILTER_STYLE}
               onFocus={(e) => {
                 e.currentTarget.style.borderColor =
                   "color-mix(in srgb, var(--accent) 50%, var(--border))";
@@ -814,23 +765,6 @@ function SectionLabel({ children }: { children: string }) {
   );
 }
 
-function StarIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill={filled ? "currentColor" : "none"}
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 2.6l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 18.9 6.2 21.05l1.1-6.45-4.7-4.6 6.5-.95z" />
-    </svg>
-  );
-}
 
 function Chevron({ rotated }: { rotated: boolean }) {
   return (

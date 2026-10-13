@@ -1,3 +1,4 @@
+import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
 import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from "../hooks/useLlamaSetupMode";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
@@ -1026,14 +1027,16 @@ export function buildProviderOptions(
   keyless: ReadonlySet<string>,
   onOpenKeySettings: () => void,
   llamaSetupMode: LlamaSetupMode = "klide",
+  missingClis: ReadonlySet<string> = new Set(),
 ): MenuOption[] {
   return providerGroupsWithCustom(custom).flatMap((group) => {
     // Delegate CLIs belong here too. They run on the subscription you already
     // pay for — no API key anywhere in Klide — and the canvas mounts their
     // session instead of a message list, which is a different surface but the
-    // same conversation. They are never quieted: a delegate authenticates
-    // through its own login, so `keyless` has nothing to say about it.
-    const items = group.items.filter((item) => item.available && isSelectedLlamaProvider(item.id, llamaSetupMode));
+    // same conversation. Their installation status dims missing executables;
+    // API key status has nothing to say about their own CLI login.
+    const items = group.items.filter((item) => item.available && isSelectedLlamaProvider(item.id, llamaSetupMode))
+      .sort((a, b) => Number(missingClis.has(a.id)) - Number(missingClis.has(b.id)));
     if (items.length === 0) return [];
     const rows: MenuOption[] = items.map((item) => {
       // A delegate is exempt by construction, not by luck: it authenticates
@@ -1044,7 +1047,7 @@ export function buildProviderOptions(
         label: item.name,
         value: item.id,
         icon: <ProviderLogo id={item.id} size={17} />,
-        dimmed: missingKey,
+        dimmed: missingKey || missingClis.has(item.id),
         // No caption: the quieted row plus its ↗ already say "not set up, and
         // here's the way out". A sentence under every hosted provider would
         // turn a glance into a read.
@@ -1671,9 +1674,10 @@ function FocusComposer({
   }, []);
   const customProviders = useCustomProviders();
   const llamaSetupMode = useLlamaSetupMode();
+  const missingDelegateClis = useMissingDelegateClis();
   const providerMenuOptions = useMemo(
-    () => buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api"), llamaSetupMode),
-    [customProviders, keylessProviders, onOpenSettingsSection, llamaSetupMode],
+    () => buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api"), llamaSetupMode, missingDelegateClis),
+    [customProviders, keylessProviders, onOpenSettingsSection, llamaSetupMode, missingDelegateClis],
   );
 
   useEffect(() => {

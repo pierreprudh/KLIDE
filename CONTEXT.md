@@ -2,6 +2,28 @@
 
 The domain language of Klide — a minimalist AI-first IDE. One context for the whole repo: the editor shell, the agent harness, and Mission Control all share these terms. Architecture reviews and design discussions use this vocabulary; when code disagrees with it, the code is what drifts.
 
+## Core product principle: harness and model independence
+
+Klide should let the user choose the agent runtime and the intelligence that
+powers it independently: **any supported harness with any compatible model**.
+The native Harness or a Delegate supplies the coding workflow and tools; the
+model's Provider supplies intelligence through an API, a local server, a
+self-hosted endpoint, or a subscription. Changing the intelligence source must
+not silently change the selected agent runtime.
+
+The agent picker selects the runtime. The model picker selects the intelligence
+source and model for that runtime. Availability depends on the runtime's actual
+capabilities, installed software, reachable endpoints, and authentication.
+Adapters must expose supported combinations and explain restrictions; they must
+not imply that every external CLI accepts every model.
+
+Current implementation: the native Harness supports its registered model
+Providers. Hermes has an independent source/model choice in the chatbox, stored
+per conversation. The other Delegate integrations still follow their CLI's model
+selection capabilities; Amp chooses its own models. This is partial progress
+toward the principle, not a universal compatibility matrix or live verification
+of every combination.
+
 ## Language
 
 ### Workspace

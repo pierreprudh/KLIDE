@@ -344,5 +344,93 @@ export const PROVIDER_ROWS = [
       "appendTodoUpdates": false
     },
     "contextWindow": null
+  },
+  {
+    "id": "amp",
+    "label": "Amp",
+    "shortLabel": null,
+    "group": "subscription",
+    "wire": "delegate",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": null,
+    "presets": [],
+    "brand": "amp",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false,
+      "appendTodoUpdates": false
+    },
+    "contextWindow": null
+  },
+  {
+    "id": "cursor",
+    "label": "Cursor",
+    "shortLabel": null,
+    "group": "subscription",
+    "wire": "delegate",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": null,
+    "presets": [],
+    "brand": "cursor",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false,
+      "appendTodoUpdates": false
+    },
+    "contextWindow": null
+  },
+  {
+    "id": "factory",
+    "label": "Factory",
+    "shortLabel": null,
+    "group": "subscription",
+    "wire": "delegate",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": null,
+    "presets": [],
+    "brand": "factory",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false,
+      "appendTodoUpdates": false
+    },
+    "contextWindow": null
+  },
+  {
+    "id": "hermes",
+    "label": "Hermes",
+    "shortLabel": null,
+    "group": "subscription",
+    "wire": "delegate",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": null,
+    "presets": [],
+    "brand": "hermes",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false,
+      "appendTodoUpdates": false
+    },
+    "contextWindow": null
   }
 ] as const;

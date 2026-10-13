@@ -486,15 +486,14 @@ mod tests {
 
     #[test]
     fn every_delegate_says_where_it_publishes() {
-        // A CLI with no known release source can still be updated; it just
-        // can't be *checked*, and the row has to say that rather than imply
-        // it is current. Today all four are on npm.
+        // The original adapters have verified npm release feeds. New standalone
+        // CLIs still offer their own updater, but an unknown feed must remain
+        // unknown instead of presenting a fabricated latest-version check.
         for adapter in delegate::ALL {
-            assert!(
-                adapter.release_package().is_some(),
-                "{} names no release package",
-                adapter.id()
-            );
+            match adapter.id() {
+                "amp" | "cursor" | "factory" | "hermes" => assert!(adapter.release_package().is_none()),
+                _ => assert!(adapter.release_package().is_some(), "{} names no release package", adapter.id()),
+            }
         }
     }
 

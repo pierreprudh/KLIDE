@@ -9178,3 +9178,12 @@ button:focus-visible .menu-leadout {
 .mission-flow-transfer { animation:mission-flow-transfer 900ms ease-out both; }
 @keyframes mission-flow-transfer { 0% { opacity:0; } 15%,75% { opacity:0.85; } 100% { opacity:0; } }
 @media (prefers-reduced-motion:reduce) { .mission-flow-transfer { display:none; animation:none; } }
+
+.provider-category-row:hover,
+.provider-category-row:focus-visible {
+  background: var(--menu-row-hover) !important;
+}
+
+.hermes-model-star { opacity: 0; }
+.hermes-model-row:hover .hermes-model-star,
+.hermes-model-row:focus-within .hermes-model-star { opacity: 1; }

@@ -1,3 +1,4 @@
+import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
 import { appendMissionReports } from "./ai/missionReports";
 import { MissionLibrary } from "./missionControl/MissionLibrary";
 import { listDurableMissions } from "../agent/durableMissions";
@@ -1533,6 +1534,7 @@ export function AiPanel({
   // canvas hosts their session the same way a panel does, and they are the one
   // route that runs on a subscription instead of an API key.
   const providerGroupsForSurface = providerGroups;
+  const missingDelegateClis = useMissingDelegateClis(providerOpen, providerGroups.flatMap((group) => group.items.filter((item) => isDelegateProvider(item.id)).map((item) => item.id)));
   // Hosted ("API") providers that have no key configured — badged in the picker
   // so a missing key is visible *before* selecting + sending, not after a failed
   // run. Populated when the menu opens.
@@ -1991,7 +1993,8 @@ export function AiPanel({
         toolsAvailableForDraft,
         projectRules,
         harnessSettings,
-        model
+        model,
+        provider
       );
     }
     if (effectiveMode !== "chat" && toolsAvailableForDraft && asksForWorkspaceInspection(input)) {
@@ -3254,7 +3257,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // Use the same provider capability and prompt as the draft estimate.
     let systemPrompt = turn.mode === "chat" && providerCaps(turn.provider).minimalChatContext
       ? MINIMAL_CHAT_SYSTEM_PROMPT
-      : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
+      : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model, turn.provider);
     // Subagent turn: append the role specialisation to the base prompt.
     const subagentDef = turn.subagent ? resolveSubagent(turn.subagent) : undefined;
     if (subagentDef) systemPrompt = buildSubagentSystemPrompt(subagentDef, systemPrompt);
@@ -3564,7 +3567,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     const placeholder: Msg = { role: "assistant", content: "", subagent: def.label, subagentRunId: runId, subagentPending: true };
     msgsRef.current = [...msgsRef.current, placeholder];
     setMsgs(msgsRef.current);
-    const base = buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, def.mode, modelSupportsTools && def.mode !== "chat", projectRules, harnessSettings, model);
+    const base = buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, def.mode, modelSupportsTools && def.mode !== "chat", projectRules, harnessSettings, model, provider);
     const systemPrompt = buildSubagentSystemPrompt(def, base);
     let report = "";
     try {
@@ -3806,12 +3809,12 @@ This user request requires workspace inspection. Before answering, you MUST call
               row carried by its fill and weight. Rows that can't run yet
               (unavailable providers) are left out, as they are there. */}
           {providerGroupsForSurface.map((group) => {
-            const items = group.items.filter((it) => it.available);
+            const items = group.items.filter((it) => it.available).sort((a, b) => Number(missingDelegateClis.has(a.id)) - Number(missingDelegateClis.has(b.id)));
             if (items.length === 0) return null;
             const expanded = expandedGroups.has(group.label);
             const hasActive = items.some((it) => it.id === provider);
             // A whole stack with no keys anywhere reads as quiet as its rows.
-            const stackKeyless = items.every((it) => keylessProviders.has(it.id));
+            const stackKeyless = items.every((it) => keylessProviders.has(it.id) || missingDelegateClis.has(it.id));
             return (
             <div key={group.label}>
               <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={expanded}
@@ -3830,10 +3833,12 @@ This user request requires workspace inspection. Before answering, you MUST call
                 // (when the host wired Settings) send the click to API keys
                 // instead of selecting a provider that would fail on send.
                 const keyless = item.available && keylessProviders.has(item.id);
+                const missingCli = missingDelegateClis.has(item.id);
+                const dimmed = keyless || missingCli;
                 const routesToSettings = keyless && !!onOpenSettingsSection;
                 return (
                   <button key={item.id} role="menuitem"
-                    title={keyless ? `${item.name} has no API key — open Settings` : undefined}
+                    title={missingCli ? `${item.name} CLI is not installed` : keyless ? `${item.name} has no API key — open Settings` : undefined}
                     onClick={() => {
                       if (routesToSettings) { closeProviderMenu(); onOpenSettingsSection?.("api"); return; }
                       selectProvider(item.id);
@@ -3841,8 +3846,8 @@ This user request requires workspace inspection. Before answering, you MUST call
                     style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, padding: "7px 9px", border: "none", borderRadius: "var(--radius-sm)", background: active ? "var(--menu-row-active)" : "transparent", color: "var(--fg-strong)", cursor: "pointer", fontSize: 12, fontWeight: active ? 550 : 500, textAlign: "left", transition: "background var(--motion-fast) var(--ease-out)" }}
                     onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--menu-row-hover)"; }}
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
-                    <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0, color: "var(--fg-subtle)", opacity: keyless ? 0.4 : 1 }}><ProviderLogo id={item.id} size={17} /></span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: keyless ? 0.45 : 1 }}>{item.name}</span>
+                    <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0, color: "var(--fg-subtle)", opacity: dimmed ? 0.4 : 1 }}><ProviderLogo id={item.id} size={17} /></span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: dimmed ? 0.45 : 1 }}>{item.name}</span>
                     {routesToSettings && (
                       /* Leads out to Settings rather than choosing anything. */
                       <svg className="menu-leadout" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}><path d="M7 17 17 7" /><path d="M8 7h9v9" /></svg>

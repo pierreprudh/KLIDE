@@ -8,7 +8,7 @@ A local-first coding workspace for running local models and subscription coding 
 
 <br/>
 
-![Version](https://img.shields.io/badge/version-0.6.9-7A9F4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.10-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
 [![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
 
@@ -56,7 +56,7 @@ Coding agents work well in terminals, but their sessions, diffs, and evidence sp
 
 | | |
 |---|---|
-| **Run real agents** | Use Claude Code, Codex, OpenCode, OMP, or a custom CLI inside persistent pseudoterminal (PTY) sessions |
+| **Run real agents** | Use Claude Code, Codex, OpenCode, OMP, Amp, Cursor, Factory, Hermes, or a custom CLI inside persistent pseudoterminal (PTY) sessions |
 | **Keep work visible** | See working, waiting, blocked, and completed runs across the workspace |
 | **Review before trust** | Approve commands, inspect proposed edits, comment on diffs, and check validation evidence |
 | **Choose where inference runs** | Start with Ollama or MLX, then opt into hosted providers or subscription CLIs |
@@ -194,6 +194,18 @@ for verified behavior and the tested small model’s limitations.
 Local Servers groups both llama.cpp setups under **Llama**, with a **Klide / Llama app**
 switch. It remembers the selection and shows only that Llama setup in the AI and Focus provider selectors.
 Switching the setup does not start or stop a server or change existing conversations.
+
+Amp (`amp`), Cursor (`cursor-agent`), Factory (`droid`), and Hermes (`hermes`)
+also appear in Subscription settings and the provider pickers. Install and
+configure each CLI using its own setup flow. Klide supports interactive terminal
+sessions, one-shot Mission dispatch, and plain-text Focus turns. These four
+adapters currently have no imported CLI history, structured tool events,
+per-session MCP wiring, or account switching. Models default to each CLI's own
+configuration; Amp manages model selection itself. Hermes can also use an API
+provider and key configured directly in Settings → Subscription → Hermes API setup.
+DeepSeek is already available
+as a native API provider using `DEEPSEEK_API_KEY`. Official setup links and
+logo sources are listed in [Provider resources](docs/PROVIDER_RESOURCES.md).
 
 ### Connection flow
 
