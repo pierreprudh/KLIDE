@@ -996,6 +996,7 @@ fn start_request_for(
             omitted: vec![],
         }),
         system_prompt: None,
+        skills: vec![],
         // A headless run cannot service interactive questions, nested agents,
         // or advisor callbacks. Permission and optional diff-review pauses stay
         // enabled because they have durable supervisor state and may be

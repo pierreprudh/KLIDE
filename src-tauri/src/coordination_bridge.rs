@@ -136,6 +136,7 @@ pub type SessionMap = Arc<Mutex<HashMap<String, BridgeSession>>>;
 #[serde(tag = "op", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum BridgeRequest {
     List,
+    ReadSkill { command: String },
     Cancel {
         run_id: String,
         #[serde(default)]
@@ -338,6 +339,10 @@ fn execute_inner(
     let root = session.workspace_root.as_str();
     let me = session.run_id.as_str();
     let operation = match request {
+        BridgeRequest::ReadSkill { command } => {
+            return crate::agent::skill_resources::read(me, &command)
+                .map(|text| serde_json::json!({ "text": text }));
+        }
         BridgeRequest::Orchestrate { request } => {
             return hooks.orchestrate.as_ref()
                 .ok_or("Mission orchestration is unavailable in this host.")?(session, request);

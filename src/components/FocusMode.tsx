@@ -1590,8 +1590,7 @@ function FocusComposer({
   );
   const [supportsTools, setSupportsTools] = useState(true);
   // The reasoning efforts this provider+model accepts. Empty means the pair
-  // has no such dial (a Klide-wire model that doesn't reason, claude-code /
-  // opencode / omp), and the control stays off the composer entirely rather
+  // has no such dial, and the control stays off the composer entirely rather
   // than offering a knob nothing reads.
   const [effortLevels, setEffortLevels] = useState<string[]>([]);
   // The window this model is trained to. For Ollama it bounds the cap picker;

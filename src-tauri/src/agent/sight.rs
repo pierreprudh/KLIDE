@@ -599,6 +599,7 @@ mod tests {
             attachments,
             context: None,
             system_prompt: None,
+            skills: vec![],
             disabled_tools: Vec::new(),
             num_ctx: None,
             num_predict: None,

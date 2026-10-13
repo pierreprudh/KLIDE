@@ -144,6 +144,9 @@ impl Turn {
                 self.settled = true;
                 Vec::new()
             }
+            "session.step.ended" => {
+                data.get("assistantMessageID").and_then(Value::as_str).and_then(|id| reported_usage(id, data, None)).into_iter().collect()
+            }
             "session.execution.failed" => {
                 self.settled = true;
                 vec![StreamItem::Error(opencode_error(data.get("error")))]
@@ -189,6 +192,8 @@ impl Turn {
                     let Some(id) = message.get("id").and_then(Value::as_str) else {
                         continue;
                     };
+                    let model = message.get("model").and_then(|model| Some(format!("{}/{}", model.get("providerID")?.as_str()?, model.get("id")?.as_str()?)));
+                    if let Some(usage) = reported_usage(id, message, model.as_deref()) { out.push(usage); }
                     let Some(content) = message.get("content").and_then(Value::as_array) else {
                         continue;
                     };
@@ -271,6 +276,22 @@ impl Turn {
         }
         out
     }
+}
+
+fn reported_usage(id: &str, data: &Value, model: Option<&str>) -> Option<StreamItem> {
+    let tokens = data.get("tokens")?;
+    let input = tokens.get("input")?.as_u64()?;
+    let cache = tokens.get("cache");
+    let read = cache.and_then(|v| v.get("read")).and_then(Value::as_u64).unwrap_or(0);
+    let write = cache.and_then(|v| v.get("write")).and_then(Value::as_u64).unwrap_or(0);
+    let output = tokens.get("output")?.as_u64()?;
+    let reasoning = tokens.get("reasoning").and_then(Value::as_u64).unwrap_or(0);
+    let context_window = model.and_then(crate::models::cached_opencode_model_facts).and_then(|facts| facts.context_window).map(|v| v as u64);
+    Some(StreamItem::Usage {
+        id: id.into(), prompt: input.saturating_add(read).saturating_add(write),
+        completion: output.saturating_add(reasoning),
+        cost: data.get("cost").and_then(Value::as_f64), context_window,
+    })
 }
 
 // V2's SQLite projections are deliberately separate from V1's tables. These

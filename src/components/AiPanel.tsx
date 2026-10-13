@@ -114,7 +114,7 @@ import type {
   PermissionRequest,
   StartAgentRunInput,
 } from "../agent/types";
-import { enabledSkillsPrompt, type Skill } from "../skills";
+import { enabledRunSkills, enabledSkillsPrompt, type Skill } from "../skills";
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { formatClock, formatDayStamp } from "../time";
@@ -642,6 +642,7 @@ type ModelInspection = {
    *  then reads "—" and the send path skips the pre-send compaction check
    *  rather than measuring against a number nobody stands behind. */
   contextLimit: number | null;
+  maxOutputTokens?: number | null;
 };
 
 /**
@@ -665,6 +666,7 @@ async function inspectModelForRun(
       supportsReflection: reflectionLevels.length > 0,
       supportsVision: caps.supportsVision,
       contextLimit: caps.contextWindow !== null && caps.contextWindow > 0 ? caps.contextWindow : null,
+      maxOutputTokens: caps.maxOutputTokens ?? null,
     };
   } catch {
     return {
@@ -1085,6 +1087,7 @@ export function AiPanel({
   }, [workspaceBranch]);
 
   const [contextLimit, setContextLimit] = useState<number | null>(null);
+  const [maxOutputTokens, setMaxOutputTokens] = useState<number | null>(null);
   // The provider's own prompt-token count from the latest finished turn — the
   // authoritative "how full is the context" number (it's exactly what the
   // model counted: system prompt + tools + history). `null` until the first
@@ -2941,6 +2944,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     setModelReflectionLevels(inspection.reflectionLevels);
     setModelSupportsVision(inspection.supportsVision);
     setContextLimit(inspection.contextLimit);
+    setMaxOutputTokens(inspection.maxOutputTokens ?? null);
     // Losing vision (a model switch) invalidates staged photos only. The
     // documents alongside them are text, and every model still reads those.
     if (!inspection.supportsVision) {
@@ -3283,6 +3287,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       text: turn.text, attachments: turn.attachments,
       context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
       systemPrompt,
+      skills: enabledRunSkills(skills),
       disabledTools: disabledTools.length > 0 ? disabledTools : undefined,
       numCtx,
       numPredict,
@@ -3568,6 +3573,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         provider, model: def.model ?? model, text: task, attachments: [],
         context: { workspaceRoot, attachments: [], lensItems: [], estimatedTokens: 0, omitted: [] },
         systemPrompt,
+        skills: enabledRunSkills(skills),
         requireDiffReview: false,
         // A child of an Auto panel routes on the same stars as its parent.
         preferredModels: isAutoProvider(provider) ? allFavModels() : undefined,
@@ -5198,6 +5204,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>Context window</span>
                       <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}><TweenedNumber value={contextUsed} format={formatContextTokens} /> / {formatContextTokens(effectiveContextLimit)} (<TweenedNumber value={contextRatio * 100} format={formatPercentWhole} />%)</span>
                     </div>
+                    {maxOutputTokens !== null && <div style={{ color: "var(--fg-subtle)", fontSize: 11, marginBottom: 9 }}>Maximum completion: {formatContextTokens(maxOutputTokens)} tokens</div>}
                     <div style={{ height: 7, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", marginBottom: 11, display: "flex", gap: 1 }}>
                       {contextBreakdownRows.filter((row) => row.id !== "free" && row.tokens > 0).map((row) => (
                         <div

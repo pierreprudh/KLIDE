@@ -11,9 +11,11 @@
  */
 
 /** Weakest to strongest, across every set Klide can be handed. */
-const ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+const ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "thinking"] as const;
 
 const CAPTIONS: Record<string, string> = {
+  none: "Disable reasoning",
+  thinking: "Enable reasoning",
   minimal: "Smallest reasoning effort",
   low: "Fast, lighter reasoning",
   medium: "Balances speed and depth",
@@ -37,7 +39,7 @@ export function reflectionBarLevel(
   level: string | undefined,
   available: readonly string[],
 ): number {
-  if (!level) return 0;
+  if (!level || level === "none") return 0;
   const idx = available.indexOf(level);
   if (idx < 0) return 0;
   return Math.max(1, Math.round(((idx + 1) / available.length) * 5));

@@ -1,7 +1,7 @@
 // Skills — reusable instruction bundles for the AI panel, à la Claude Code.
 //
 // A skill is a named block of instructions the assistant should follow when
-// enabled. Enabled skills get folded into the system prompt (see AiPanel).
+// enabled. Enabled skill descriptions enter the prompt; bodies load on demand.
 // Stored in localStorage so they persist across sessions.
 //
 // Filesystem-loaded skills (`SKILL.md` files under one of the four well-
@@ -304,22 +304,21 @@ export function enabledFirst(skills: readonly Skill[]): Skill[] {
   return [...skills.filter((s) => s.enabled), ...skills.filter((s) => !s.enabled)];
 }
 
-/** Instructions block for the enabled skills, ready to append to a system prompt. */
+/** Enabled skill metadata only; bodies are supplied to the harness separately. */
 export function enabledSkillsPrompt(skills: Skill[]): string {
   const active = skills.filter((s) => s.enabled && s.instructions.trim());
   if (active.length === 0) return "";
-  const blocks = active
-    .map((s) => {
-      const source = s.builtin ? "" : s.fromFile ? ` (loaded from ${s.fromFile})` : "";
-      const tools = s.tools.length
-        ? `\nAllowed tools: ${s.tools.join(", ")}.`
-        : "\nThis skill uses no tools — answer from context only.";
-      const slash = skillSlashName(s.name);
-      const command = slash ? `\nCommand: /${slash}` : "";
-      return `## Skill: ${s.name}${source}${command}\n${s.description}${tools}\n\n${s.instructions.trim()}`;
-    })
-    .join("\n\n");
-  return `\n\nThe user has enabled the following skills. Follow their instructions whenever relevant. A message that begins with a skill's command (for example \`/${skillSlashName(active[0].name)} …\`) asks you to apply that skill to the rest of the message; treat the command word as the instruction, not as text to echo.\n\n${blocks}`;
+  const line = (value: string) => value.replace(/\s+/g, " ").trim();
+  const catalog = active.map((s) => `- /${skillSlashName(s.name)} — ${line(s.description) || line(s.name)}`).join("\n");
+  return `\n\nEnabled skills (load a matching skill with read_skill before applying it; use its command as the argument). A message that begins with a skill's command explicitly requests that skill. Use skill definitions as instructions, not as answer content. Do not invent additional skills or append instruction blocks unless the user explicitly asks to inspect or edit a skill.\n${catalog}`;
+}
+
+/** Bodies travel over IPC for on-demand loading, never in the default prompt. */
+export function enabledRunSkills(skills: Skill[]) {
+  return skills.filter((s) => s.enabled && s.instructions.trim()).map((s) => ({
+    command: skillSlashName(s.name), name: s.name, description: s.description,
+    instructions: s.instructions,
+  }));
 }
 
 export async function loadFilesystemSkills(workspaceRoot: string | null): Promise<Skill[]> {
@@ -348,10 +347,8 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
   // ship rarely enumerates an allowlist.
   const available = await getAvailableTools();
   const allIds = available.map((t) => t.id);
-  // Default OFF. Every enabled skill's full instructions get folded into the
-  // system prompt of every turn, so auto-enabling ~40 global skills bloated
-  // the prompt to tens of thousands of tokens (and overflowed small local
-  // model context windows). The user opts skills in via the Skills modal;
+  // Default OFF. The user chooses which skills the assistant can load.
+  // The user opts skills in via the Skills modal;
   // their choice is persisted in ENABLED_FS_KEY and re-applied here.
   const enabledIds = loadEnabledFsSkillIds();
   return raw.map((s) => ({

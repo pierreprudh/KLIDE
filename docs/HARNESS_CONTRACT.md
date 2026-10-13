@@ -257,6 +257,14 @@ separate network targets. `web_search` uses the `web_search` target; `web_fetch`
 uses `host:<domain>`, such as `host:docs.rs`. Project-scoped network approvals
 persist under `.klide/network-allowlist.json` and never imply command approval.
 
+Enabled skills enter the prompt as one-line command/description entries.
+Their bodies travel separately in the Run request and stay in a run-scoped
+catalog. `read_skill(command)` loads a matching enabled skill when needed;
+an explicit `/skill` request loads only that skill into the turn's instructions.
+The Delegate MCP bridge exposes the same loader, bound to the authenticated
+Run. Loading instructions grants no permissions. The catalog is released at
+settle; child Runs inherit their parent's catalog when they have none of their own.
+
 Connector Tools (`agent/connector_tools.rs`) reach the MCP servers the user
 enabled in Settings → Connectors through two fixed Tools, so a connector with
 forty tools costs the prompt one short listing, not forty schemas:

@@ -1438,6 +1438,8 @@ pub(crate) struct AiChatResponse {
 pub(crate) struct StreamChunk {
     pub(crate) content: String,
     pub(crate) thinking: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) usage: Option<AiUsage>,
     /// Tool work the *provider itself* performed and reported, rather than
     /// asked Klide to perform. Only the structured delegate-CLI path fills
     /// this; every wire adapter leaves it `None`, because a wire model asks for

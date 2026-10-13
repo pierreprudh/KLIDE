@@ -520,6 +520,48 @@ pub(crate) fn opencode_cached_models() -> Option<Vec<String>> {
     opencode_models_from(&cli)
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OpenCodeModelFacts {
+    pub reasoning_levels: Vec<String>,
+    pub context_window: Option<usize>,
+    pub max_output_tokens: Option<usize>,
+}
+type OpenCodeVariants = HashMap<String, OpenCodeModelFacts>;
+static OPENCODE_VARIANTS: LazyLock<Mutex<Option<(String, Instant, OpenCodeVariants)>>> = LazyLock::new(|| Mutex::new(None));
+
+fn opencode_catalog(value: &serde_json::Value) -> Option<OpenCodeVariants> {
+    let mut catalog = HashMap::new();
+    for model in value.get("data")?.as_array()? {
+        let (Some(provider), Some(id)) = (model.get("providerID").and_then(|v| v.as_str()), model.get("id").and_then(|v| v.as_str())) else { continue; };
+        let levels = model.get("variants").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|variant| {
+            let settings = variant.get("settings")?.as_object()?;
+            if !["reasoningEffort", "reasoning_effort", "effort", "thinking", "thinkingBudget", "thinkingLevel"].iter().any(|key| settings.contains_key(*key)) { return None; }
+            variant.get("id")?.as_str().filter(|id| !id.trim().is_empty()).map(str::to_owned)
+        }).collect();
+        let limit = |key: &str| model.get("limit")?.get(key)?.as_u64().and_then(|v| usize::try_from(v).ok()).filter(|v| *v > 0);
+        catalog.insert(format!("{provider}/{id}"), OpenCodeModelFacts { reasoning_levels: levels, context_window: limit("context"), max_output_tokens: limit("output") });
+    }
+    Some(catalog)
+}
+
+pub(crate) fn opencode_model_facts(model: &str) -> Option<OpenCodeModelFacts> {
+    if !model.contains('/') { return None; }
+    let cli = resolve_command(crate::delegate::OpenCode.binary()).ok()?;
+    if let Some((binary, at, catalog)) = OPENCODE_VARIANTS.lock().unwrap().as_ref() {
+        if binary == &cli && at.elapsed() < Duration::from_secs(300) {
+            return catalog.get(model.split('#').next().unwrap_or(model)).cloned();
+        }
+    }
+    opencode_models_from(&cli)?;
+    OPENCODE_VARIANTS.lock().unwrap().as_ref().and_then(|(_, _, catalog)| catalog.get(model.split('#').next().unwrap_or(model)).cloned())
+}
+
+pub(crate) fn cached_opencode_model_facts(model: &str) -> Option<OpenCodeModelFacts> {
+    OPENCODE_VARIANTS.lock().unwrap().as_ref().and_then(|(_, at, catalog)| {
+        (at.elapsed() < Duration::from_secs(300)).then(|| catalog.get(model).cloned()).flatten()
+    })
+}
+
 /// Called off the async runtime by subscription discovery. V2's shared
 /// service can outlive its config and binary; a private query reads today's
 /// providers and credentials without depending on that service's health.
@@ -532,10 +574,21 @@ pub(crate) fn opencode_models_from(cli: &str) -> Option<Vec<String>> {
         if !version.status.success() { return None; }
         let v2 = crate::delegate::first_version_token(&String::from_utf8_lossy(&version.stdout))?.starts_with("2.");
         let mut query = tokio::process::Command::new(cli);
-        query.arg("models").kill_on_drop(true);
-        if v2 { query.arg("--standalone"); }
+        query.kill_on_drop(true);
+        if v2 { query.args(["api", "get", "/api/model", "--standalone"]); }
+        else { query.arg("models"); }
         let output = tokio::time::timeout(Duration::from_secs(20), query.output()).await.ok()?.ok()?;
         if !output.status.success() { return None; }
+        if v2 {
+            let value = serde_json::from_slice(&output.stdout).ok()?;
+            let catalog = opencode_catalog(&value)?;
+            let mut models: Vec<String> = catalog.keys().cloned().collect();
+            models.sort();
+            if models.is_empty() { return None; }
+            *OPENCODE_VARIANTS.lock().unwrap() = Some((cli.to_string(), Instant::now(), catalog));
+            return Some(models);
+        }
+        *OPENCODE_VARIANTS.lock().unwrap() = Some((cli.to_string(), Instant::now(), HashMap::new()));
         let mut models: Vec<String> = String::from_utf8_lossy(&output.stdout)
             .lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
         models.sort();
@@ -1031,6 +1084,21 @@ pub(crate) async fn ai_count_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_variants_follow_each_models_metadata() {
+        let catalog = opencode_catalog(&serde_json::json!({"data":[
+            {"providerID":"opencode-go","id":"minimax-m3","variants":[{"id":"none","settings":{"thinking":{"type":"disabled"}}},{"id":"thinking","settings":{"thinking":{"type":"adaptive"}}}]},
+            {"providerID":"opencode-go","id":"glm-5.3-flash","variants":[{"id":"low","settings":{"reasoningEffort":"low"}},{"id":"high","settings":{"reasoningEffort":"high"}}]},
+            {"providerID":"mock","id":"plain","limit":{"context":1000000,"output":131072},"variants":[{"id":"batch","body":{"service_tier":"flex"}}]}
+        ]})).unwrap();
+        assert_eq!(catalog["opencode-go/minimax-m3"].reasoning_levels, ["none", "thinking"]);
+        assert_eq!(catalog["opencode-go/glm-5.3-flash"].reasoning_levels, ["low", "high"]);
+        assert!(catalog["mock/plain"].reasoning_levels.is_empty());
+        assert_eq!(catalog["mock/plain"].context_window, Some(1_000_000));
+        assert_eq!(catalog["mock/plain"].max_output_tokens, Some(131_072));
+        assert_eq!(catalog["opencode-go/minimax-m3"].context_window, None);
+    }
 
     #[test]
     fn claude_model_id_accepts_the_modern_naming_only() {

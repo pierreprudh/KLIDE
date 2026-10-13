@@ -83,6 +83,9 @@ pub struct StartRunRequest {
     pub attachments: Vec<AgentAttachment>,
     pub context: Option<AgentContextSnapshot>,
     pub system_prompt: Option<String>,
+    /// Skill bodies available to read_skill, not appended to model context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<RunSkill>,
     #[serde(default)]
     pub disabled_tools: Vec<String>,
     /// Context window (num_ctx) for local models — the frontend resolves each
@@ -174,6 +177,15 @@ pub struct StartRunRequest {
     /// input is ignored — the router is the only writer.
     #[serde(default, skip)]
     pub routed: Option<RouteDecision>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSkill {
+    pub command: String,
+    pub name: String,
+    pub description: String,
+    pub instructions: String,
 }
 
 /// One photo the eyes described, for `SightResolved`.

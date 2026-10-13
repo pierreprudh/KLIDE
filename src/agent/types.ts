@@ -385,6 +385,7 @@ export type StartAgentRunInput = {
   attachments: AgentAttachment[];
   context?: AgentContextSnapshot;
   systemPrompt?: string;
+  skills?: { command: string; name: string; description: string; instructions: string }[];
   disabledTools?: string[];
   /** Context window (num_ctx) for local models — resolved per model from the
    *  detected window or a user override. Omit to use the adapter default. */

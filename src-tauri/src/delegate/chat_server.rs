@@ -463,6 +463,12 @@ mod tests {
         let model_binary = binary.clone();
         let models = tokio::task::spawn_blocking(move || crate::models::opencode_models_from(&model_binary)).await.unwrap().expect("CLI model discovery");
         assert!(models.iter().any(|model| model == "mock/mock"), "configured model missing: {models:?}");
+        if v2 {
+            let caps = crate::model_capabilities::capabilities("opencode", "mock/mock", false).await.unwrap();
+            assert_eq!(caps.reasoning_levels, ["high"]);
+            assert_eq!(caps.context_window, Some(1_000_000));
+            assert_eq!(caps.max_output_tokens, Some(131_072));
+        }
         super::super::status::install_opencode_hooks(&std::path::Path::new(&root).join("config/opencode/plugin")).unwrap();
         let states: Arc<Mutex<Vec<(String, Option<String>)>>> = Arc::default();
         let sink = states.clone();
@@ -473,7 +479,7 @@ mod tests {
         let mut resume: Option<String> = None;
         for turn in 0..3 {
             let first_state = states.lock().unwrap().len();
-            let spec = super::super::ChatSpec { model:"mock/mock",effort:None,resume:resume.as_deref(),mcp:None,allowed_commands:&[] };
+            let spec = super::super::ChatSpec { model:"mock/mock",effort:if v2 { Some("high") } else { None },resume:resume.as_deref(),mcp:None,allowed_commands:&[] };
             let mut command = TokioCommand::new(&binary);
             command.current_dir(&root).args(adapter.chat_stream_args(&root,&spec).unwrap());
             command.env("KLIDE_HOOK_URL",&hook_url);
@@ -487,9 +493,12 @@ mod tests {
             let thinking_time = first_thinking.clone();
             let first_text: Arc<Mutex<Option<Instant>>> = Arc::default();
             let text_time = first_text.clone();
+            let usage: Arc<Mutex<Option<serde_json::Value>>> = Arc::default();
+            let usage_sink = usage.clone();
             let channel: Channel<StreamChunk> = Channel::new(move |body| {
                 if let tauri::ipc::InvokeResponseBody::Json(json) = body {
                     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+                    if let Some(reported) = value.get("usage") { *usage_sink.lock().unwrap() = Some(reported.clone()); }
                     if let Some(text) = value.get("content").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                         text_time.lock().unwrap().get_or_insert_with(Instant::now);
                         sink.lock().unwrap().push(text.into());
@@ -506,6 +515,12 @@ mod tests {
             let answer = match result { ServerTurn::Ran(answer) => answer.unwrap(), ServerTurn::Unavailable(why) => panic!("{why}") };
             assert_eq!(answer,"Hello from V2.","turn {turn}");
             assert_eq!(chunks.lock().unwrap().concat(),answer);
+            if v2 {
+                let reported = usage.lock().unwrap().clone().expect("provider usage");
+                assert_eq!(reported["promptTokens"], 10, "cached input must count toward context");
+                assert_eq!(reported["completionTokens"], 7, "reasoning counts as output; history replay must not double it");
+                assert_eq!(reported["contextWindow"], 1_000_000);
+            }
             if v2 {
                 assert_eq!(thinking.lock().unwrap().concat(), "Thinking about the answer.");
                 assert!(first_text.lock().unwrap().unwrap().duration_since(first_thinking.lock().unwrap().unwrap()) > Duration::from_millis(100), "reasoning must stream before the answer, not arrive during recovery");

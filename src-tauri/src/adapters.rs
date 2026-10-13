@@ -283,6 +283,7 @@ impl StreamingProvider for OllamaAdapter {
             content.push_str(c);
             thinking.push_str(t);
             on_chunk(StreamChunk {
+                usage: None,
                 content: c.to_string(),
                 thinking: t.to_string(),
                 observed: None,
@@ -626,6 +627,7 @@ impl StreamingProvider for OpenAiAdapter {
             if !c.is_empty() {
                 content.push_str(c);
                 on_chunk(StreamChunk {
+                    usage: None,
                     content: c.to_string(),
                     thinking: String::new(),
                     observed: None,
@@ -644,6 +646,7 @@ impl StreamingProvider for OpenAiAdapter {
             if !r.is_empty() {
                 thinking.push_str(r);
                 on_chunk(StreamChunk {
+                    usage: None,
                     content: String::new(),
                     thinking: r.to_string(),
                     observed: None,
@@ -1205,6 +1208,7 @@ impl StreamingProvider for AnthropicAdapter {
                             if !t.is_empty() {
                                 content.push_str(t);
                                 on_chunk(StreamChunk {
+                                    usage: None,
                                     content: t.to_string(),
                                     thinking: String::new(),
                                     observed: None,
@@ -1218,6 +1222,7 @@ impl StreamingProvider for AnthropicAdapter {
                             if !t.is_empty() {
                                 thinking.push_str(t);
                                 on_chunk(StreamChunk {
+                                    usage: None,
                                     content: String::new(),
                                     thinking: t.to_string(),
                                     observed: None,

@@ -41,6 +41,9 @@ pub(crate) enum StreamItem {
     TextPart { id: String, text: String },
     /// Provider reasoning, kept separate from the answer.
     ThinkingPart { id: String, text: String },
+    /// Provider usage for a completed assistant step. Replayed by history
+    /// recovery under the same id, so totals must be upserted, not added twice.
+    Usage { id: String, prompt: u64, completion: u64, cost: Option<f64>, context_window: Option<u64> },
     /// A tool the CLI called on its own.
     ToolCall {
         id: String,

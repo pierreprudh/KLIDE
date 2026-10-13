@@ -51,6 +51,7 @@ export type ModelMaker =
  *  "—" rather than a made-up number. `reasoningLevels` empty means no dial. */
 export type ModelCapabilities = {
   contextWindow: number | null;
+  maxOutputTokens?: number | null;
   supportsTools: boolean;
   supportsVision: boolean;
   reasoningLevels: string[];

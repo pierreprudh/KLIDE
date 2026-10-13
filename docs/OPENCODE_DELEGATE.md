@@ -48,10 +48,15 @@ and coordination boundaries.
 
 ## History and credentials
 
-Model discovery uses `opencode models --standalone` on V2, so a stale or
+Model discovery uses `opencode api get /api/model --standalone` on V2, so a stale or
 unavailable shared service cannot hide models from Klide's picker. V1 retains
 `opencode models`. Both queries have a deadline; discovery sends no inference
 request and lists the models OpenCode makes available through its providers.
+The same metadata supplies the model's reasoning variants. The effort picker
+offers only variants with reasoning settings (for example MiniMax's `none`
+and `thinking`), and sends the chosen value as `provider/model#variant` on
+new, resumed, and native command turns. Auto keeps OpenCode's own default;
+models without reasoning variants have no effort control.
 
 Mission Control reads V1's `session`/`message`/`part` tables and V2's
 `session_v2`/`session_message` projections using read-only SQLite connections.
@@ -69,6 +74,13 @@ account switcher for V2. Use OpenCode's `auth login`, `auth list` and
 `auth switch <integration> <label>` commands to manage V2 accounts.
 
 ## Verification
+
+Model metadata supplies the context capacity and maximum completion length.
+Completed steps and transcript recovery supply actual usage: the context gauge
+uses the latest request's input, including cached tokens; completion totals
+include reasoning tokens and are deduplicated by assistant message ID. Missing
+usage stays unknown, so the UI retains its estimated count until OpenCode reports
+it. Choosing the CLI default also uses the resolved model's reported capacity.
 
 Unit fixtures were captured from the official V2 2.0.27 CLI against a local
 mock model. Tests cover native streaming, transcript recovery, pagination,

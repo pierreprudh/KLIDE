@@ -17,8 +17,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class Model(BaseHTTPRequestHandler):
+    variants = []
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        self.variants.append(body.get("klide_variant"))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream" if body.get("stream") else "application/json")
         self.end_headers()
@@ -26,7 +28,7 @@ class Model(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "id": "mock", "object": "chat.completion", "created": 1, "model": "mock",
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello from V2."}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                "usage": {"prompt_tokens": 10, "completion_tokens": 7, "total_tokens": 17},
             }).encode())
             return
         try:
@@ -48,7 +50,7 @@ class Model(BaseHTTPRequestHandler):
             self.wfile.write(("data: " + json.dumps({
                 "id": "mock", "object": "chat.completion.chunk", "created": 1, "model": "mock",
                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                "usage": {"prompt_tokens": 10, "completion_tokens": 7, "total_tokens": 17, "prompt_tokens_details": {"cached_tokens": 4}, "completion_tokens_details": {"reasoning_tokens": 2}},
             }) + "\n\ndata: [DONE]\n\n").encode())
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -89,6 +91,9 @@ def main():
             else:
                 settings = {"provider": {"mock": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": url, "apiKey": "mock"}, "models": {"mock": {"name": "Mock"}}}}, "command": {"review": {"template": "Review the current changes. $ARGUMENTS"}}}
             settings["model"] = "mock/mock"
+            if major == "2":
+                settings["providers"]["mock"]["models"]["mock"]["limit"] = {"context": 1000000, "output": 131072}
+                settings["providers"]["mock"]["models"]["mock"]["variants"] = [{"id": "high", "settings": {"reasoningEffort": "high"}, "body": {"klide_variant": "high"}}]
             (config / "opencode.json").write_text(json.dumps(settings))
             env["KLIDE_OPENCODE_TEST_BINARY"] = str(binary)
             env["KLIDE_OPENCODE_TEST_ROOT"] = str(root)
@@ -97,6 +102,9 @@ def main():
                 "cargo", "test", "--manifest-path", str(repo / "src-tauri" / "Cargo.toml"), "--lib",
                 f"v{major}_mock_streams_resumes_and_runs_a_native_command", "--", "--ignored", "--nocapture",
             ], cwd=repo, env=env, check=True, timeout=180)
+            if major == "2":
+                # OpenCode may also generate a session title with the model.
+                assert len(Model.variants) >= 3 and set(Model.variants) == {"high"}, f"Effort variant lost on new/resumed/command turn: {Model.variants}"
         finally:
             model.shutdown()
             model.server_close()

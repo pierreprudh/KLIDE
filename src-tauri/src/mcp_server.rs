@@ -126,6 +126,14 @@ impl Bridge for HttpBridge {
 /// publishes its result at settle.
 pub fn tool_list() -> Value {
     let mut tools = vec![crate::missions::orchestration::tool()];
+    let skill = crate::agent::tools::list_tools(&crate::agent::types::AgentMode::Plan)
+        .into_iter().find(|tool| tool["function"]["name"] == "read_skill")
+        .expect("read_skill is registered");
+    tools.push(json!({
+        "name": skill["function"]["name"],
+        "description": skill["function"]["description"],
+        "inputSchema": skill["function"]["parameters"]
+    }));
     tools.push(json!({
         "name": crate::agent::permission_relay::TOOL,
         "description": "Klide answers this CLI's permission prompts. Claude Code calls it through --permission-prompt-tool for every action its own rules did not already allow; the operator sees the same card Klide shows for its own shell commands and answers once, for this run, or for this project. Not for the model to call.",
@@ -173,6 +181,9 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, String> {
     let timeout = args.get("timeoutSeconds").and_then(Value::as_u64);
     match name {
+        "read_skill" => Ok(BridgeRequest::ReadSkill {
+            command: str_arg(args, "command").ok_or("read_skill requires command.")?,
+        }),
         "mission_orchestrate" => Ok(BridgeRequest::Orchestrate {
             request: serde_json::from_value(args.clone()).map_err(|e| format!("Invalid Mission request: {e}"))?,
         }),
@@ -508,7 +519,7 @@ mod tests {
         // looks the prompt tool up on tools/list like any other.
         assert_eq!(
             names,
-            ["mission_orchestrate", "permission", "agent_list", "agent_send", "agent_wait", "agent_cancel", "agent_read_result", "agent_publish_result"]
+            ["mission_orchestrate", "read_skill", "permission", "agent_list", "agent_send", "agent_wait", "agent_cancel", "agent_read_result", "agent_publish_result"]
         );
     }
 
@@ -772,7 +783,7 @@ mod chain {
         // What a CLI asks before it will call anything.
         let listed =
             handle_message(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &bridge).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 8);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 9);
 
         // agent_list sees the Harness peer under its thread title, and itself.
         let reply = handle_message(

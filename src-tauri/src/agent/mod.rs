@@ -1,4 +1,5 @@
 mod approval_store;
+pub(crate) mod skill_resources;
 pub(crate) mod daemon;
 mod remote;
 mod run_host;
@@ -707,6 +708,7 @@ async fn run_subagent_to_completion(
             omitted: vec![],
         }),
         system_prompt: Some(spec.system_prompt.clone()),
+        skills: vec![],
         // A child has no surface of its own to answer a question, consult an
         // advisor, or spawn a further subagent — and the last of those is also
         // what stops a subagent tree from recursing without bound. Derived from
@@ -852,6 +854,7 @@ impl RunLease {
 
 impl Drop for RunLease {
     fn drop(&mut self) {
+        skill_resources::clear(&self.id);
         if self.settled {
             return;
         }
@@ -2005,6 +2008,7 @@ async fn loop_body(
     // Start this run's file-snapshot slate clean so a reused id never inherits
     // stale read/write hashes from a previous run (see tools::clear_run_snapshots).
     clear_run_snapshots(&id);
+    skill_resources::register(&id, &request.skills, request.parent_id.as_deref());
     let prior_turns = prior_events
         .iter()
         .filter(|e| matches!(e, AgentEvent::AssistantMessage { .. }))
@@ -2163,6 +2167,10 @@ async fn loop_body(
     }
 
     let mut system = base_system_prompt(&request);
+    if let Some(instructions) = skill_resources::explicit_instructions(&id, &request.initial_text) {
+        system.push_str("\n\nApply the skill explicitly requested by the user:\n");
+        system.push_str(&instructions);
+    }
     if let Some(memory) = &memory {
         system.push_str("\n\n");
         system.push_str(&memory.prompt);
@@ -6647,6 +6655,47 @@ mod run_loop_tests {
         assert_eq!(
             seen[1].last().unwrap()["content"], "[TODO list]\n[ ] T1: Check the tests",
         );
+    }
+
+    #[tokio::test]
+    async fn enabled_skill_bodies_enter_context_only_when_loaded() {
+        let (runs_dir, root) = sandbox("skill-loading");
+        let id = "skill-loading-run";
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Loading the matching skill.", vec![scripted_tool_call(
+                "load-skill", "read_skill", serde_json::json!({"command":"draw"}),
+            )]),
+            scripted_turn("A drawing.", vec![]),
+        ]);
+        let mut request = test_request(&root, &[]);
+        request.skills = vec![types::RunSkill {
+            command: "draw".into(), name: "Draw".into(), description: "Draw pictures".into(),
+            instructions: "SKILL_BODY_SENTINEL: Use SVG".into(),
+        }];
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(!serde_json::to_string(&seen[0]).unwrap().contains("SKILL_BODY_SENTINEL"));
+        assert!(seen[1].iter().any(|message| message["role"] == "tool" && message["content"].as_str().unwrap_or_default().contains("SKILL_BODY_SENTINEL")));
+        assert!(skill_resources::read(id, "draw").is_err(), "settle releases the catalog");
+    }
+
+    #[tokio::test]
+    async fn explicit_skill_command_loads_only_the_requested_body() {
+        let (runs_dir, root) = sandbox("explicit-skill");
+        let id = "explicit-skill-run";
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("A drawing.", vec![])]);
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "/draw a logo".into();
+        request.skills = vec![
+            types::RunSkill { command: "draw".into(), name: "Draw".into(), description: "Pictures".into(), instructions: "REQUESTED_SKILL_BODY".into() },
+            types::RunSkill { command: "review".into(), name: "Review".into(), description: "Review".into(), instructions: "UNRELATED_SKILL_BODY".into() },
+        ];
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap();
+        let prompt = serde_json::to_string(&seen[0]).unwrap();
+        assert!(prompt.contains("REQUESTED_SKILL_BODY"));
+        assert!(!prompt.contains("UNRELATED_SKILL_BODY"));
     }
 
     #[tokio::test]

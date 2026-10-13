@@ -34,6 +34,9 @@ describe("expectedWorkingWindow (mirrors adapters::working_num_ctx)", () => {
 });
 
 describe("resolveGaugeWindow", () => {
+  it("uses OpenCode's resolved model window when the picker was on default", () => {
+    expect(resolveGaugeWindow({ provider: "opencode", detected: 0, reported: 1_000_000, estimatedPromptTokens: 10_000 })).toBe(1_000_000);
+  });
   const base = { provider: "ollama", detected: 131_072, reported: null, estimatedPromptTokens: 1_000 };
 
   it("hosted providers measure against the detected window, whatever else is set", () => {

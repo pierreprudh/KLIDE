@@ -8,6 +8,13 @@ import {
 } from "./reflectionLevels";
 
 describe("reflection levels", () => {
+  it("orders OpenCode's on/off variants and gives them explicit captions", () => {
+    expect(sortReflectionLevels(["thinking", "none"])).toEqual(["none", "thinking"]);
+    expect(sortReflectionLevels(["high", "none", "low"])).toEqual(["none", "low", "high"]);
+    expect(reflectionCaption("none")).toBe("Disable reasoning");
+    expect(reflectionCaption("thinking")).toBe("Enable reasoning");
+    expect(reflectionBarLevel("none", ["none", "thinking"])).toBe(0);
+  });
   it("places a level inside its own set, not on a fixed scale", () => {
     // The glyph has five bars. A Klide-wire model's five levels map one to
     // one; a six-level Codex model still reads weakest→strongest, and its top

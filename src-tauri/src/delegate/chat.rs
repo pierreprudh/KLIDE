@@ -173,11 +173,15 @@ pub async fn run_subscription_chat(
     // otherwise the final fold would erase the live thinking display.
     let thinking = std::sync::Arc::new(Mutex::new(String::new()));
     let thinking_sink = thinking.clone();
+    let usage = std::sync::Arc::new(Mutex::new(None));
+    let usage_sink = usage.clone();
     let downstream = on_chunk.clone();
     let channel = Channel::new(move |body| {
         if let tauri::ipc::InvokeResponseBody::Json(json) = body {
             let chunk: StreamChunk = serde_json::from_str(&json).map_err(|e| tauri::Error::Anyhow(e.into()))?;
             thinking_sink.lock().unwrap().push_str(&chunk.thinking);
+            if let Some(reported) = &chunk.usage { *usage_sink.lock().unwrap() = Some(reported.clone()); }
+            if chunk.content.is_empty() && chunk.thinking.is_empty() && chunk.observed.is_none() { return Ok(()); }
             downstream.send(chunk)?;
         }
         Ok(())
@@ -309,6 +313,7 @@ pub async fn run_subscription_chat(
     if let Some(key) = key.as_deref() {
         remember_instructions(key, instructions_fingerprint(&system_text(&messages)));
     }
+    let reported_usage = usage.lock().unwrap().clone();
     Ok(AiChatResponse {
         content,
         thinking: {
@@ -319,7 +324,7 @@ pub async fn run_subscription_chat(
         // them here would make the harness queue them for execution a second
         // time. They reach the UI as observed activity instead.
         tool_calls: Vec::new(),
-        usage: None,
+        usage: reported_usage,
         stop_reason: None,
     })
 }
@@ -479,6 +484,7 @@ pub(super) struct Emitter<'a> {
     // only the new suffix goes out either way — no duplicated answer if it
     // repeats, no lost text if it does not.
     emitted_parts: HashMap<String, usize>,
+    usage_steps: HashMap<String, (u64, Option<f64>)>,
 }
 
 impl<'a> Emitter<'a> {
@@ -499,6 +505,7 @@ impl<'a> Emitter<'a> {
             error: None,
             saw_delta: false,
             emitted_parts: HashMap::new(),
+            usage_steps: HashMap::new(),
         }
     }
 
@@ -512,6 +519,20 @@ impl<'a> Emitter<'a> {
     pub(super) fn handle(&mut self, item: super::chat_stream::StreamItem) {
         use super::chat_stream::{summarize_call, StreamItem};
         match item {
+            StreamItem::Usage { id, prompt, completion, cost, context_window } => {
+                self.emitted.store(true, Ordering::Relaxed);
+                self.usage_steps.insert(id, (completion, cost));
+                let completion = self.usage_steps.values().fold(0u64, |total, (tokens, _)| total.saturating_add(*tokens));
+                let costs: Vec<f64> = self.usage_steps.values().filter_map(|(_, cost)| *cost).collect();
+                let _ = self.on_chunk.send(StreamChunk {
+                    usage: Some(crate::providers::AiUsage {
+                        prompt_tokens: Some(prompt), completion_tokens: Some(completion),
+                        cost_usd: (!costs.is_empty()).then(|| costs.iter().sum()),
+                        context_window, ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+            }
             StreamItem::Error(message) => {
                 // A provider rejection is not a missing session: do not resend
                 // the prompt through the cold-session retry path.
@@ -653,7 +674,7 @@ fn latest_user_message(messages: &[serde_json::Value]) -> String {
 fn prompt_from_messages(messages: &[serde_json::Value]) -> String {
     let mut out = String::from(
         "You are running as a subscription CLI backend inside Klide.\n\
-         Answer the user's latest request using the conversation below.\n\
+         Answer the user's latest request using the conversation below. The system blocks are instructions for you, not content to reproduce. Do not append skill definitions or tool instructions to an ordinary answer.\n\
          Follow the active Klide mode described in the system message. In Work mode,\n\
          you may edit files directly in the current workspace; Klide will surface the\n\
          resulting file and git diffs after you finish. In Chat or Plan mode, do not\n\
@@ -910,6 +931,35 @@ mod tests {
         let goal = vec![msg("system", "GOAL MODE: edit files directly."), msg("user", "now do it")];
         let command = with_command_instructions(TokioCommand::new("claude"), &super::super::ClaudeCode, None, &goal);
         assert_eq!(command.as_std().get_args().count(), 0);
+    }
+
+    #[test]
+    fn opencode_usage_replays_do_not_double_count_completion() {
+        let emitted = AtomicBool::new(false);
+        let chunks = std::sync::Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let sink = chunks.clone();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                sink.lock().unwrap().push(serde_json::from_str(&json).unwrap());
+            }
+            Ok(())
+        });
+        let mut emitter = Emitter::new(&super::super::opencode::OpenCode, "/tmp", None, &emitted, &channel);
+        for _ in 0..2 {
+            for (id, prompt, completion, cost) in [("first", 10, 5, 0.1), ("last", 20, 8, 0.2)] {
+                emitter.handle(super::super::chat_stream::StreamItem::Usage {
+                    id: id.into(), prompt, completion, cost: Some(cost), context_window: Some(1_000_000),
+                });
+            }
+        }
+        let chunks = chunks.lock().unwrap();
+        let usage = &chunks.last().unwrap()["usage"];
+        assert_eq!(usage["promptTokens"], 20);
+        assert_eq!(usage["completionTokens"], 13);
+        assert_eq!(usage["contextWindow"], 1_000_000);
+        assert!((usage["costUsd"].as_f64().unwrap() - 0.3).abs() < 1e-9);
+        assert!(emitted.load(Ordering::Relaxed));
+        assert_eq!(emitter.finish().unwrap(), "");
     }
 
     #[test]

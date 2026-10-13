@@ -20,6 +20,7 @@ type StartRunRequest = {
   attachments: StartAgentRunInput["attachments"];
   context?: StartAgentRunInput["context"];
   systemPrompt?: string;
+  skills?: { command: string; name: string; description: string; instructions: string }[];
   disabledTools?: string[];
   numCtx?: number;
   numPredict?: number;
@@ -82,6 +83,7 @@ export async function startAgentRun(
       attachments: input.attachments,
       context: input.context,
       systemPrompt: input.systemPrompt,
+      skills: input.skills,
       disabledTools: input.disabledTools,
       numCtx: input.numCtx,
       numPredict: input.numPredict,

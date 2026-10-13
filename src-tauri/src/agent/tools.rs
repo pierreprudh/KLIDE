@@ -777,6 +777,19 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
+            schema: schema("read_skill", "Load an enabled skill's full instructions when its description matches the task. Use the command from the skill catalog; loading a skill does not grant tool permissions.",
+                serde_json::json!({ "command": { "type": "string", "description": "Skill command, for example visualise or /visualise." } }),
+                &["command"]),
+            run_read: Some(|_ws, input, run_id, _runs_dir| {
+                match super::skill_resources::read(run_id, &trimmed_arg(input, "command").unwrap_or_default()) {
+                    Ok(content) => ok(content), Err(message) => err(message),
+                }
+            }),
+            run_write_preview: None,
+            summary: default_summary,
+        },
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
             schema: schema("list_dir", "List entries in a workspace directory.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative directory path. Use . for the root." } }),
                 &["path"]),

@@ -10,6 +10,12 @@ use std::collections::{HashMap, HashSet};
 #[path = "opencode_v2.rs"]
 mod v2;
 
+fn model_variant(model: &str, effort: Option<&str>) -> String {
+    let Some(effort) = effort.map(str::trim).filter(|v| !v.is_empty()) else { return model.to_string(); };
+    if !model.contains('/') { return model.to_string(); }
+    format!("{}#{effort}", model.split('#').next().unwrap_or(model))
+}
+
 /// OpenCode — the SST CLI. The quirkiest of the three:
 ///
 /// - Its TUI treats the first positional arg as a project path
@@ -111,6 +117,16 @@ impl Delegate for OpenCode {
         format!(" -m {}", shell_quote(model))
     }
 
+    fn spawn_command(&self, task: Option<&str>, model: Option<&str>, resume: Option<&str>, effort: Option<&str>) -> String {
+        let task = task.map(str::trim).filter(|v| !v.is_empty());
+        let model = model.map(str::trim).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(super::CLI_DEFAULT_MODEL));
+        let resume = resume.map(str::trim).filter(|v| !v.is_empty());
+        let prefix = self.spawn_prefix(task.is_some(), resume.is_some());
+        let resume = resume.map(|v| self.resume_arg(v)).unwrap_or_default();
+        let model = model.map(|v| self.model_arg(&model_variant(v, effort))).unwrap_or_default();
+        match task { Some(task) => format!("{prefix}{resume}{model} {}", shell_quote(task)), None => format!("{prefix}{resume}{model}") }
+    }
+
     /// OpenCode has no per-invocation MCP flag; `OPENCODE_CONFIG` names an
     /// extra config file merged over the user's, so the server rides in a
     /// per-session file and the env var, not in `~/.config/opencode`.
@@ -174,7 +190,7 @@ impl Delegate for OpenCode {
     /// `--auto`, so OpenCode approves its own tool calls and has nothing to
     /// carry an allowlist into.
     fn chat_stream_args(&self, cwd: &str, spec: &ChatSpec) -> Option<Vec<String>> {
-        let mut args = self.chat_args(cwd, spec.model).ok()?;
+        let mut args = self.chat_args(cwd, &model_variant(spec.model, spec.effort)).ok()?;
         args.extend(["--format".to_string(), "json".to_string()]);
         // `-s <id>` continues an existing session (`--continue` would take the
         // last one, which is the wrong session as soon as two conversations run
@@ -1072,6 +1088,17 @@ fn launch_prefix(has_task: bool, resuming: bool, v2: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_effort_reaches_the_opencode_model_reference() {
+        use super::*;
+        let spec = ChatSpec { model: "opencode-go/minimax-m3", effort: Some("thinking"), resume: Some("session"), mcp: None, allowed_commands: &[] };
+        let args = OpenCode.chat_stream_args("/workspace", &spec).unwrap();
+        assert_eq!(args[args.iter().position(|arg| arg == "--model").unwrap() + 1], "opencode-go/minimax-m3#thinking");
+        assert_eq!(model_variant("opencode-go/glm-5.3-flash#low", Some("high")), "opencode-go/glm-5.3-flash#high");
+        assert_eq!(model_variant("", Some("high")), "");
+        assert_eq!(model_variant("mock/mock", None), "mock/mock");
+        assert_eq!(model_variant("mock/mock", Some("none")), "mock/mock#none");
+    }
     use super::*;
 
     // Captured from a real `opencode run --auto --format json` turn. OpenCode's

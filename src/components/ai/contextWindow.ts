@@ -52,6 +52,7 @@ export type GaugeWindowInput = {
 /** The number usage is measured against. */
 export function resolveGaugeWindow(input: GaugeWindowInput): number {
   const { provider, detected, override, reported, estimatedPromptTokens } = input;
+  if (provider === "opencode" && reported !== null && reported > 0) return reported;
   if (!providerHasContextWindowSetting(provider)) return detected;
   const ceiling = override && override > 0 ? override : detected;
   if (reported !== null && reported > 0) return reported;

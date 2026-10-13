@@ -80,6 +80,7 @@ pub enum PriceClass {
 #[serde(rename_all = "camelCase")]
 pub struct ModelCapabilities {
     pub context_window: Option<usize>,
+    pub max_output_tokens: Option<usize>,
     pub supports_tools: bool,
     pub supports_vision: bool,
     /// The reasoning efforts the pair accepts, weakest first. Empty = no dial.
@@ -706,6 +707,7 @@ async fn resolve_uncached(
     if crate::agent::routing::is_auto(provider) {
         return Ok((
             ModelCapabilities {
+                max_output_tokens: None,
                 context_window: None,
                 supports_tools: true,
                 supports_vision: false,
@@ -719,14 +721,18 @@ async fn resolve_uncached(
 
     // A Delegate CLI: the CLI's own facts. Codex publishes a per-model window
     // and effort set in its manifest; Claude Code accepts a CLI-wide effort
-    // vocabulary; the others have no dial. Every Delegate uses tools; none
+    // vocabulary; OpenCode V2 publishes reasoning variants per model. Every Delegate uses tools; none
     // takes an image through Klide's composer.
     if providers::is_subscription_provider(provider) {
         let entry = providers::lookup(provider);
+        let opencode = if provider == "opencode" {
+            let model = model.to_string();
+            crate::blocking::run_infallible(move || crate::models::opencode_model_facts(&model)).await
+        } else { None };
         let context_window = if provider == "codex" {
             crate::models::codex_context_window(model)
         } else {
-            None
+            opencode.as_ref().and_then(|facts| facts.context_window)
         }
         .or_else(|| entry.and_then(|e| e.context_window))
         .or(names.window);
@@ -737,11 +743,14 @@ async fn resolve_uncached(
                 .iter()
                 .map(|s| s.to_string())
                 .collect()
+        } else if provider == "opencode" {
+            opencode.as_ref().map(|facts| facts.reasoning_levels.clone()).unwrap_or_default()
         } else {
             Vec::new()
         };
         return Ok((
             ModelCapabilities {
+                max_output_tokens: opencode.as_ref().and_then(|facts| facts.max_output_tokens),
                 context_window,
                 supports_tools: true,
                 supports_vision: false,
@@ -780,6 +789,7 @@ async fn resolve_uncached(
         };
         return Ok((
             ModelCapabilities {
+                max_output_tokens: None,
                 context_window: show.window.or(names.window),
                 supports_tools: show.tools.unwrap_or(true),
                 supports_vision: show.vision,
@@ -831,6 +841,8 @@ async fn resolve_uncached(
 
     Ok((
         ModelCapabilities {
+            max_output_tokens: None,
+
             context_window,
             supports_tools,
             supports_vision,
@@ -1334,6 +1346,7 @@ mod tests {
     #[test]
     fn planning_falls_back_to_the_one_named_default() {
         let unknown = ModelCapabilities {
+            max_output_tokens: None,
             context_window: None,
             supports_tools: true,
             supports_vision: false,
