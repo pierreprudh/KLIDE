@@ -151,38 +151,42 @@ Research and benchmark plan: `docs/workers-comparison-2026-09-21.md` (local note
   operator review rather than acceptance. Accept/reject records durable
   validation, and restart recovery never replays an ambiguous Delegate.
 
-## OpenCode v2 delegate (deferred — upstream is beta, noted 2026-08-12)
+## OpenCode v2 delegate (shipped 0.6.9, 2026-10-12)
 
-OpenCode 2.0 is a rewrite (Bun → Node, Electron desktop) whose server API is an
-intentional breaking change: a documented HTTP API plus a generated TypeScript
-client (`@opencode-ai/client`), with an OpenAPI 3.1 spec served at
-`http://localhost:4096/doc` and bearer auth via an `authorization` header. It
-installs as a **separate** binary — `npm i -g @opencode-ai/cli@next` → `opencode2`
-— so it coexists with the v1 `opencode` our current adapter drives. Upstream
-warns beta data may be wiped and the API may still move, so this stays deferred
-until it stabilizes; nothing here blocks v0.5.1 or v0.6.
+OpenCode 2.0 is a rewrite whose server API is an intentional breaking change:
+a documented HTTP API under `/api`, bearer auth, and a separate binary
+(`@opencode/cli`). Klide supports it beside v1 in one adapter — the installed
+version picks the contract, nothing is migrated in place.
 
-Why it's worth doing when it lands: the v2 server exposes over HTTP most of what
-`delegate/opencode.rs` currently obtains by scraping — sessions, durable
-history, event streams, models/providers, permissions, questions/forms, PTY
-sessions, shell processes, skills, MCP, filesystem, snapshots/reverts,
-compaction, and VCS status/diff.
-
-- [ ] Add `OpenCode2` as its own `DelegateAdapter` beside the existing one, so
-  v1 keeps working on the SQLite/`opencode export` path and only the new kind
-  talks to the API. Do not migrate the v1 adapter in place.
-- [ ] Drive run listing and transcripts from the API instead of reading
-  `~/.local/share/opencode/opencode.db` and parsing the session id out of
-  startup stdout.
+- [x] Support v2 in the existing `OpenCode` adapter, switched on the installed
+  version (`configure_version` / `installed_v2`): v1 keeps the `--attach` +
+  `/event` + `opencode export` path, v2 launches a private `--standalone`
+  server, reads `/api/event`, sends `/api/session/{id}/command`, and handles
+  permissions over `/api/session/{id}/permission`. Focus, interactive PTY
+  sessions, Missions, resume, native slash commands and status callbacks all
+  work; reasoning streams separately from the answer.
+- [x] Recover an interrupted turn from durable history
+  (`/api/session/{id}/message`) instead of trusting the event stream alone.
+- [x] Discover v2 models through a private server so a down shared service
+  can't hide local, free or configured models. Credentials stay in OpenCode
+  (V2 keeps them in SQLite; the v1 `auth.json` account switcher is disabled
+  for v2).
+- [x] Connector discovery reads `~/.config/opencode/cli.json` as well as
+  `opencode.json`, and accepts MCP entries under `mcp.servers` or `mcp`.
+- [x] Isolated smoke test covering discovery, reasoning + answer streaming,
+  resume, commands and status callbacks without paid inference.
+- [ ] Run listing and transcript reads for v2 still go through `opencode.db`
+  (`v2::discover` / `v2::read_run` take the SQLite connection); move them to
+  `/api/session` when the listing endpoint is stable enough to replace the
+  database, or keep SQLite deliberately and say so here.
 - [ ] Evaluate `GET /api/experimental/session/{id}/log?after=<seq>&follow=true`
-  (newline-delimited `{ id, event, data }`, replay-then-follow) against our
-  hand-built delegate replay contract — capped scrollback ring + monotonic
-  `seq` + `delegate_pty_snapshot` then dedupe. If it holds, the v2 kind reads
-  upstream's log rather than carrying our own ring buffer, and its PTY
-  endpoints may cover what `ptyd` does for v1.
-- [ ] Handle the renamed config surface when we read or write opencode config:
-  one global `~/.config/opencode/cli.json`, `agent`→`agents`, `prompt`→`system`,
-  `disable`→`disabled`, MCP under `mcp.servers`.
+  (replay-then-follow) against our own replay contract — capped scrollback
+  ring + monotonic `seq` + `delegate_pty_snapshot`. Not adopted; v2 still uses
+  Klide's ring buffer and `ptyd`.
+- [ ] The MCP wiring Klide writes for a session uses the v1 `mcp.<name>` shape
+  with `OPENCODE_CONFIG`; confirm v2 still honours it or write `mcp.servers`
+  when the installed CLI is v2. The other renames (`agent`→`agents`,
+  `prompt`→`system`, `disable`→`disabled`) don't touch anything Klide writes.
 
 Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/build/client>.
 
