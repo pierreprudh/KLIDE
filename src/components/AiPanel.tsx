@@ -4340,7 +4340,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           // response mark; the actual follow-up answer below owns that mark.
           // It is machinery, so it sits on the tool rows' indent — one step
           // (14px) inside the prose edge — not flush with the answer.
-          if (m.role === "system" && m.observer) {
+          if (m.role === "system" && (m.observer || m.workerReport)) {
             return (
               <div key={i} data-observer-row={i} tabIndex={0} className="ai-msg-in" style={{ margin: "12px 0 5px 46px", color: "var(--fg-dim)", fontSize: 12 }}>
                 {renderMessageBody(m)}
@@ -4415,7 +4415,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           // follow-up lands, the icon row moves to it. Each answer keeps its
           // own stats line; only the actions are one per response.
           const afterCompletion = nextMsg?.role === "system" && nextMsg.completion ? msgs[i + 2] : nextMsg;
-          const observerFollows = afterCompletion?.role === "system" && !!afterCompletion.observer;
+          const observerFollows = afterCompletion?.role === "system" && (!!afterCompletion.observer || !!afterCompletion.workerReport);
           const isResponseEnd = !observerFollows && (!nextMsg || (nextMsg.role === "system" && !!nextMsg.completion) || (nextMsg.role === "user" && nextMsg.queueState !== "queued"));
           const mark = isResponseStart && m.role === "assistant" ? responseMark(m) : null;
           // This turn's results, handed to its call rows. A result is live

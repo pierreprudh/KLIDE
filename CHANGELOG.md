@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A worker can be dispatched in the background. `spawn_subagent` with `background: true` returns the child's Run id at once instead of parking the conversation; the same card is asked, the same worktree is made, and the report — Git evidence included — is delivered to the conversation when the worker settles, by a follow-up turn if the conversation is idle, the way a background shell's completion arrives. The "Dispatched to" row keeps following the child live; meanwhile `agent_list` shows it, `agent_cancel` stops it, and `agent_read_result` reads what it published. Several workers can now run at once from one conversation.
 - Threads already saved with another Provider's model (a Claude Code thread on `deepseek/…`) are healed at boot: the model is dropped so the thread opens on the CLI's own default, the same rule a resume now applies when a recorded model is plainly foreign.
 - A thread carried onto another Provider without a recorded model no longer keeps the previous Provider's model: a Claude Code session opened from a DeepSeek chat showed "deepseek-v4.1" in its composer. It now starts where a switch to that Provider would (remembered pick, star, or the CLI's own default).
 

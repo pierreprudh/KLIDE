@@ -873,12 +873,27 @@ pub enum AgentEvent {
         /// Absent for an in-model child, and for a CLI on its own default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        /// True when the parent did not wait: the call returned at once with
+        /// the child's Run id, and the report arrives later as its own
+        /// `SubagentResolved`, delivered at a turn boundary.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        background: bool,
         ts: i64,
     },
+    /// The child's report. Foreground: written by the parent's tool step,
+    /// beside the tool result that carries the same text. Background: written
+    /// when the report is delivered to the parent's model, opening a new
+    /// response the way `ObserverCompleted` does.
     SubagentResolved {
         run_id: String,
         request_id: String,
         result: String,
+        /// Whether the child settled `done` with an answer. Absent on
+        /// transcripts written before it was recorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ok: Option<bool>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        background: bool,
         ts: i64,
     },
     /// The model called `consult_advisor` and is paused waiting for guidance

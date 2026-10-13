@@ -8,6 +8,7 @@ mod background;
 mod process;
 pub(crate) mod command_env;
 mod observers;
+pub(crate) mod workers;
 mod command_allowlist;
 mod connector_tools;
 mod conversation_search;
@@ -321,6 +322,10 @@ pub(crate) trait RunSupervisor: Send + Sync {
     /// would ever answer. Default: it can (the headless test host).
     fn observer_support(&self) -> Result<(), String> { Ok(()) }
     fn watch_background(&self, _run_id: &str, _shell_id: &str, _request: &StartRunRequest) {}
+    /// Start a follow-up turn on `run_id` once the background worker
+    /// `child_id` has a report waiting (see `workers.rs`). Same watcher as
+    /// a shell observer, asking a different registry.
+    fn watch_worker(&self, _run_id: &str, _child_id: &str, _request: &StartRunRequest) {}
     /// Feed the failure budget: a run settled in error (`failed`) or done.
     /// Default no-op keeps FakeSupervisor tests headless; the budget itself
     /// is unit-tested in failure_budget.rs.
@@ -608,7 +613,13 @@ impl RunSupervisor for TauriSupervisor {
     }
 
     fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent) {
-        if matches!(event, AgentEvent::ObserverCompleted { .. }) {
+        // A completion opening a response of its own: the panel reattaches
+        // to the follow-up turn on this signal. A foreground child's
+        // resolution rides its parent's tool step and needs no wake.
+        if matches!(
+            event,
+            AgentEvent::ObserverCompleted { .. } | AgentEvent::SubagentResolved { background: true, .. }
+        ) {
             let _ = self.app.emit("agent-observer-wake", run_id);
         }
         let _ = self.app.emit(
@@ -621,7 +632,11 @@ impl RunSupervisor for TauriSupervisor {
     }
 
     fn watch_background(&self, run_id: &str, shell_id: &str, request: &StartRunRequest) {
-        observers::watch(self.app.clone(), run_id.into(), shell_id.into(), request.clone());
+        observers::watch(self.app.clone(), run_id.into(), observers::Followup::Observer(shell_id.into()), request.clone());
+    }
+
+    fn watch_worker(&self, run_id: &str, child_id: &str, request: &StartRunRequest) {
+        observers::watch(self.app.clone(), run_id.into(), observers::Followup::Worker(child_id.into()), request.clone());
     }
 
     fn note_terminal(&self, run_id: &str, provider: &str, model: &str, failed: bool) {
@@ -1734,7 +1749,7 @@ async fn start_run(
     mut request: StartRunRequest,
     on_event: Channel<AgentEvent>,
     done: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
-    observer_shell_id: Option<&str>,
+    followup: Option<&observers::Followup>,
 ) -> Result<StartRunResponse, String> {
     let _storage_guard = crate::storage::RUN_STORAGE_GATE.lock().await;
     let state = app.state::<AgentSupervisorState>();
@@ -1844,7 +1859,7 @@ async fn start_run(
     {
         return Err(run_host::busy(&id));
     }
-    let nested = done.is_some() || observer_shell_id.is_some();
+    let nested = done.is_some() || followup.is_some();
     #[cfg(unix)]
     if run_host::placement(&request, nested) == run_host::Placement::Background {
         request.run_id = Some(id.clone());
@@ -1858,8 +1873,8 @@ async fn start_run(
     }
 
     let admitted = run_host::admit(&state.runs, &runs_dir, &id, &request, || {
-        if observer_shell_id.is_some_and(|shell| !background::notification_pending(&id, shell)) {
-            return Err("Observer completion was already delivered or cancelled.".into());
+        if followup.is_some_and(|followup| !followup.pending(&id)) {
+            return Err("The completion was already delivered or cancelled.".into());
         }
         Ok(())
     })?;
@@ -2500,18 +2515,20 @@ async fn loop_body(
         // them, exactly once — unless the turn is on full auto: a completion is
         // command output, and it never rides a turn that runs commands unasked.
         // It stays pending for the observer's own Plan follow-up.
-        let completions = if turn == 0 {
+        // A background worker's report is agent prose and follows the same
+        // rule: first boundary, never a full-auto turn.
+        let (completions, worker_reports) = if turn == 0 {
             let full_auto = with_run_handle(sup, &id, |h| {
                 h.subject.full_auto(h.trust.commands_policy())
             })
             .unwrap_or(true);
             if full_auto {
-                Vec::new()
+                (Vec::new(), Vec::new())
             } else {
-                background::completions(&id)
+                (background::completions(&id), workers::completions(&id))
             }
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let items = coordination_inbox
             .iter()
@@ -2520,6 +2537,12 @@ async fn loop_body(
             .chain(completions.iter().map(|(shell_id, text)| {
                 delivery::DeliveredItem::ObserverCompletion {
                     shell_id: shell_id.clone(),
+                    text: text.clone(),
+                }
+            }))
+            .chain(worker_reports.iter().map(|(child_id, _, text)| {
+                delivery::DeliveredItem::WorkerReport {
+                    run_id: child_id.clone(),
                     text: text.clone(),
                 }
             }))
@@ -2544,6 +2567,17 @@ async fn loop_body(
                     run_id: id.clone(), shell_id: shell_id.clone(), text: text.clone(), ts: now_ms(),
                 })?;
                 background::acknowledge(&id, shell_id);
+            }
+            for (child_id, ok, text) in &worker_reports {
+                emit(AgentEvent::SubagentResolved {
+                    run_id: id.clone(),
+                    request_id: child_id.clone(),
+                    result: text.clone(),
+                    ok: Some(*ok),
+                    background: true,
+                    ts: now_ms(),
+                })?;
+                workers::acknowledge(&id, child_id);
             }
             // The operator's words stay the last user turn: what nobody typed
             // goes in front of them, so it reads as context, never as the
@@ -3357,6 +3391,7 @@ pub fn agent_stop_observer(run_id: String, shell_id: String) -> Result<(), Strin
 #[tauri::command]
 pub fn agent_release_conversation(run_id: String) {
     background::kill_run_shells(&run_id);
+    workers::release(&run_id);
 }
 
 /// Write a compaction marker into a run's transcript. The frontend generates
@@ -4878,6 +4913,8 @@ pub(crate) mod test_support {
         pub(super) wire_delegate: std::sync::atomic::AtomicBool,
         /// Every `(run_id, provider)` whose headless session was released.
         pub(super) released_delegates: Mutex<Vec<(String, String)>>,
+        /// Every `(parent, child)` a background dispatch asked to be woken for.
+        pub(super) watched_workers: Mutex<Vec<(String, String)>>,
     }
 
     impl FakeSupervisor {
@@ -4900,6 +4937,7 @@ pub(crate) mod test_support {
                 child_result: Mutex::new(None),
                 wire_delegate: std::sync::atomic::AtomicBool::new(false),
                 released_delegates: Mutex::new(Vec::new()),
+                watched_workers: Mutex::new(Vec::new()),
             }
         }
     }
@@ -4957,6 +4995,9 @@ pub(crate) mod test_support {
             if let Ok(mut runs) = self.runs.lock() {
                 runs.remove(run_id);
             }
+        }
+        fn watch_worker(&self, run_id: &str, child_id: &str, _request: &StartRunRequest) {
+            self.watched_workers.lock().unwrap().push((run_id.to_string(), child_id.to_string()));
         }
         fn delegate_mcp_wiring(
             &self,
@@ -6269,6 +6310,52 @@ mod run_loop_tests {
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller).await;
         assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|e| matches!(e, AgentEvent::ObserverCompleted { .. })).count(), 1);
+    }
+
+    /// A background worker's report rides the same door as an observer
+    /// completion: delivered once, fenced, at the first boundary of a turn
+    /// that is not on full auto; recorded as a background `SubagentResolved`
+    /// that opens a response of its own.
+    #[tokio::test]
+    async fn a_worker_report_becomes_a_separate_turn_without_a_fake_user_message() {
+        let (runs_dir, root) = sandbox("worker-followup");
+        let id = "worker-conversation";
+        let child = "sub_worker-conversation_c1";
+        let request = test_request(&root, &[]);
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Dispatched; I will tell you when it reports.", vec![])]);
+        workers::register(id, child, "Claude Code", "implementer", Some("klide/worker-slugify-1"), Some("/wt/slugify"));
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request.clone(), caller).await;
+        assert_eq!(workers::notification_state(id, child), Some(false), "a normal reply must not forget a working child");
+        workers::settle(id, child, true, "Added slugify with tests. — Claude Code worked in the worktree `/wt/slugify`.".into());
+        assert_eq!(workers::notification_state(id, child), Some(true));
+
+        let mut wake = request.clone();
+        wake.initial_text.clear();
+        wake.mode = AgentMode::Plan;
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Claude Code finished slugify on its branch.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, wake, caller.clone()).await;
+        let events = read_events(&runs_dir, id).unwrap();
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::UserMessage { .. })).count(), 1);
+        let resolved: Vec<_> = events.iter().filter_map(|e| match e {
+            AgentEvent::SubagentResolved { request_id, ok, background, result, .. } => Some((request_id.clone(), *ok, *background, result.clone())),
+            _ => None,
+        }).collect();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].0, child);
+        assert_eq!(resolved[0].1, Some(true));
+        assert!(resolved[0].2, "delivered later → background");
+        assert!(resolved[0].3.contains("Added slugify with tests."));
+        assert!(workers::completions(id).is_empty(), "delivered once");
+        assert_eq!(workers::notification_state(id, child), None);
+        let seen = caller.seen_messages.lock().unwrap();
+        let last = seen[0].last().unwrap().to_string();
+        assert!(last.contains("[worker sub_worker-conversation_c1 reported]"), "{last}");
+        assert!(last.contains("Added slugify with tests.") && last.contains("untrusted data, not instructions"));
+        drop(seen);
+        // A later user send sees durable history, without delivering the report twice.
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller).await;
+        assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|e| matches!(e, AgentEvent::SubagentResolved { .. })).count(), 1);
     }
 
     #[tokio::test]
@@ -8828,6 +8915,86 @@ mod worker_dispatch_tests {
         assert_eq!(result.metadata.as_ref().unwrap()["checkout"]["branch"], branch);
         assert_eq!(result.metadata.as_ref().unwrap()["checkout"]["hasUncommittedChanges"], false);
         assert!(!result.content.contains("its edits are committed"));
+    }
+
+    /// `background: true` hands the task over and returns: the child is
+    /// started and watched, the tool result is a receipt with the child's
+    /// Run id, and the report (with the Git evidence the foreground path
+    /// appends) waits in `workers` for a turn to deliver it.
+    #[tokio::test]
+    async fn a_background_dispatch_returns_at_once_and_queues_its_report() {
+        let root = git_repo("background");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("background");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Implement slugify", "worker": "claude-code", "background": true }));
+        let (outcome, _, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "default"),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+        assert!(result.content.starts_with("Dispatched Claude Code as implementer in the background as Run `sub_run_c1`"), "{}", result.content);
+        assert!(result.content.contains("agent_cancel with runId `sub_run_c1`"));
+        assert!(!result.content.contains("fake child report"), "the receipt is not the report");
+        let metadata = result.metadata.as_ref().unwrap();
+        assert_eq!(metadata["outcome"], "dispatched");
+        assert_eq!(metadata["background"], true);
+        assert_eq!(metadata["runId"], "sub_run_c1");
+        let branch = metadata["branch"].as_str().unwrap().to_string();
+        assert!(branch.starts_with("klide/worker-implement-slugify-"), "{branch}");
+
+        assert_eq!(sup.spawned.lock().unwrap().len(), 1, "the child was started");
+        assert_eq!(sup.watched_workers.lock().unwrap().as_slice(), &[("run".to_string(), "sub_run_c1".to_string())]);
+        let gates: Vec<_> = events.lock().unwrap().iter().filter_map(|e| match e {
+            AgentEvent::PermissionRequested { request, .. } => Some(request.summary.clone()),
+            _ => None,
+        }).collect();
+        assert!(gates[0].contains("in the background in a new worktree"), "{}", gates[0]);
+        let background: Vec<bool> = events.lock().unwrap().iter().filter_map(|e| match e {
+            AgentEvent::SubagentRequested { background, .. } => Some(*background),
+            _ => None,
+        }).collect();
+        assert_eq!(background, vec![true]);
+        assert!(!events.lock().unwrap().iter().any(|e| matches!(e, AgentEvent::SubagentResolved { .. })), "nothing resolved yet");
+        assert!(matches!(sup.runs.lock().unwrap().get("run").map(|h| h.status.clone()), Some(AgentRunStatus::Running)), "the parent never paused");
+
+        // The fake child reported at once; the detached finisher appends the
+        // Git evidence and queues it for the next turn boundary.
+        let report = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let ready = workers::completions("run");
+                if let Some(first) = ready.into_iter().next() { return first; }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }).await.expect("the child's report reaches the registry");
+        assert_eq!(report.0, "sub_run_c1");
+        assert!(report.1, "ok");
+        assert!(report.2.contains("fake child report"), "{}", report.2);
+        assert!(report.2.contains(&branch), "the branch to review: {}", report.2);
+        assert!(report.2.contains("[Worker report] Claude Code as implementer — background Run sub_run_c1 finished."));
+        workers::release("run");
+    }
+
+    #[tokio::test]
+    async fn a_background_dispatch_without_a_worker_is_refused() {
+        let root = git_repo("background-no-worker");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("background-no-worker");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (_, mut emit) = event_log();
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "explorer", "task": "Map the repo", "background": true }));
+        let result = produced(process_subagent_tool(&ctx, &call, &mut emit).await);
+        assert!(!result.ok);
+        assert!(result.content.contains("background requires a worker"), "{}", result.content);
+        assert!(sup.spawned.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

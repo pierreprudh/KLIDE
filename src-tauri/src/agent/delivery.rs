@@ -1,8 +1,8 @@
 //! Delivery: everything a Run's model reads that the operator did not type.
 //!
 //! Peer mail (at the turn boundary, from `agent_wait`, in a send receipt, or
-//! over the Delegate bridge) and background observer completions all reach the
-//! model through this one renderer. Each item sits inside a fence closed by a
+//! over the Delegate bridge), background observer completions and background
+//! worker reports all reach the model through this one renderer. Each item sits inside a fence closed by a
 //! per-delivery random nonce, so a body cannot end its own fence early and
 //! write a line that looks like Klide's framing — an operator header, a second
 //! message, an approval. The nonce is minted for the delivery and re-minted
@@ -26,6 +26,9 @@ const MAIL_GUIDANCE: &str =
 pub(crate) enum DeliveredItem {
     PeerMail(CoordinationEnvelopeSnapshot),
     ObserverCompletion { shell_id: String, text: String },
+    /// A worker dispatched with `background: true` settled; `run_id` is the
+    /// child Run, `text` its report with the observed Git state appended.
+    WorkerReport { run_id: String, text: String },
 }
 
 impl DeliveredItem {
@@ -38,6 +41,7 @@ impl DeliveredItem {
                 actor_label(&entry.envelope.from)
             ),
             DeliveredItem::ObserverCompletion { shell_id, .. } => format!("observer {shell_id}"),
+            DeliveredItem::WorkerReport { run_id, .. } => format!("worker {run_id} reported"),
         }
     }
 
@@ -45,6 +49,7 @@ impl DeliveredItem {
         match self {
             DeliveredItem::PeerMail(entry) => &entry.envelope.body,
             DeliveredItem::ObserverCompletion { text, .. } => text,
+            DeliveredItem::WorkerReport { text, .. } => text,
         }
     }
 }
@@ -88,8 +93,8 @@ impl Delivery {
     /// The transcript line for the mail in a delivery: which envelopes, from
     /// whom. Bodies are durable in the journal under these ids, so the Run's
     /// record says what the model was shown without copying the text twice.
-    /// Observer items have their own `ObserverCompleted` event; `None` when
-    /// there is no mail. The shape is parsed by `coordinationPeers.ts`.
+    /// Observer items have their own `ObserverCompleted` event and worker
+    /// reports their `SubagentResolved`; `None` when there is no mail. The shape is parsed by `coordinationPeers.ts`.
     pub(crate) fn transcript_reason(&self) -> Option<String> {
         let parts = self
             .items
@@ -101,7 +106,7 @@ impl Delivery {
                     actor_label(&entry.envelope.from),
                     entry.envelope.id
                 )),
-                DeliveredItem::ObserverCompletion { .. } => None,
+                DeliveredItem::ObserverCompletion { .. } | DeliveredItem::WorkerReport { .. } => None,
             })
             .collect::<Vec<_>>();
         if parts.is_empty() {
@@ -254,6 +259,24 @@ mod tests {
         assert!(nonce_absent_from(&items, always).is_err(), "and never used");
         let delivery = Delivery::new(items).unwrap();
         assert!(!body.contains(&delivery.nonce));
+    }
+
+    /// A worker's report is fenced like everything else the operator did not
+    /// type, under a header that names the child Run, and leaves no mail
+    /// line on the transcript — its own `SubagentResolved` records it.
+    #[test]
+    fn a_worker_report_is_fenced_under_its_child_run() {
+        let delivery = Delivery::new(vec![DeliveredItem::WorkerReport {
+            run_id: "sub_run_c1".into(),
+            text: "[Worker report] Claude Code as implementer\nDone.".into(),
+        }])
+        .unwrap();
+        let text = delivery.render();
+        let framing = framing_lines(&text, &delivery.nonce);
+        assert!(framing.iter().any(|line| line.ends_with("[worker sub_run_c1 reported]")), "{framing:?}");
+        assert!(!text.contains(MAIL_GUIDANCE), "a report is not mail to answer");
+        assert!(text.contains("Done."));
+        assert_eq!(delivery.transcript_reason(), None);
     }
 
     /// `render_mail` is what a wait and a send receipt hand back on both

@@ -250,6 +250,7 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
       // spawn call's own row; without this the live "Delegated to" line shows
       // whatever Kit first wrote and only the reload gets it right.
       case "subagent_requested":
+      case "subagent_resolved":
       case "observed_tool_result":
       case "tool_call_started":
       case "tool_call_finished":

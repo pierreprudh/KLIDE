@@ -51,6 +51,7 @@ export function hasOpenTurn(events: AgentEvent[]): boolean {
     const type = events[i].type;
     if (type === "run_result" || type === "run_error" || type === "assistant_message") return false;
     if (type === "user_message" || type === "observer_completed") return true;
+    if (type === "subagent_resolved" && events[i].type === "subagent_resolved" && (events[i] as { background?: boolean }).background) return true;
   }
   return false;
 }
