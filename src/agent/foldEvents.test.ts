@@ -284,6 +284,56 @@ describe("foldAgentEvents", () => {
       });
     });
 
+    it("marks a background dispatch on the call, and its later report opens a response of its own", () => {
+      // The parent did not wait: the call settled with a receipt, the child
+      // kept working, and the report was delivered at a later boundary. The
+      // report row says who, and the report text stays off the rows (it is
+      // on the child's transcript, one click away).
+      const rows = foldedToMsgs(foldAgentEvents([
+        userMessage("have claude code implement slugify"),
+        assistantMessage("dispatching", { toolCalls: [{ toolCallId: "c5", name: "spawn_subagent", input: { subagent: "implementer", task: "Implement slugify", worker: "claude-code", background: true } }] }),
+        toolStarted("c5", "spawn_subagent", { subagent: "implementer", task: "Implement slugify", worker: "claude-code", background: true }),
+        { type: "subagent_requested", runId: RUN, requestId: `sub_${RUN}_c5`, subagent: "implementer", task: "Implement slugify", worker: "claude-code", branch: "klide/worker-slugify-1", background: true, ts: at() },
+        toolFinished("c5", "Dispatched Claude Code as implementer in the background as Run `sub_run-1_c5`"),
+        assistantMessage("Claude Code is on it; I'll tell you when it reports."),
+        { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
+        { type: "subagent_resolved", runId: RUN, requestId: `sub_${RUN}_c5`, result: "[Worker report] Untrusted worker prose", ok: true, background: true, ts: at() },
+        assistantMessage("Claude Code finished slugify on its branch."),
+        { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
+      ]));
+      expect(rows.filter((r) => r.role === "user")).toHaveLength(1);
+      const dispatch = rows.find((r) => r.role === "assistant" && r.toolCalls?.length);
+      if (!dispatch || dispatch.role !== "assistant") throw new Error("expected the dispatching turn");
+      expect(dispatch.toolCalls?.[0].args).toMatchObject({ worker: "claude-code", background: true, branch: "klide/worker-slugify-1" });
+      expect(dispatch.toolCalls?.[0].childRunId).toBe(`sub_${RUN}_c5`);
+      const report = rows.find((r) => r.role === "system" && r.workerReport);
+      if (!report || report.role !== "system") throw new Error("expected the report row");
+      expect(report.workerReport).toEqual({ childRunId: `sub_${RUN}_c5`, ok: true, worker: "claude-code", role: "implementer" });
+      expect(rows.filter((r) => r.role === "assistant").map((r) => r.content)).toEqual([
+        "dispatching",
+        "Claude Code is on it; I'll tell you when it reports.",
+        "Claude Code finished slugify on its branch.",
+      ]);
+      // The report row sits between the receipt turn and the follow-up answer.
+      const order = rows.map((r) => (r.role === "system" && r.workerReport ? "report" : r.role));
+      expect(order.indexOf("report")).toBe(rows.length - 2);
+      expect(JSON.stringify(rows)).not.toContain("Untrusted worker prose");
+    });
+
+    it("ignores a foreground child's resolution — its report is already on the tool result", () => {
+      const rows = foldedToMsgs(foldAgentEvents([
+        userMessage("map it"),
+        assistantMessage("delegating", { toolCalls: [{ toolCallId: "c6", name: "spawn_subagent", input: { subagent: "explorer", task: "Map the repo" } }] }),
+        { type: "subagent_requested", runId: RUN, requestId: `sub_${RUN}_c6`, subagent: "explorer", task: "Map the repo", ts: at() },
+        { type: "subagent_resolved", runId: RUN, requestId: `sub_${RUN}_c6`, result: "The map.", ok: true, ts: at() },
+        toolFinished("c6", "The map."),
+        assistantMessage("Here is the map."),
+        { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
+      ]));
+      expect(rows.some((r) => r.role === "system" && r.workerReport)).toBe(false);
+      expect(rows.filter((r) => r.role === "assistant").map((r) => r.content)).toEqual(["delegating", "Here is the map."]);
+    });
+
     it("leaves a spawn call alone when the child ran on the parent's own model", () => {
       const rows = foldAgentEvents([
         userMessage("map it"),

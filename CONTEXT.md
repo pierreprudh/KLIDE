@@ -112,6 +112,29 @@ _Avoid_: vibe check, soft review, confidence score
 A typed event a run emits (token, tool call, status change). The only way any surface learns what a run is doing.
 _Avoid_: message, update
 
+**Subagent**:
+A focused task a Run hands off through `spawn_subagent` and gets a report back
+from. Without a worker it is read-only and runs on the parent's own model,
+inside the parent's Run (explorer, reviewer). Not a Mission Task.
+_Avoid_: helper, sub-task, thread
+
+**Worker**:
+A subagent handed to another agent — a Delegate CLI or a hosted API provider —
+as a gated Run of its own, in its own worktree on a `klide/worker-…` branch, so
+it may edit. The operator approves every dispatch on a card. Its report carries
+the Git state the Harness observed, never only the worker's word.
+_Avoid_: background agent (that is a *background dispatch*), bot, instance
+
+**Background dispatch**:
+A worker the parent does not wait for: `spawn_subagent` with `background:
+true` returns the child's Run id at once, the child keeps working as a Run of
+its own, and its report is delivered at a later turn boundary of the parent —
+or by a follow-up turn the Harness starts for it — the way an observer
+completion is. Meanwhile the parent inspects and cancels it through the
+coordination verbs (`agent_list`, `agent_cancel`, `agent_read_result`). A
+Mission Task is still the detached form that survives the app closing.
+_Avoid_: async worker, fire-and-forget, daemon
+
 **Run coordination**:
 The Rust-owned control plane through which Runs identify, address, steer, wait
 for, cancel, and return structured work to one another. Its append-only journal

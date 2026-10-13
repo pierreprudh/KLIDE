@@ -127,6 +127,9 @@ export type FoldedRow =
       count: number;
     }
   | { kind: "observer"; shellId: string }
+  /** A background worker's report was delivered: a new response opens here,
+   *  as after an observer. The child is named so the row can say who. */
+  | { kind: "workerReport"; childRunId: string; ok: boolean; worker?: string; role?: string }
   | {
       kind: "steering";
       reason: string;
@@ -554,9 +557,40 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         input.worker = event.worker;
         if (event.branch) input.branch = event.branch;
         if (event.model) input.model = event.model;
+        if (event.background) input.background = true;
         t.input = input;
       });
       return { changed: [idx] };
+    }
+
+    // A background worker's report lands later, in a turn of its own. A
+    // foreground child's resolution is already on its tool result, so only
+    // the background one opens a row — the same shape as an observer's.
+    if (event.type === "subagent_resolved") {
+      if (!event.background) return { changed: [] };
+      let worker: string | undefined;
+      let role: string | undefined;
+      for (let i = rows.length - 1; i >= 0 && !worker; i--) {
+        const row = rows[i];
+        if (row.kind !== "assistant") continue;
+        const call = row.toolCalls.find((t) => t.childRunId === event.requestId);
+        if (!call) continue;
+        const input = (call.input ?? {}) as Record<string, unknown>;
+        if (typeof input.worker === "string") worker = input.worker;
+        if (typeof input.subagent === "string") role = input.subagent;
+      }
+      splitRow();
+      turnOpen = true;
+      turnStartTs = event.ts;
+      turnRendered = "";
+      completed = false;
+      attemptStart = rows.length;
+      changedFiles.clear();
+      producedFiles.clear();
+      commands.clear();
+      completionWarnings.clear();
+      rows.push({ kind: "workerReport", childRunId: event.requestId, ok: event.ok ?? true, worker, role });
+      return { changed: [rows.length - 1] };
     }
 
     // Work a delegate CLI did on its own. Same row shape as a dispatched call
@@ -875,6 +909,13 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
   if (row.kind === "observer") {
     return [{ role: "system", content: "Background observer finished", observer: { shellId: row.shellId } }];
   }
+  if (row.kind === "workerReport") {
+    return [{
+      role: "system",
+      content: row.ok ? "Background worker reported" : "Background worker failed",
+      workerReport: { childRunId: row.childRunId, ok: row.ok, worker: row.worker, role: row.role },
+    }];
+  }
   if (row.kind === "steering") {
     return [
       {
@@ -973,7 +1014,7 @@ export function foldedToRunMessages(rows: FoldedRow[]): RunMessage[] {
     // `RunMessage.role` is "user" | "assistant" by wire contract (the Rust
     // struct and every Delegate adapter agree), so AI-panel transcript
     // annotations have no row to occupy in Mission Control.
-    if (row.kind === "observer" || row.kind === "compaction" || row.kind === "steering" || row.kind === "completion" || row.kind === "interrupted") continue;
+    if (row.kind === "observer" || row.kind === "workerReport" || row.kind === "compaction" || row.kind === "steering" || row.kind === "completion" || row.kind === "interrupted") continue;
     if (!row.text.trim() && row.toolCalls.length === 0) continue;
     out.push({
       role: "assistant",
