@@ -79,6 +79,9 @@ export type Msg =
       completion?: RunCompletion;
       /** A command completed and opened a new reply, without a user message. */
       observer?: { shellId: string };
+      /** A worker dispatched in the background reported, and opened a new
+       *  reply the same way. `worker` / `role` come off the spawn call. */
+      workerReport?: { childRunId: string; ok: boolean; worker?: string; role?: string };
       /** Set when this system message is a context-compaction marker, so the
        *  chat renders it as a compaction card instead of a text blob.
        *  `content` is kept as a plain-text fallback (serialization, search).

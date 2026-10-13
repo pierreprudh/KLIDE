@@ -182,6 +182,11 @@ where
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|m| !m.is_empty());
+    let background = call
+        .input
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let source_ref = match call.input.get("source_ref") {
         None => None,
         Some(value) => match value.as_str().map(str::trim).filter(|s| !s.is_empty()) {
@@ -239,6 +244,16 @@ where
         return Ok(ToolOutcome::Produced(ToolResult {
             ok: false,
             content: "source_ref requires a worker with its own Git worktree. Name a worker to inspect another worker's commit.".into(),
+            metadata: None,
+        }));
+    }
+    // A background dispatch is a worker the parent does not wait for. An
+    // in-model child has no worker to hand off to and no card that could say
+    // "in the background", so it stays a foreground call.
+    if background && worker.is_none() && !needs_worker {
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: "background requires a worker. Name one (or let the user pick on the card), or run the read-only subagent in the foreground.".into(),
             metadata: None,
         }));
     }
@@ -381,12 +396,16 @@ where
                 metadata: None,
             }));
         }
-        let where_it_works = if is_repo {
-            format!("in a new worktree on branch `{planned_branch}` from commit `{}`", source_commit.as_deref().unwrap())
-        } else {
-            "directly in the project folder (not a Git repository, so no worktree can isolate it)"
-                .to_string()
-        };
+        let where_it_works = format!(
+            "{}{}",
+            if background { "in the background " } else { "" },
+            if is_repo {
+                format!("in a new worktree on branch `{planned_branch}` from commit `{}`", source_commit.as_deref().unwrap())
+            } else {
+                "directly in the project folder (not a Git repository, so no worktree can isolate it)"
+                    .to_string()
+            }
+        );
         // An API worker is named with its model — the model is the whole
         // difference between one Anthropic dispatch and another.
         let who = match (worker.is_delegate(), model_arg) {
@@ -424,15 +443,19 @@ where
                 "model": model_arg,
                 "sourceRef": source_ref,
                 "sourceCommit": source_commit,
+                "background": background,
             }),
             summary: format!("Dispatch {who} as {} {where_it_works}", def.id),
             reason: format!(
-                "{} {how_it_edits} {} Dispatch approvals are never remembered.",
+                "{} {how_it_edits} {}{} Dispatch approvals are never remembered.",
                 source_commit.as_ref().map(|commit| format!(
                     "Starts at {commit} (committed files only)."
                 )).unwrap_or_default(),
                 if is_repo { "Review and merge its branch when ready." }
-                else { "Edits are made directly in this folder." }
+                else { "Edits are made directly in this folder." },
+                if background {
+                    " This conversation does not wait for it: the report is delivered here when it settles, and Mission Control shows it meanwhile."
+                } else { "" }
             ),
             options: worker_gate_options(),
         };
@@ -482,6 +505,7 @@ where
         worker: worker.map(|w| w.id().to_string()),
         branch: branch.clone(),
         model: worker.and(model_arg).map(str::to_string),
+        background,
         ts: now_ms(),
     })?;
 
@@ -560,67 +584,78 @@ where
         ));
     }
 
+    let outcome = WorkerOutcome {
+        label: worker_label.clone(),
+        branch: branch.clone(),
+        worktree_path: worktree_path.clone(),
+        source_commit: source_commit.clone(),
+    };
+
+    if background {
+        // The parent carries on. The child is a Run of its own — registered
+        // in the journal under this Run, listed in Mission Control — and its
+        // report waits in `workers` until a turn of this conversation
+        // delivers it: the next user turn, or the follow-up the watcher
+        // starts if the conversation is idle. Cancelling this turn does not
+        // stop it; the operator approved it on its own card, and
+        // `agent_cancel` is the way to take that back.
+        let label = worker_label.clone().unwrap_or_default();
+        workers::register(ctx.id, &request_id, &label, def.id, branch.as_deref(), worktree_path.as_deref());
+        let child = ctx.sup.spawn_subagent(spec);
+        ctx.sup.watch_worker(ctx.id, &request_id, ctx.request);
+        let parent_id = ctx.id.to_string();
+        let child_id = request_id.clone();
+        let role = def.id;
+        tokio::spawn(async move {
+            let (ok, report) = settled_child(child.await, role);
+            let (report, _) = outcome.describe(report).await;
+            workers::settle(&parent_id, &child_id, ok, report);
+        });
+        let where_now = match (branch.as_deref(), worktree_path.as_deref()) {
+            (Some(branch), Some(path)) => format!("on branch `{branch}` in worktree `{path}`"),
+            _ => "directly in the project folder".to_string(),
+        };
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: true,
+            content: format!(
+                "Dispatched {label} as {} in the background as Run `{request_id}`, working {where_now}. \
+                 You are not waiting for it: carry on, or answer the user. Its report is delivered to \
+                 this conversation when it settles. Until then agent_list shows its state, agent_cancel \
+                 with runId `{request_id}` stops it, and agent_read_result reads what it published once settled.",
+                def.id
+            ),
+            metadata: Some(serde_json::json!({
+                "runId": request_id,
+                "outcome": "dispatched",
+                "background": true,
+                "sourceCommit": source_commit,
+                "subagent": def.id,
+                "worker": worker.map(|w| w.id()),
+                "branch": branch,
+                "cwd": worktree_path,
+            })),
+        }));
+    }
+
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Paused);
     let child = ctx.sup.spawn_subagent(spec);
-    let (ok, mut report) = tokio::select! {
+    let (ok, report) = tokio::select! {
         // Cancelling the parent must not leave the child running headless.
         _ = ctx.cancel.cancelled() => {
             ctx.sup.with_handle(&request_id, &mut |handle| handle.cancel.cancel());
             return Ok(ToolOutcome::Cancelled);
         }
-        result = child => match result {
-            Ok(Ok(report)) => (true, report),
-            // A child that failed is a tool result the model can react to, not a
-            // dead parent run.
-            Ok(Err(err)) => (false, format!("Subagent \"{}\" failed: {err}", def.id)),
-            Err(_) => (false, format!("Subagent \"{}\" ended without reporting.", def.id)),
-        },
+        result = child => settled_child(result, def.id),
     };
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
-
-    // Git evidence is independent of the worker's prose and Run outcome.
-    // Auto-commit is best-effort; a clean checkout is not proof of validation.
-    let checkout = if let Some(path) = worktree_path.clone() {
-        Some(crate::blocking::run(move || subagents::worker_checkout_evidence(&path)).await)
-    } else {
-        None
-    };
-    if let Some(label) = worker_label.as_deref() {
-        report.push_str("\n\n— ");
-        match (branch.as_deref(), worktree_path.as_deref()) {
-            (Some(branch), Some(path)) => {
-                report.push_str(&format!(
-                    "{label} worked in the worktree `{path}` allocated on branch `{branch}` from source commit `{}`. ",
-                    source_commit.as_deref().unwrap_or("unknown")
-                ));
-                match checkout.as_ref().expect("worktree evidence was requested") {
-                    Ok(evidence) => {
-                        report.push_str(&evidence.description());
-                        if !evidence.has_uncommitted_changes {
-                            report.push_str(&format!(
-                                " To give another worker this committed result, pass source_ref: \"{}\" to spawn_subagent.",
-                                evidence.head_commit
-                            ));
-                        } else {
-                            report.push_str(" Do not hand off this commit as the full result: uncommitted edits are missing from it.");
-                        }
-                    }
-                    Err(error) => report.push_str(&format!(
-                        "Git state could not be verified: {error}. Inspect the worktree before merging."
-                    )),
-                }
-            }
-            _ => report.push_str(&format!(
-                "{label} worked directly in the project folder (not a Git repository), so there is \
-                 no branch to review; check the files it names."
-            )),
-        }
-    }
+    let (report, checkout) = outcome.describe(report).await;
 
     emit(AgentEvent::SubagentResolved {
         run_id: ctx.id.to_string(),
         request_id: request_id.clone(),
         result: report.clone(),
+        ok: Some(ok),
+        background: false,
         ts: now_ms(),
     })?;
 
@@ -639,6 +674,73 @@ where
             "cwd": worktree_path,
         })),
     }))
+}
+
+/// What a settled child means to its parent: `(ok, report)`. A child that
+/// failed is a tool result the model can react to, not a dead parent run.
+fn settled_child(result: Result<Result<String, String>, tokio::sync::oneshot::error::RecvError>, role: &str) -> (bool, String) {
+    match result {
+        Ok(Ok(report)) => (true, report),
+        Ok(Err(err)) => (false, format!("Subagent \"{role}\" failed: {err}")),
+        Err(_) => (false, format!("Subagent \"{role}\" ended without reporting.")),
+    }
+}
+
+/// Where a worker worked, so its report can say so — the same paragraph
+/// whether the parent waited for the report or it is delivered later.
+struct WorkerOutcome {
+    label: Option<String>,
+    branch: Option<String>,
+    worktree_path: Option<String>,
+    source_commit: Option<String>,
+}
+
+impl WorkerOutcome {
+    /// Append the Git evidence to the child's words. The evidence is
+    /// independent of the worker's prose and Run outcome: auto-commit is
+    /// best-effort, and a clean checkout is not proof of validation.
+    async fn describe(
+        &self,
+        mut report: String,
+    ) -> (String, Option<Result<subagents::WorkerCheckoutEvidence, String>>) {
+        let checkout = if let Some(path) = self.worktree_path.clone() {
+            Some(crate::blocking::run(move || subagents::worker_checkout_evidence(&path)).await)
+        } else {
+            None
+        };
+        if let Some(label) = self.label.as_deref() {
+            report.push_str("\n\n— ");
+            match (self.branch.as_deref(), self.worktree_path.as_deref()) {
+                (Some(branch), Some(path)) => {
+                    report.push_str(&format!(
+                        "{label} worked in the worktree `{path}` allocated on branch `{branch}` from source commit `{}`. ",
+                        self.source_commit.as_deref().unwrap_or("unknown")
+                    ));
+                    match checkout.as_ref().expect("worktree evidence was requested") {
+                        Ok(evidence) => {
+                            report.push_str(&evidence.description());
+                            if !evidence.has_uncommitted_changes {
+                                report.push_str(&format!(
+                                    " To give another worker this committed result, pass source_ref: \"{}\" to spawn_subagent.",
+                                    evidence.head_commit
+                                ));
+                            } else {
+                                report.push_str(" Do not hand off this commit as the full result: uncommitted edits are missing from it.");
+                            }
+                        }
+                        Err(error) => report.push_str(&format!(
+                            "Git state could not be verified: {error}. Inspect the worktree before merging."
+                        )),
+                    }
+                }
+                _ => report.push_str(&format!(
+                    "{label} worked directly in the project folder (not a Git repository), so there is \
+                     no branch to review; check the files it names."
+                )),
+            }
+        }
+        (report, checkout)
+    }
 }
 
 /// Whether the user's own message already names this dispatch: the agent by

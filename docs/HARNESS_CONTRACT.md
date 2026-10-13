@@ -247,6 +247,28 @@ transfer; dirty source edits are not copied or committed on the parent's behalf.
 The worker's resulting branch includes the source history, so review its full
 diff against the intended integration target before merging.
 
+A dispatch is foreground by default: the parent's turn parks until the child
+settles and the report is the Tool result. With `background: true` the same
+card is asked (its summary says "in the background"), the same worktree is
+made, and the Tool result is a receipt — the child's Run id, its branch, and
+what the parent may do meanwhile — returned at once. `background` requires a
+worker; an in-model subagent has no card and stays foreground. The child is an
+ordinary Run registered in the coordination journal under its parent, so the
+parent reaches it through the verbs it already has: `agent_list` shows its
+state, `agent_cancel` stops it (a direct child), and `agent_read_result` reads
+what it published once settled. Its report — the same text the foreground path
+would have returned, Git evidence included — is *delivered*, not returned: it
+rides the turn-boundary delivery beside peer mail and observer completions,
+fenced under `[worker <child run id> reported]`, at the first boundary of the
+parent's next turn, or of a Plan follow-up turn the Harness starts for it when
+the conversation is idle (the same watcher that wakes an observer). A full-auto
+turn never carries it, exactly as for an observer completion. The transcript
+records the delivery as a `SubagentResolved` with `background: true` and `ok`,
+which opens a response of its own. Cancelling the parent's turn does not stop a
+background child: the operator approved it on its own card, and `agent_cancel`
+or Mission Control is the way to take that back. Deleting the conversation
+forgets its pending reports; the children stay visible in Mission Control.
+
 The project allowlist remains backward-compatible with `commands: string[]` and
 also accepts `rules: [{ "pattern": "cargo test *" }]`. Wildcard rules do not
 silently approve commands that introduce new outside-Workspace absolute paths;

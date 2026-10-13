@@ -75,8 +75,15 @@ them.
   resolves before approval, pins the new worktree, and returns `sourceCommit`.
   Testers can receive the implementer's committed changes without merging them
   into the parent. Uncommitted files are excluded and existing branches rejected.
-- [ ] Add bounded background dispatch and inspect/wait/cancel operations under
-  the Rust supervisor, with aggregate capacity and permission routing.
+- [x] Background dispatch: `spawn_subagent(background: true)` returns the
+  child's Run id at once; the report is delivered at the parent's next turn
+  boundary or by a follow-up turn (the observer watcher, asking the worker
+  registry). Inspect / cancel / read-result go through the coordination verbs
+  the child is already registered for; no second door. Shipped 2026-10-13,
+  in-app dogfood owed.
+- [ ] Aggregate capacity for dispatch (`capacityPlanner.ts` is a model, not in
+  the Rust admission path) and routing of a background child's permission
+  prompts onto the parent's card.
 - [ ] Make worker setup an approved, visible stage; workers currently skip the
   configured setup script. Report setup failure before spending model tokens.
 - [ ] Join worker results to validation evidence and a review/apply action;

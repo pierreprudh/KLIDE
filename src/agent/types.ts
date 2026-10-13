@@ -293,8 +293,12 @@ export type AgentEvent =
   /** `worker` and `branch` are set when the call handed the task to a Delegate
    *  CLI: the worker id, and the worktree branch it edits on (absent when the
    *  project is not a Git repository and it works in the folder directly). */
-  | { type: "subagent_requested"; runId: string; requestId: string; subagent: string; task: string; worker?: string; branch?: string; model?: string; ts: number }
-  | { type: "subagent_resolved"; runId: string; requestId: string; result: string; ts: number }
+  | { type: "subagent_requested"; runId: string; requestId: string; subagent: string; task: string; worker?: string; branch?: string; model?: string; background?: boolean; ts: number }
+  /** The child's report. A foreground child's rides its parent's tool step
+   *  (the tool result carries the same text). A `background` child's is
+   *  written when the report is delivered to the parent's model, and opens a
+   *  new response the way `observer_completed` does. */
+  | { type: "subagent_resolved"; runId: string; requestId: string; result: string; ok?: boolean; background?: boolean; ts: number }
   | { type: "advisor_requested"; runId: string; requestId: string; question: string; ts: number }
   | { type: "advisor_resolved"; runId: string; requestId: string; advice: string; ts: number }
   /** The auto-compactor collapsed the older turns into `summary` to free

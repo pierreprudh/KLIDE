@@ -200,14 +200,19 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
   const task = typeof o.task === "string" ? o.task.replace(/\s+/g, " ").trim() : "";
   const long = task.length > 96;
   const short = long ? task.slice(0, 95) + "…" : task;
+  // A background dispatch settles its call at once while the child is still
+  // working, so the call being settled says nothing about the child: keep
+  // following it until its own transcript settles.
+  const background = o.background === true;
+  const live = !settled || background;
   // While the child works, its own Run is the only thing happening — watch it.
   // Once the report lands the parent shows that instead, and the child's rows
   // stay one click away (fetched only if that click comes).
   const [opened, setOpened] = useState(false);
-  const watch = useSubagentWatch(childRunId, !!childRunId && (!settled || opened));
+  const watch = useSubagentWatch(childRunId, !!childRunId && (live || opened));
   // Only once its transcript has been read: an unresolved call whose child
   // actually died with the app would otherwise flash "starting" and vanish.
-  const watching = !!childRunId && !settled && watch.loaded && isWatchable(watch.activity);
+  const watching = !!childRunId && live && watch.loaded && isWatchable(watch.activity);
   const rows = useMemo(
     () => (opened && watch.events.length ? foldedToMsgs(foldAgentEvents(watch.events)) : []),
     [opened, watch.events],
@@ -217,7 +222,7 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
     <details style={{ margin: "5px 0 -3px" }}>
       <summary style={{ display: "flex", alignItems: "center", gap: 7, padding: 0, cursor: long ? "pointer" : "default", listStyle: "none", userSelect: "none", minWidth: 0 }}>
         <span aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0 }}>·</span>
-        <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>Delegated to</span>
+        <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>{background ? "Dispatched to" : "Delegated to"}</span>
         {worker && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, fontSize: 12, color: "var(--fg-strong)" }}>
             <ProviderLogo id={worker} size={13} />
@@ -239,10 +244,10 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
     {/* "View activity" is the settled shape — or the child turned out not to
         be watchable once its transcript was read. Before that read nothing
         shows, so a running child doesn't flash the button before its line. */}
-    {childRunId && !opened && (settled || (watch.loaded && !watching)) && (
+    {childRunId && !opened && !watching && (settled || watch.loaded) && (
       <button type="button" onClick={() => setOpened(true)} style={{ border: 0, background: "none", color: "var(--fg-dim)", fontSize: 12, cursor: "pointer", marginLeft: 24 }}>View activity</button>
     )}
-    {(watching || opened || (!settled && watch.loaded && watch.activity.status === "failed")) && (
+    {(watching || opened || (live && watch.loaded && watch.activity.status === "failed")) && (
       <SubagentWatchLine
         activity={watch.activity}
         open={opened}
@@ -262,6 +267,22 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
       </SubagentWatchBody>
     )}
     </>
+  );
+}
+
+// A background worker's report opened this response. Same quiet machinery
+// line as an observer's, but it says who: the worker's mark and name, the
+// role, and whether it finished or failed. The answer below is Kit's reading
+// of the report; the report itself is one click away on the dispatch row.
+function WorkerReportRow({ report }: { report: NonNullable<Extract<Msg, { role: "system" }>["workerReport"]> }) {
+  const worker = report.worker ? (report.worker as ProviderId) : null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>
+      {worker && <ProviderLogo id={worker} size={13} />}
+      <span style={{ color: worker ? "var(--fg-subtle)" : undefined }}>{worker ? providerName(worker) : "Background worker"}</span>
+      {report.role && <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-dim)" }}>{report.role}</span>}
+      <span>{report.ok ? "reported" : "failed"}</span>
+    </div>
   );
 }
 
@@ -1402,6 +1423,9 @@ type MessageBodyProps = MessageBodyOptions & {
 function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, inRun }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
+  }
+  if (m.role === "system" && m.workerReport) {
+    return <WorkerReportRow report={m.workerReport} />;
   }
   if (m.role === "system" && m.steering) {
     const delivered = parseDeliveryReason(m.steering.reason);
