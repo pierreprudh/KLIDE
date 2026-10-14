@@ -151,7 +151,7 @@ pub fn claude_env(base: String, token: String, model: &str) -> Vec<(String, Stri
         ("ANTHROPIC_DEFAULT_MYTHOS_MODEL".into(), model.into()),
     ]
 }
-pub fn models(claude_only: bool) -> Result<Vec<String>, String> {
+fn catalog() -> Result<Value, String> {
     let proxy = ensure()?;
     let response = client(30)?
         .get(format!("{proxy}/models"))
@@ -164,7 +164,15 @@ pub fn models(claude_only: bool) -> Result<Vec<String>, String> {
             response.status().as_u16()
         ));
     }
-    let value: Value = response.json().map_err(|_| "Invalid Nous model catalog.")?;
+    response.json().map_err(|_| "Invalid Nous model catalog.".into())
+}
+pub fn model_efforts(model: &str) -> Result<Vec<String>, String> {
+    let value = catalog()?;
+    Ok(value["data"].as_array().and_then(|rows| rows.iter().find(|row| row["id"] == model))
+        .and_then(crate::harness_source::gateway_efforts).unwrap_or_default())
+}
+pub fn models(claude_only: bool) -> Result<Vec<String>, String> {
+    let value = catalog()?;
     let mut models: Vec<_> = value["data"]
         .as_array()
         .ok_or("Missing Nous model catalog.")?

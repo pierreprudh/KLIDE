@@ -196,6 +196,8 @@ pub async fn run_subscription_chat(
     } else {
         model
     };
+    let selected_model = crate::harness_source::with_effort(model, effort.as_deref())?;
+    let model = selected_model.as_str();
     let routed_source = crate::harness_source::selection(model)?;
     if routed_source.is_some() {
         let (harness, selected, root) = (adapter.id().to_string(), model.to_string(), cwd.clone());
@@ -207,7 +209,7 @@ pub async fn run_subscription_chat(
     let key = run_id
         .filter(|id| !id.trim().is_empty())
         .map(|id| match &routed_source {
-            Some(source) => format!("{}:{}:{}", session_key(&id, adapter.id()), source.provider, source.model),
+            Some(source) => format!("{}:{}:{}:{:?}", session_key(&id, adapter.id()), source.provider, source.model, source.effort),
             None => session_key(&id, adapter.id()),
         });
     // A conversation carried in from the CLI's own session starts *there*:
@@ -309,13 +311,21 @@ pub async fn run_subscription_chat(
                 Err(err) => return Err(err),
             }
         }
-        None => run_cli_with_stdin(
-            with_command_instructions(adapter.chat_invocation(&cwd, model)?, adapter, cli_command.as_deref(), &messages),
+        None => {
+            let mut command = adapter.chat_invocation(&cwd, model)?;
+            if adapter.id() == "hermes" {
+                if let Some(level) = effort.as_deref().filter(|level| crate::harness_source::EFFORT_LEVELS.contains(level)) {
+                    command.args(["--reasoning", level]);
+                }
+            }
+            run_cli_with_stdin(
+            with_command_instructions(command, adapter, cli_command.as_deref(), &messages),
             prompt,
             label,
             on_chunk,
         )
             .await?
+        }
     };
     // The session has now seen the current instructions — whether folded into
     // a cold start, carried on this resumed turn, or unchanged since last time.

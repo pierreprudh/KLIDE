@@ -301,7 +301,7 @@ async fn fetch_ollama_tags() -> Result<Vec<String>, String> {
 pub(crate) fn parse_anthropic_model(row: &serde_json::Value) -> ModelMeta {
     let capabilities = row.get("capabilities");
     let supported = |name: &str| capabilities.and_then(|c| c.get(name)).and_then(|v| v.get("supported")).and_then(|v| v.as_bool());
-    let reasoning_levels = capabilities.and_then(|c| c.get("effort")).and_then(|e| e.as_object()).map(|e| e.keys().filter(|k| k.as_str() != "supported").cloned().collect());
+    let reasoning_levels = capabilities.and_then(|c| c.get("effort")).and_then(|e| e.as_object()).map(|e| e.iter().filter(|(key, value)| key.as_str() != "supported" && value.get("supported").and_then(|v| v.as_bool()).unwrap_or(false)).map(|(key, _)| key.clone()).collect());
     ModelMeta { context_length: row.get("max_input_tokens").and_then(|v| v.as_u64()).map(|v| v as usize), supports_tools: None, input_per_million: None, output_per_million: None, supports_vision: supported("image_input"), reasoning_levels }
 }
 
@@ -419,7 +419,7 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
                 input_per_million: price("prompt"),
                 output_per_million: price("completion"),
                 supports_vision: capability("vision"),
-                reasoning_levels: None,
+                reasoning_levels: crate::harness_source::gateway_efforts(m),
             },
         );
     }

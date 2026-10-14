@@ -73,7 +73,7 @@ impl Delegate for CliDelegate {
         task: Option<&str>,
         model: Option<&str>,
         resume: Option<&str>,
-        _effort: Option<&str>,
+        effort: Option<&str>,
     ) -> String {
         let task = task.map(str::trim).filter(|s| !s.is_empty());
         let model = self.mission_model_arg(model);
@@ -103,7 +103,11 @@ impl Delegate for CliDelegate {
                 )
             })
             .unwrap_or_default();
-        format!("{prefix}{resume}{model}{prompt}")
+        let effort = if self.id == "hermes" {
+            effort.filter(|level| crate::harness_source::EFFORT_LEVELS.contains(level))
+                .map(|level| format!(" --reasoning {}", shell_quote(level))).unwrap_or_default()
+        } else { String::new() };
+        format!("{prefix}{resume}{model}{effort}{prompt}")
     }
     fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
         let task = shell_quote(self.mission_task(task)?);

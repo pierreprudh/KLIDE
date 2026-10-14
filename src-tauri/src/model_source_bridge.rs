@@ -44,7 +44,7 @@ fn ensure(harness: &str, source: &Selection, cwd: &str) -> Result<(String, Strin
     // Resolve once before launching so a missing key or subscription fails
     // before a CLI session starts. Requests resolve again to honor rotation.
     source_endpoint::resolve(&source.provider, Some(Path::new(cwd)))?;
-    let key = json!([harness, source.provider, source.model, cwd]).to_string();
+    let key = json!([harness, source.provider, source.model, source.effort, cwd]).to_string();
     let mut state = BRIDGES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -59,6 +59,7 @@ fn ensure(harness: &str, source: &Selection, cwd: &str) -> Result<(String, Strin
     let token = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let stop = Arc::new(AtomicBool::new(false));
     let source = source.clone();
+    let routing = source.clone();
     let cwd = cwd.to_owned();
     let model = source.model.clone();
     start(
@@ -67,6 +68,7 @@ fn ensure(harness: &str, source: &Selection, cwd: &str) -> Result<(String, Strin
         stop.clone(),
         Arc::new(move || source_endpoint::resolve(&source.provider, Some(Path::new(&cwd)))),
         model,
+        Some(routing),
     )?;
     state.insert(
         key,
@@ -172,6 +174,44 @@ pub fn codex_config_args(base: &str) -> Vec<String> {
     .collect()
 }
 type Resolver = Arc<dyn Fn() -> Result<Endpoint, String> + Send + Sync>;
+/// The source owns the effort vocabulary. CLI defaults must not override a
+/// conversation's explicit choice (or its choice to use the provider default).
+fn apply_effort(body: &mut Value, provider: &str, path: &str, effort: Option<&str>) -> Result<(), String> {
+    let object = body.as_object_mut().ok_or("Invalid inference request.")?;
+    object.remove("reasoning_effort");
+    if let Some(reasoning) = object.get_mut("reasoning").and_then(Value::as_object_mut) {
+        reasoning.remove("effort");
+        if reasoning.is_empty() { object.remove("reasoning"); }
+    }
+    if let Some(config) = object.get_mut("output_config").and_then(Value::as_object_mut) {
+        config.remove("effort");
+        if config.is_empty() { object.remove("output_config"); }
+    }
+    let Some(level) = effort else { return Ok(()); };
+    if !crate::harness_source::EFFORT_LEVELS.contains(&level) {
+        return Err("Invalid reasoning effort.".into());
+    }
+    match path {
+        "messages" => {
+            if !crate::delegate::CLAUDE_EFFORT_LEVELS.contains(&level) {
+                return Err("This effort is not supported by the Anthropic source.".into());
+            }
+            if !body["output_config"].is_object() { body["output_config"] = json!({}); }
+            body["output_config"]["effort"] = json!(level);
+        }
+        "responses" => {
+            if !body["reasoning"].is_object() { body["reasoning"] = json!({}); }
+            body["reasoning"]["effort"] = json!(level);
+        }
+        "chat/completions" if provider == "openrouter" || provider == harness_source::NOUS => {
+            if !body["reasoning"].is_object() { body["reasoning"] = json!({}); }
+            body["reasoning"]["effort"] = json!(level);
+        }
+        "chat/completions" => { body["reasoning_effort"] = json!(level); }
+        _ => return Err("This source does not expose reasoning effort.".into()),
+    }
+    Ok(())
+}
 fn header(name: &str, value: &str) -> Header {
     Header::from_bytes(name, value).expect("valid HTTP header")
 }
@@ -184,6 +224,7 @@ fn start(
     stop: Arc<AtomicBool>,
     resolve: Resolver,
     model: String,
+    routing: Option<Selection>,
 ) -> Result<(), String> {
     let http = reqwest::blocking::Client::builder()
         .no_proxy()
@@ -209,8 +250,8 @@ fn start(
                     error(request, 401, "Invalid source bridge credential.");
                     continue;
                 }
-                let (http, resolve, model) = (http.clone(), resolve.clone(), model.clone());
-                std::thread::spawn(move || handle(request, &http, resolve, &model));
+                let (http, resolve, model, routing) = (http.clone(), resolve.clone(), model.clone(), routing.clone());
+                std::thread::spawn(move || handle(request, &http, resolve, &model, routing.as_ref()));
             }
         })
         .map_err(|e| e.to_string())?;
@@ -254,6 +295,7 @@ fn handle(
     http: &reqwest::blocking::Client,
     resolve: Resolver,
     model: &str,
+    routing: Option<&Selection>,
 ) {
     let path = request.url().split('?').next().unwrap_or("").to_string();
     if request.method().as_str() != "POST"
@@ -364,6 +406,14 @@ fn handle(
             return;
         }
     }
+    if !count {
+        if let Some(source) = routing {
+            if let Err(message) = apply_effort(&mut outgoing, &source.provider, &upstream_path, source.effort.as_deref()) {
+                error(request, 400, &message);
+                return;
+            }
+        }
+    }
     let mut upstream = http
         .post(format!(
             "{}/{upstream_path}",
@@ -440,6 +490,25 @@ fn handle(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn effort_reaches_each_upstream_wire_and_default_clears_cli_overrides() {
+        use super::*;
+        for (provider, path, field) in [
+            ("anthropic", "messages", "/output_config/effort"),
+            ("openai", "responses", "/reasoning/effort"),
+            ("openai", "chat/completions", "/reasoning_effort"),
+            ("openrouter", "chat/completions", "/reasoning/effort"),
+            (harness_source::NOUS, "chat/completions", "/reasoning/effort"),
+        ] {
+            let mut body = json!({"model":"test", "reasoning_effort":"low", "reasoning":{"effort":"low","summary":"auto"}, "output_config":{"effort":"low","format":{"type":"json_schema"}}});
+            apply_effort(&mut body, provider, path, Some("high")).unwrap();
+            assert_eq!(body.pointer(field).unwrap(), "high", "{provider}: {path}");
+            apply_effort(&mut body, provider, path, None).unwrap();
+            assert!(body.pointer(field).is_none());
+            assert_eq!(body["reasoning"]["summary"], "auto");
+            assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+        }
+    }
     use super::*;
     use std::process::{Command, Stdio};
     use std::time::Instant;
@@ -572,6 +641,11 @@ mod tests {
                 })
             }),
             "coder".into(),
+            Some(Selection {
+                provider: if wire == Wire::Anthropic { "anthropic" } else { "openrouter" }.into(),
+                model: "coder".into(),
+                effort: Some("high".into()),
+            }),
         )
         .unwrap();
         (base, stop, receiver)
@@ -588,6 +662,7 @@ mod tests {
         let source = Selection {
             provider: "openrouter".into(),
             model: "anthropic/claude-test".into(),
+            effort: None,
         };
         for v2 in [false, true] {
             let config = opencode_config(&source, "http://127.0.0.1:1/v1", Wire::Chat, v2);
@@ -661,6 +736,7 @@ mod tests {
             let source = Selection {
                 provider: "fixture".into(),
                 model: "coder".into(),
+                effort: None,
             };
             command
                 .env("XDG_CONFIG_HOME", dir.join("config"))
@@ -708,6 +784,10 @@ mod tests {
             "{harness} missing answer: {stdout}\n{stderr}"
         );
         let requests: Vec<_> = received.try_iter().collect();
+        assert!(!requests.is_empty());
+        for body in &requests {
+            assert_eq!(if wire == Wire::Anthropic { &body["output_config"]["effort"] } else { &body["reasoning"]["effort"] }, "high", "{harness}: effort was lost before the provider request");
+        }
         assert!(
             requests.iter().any(
                 |v| v["messages"]

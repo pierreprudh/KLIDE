@@ -86,7 +86,12 @@ pub fn validated_cwd(workspace_root: Option<String>) -> Result<Option<String>, S
 ///   CLI announcing its own session id, so `detect_session_id` is exactly
 ///   "an adapter matched" — each host resolves the detector from the same
 ///   registry at spawn.
-pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
+pub fn spawn_spec_for(mut req: SpawnRequest) -> Result<SpawnSpec, String> {
+    if !req.one_shot {
+        if let Some(model) = req.model.as_mut() {
+            *model = crate::harness_source::with_effort(model, req.effort.as_deref())?;
+        }
+    }
     if let Some(source) = crate::harness_source::selection(req.model.as_deref().unwrap_or(""))? {
         if !crate::harness_source::support(&req.provider, &source.provider).supported { return Err("This harness has no adapter for the selected intelligence source.".into()); }
     }
@@ -242,6 +247,24 @@ mod tests {
     }
 
     // ── Coordination wiring ───────────────────────────────────────────────
+
+    #[test]
+    fn routed_effort_reaches_the_host_without_changing_the_cli_model() {
+        for provider in ["claude-code", "codex", "opencode"] {
+            let mut req = request(provider);
+            req.model = Some(r#"harness-source:{"provider":"openrouter","model":"openai/gpt-test"}"#.into());
+            req.effort = Some("high".into());
+            let spec = spawn_spec_for(req).unwrap();
+            assert!(!spec.command.contains("harness-source:"));
+            let routing = spec.env.iter().find(|(key, _)| key == crate::harness_source::ENV).unwrap();
+            let source: crate::harness_source::Selection = serde_json::from_str(&routing.1).unwrap();
+            assert_eq!(source.model, "openai/gpt-test");
+            assert_eq!(source.effort.as_deref(), Some("high"));
+        }
+        let mut req = request("hermes");
+        req.effort = Some("high".into());
+        assert!(spawn_spec_for(req).unwrap().command.contains("--reasoning 'high'"));
+    }
 
     #[test]
     fn hermes_model_choice_keeps_agent_and_routes_its_source() {

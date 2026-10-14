@@ -669,10 +669,23 @@ pub async fn capabilities(
         if let Some(source) = crate::harness_source::intelligence(model)? {
             let metadata_provider = if source.provider == crate::harness_source::NOUS { provider } else { &source.provider };
             let mut caps = resolve_with(&OllamaHttp, metadata_provider, &source.model, allow_activation_probe).await?;
-            // Routed delegates cannot forward composer images or the native
-            // wire's reflection controls through their CLI invocation.
+            // Effort belongs to the underlying source, not the delegate's
+            // native model manifest. Unknown local/custom wire controls stay hidden.
             caps.supports_vision = false;
-            caps.reasoning_levels.clear();
+            if source.provider == crate::harness_source::NOUS {
+                let model = source.model.clone();
+                caps.reasoning_levels = crate::blocking::run_infallible(move ||
+                    crate::claude_nous_bridge::model_efforts(&model).unwrap_or_default()).await;
+            } else if source.provider == "anthropic" {
+                caps.reasoning_levels = crate::models::anthropic_model_meta().await
+                    .get(&source.model).and_then(|m| m.reasoning_levels.clone()).unwrap_or_default();
+                caps.reasoning_levels.retain(|level| crate::delegate::CLAUDE_EFFORT_LEVELS.contains(&level.as_str()));
+            } else if source.provider == "ollama" || crate::custom_providers::get(&source.provider).is_some() {
+                caps.reasoning_levels.clear();
+            }
+            if provider == "hermes" && !matches!(source.provider.as_str(), "anthropic" | "openai" | "openrouter" | crate::harness_source::NOUS) {
+                caps.reasoning_levels.clear();
+            }
             caps.price_class = price_class(provider, model);
             return Ok(caps);
         }

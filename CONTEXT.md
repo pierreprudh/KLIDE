@@ -359,8 +359,11 @@ subscription proxy; Klide's Messages and Responses adapters let Claude Code
 and Codex consume compatible inference, while OpenCode uses its native provider
 configuration. Capability checks decide which pairs run, and unsupported pairs
 remain visible with their missing adapter explained. Selecting a source never
-silently switches the Harness. Conversation routing records only source and
-model; the process host resolves credentials.
+silently switches the Harness. Conversation routing records source, model, and
+an optional per-run effort override; the process host resolves credentials.
+Effort choices follow the source's model capabilities. Provider default omits
+the override; routed bridges translate an explicit choice into the provider's
+wire format. Unknown effort controls stay hidden.
 
 **Provider catalog**:
 The Rust registry as the renderer reads it — every row published as plain

@@ -129,15 +129,21 @@ and custom tools, rather than provider-hosted tools. Codex's hosted web search
 and remote compaction are disabled for routed sources; local compaction remains.
 Claude Code with non-Claude models is experimental and is not supported by
 Anthropic. Exact token counting and signed thinking history are unavailable
-through translated paths. Routed reflection controls and composer vision are
-hidden; model context, maker, and billing metadata follow the selected source.
+through translated paths. Composer vision remains hidden; model context, maker,
+billing, and supported effort levels follow the selected source. The effort menu
+beside the model offers **Provider default** (no effort override) and the source's
+supported levels. Routed Claude Code, Codex, and OpenCode requests apply the
+choice at the bridge, after protocol conversion. Hermes receives a per-run
+`--reasoning` override on supported API/Nous routes. Custom/local endpoints whose
+effort vocabulary is unknown do not show a dial.
 
 API keys are resolved in the process host for each inference request. The CLI
 receives only a temporary loopback credential, with source/model stored as
 non-secret conversation routing. Terminal launch variables are restored after
 the login shell profile so that an existing API setup cannot silently override
 Klide's selection. Source changes take effect on a fresh interactive session;
-headless runs isolate their resumable sessions by source and model.
+headless runs isolate their resumable sessions by source, model, and effort, so
+changing effort sends the full conversation to a fresh compatible session.
 
 Validation includes installed Claude Code, OpenCode 2, and Codex tool loops
 against isolated mock endpoints, including Codex through the Anthropic wire.
@@ -147,3 +153,7 @@ References: [OpenCode 2 providers](https://dev.opencode.ai/v2/docs/providers/),
 [OpenCode 1 inline configuration](https://opencode.ai/docs/config/),
 [Codex custom providers](https://learn.chatgpt.com/docs/config-file/config-advanced),
 [Responses tool namespaces](https://developers.openai.com/api/docs/guides/function-calling).
+
+Effort references: [Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+[OpenRouter reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens),
+[Hermes per-run reasoning](https://hermes-agent.nousresearch.com/docs/user-guide/configuration).

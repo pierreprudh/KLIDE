@@ -1079,9 +1079,9 @@ const KEYED_PROVIDERS = PROVIDER_GROUPS.flatMap((group) => group.items).filter(
 function effortOptionsFor(levels: readonly string[]): MenuOption[] {
   return [
     {
-      label: "Auto",
+      label: "Provider default",
       value: undefined,
-      caption: "The model's own default",
+      caption: "Let the provider use its default effort",
       icon: <EffortBars level={0} />,
     },
     ...levels.map((level) => ({
@@ -1734,6 +1734,7 @@ function FocusComposer({
 
   useEffect(() => {
     let cancelled = false;
+    setEffortLevels([]);
     queryModelReflectionLevels(provider, model)
       .then((levels) => {
         if (cancelled) return;
@@ -2204,7 +2205,7 @@ function FocusComposer({
             {effortLevels.length > 0 && (
               <InlineMenu
                 label="Reasoning effort"
-                display={effort ?? "auto"}
+                display={effort ?? "default"}
                 leading={<EffortBars level={reflectionBarLevel(effort, effortLevels)} size={13} />}
                 header={{
                   icon: <EffortBars level={reflectionBarLevel(effort, effortLevels)} />,
