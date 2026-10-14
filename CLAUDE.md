@@ -67,7 +67,7 @@ Klide/
 │   ├── main.tsx                 React boot
 │   ├── monaco-setup.ts          Self-host Monaco from the npm bundle (no CDN fetch)
 │   ├── App.tsx                  Root layout — composes view/panel/editor state; threads props
-│   ├── theme.ts                 7 themes + Monaco theme defs
+│   ├── theme.ts                 8 themes + Monaco theme defs
 │   ├── styles/tokens.css        CSS custom properties + design primitives
 │   ├── icons.tsx                App-wide icon vocabulary, one weight lever (Phosphor Light; brand/file marks stay hand-drawn)
 │   ├── zLayers.ts               Z scale for root-level overlay stacking
@@ -135,6 +135,7 @@ Klide/
 │   │   ├── delegates.ts           delegate_catalog — the adapters' facts over the wire (src/delegates.ts is the pinned mirror)
 │   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
+│   │   ├── hermes.ts             Hermes settings + `harness_source_support` / `harness_source_models` / Nous login wire
 │   ├── hooks/
 │   │   ├── useFlipIndicator.ts  Shared FLIP animation for rail/tab indicators
 │   │   ├── useEditorTabs.ts     Open tabs: open/edit/save/close/rename, external-change watch
@@ -207,6 +208,7 @@ Klide/
 │   │       ├── ChatMessage.tsx    renderMessageBody
 │   │       ├── MessageActions.tsx Hover per-message actions (copy, retry, branch, edit)
 │   │       ├── ModelPicker.tsx    Portaled model selector (filter, favorites, keyboard)
+│   │       ├── HarnessModelPicker.tsxA Delegate's nested model control — category → source → model — writes the routed string; favourites shared with the base picker
 │   │       ├── replayConversation.ts On-disk transcript → resumable panel Conversation
 │   │       ├── transcriptReducer.ts  Live Msg[] view of one run's fold (region splice, stable refs)
 │   │       ├── turnDriver.ts      Streaming state machine for one turn
@@ -244,6 +246,8 @@ Klide/
 │       ├── providers.ts         Picker rows — every builtin derived from providerCatalog.ts; adds only `auto` and the custom/CLI shapes
 │       ├── providerCatalog.ts   The one TS door onto the Rust Provider registry (label, group, default, presets, key env, brand, caps)
 │       ├── providerCatalog.generated.ts  GENERATED mirror of the registry rows — written by a Rust test, never edited
+│       ├── harnessSource.ts      The routed model string on the TS side — parse / build, and what an agent-menu pick means in a Delegate thread (route / refuse / switch)
+│       ├── harnessModelSources.tsThe nested source menu's groups (API / Local / Self-hosted / Subscription) derived from the shared catalog
 │       ├── client.ts            Frontend agent harness client
 │       ├── foldEvents.ts        Sole owner of folding AgentEvent[] into conversation rows
 │       ├── completion.ts        Evidence for one completed attempt, from the shared transcript fold
@@ -274,6 +278,13 @@ Klide/
     │   ├── adapters.rs           Provider streaming trait + shared loop + 3 wire adapters (Ollama/OpenAI/Anthropic)
     │   ├── providers.rs          Provider registry — one row is the whole provider (wire, key, models, label, group, defaults, brand, caps); publishes itself to TS
     │   ├── custom_providers.rs   User-added self-hosted OpenAI-wire endpoints
+    │   ├── harness_source.rs     The routed model string — `harness-source:{provider,model}` — a Delegate's intelligence chosen apart from the Delegate; support matrix + the CLI's model ref
+    │   ├── source_endpoint.rs    A source id → base URL, wire (Chat / Anthropic / Responses), key resolved per request; a Subscription row is never a source
+    │   ├── model_source_bridge.rsThe loopback bridge a routed CLI talks to — one per (harness, source, model, cwd), random token, translated per request; opt-in real-CLI tests + one live OpenRouter run
+    │   ├── anthropic_bridge_wire.rsAnthropic Messages ↔ Chat Completions (text, images, tools, stop reasons, streamed usage); unsupported blocks fail explicitly
+    │   ├── responses_bridge_wire.rsOpenAI Responses ↔ Chat / Messages (namespaced functions, custom patch tools); streaming only, no hosted tools
+    │   ├── claude_nous_bridge.rs Nous Portal via `hermes proxy start --provider nous` + the env a routed Claude Code gets (base URL, loopback token, model vars, thinking off)
+    │   ├── hermes_settings.rs    Hermes's configured default source (~/.klide/hermes.json), the `hermes-source:` selection, source support
     │   ├── custom_cli.rs         User-defined CLI agents via command templates
     │   ├── models.rs             Model discovery — list models; reads the Codex manifest + OpenAI-wire `/models` listings
     │   ├── model_capabilities.rs The one answer to what a model can do — window, tools, vision, reasoning levels, price class, maker; one order, one memo
@@ -446,13 +457,13 @@ behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
 / Refuse; the webview only picks a surface.
 
-### Where the product is (v0.6.5 shipped)
+### Where the product is (v0.6.10 shipped)
 
 v0.5 closed on 2026-07-21, and the v0.6 line has cut five patch releases:
 v0.6.1 — Subscriptions and Reach (2026-08-23), v0.6.2 — Memory, Routing,
 Recovery (2026-09-11), v0.6.3 — Coordination and Documents (2026-09-12),
 v0.6.4 — Workers, Connectors, Visuals (2026-09-20), and v0.6.5 — Shells,
-Watchers, Links (2026-09-23).
+Watchers, Links (2026-09-23). The patch line then ran to 0.6.10 (2026-10-13): `/goal` checks that fail end the run, Memory proposes lessons (0.6.6); llama.cpp at 16k + Llama app + the local benchmark (0.6.7); Sight, shared admission/crash recovery for app and background runs, the Memory inbox (0.6.8); OpenCode 2 (0.6.9); Amp / Cursor / Factory / Hermes as CLI providers and Hermes on any source (0.6.10). On main since: any agent on any intelligence (see Features), effort across routed models, and a conversation that keeps the agent it began on.
 Mission Control is the operations surface for Harness runs and Delegate runs;
 review evidence, worktree fleets, mission chaining, subagents, advisor
 escalation and two-agent races are shipped; `auto` resolves to one concrete
@@ -758,6 +769,7 @@ enforce wrapper coverage for the git family.
 - [x] Links and places — a URL in an answer opens in the browser under its name, a rooted path in Finder, a file of the open project in an editor tab
 - [x] `klide://` links + Ask Kit — Raycast, Shortcuts, a terminal or the Services menu open a pre-filled conversation, a file at a line, or a project (installed app only on macOS)
 - [x] CLI sessions both ways — "follow up this conversation in Klide", said to Claude Code / Codex / OpenCode / omp, resumes it in Klide (`klide://resume` + the `/klide` skill); "open the Claude Code conv about X", said to Kit, lists and opens it (`list_cli_sessions` / `open_cli_session`)
+- [x] Any agent, any intelligence — a Delegate (Claude Code / Codex / OpenCode / Hermes) runs on any API, local, self-hosted or Nous Portal source through a loopback bridge that translates wires per request and never hands the CLI the key; the conversation keeps the agent it began on and wears the model's mark; OMP / Amp / Cursor / Factory and subscription-on-subscription pairs are shown as needing an adapter, never swapped silently
 
 ## Development
 
