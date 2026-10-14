@@ -267,10 +267,12 @@ export function conversationSessionReducer(
     case "run-started":
       return {
         ...session,
-        // Continue from the latest dispatched pair. Earlier messages retain
-        // their own stamps; moving an unsent picker still changes no history.
-        originProvider: action.provider ?? session.provider,
-        originModel: action.model ?? session.model,
+        // The thread's origin is its FIRST dispatched pair, and a later Run
+        // never moves it: a thread that tried another Provider for one turn
+        // is still filed, marked and reopened as the thread it began as. Each
+        // message keeps its own stamp for what actually answered it.
+        originProvider: session.originProvider ?? action.provider ?? session.provider,
+        originModel: session.originProvider ? session.originModel : (action.model ?? session.model),
         run: { active: true, activity: action.activity ?? null },
       };
     case "run-settled":

@@ -86,14 +86,17 @@ export function loadConversations<T>(key?: string): T[] {
         const msgs = ((c as { msgs: unknown[] }).msgs).filter(
           (m) => m && typeof m === "object"
         ) as Msg[];
-        // Older records pinned the thread to its first provider even after
-        // a later turn switched. The actual answer stamps repair that pair
-        // for every reader (rail, resume, and Mission Control) without losing
-        // the earlier messages or inferring from today's picker preferences.
-        const latest = [...msgs].reverse().find((m) => m.role === "assistant" && !m.subagent && m.provider && m.model);
+        // A thread is filed under the pair that produced its FIRST answer,
+        // and nothing later moves it: the rail mark, the group and the
+        // reopen target stay what the thread began as, while each later turn
+        // keeps its own stamp. (0.6.9 refiled a thread under its *latest*
+        // answer, so a Claude Code thread that tried a local model for one
+        // turn moved under Ollama. Those records are healed here from the
+        // same evidence, read from the other end.)
+        const first = msgs.find((m) => m.role === "assistant" && !m.subagent && m.provider && m.model);
         return {
           ...(c as object), msgs,
-          ...(latest?.role === "assistant" ? { provider: latest.provider, model: latest.model } : {}),
+          ...(first?.role === "assistant" ? { provider: first.provider, model: first.model } : {}),
         };
       }) as T[];
   } catch {

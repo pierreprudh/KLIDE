@@ -544,3 +544,31 @@ describe("renameStoredConversation — a given name outlives the derived one", (
     expect(seen).toEqual(["thread"]);
   });
 });
+
+describe("a thread is filed under its first answer's pair", () => {
+  const local = "pierreprudh/lfm2.5-8b-a1b:latest";
+  it("heals a record a later turn refiled under its latest answer", () => {
+    localStorage.setItem("klide-conversations", JSON.stringify([conversation({
+      id: "cc-thread", provider: "ollama", model: local,
+      msgs: [
+        { role: "user", content: "who are you?" },
+        { role: "assistant", content: "I'm Claude Code", provider: "claude-code", model: "default" },
+        { role: "user", content: "and now?" },
+        { role: "assistant", content: "Kit", provider: "ollama", model: local },
+      ],
+    })]));
+    const [loaded] = loadConversations<Conversation>();
+    expect(loaded.provider).toBe("claude-code");
+    expect(loaded.model).toBe("default");
+    expect(loaded.msgs).toHaveLength(4);
+  });
+
+  it("leaves a record alone when no answer carries a stamp", () => {
+    localStorage.setItem("klide-conversations", JSON.stringify([conversation({
+      msgs: [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }],
+    })]));
+    const [loaded] = loadConversations<Conversation>();
+    expect(loaded.provider).toBe("openai");
+    expect(loaded.model).toBe("gpt-5.6");
+  });
+});

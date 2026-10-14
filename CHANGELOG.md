@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Enable provider/model effort controls across supported harness routes, including per-run Hermes reasoning and bridge-level overrides for Claude Code, Codex, and OpenCode.
 - Share the nested intelligence-source selector across coding harnesses, with existing favorites and explicit compatibility indicators.
 - Route Claude Code, OpenCode, and Codex through Klide API keys, local/self-hosted endpoints, and Nous Portal without changing the selected harness or persistent CLI configuration.
 - Translate Messages/Responses protocols, namespaced functions, and custom patch-tool inputs; classify model metadata and billing by intelligence source.

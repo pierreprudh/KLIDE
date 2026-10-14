@@ -520,15 +520,15 @@ describe("snapshotConversationSession", () => {
 });
 
 describe("a thread records the Provider that produced it, not the picker", () => {
-  it("records the latest dispatched pair while each message keeps its own stamp", () => {
+  it("keeps the first dispatched pair while each later message keeps its own stamp", () => {
     const started = conversationSessionReducer(
       session({ provider: "claude-code", model: "default" }),
       { type: "run-started", activity: "thinking", provider: "claude-code", model: "default" },
     );
     expect(started.originProvider).toBe("claude-code");
 
-    // A second Run on another Provider continues the thread; it does not
-    // rewrite what the earlier turns came from.
+    // A second Run on another Provider continues the thread as a turn of
+    // it; the thread is still the one that began on Claude Code.
     const switched = conversationSessionReducer(started, {
       type: "configured",
       provider: "openrouter",
@@ -540,14 +540,14 @@ describe("a thread records the Provider that produced it, not the picker", () =>
       model: "deepseek/deepseek-v4",
     });
     expect(secondRun.provider).toBe("openrouter");
-    expect(secondRun.originProvider).toBe("openrouter");
-    expect(secondRun.originModel).toBe("deepseek/deepseek-v4");
+    expect(secondRun.originProvider).toBe("claude-code");
+    expect(secondRun.originModel).toBe("default");
   });
 
-  it("reopens an older mixed-provider thread with its latest answer's pair", () => {
+  it("reopens a mixed-provider thread with its first answer's pair, healing a record refiled by its latest", () => {
     const saved: Conversation = {
       id: "mixed", title: "Count", cwd: "/workspace", updatedAt: 100,
-      provider: "openrouter", model: "opencode-go/glm-5.3",
+      provider: "opencode", model: "opencode-go/glm-5.3-flash",
       msgs: [userMessage,
         { role: "assistant", content: "error", provider: "openrouter", model: "opencode-go/glm-5.3" },
         { role: "assistant", content: "1\n2", provider: "opencode", model: "opencode-go/glm-5.3-flash" }],
@@ -555,9 +555,9 @@ describe("a thread records the Provider that produced it, not the picker", () =>
     localStorage.setItem("klide-conversations", JSON.stringify([saved]));
     localStorage.setItem("klide.panelSession.ai-main", JSON.stringify({ convoId: saved.id, provider: "openrouter", workspaceRoot: "/workspace" }));
     const restored = restoreConversationSession({ panelId: "ai-main", initialConversationId: saved.id, provider: "openrouter", model: "gpt-4o", workspaceRoot: "/workspace" });
-    expect(restored.provider).toBe("opencode");
-    expect(restored.model).toBe("opencode-go/glm-5.3-flash");
-    expect(snapshotConversationSession(restored)?.provider).toBe("opencode");
+    expect(restored.provider).toBe("openrouter");
+    expect(restored.model).toBe("opencode-go/glm-5.3");
+    expect(snapshotConversationSession(restored)?.provider).toBe("openrouter");
     expect(restored.messages).toEqual(saved.msgs);
   });
 

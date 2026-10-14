@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactElement } from "react";
+import { routedSelection } from "./agent/harnessSource";
 import {
   DeepSeekLogo,
   LiquidAiLogo,
@@ -136,6 +137,9 @@ const NON_MODEL_LABEL = /^(auto|default|none|null|unknown)$/i;
  * runner's mark as a floor ask `conversationMark` for it.
  */
 export function modelIdentity(model: string | null | undefined): ModelIdentity | null {
+  // A routed selection is marked by the model it names, not by its wrapper.
+  const routed = routedSelection(model);
+  if (routed) return modelIdentity(routed.model);
   const normalized = model?.trim();
   if (!normalized || NON_MODEL_LABEL.test(normalized)) return null;
 

@@ -147,6 +147,8 @@ import { AgentActivity } from "./ai/AgentActivity";
 import { reviewEnvelope } from "../agent/coordination";
 import { allFavModels, favModelsFor } from "../favModels";
 import { storedModelForProvider, switchModelForProvider } from "./ai/rememberedModel";
+import { agentPickForConversation, routedModelString } from "../agent/harnessSource";
+import { readHarnessSourceSupport } from "../ipc/hermes";
 import { conversationMark } from "../modelIdentity";
 import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
@@ -1575,6 +1577,24 @@ export function AiPanel({
     setExpandedGroups(new Set(activeGroup ? [activeGroup.label] : []));
   }, [providerOpen]);
   function selectProvider(id: ProviderId) {
+    // A Conversation that began in a Delegate stays in it. Picking an API,
+    // local or self-hosted Provider here changes where that CLI's tokens come
+    // from (a routed model string), not which CLI the thread is; picking
+    // another CLI is refused, since the thread's history lives in this one.
+    const pick = agentPickForConversation(
+      conversationSession.messages.length > 0 ? conversationSession.originProvider : undefined,
+      id,
+    );
+    if (pick.kind === "refuse") {
+      closeProviderMenu();
+      notify(`This conversation runs in ${providerName(pick.harness)}. Start a new conversation to use ${providerName(id)}.`);
+      return;
+    }
+    if (pick.kind === "route") {
+      closeProviderMenu();
+      void routeHarnessTo(pick.harness, id);
+      return;
+    }
     const nextModel = switchModelForProvider(id);
     transitionConversation({ type: "configured", provider: id, model: nextModel });
     onProviderChange?.(id);
@@ -1582,6 +1602,21 @@ export function AiPanel({
     localStorage.setItem("klide.provider", id);
     onModelChange(nextModel);
     closeProviderMenu();
+  }
+  /** Route the thread's CLI onto another Provider's model, keeping the CLI.
+   *  Rust decides whether that pair has an adapter; an unsupported pair is
+   *  told, not silently swapped. Takes effect on the CLI's next session. */
+  async function routeHarnessTo(harness: ProviderId, source: ProviderId) {
+    try {
+      const support = await readHarnessSourceSupport(harness, source);
+      if (!support.supported) {
+        notify(support.reason ?? `${providerName(harness)} has no adapter for ${providerName(source)} yet.`);
+        return;
+      }
+      changeModel(routedModelString(harness, source, switchModelForProvider(source)));
+    } catch (e) {
+      notify(errMessage(e));
+    }
   }
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
 
@@ -1960,7 +1995,7 @@ export function AiPanel({
     ? reflectionLevelWithin(panelReflectionLevel, modelReflectionLevels)
     : undefined;
   const reflectionOptions: ReflectionOption[] = [
-    { value: undefined, label: "Auto", level: 0, desc: "The model's own default" },
+    { value: undefined, label: "Provider default", level: 0, desc: "Let the provider use its default effort" },
     ...modelReflectionLevels.map((level) => ({
       value: level,
       label: level,
