@@ -148,6 +148,28 @@ describe("a single slot, at rail size", () => {
     expect(drawn("claude-opus-5", "claude-code", 15)).toContain("claude-code-logo.png");
   });
 
+  // Routed onto another Provider's model, a one-house delegate no longer
+  // names its maker by naming itself: Codex on DeepSeek wears DeepSeek in
+  // the rail, under the "Codex" heading that already says where it runs.
+  it("lets the source lead a one-house delegate routed elsewhere", () => {
+    const routed = 'harness-source:{"provider":"deepseek","model":"deepseek-v4.1-flash"}';
+    expect(drawn(routed, "codex", 15)).toBe(drawn("deepseek-v4.1-flash", "deepseek", 15));
+    expect(drawn(routed, "codex", 15)).not.toBe(drawn("default", "codex", 15));
+    expect(conversationMark(routed, "codex", 15)?.label).toBe("Codex · DeepSeek");
+  });
+
+  it("wears the source Provider when the routed model names no maker", () => {
+    const routed = 'harness-source:{"provider":"ollama","model":"pierreprudh/klide-8b:latest"}';
+    expect(drawn(routed, "claude-code", 15)).toBe(drawn("", "ollama", 15));
+    expect(drawn(routed, "claude-code", 15)).not.toBe(drawn("default", "claude-code", 15));
+    expect(conversationMark(routed, "claude-code", 15)?.label).toBe("Claude Code · Ollama");
+    // At pair size the CLI leads and the source rides its corner — not the house.
+    const pair = drawn(routed, "claude-code", 24);
+    expect(pair).toContain("claude-code-logo.png");
+    expect(pair).toContain("ollama-logo.png");
+    expect(pair).not.toContain("anthropic");
+  });
+
   // The maker leading is a rule about the single slot, not a demotion of the
   // runner: wherever both fit, both are drawn.
   it("still pairs both at a size that fits them", () => {

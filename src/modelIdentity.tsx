@@ -220,6 +220,10 @@ export function makerMark(
 ): ReactElement | null {
   const fromModel = resolveModelLogo(model, size);
   if (fromModel) return fromModel;
+  // A routed run gets its tokens from elsewhere: the CLI's house says nothing
+  // about it, the source Provider does.
+  const routed = routedSelection(model);
+  if (routed) return <ProviderLogo id={routed.provider as ProviderId} size={size} />;
   const house = provider ? DELEGATE_HOUSE[provider] : undefined;
   return house ? <ProviderLogo id={house} size={size} /> : null;
 }
@@ -244,9 +248,14 @@ function soloMark(
   model: string | null | undefined,
   size: number,
 ): ReactElement {
-  if (isDelegateProvider(provider) && !DELEGATE_HOUSE[provider]) {
+  const routed = routedSelection(model);
+  // A one-house delegate routed onto another Provider's model (Codex on
+  // DeepSeek) is, for this run, a multi-house one: naming itself no longer
+  // names what replied, so the source leads here too.
+  if (isDelegateProvider(provider) && (!DELEGATE_HOUSE[provider] || routed)) {
     const maker = resolveModelLogo(model, size);
     if (maker) return maker;
+    if (routed) return <ProviderLogo id={routed.provider as ProviderId} size={size} />;
   }
   return <ProviderLogo id={provider} size={size} />;
 }
@@ -289,10 +298,7 @@ export function ProviderModelMark({
   size?: number;
 }): ReactElement {
   const makerSize = Math.round(size * MAKER_SHARE);
-  const house = DELEGATE_HOUSE[provider];
-  const maker =
-    resolveModelLogo(model, makerSize) ??
-    (house ? <ProviderLogo id={house} size={makerSize} /> : null);
+  const maker = makerMark(model, provider, makerSize);
   if (size < PAIR_MIN_SIZE || !maker) return soloMark(provider, model, size);
 
   const runnerSize = size - makerSize + Math.round(makerSize * OVERLAP);
@@ -350,8 +356,10 @@ export function conversationMark(
 ): ConversationMark | null {
   if (provider && isDelegateProvider(provider)) {
     const house = DELEGATE_HOUSE[provider];
+    const routed = routedSelection(model);
     const maker =
-      modelIdentity(model)?.name ?? (house ? providerName(house) : undefined);
+      modelIdentity(model)?.name ??
+      (routed ? providerName(routed.provider as ProviderId) : house ? providerName(house) : undefined);
     return {
       node: <ProviderModelMark provider={provider} model={model} size={size} />,
       label: maker ? `${providerName(provider)} · ${maker}` : providerName(provider),
