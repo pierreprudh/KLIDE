@@ -27,3 +27,10 @@ describe("selected harness identity", () => {
     expect(text).not.toContain("hermes-source:");
   });
 });
+
+it("preserves Claude Code identity with a Nous Portal model selection", () => {
+  const text = prompt("claude-code", 'harness-source:{"provider":"hermes-subscription:nous","model":"anthropic/claude-sonnet-test"}');
+  expect(text).toContain("Claude Code");
+  expect(text).toContain("anthropic/claude-sonnet-test");
+  expect(text).not.toContain("harness-source:");
+});

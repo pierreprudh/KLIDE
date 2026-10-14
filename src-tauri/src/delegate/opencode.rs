@@ -11,6 +11,9 @@ use std::collections::{HashMap, HashSet};
 mod v2;
 
 fn model_variant(model: &str, effort: Option<&str>) -> String {
+    let decoded = crate::harness_source::cli_model("opencode", model).unwrap_or_else(|_| model.into());
+    if model.starts_with(crate::harness_source::PREFIX) { return decoded; }
+    let model = decoded.as_str();
     let Some(effort) = effort.map(str::trim).filter(|v| !v.is_empty()) else { return model.to_string(); };
     if !model.contains('/') { return model.to_string(); }
     format!("{}#{effort}", model.split('#').next().unwrap_or(model))
@@ -114,7 +117,7 @@ impl Delegate for OpenCode {
     }
 
     fn model_arg(&self, model: &str) -> String {
-        format!(" -m {}", shell_quote(model))
+        format!(" -m {}", shell_quote(&crate::harness_source::cli_model(self.id(), model).unwrap_or_else(|_| model.into())))
     }
 
     fn spawn_command(&self, task: Option<&str>, model: Option<&str>, resume: Option<&str>, effort: Option<&str>) -> String {
@@ -157,6 +160,7 @@ impl Delegate for OpenCode {
     }
 
     fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        if let Some(model) = model { crate::harness_source::cli_model(self.id(), model)?; }
         let task = self.mission_task(task)?;
         let model_arg = self.mission_model_arg(model);
         let private = if installed_v2() { " --standalone" } else { "" };
@@ -174,6 +178,7 @@ impl Delegate for OpenCode {
     /// (Claude Code's `acceptEdits`, Codex's `workspace-write`): a headless turn
     /// has no terminal to approve anything in.
     fn chat_args(&self, _cwd: &str, model: &str) -> Result<Vec<String>, String> {
+        let model = crate::harness_source::cli_model(self.id(), model)?;
         let mut args: Vec<String> = vec!["run".into()];
         if !model.is_empty() {
             args.extend(["--model".into(), model.into()]);
@@ -200,6 +205,10 @@ impl Delegate for OpenCode {
             args.extend(["-s".to_string(), session.to_string()]);
         }
         Some(args)
+    }
+
+    fn chat_source_env(&self, cwd: &str, model: &str) -> Result<Vec<(String, String)>, String> {
+        crate::model_source_bridge::runtime_env(self.id(), model, cwd, installed_v2())
     }
 
     /// `opencode run -s <id>` continues the named session.

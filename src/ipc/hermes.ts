@@ -14,3 +14,14 @@ export type HermesSourceSupport = { supported: boolean; reason: string | null };
 export function readHermesSourceSupport(provider: string): Promise<HermesSourceSupport> {
   return invoke("hermes_source_support", { provider });
 }
+
+export const NOUS_SOURCE = "hermes-subscription:nous";
+export function readHarnessSourceSupport(harness: string, provider: string): Promise<HermesSourceSupport> {
+  return invoke("harness_source_support", { harness, provider });
+}
+export function listHarnessSourceModels(harness: string, provider: string): Promise<string[]> {
+  return invoke("harness_source_models", { harness, provider });
+}
+export function loginNousPortal(): Promise<void> {
+  return invoke("harness_nous_login");
+}

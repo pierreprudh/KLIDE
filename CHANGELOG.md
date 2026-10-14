@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Share the nested intelligence-source selector across coding harnesses, with existing favorites and explicit compatibility indicators.
+- Route Claude Code, OpenCode, and Codex through Klide API keys, local/self-hosted endpoints, and Nous Portal without changing the selected harness or persistent CLI configuration.
+- Translate Messages/Responses protocols, namespaced functions, and custom patch-tool inputs; classify model metadata and billing by intelligence source.
+- Keep credentials in the process host and restore routed terminal variables after shell profiles. Validate installed CLI tool loops against isolated mock APIs.
+
 ## 0.6.10 (2026-10-13)
 
 - Added Amp, Cursor, Factory, and Hermes CLI providers, with official logos and documentation links. DeepSeek remains a native API provider.

@@ -70,7 +70,7 @@ impl Delegate for Codex {
     }
 
     fn model_arg(&self, model: &str) -> String {
-        format!(" -m {}", shell_quote(model))
+        format!(" -m {}", shell_quote(&crate::harness_source::cli_model("codex", model).unwrap_or_else(|_| model.into())))
     }
 
     /// Codex takes per-invocation config overrides as `-c key=value` with a
@@ -123,6 +123,7 @@ impl Delegate for Codex {
     }
 
     fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        if let Some(model) = model { crate::harness_source::cli_model(self.id(), model)?; }
         let task = self.mission_task(task)?;
         let model_arg = self.mission_model_arg(model);
         Ok(format!(
@@ -134,6 +135,7 @@ impl Delegate for Codex {
     /// Headless: `exec … -` reads the prompt from stdin. `workspace-write`
     /// sandboxes edits to the workspace; the cwd rides in via `-C`.
     fn chat_args(&self, cwd: &str, model: &str) -> Result<Vec<String>, String> {
+        let model = crate::harness_source::cli_model(self.id(), model)?;
         let mut args: Vec<String> = vec!["exec".into()];
         if !model.is_empty() {
             args.extend(["-m".into(), model.into()]);
@@ -160,18 +162,19 @@ impl Delegate for Codex {
     /// working directory (set by `chat_invocation`). The prompt stays on stdin
     /// (`-`) in both shapes.
     fn chat_stream_args(&self, cwd: &str, spec: &ChatSpec) -> Option<Vec<String>> {
+        let model = crate::harness_source::cli_model(self.id(), spec.model).ok()?;
         let mut args: Vec<String> = vec!["exec".into()];
         match spec.resume.map(str::trim).filter(|s| !s.is_empty()) {
             Some(session) => {
                 args.extend(["resume".into(), session.into()]);
-                if !spec.model.is_empty() {
-                    args.extend(["-m".into(), spec.model.into()]);
+                if !model.is_empty() {
+                    args.extend(["-m".into(), model.clone()]);
                 }
                 args.extend(["-c".into(), "sandbox_mode=\"workspace-write\"".into()]);
             }
             None => {
-                if !spec.model.is_empty() {
-                    args.extend(["-m".into(), spec.model.into()]);
+                if !model.is_empty() {
+                    args.extend(["-m".into(), model.clone()]);
                 }
                 args.extend(["-s".into(), "workspace-write".into(), "-C".into(), cwd.into()]);
             }
@@ -182,6 +185,13 @@ impl Delegate for Codex {
         }
         args.extend(["--skip-git-repo-check".into(), "--json".into(), "-".into()]);
         Some(args)
+    }
+
+    fn chat_source_env(&self, cwd: &str, model: &str) -> Result<Vec<(String, String)>, String> {
+        crate::model_source_bridge::runtime_env(self.id(), model, cwd, false)
+    }
+    fn chat_source_args(&self, model: &str, env: &[(String,String)]) -> Result<Vec<String>, String> {
+        crate::model_source_bridge::launch_args(self.id(), model, env)
     }
 
     /// `codex exec resume <thread_id> -` continues the named thread.

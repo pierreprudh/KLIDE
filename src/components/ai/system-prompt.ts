@@ -31,9 +31,10 @@ export function buildSystemPrompt(
   // CLAUDE.md full of "Claude"/"Anthropic" branding, and many models are
   // distilled on Claude data — both make models wrongly announce "I'm
   // Claude". State the real model and forbid the misidentification.
-  if (modelLabel?.startsWith("hermes-source:")) {
+  const sourcePrefix = modelLabel?.startsWith("harness-source:") ? "harness-source:" : "hermes-source:";
+  if (modelLabel?.startsWith(sourcePrefix)) {
     try {
-      const selected = JSON.parse(modelLabel.slice("hermes-source:".length));
+      const selected = JSON.parse(modelLabel.slice(sourcePrefix.length));
       modelLabel = typeof selected.model === "string" ? selected.model : undefined;
     } catch { modelLabel = undefined; }
   }

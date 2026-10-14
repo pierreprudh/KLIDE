@@ -572,7 +572,8 @@ impl SessionHost {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         let mut cmd = CommandBuilder::new(shell);
         cmd.arg("-lc");
-        cmd.arg(&spec.command);
+        let mut command = spec.command.clone();
+        let mut routed_env = Vec::new();
         if let Some(path) = spec.cwd.as_deref() {
             cmd.cwd(path);
         }
@@ -580,13 +581,22 @@ impl SessionHost {
             if spec.provider == "hermes" && key == crate::hermes_settings::KEY_PROVIDER_ENV {
                 let env = crate::hermes_settings::runtime_env(value, spec.cwd.as_deref().map(std::path::Path::new))?;
                 crate::hermes_settings::check_environment_overrides(&env)?;
-                for (name, secret) in env {
-                    cmd.env(name, secret);
+                for (name, secret) in &env {
+                    cmd.env(format!("KLIDE_ROUTE_{name}"), secret);
                 }
+                routed_env.extend(env);
+            } else if matches!(spec.provider.as_str(), "claude-code" | "codex" | "opencode") && key == crate::harness_source::ENV {
+                let model = format!("{}{}", crate::harness_source::PREFIX, value);
+                let v2 = spec.provider == "opencode" && crate::cli_update::version_of(crate::delegate::lookup("opencode").unwrap()).version.is_some_and(|v| v.starts_with("2."));
+                let env = crate::model_source_bridge::runtime_env(&spec.provider, &model, spec.cwd.as_deref().unwrap_or("."), v2)?;
+                for arg in crate::model_source_bridge::launch_args(&spec.provider, &model, &env)? { command.push(' '); command.push_str(&crate::delegate::shell_quote(&arg)); }
+                for (name, value) in &env { cmd.env(format!("KLIDE_ROUTE_{name}"), value); }
+                routed_env.extend(env);
             } else {
                 cmd.env(key, value);
             }
         }
+        cmd.arg(crate::pty_spawn::restore_source_env(&command, &routed_env));
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
 

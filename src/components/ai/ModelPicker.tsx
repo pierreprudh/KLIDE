@@ -1,5 +1,6 @@
 import { ModelPickerHeader, MODEL_FILTER_STYLE, StarIcon } from "./ModelPickerChrome";
-import { HermesModelPicker } from "./HermesModelPicker";
+import { isDelegateId } from "../../delegates";
+import { HarnessModelPicker } from "./HarnessModelPicker";
 // Premium model selector — replaces the cramped native <select> in the AI
 // panel composer. Glass surface, provider logo, filter input, keyboard nav.
 //
@@ -105,7 +106,7 @@ function modelsVerb(id: ProviderId): string {
 }
 
 export function ModelPicker(props: Props) {
-  return props.provider === "hermes" ? <HermesModelPicker {...props} /> : <StandardModelPicker {...props} />;
+  return isDelegateId(props.provider) ? <HarnessModelPicker key={props.provider} {...props} harness={props.provider} /> : <StandardModelPicker {...props} />;
 }
 
 function StandardModelPicker({

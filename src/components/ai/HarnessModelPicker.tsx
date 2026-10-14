@@ -1,3 +1,4 @@
+import { delegateLabel, type DelegateId } from "../../delegates";
 import { isFavModel, toggleFavModel, subscribeFavModels } from "../../favModels";
 import { ModelPickerHeader, MODEL_FILTER_STYLE, MODEL_ROW_STYLE, StarIcon } from "./ModelPickerChrome";
 import { resolveModelLogo } from "../../modelIdentity";
@@ -5,12 +6,12 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePortalMenu } from "../../hooks/usePortalMenu";
 import { useCustomProviders } from "../../hooks/useCustomProviders";
-import { harnessModelSourceGroups } from "../../agent/harnessModelSources";
+import { intelligenceSourceGroups } from "../../agent/harnessModelSources";
 import { useMissingDelegateClis } from "../../hooks/useMissingDelegateClis";
 import { refreshCustomCli, type CustomCli } from "../../customCli";
 import type { ProviderId } from "../../agent/types";
 import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
-import { readHermesSettings, readHermesSourceSupport, type HermesSourceSupport } from "../../ipc/hermes";
+import { readHermesSettings, readHarnessSourceSupport, listHarnessSourceModels, loginNousPortal, NOUS_SOURCE, type HermesSourceSupport } from "../../ipc/hermes";
 import { ProviderLogo } from "./icons";
 import { Z } from "../../zLayers";
 import { errMessage } from "../../errors";
@@ -18,12 +19,13 @@ import { openSettingsSection } from "../../settingsNavigation";
 
 const PREFIX = "hermes-source:";
 const CATEGORIES = ["API", "Local", "Self-hosted", "Subscription"];
-function readChoice(model: string): { provider: string; model: string } | null {
-  if (!model.startsWith(PREFIX)) return null;
-  try { return JSON.parse(model.slice(PREFIX.length)); } catch { return null; }
+function readChoice(model: string, harness: string): { provider: string; model: string } | null {
+  const prefix = harness === "hermes" ? PREFIX : "harness-source:";
+  if (!model.startsWith(prefix)) return null;
+  try { return JSON.parse(model.slice(prefix.length)); } catch { return null; }
 }
-export function HermesModelPicker({ model, onChange, disabled, fluid, direction = "up" }: {
-  model: string; onChange: (model: string) => void; disabled?: boolean; fluid?: boolean; direction?: "up" | "down";
+export function HarnessModelPicker({ harness = "hermes", model, onChange, disabled, fluid, bareHover = false, placeholder, direction = "up" }: {
+  harness?: DelegateId; model: string; onChange: (model: string) => void; disabled?: boolean; fluid?: boolean; bareHover?: boolean; placeholder?: string; direction?: "up" | "down";
 }) {
   const custom = useCustomProviders();
   const [favTick, setFavTick] = useState(0);
@@ -40,13 +42,16 @@ export function HermesModelPicker({ model, onChange, disabled, fluid, direction 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState<{ provider: string; model: string } | null>(null);
-  const choice = readChoice(model);
+  const choice = readChoice(model, harness);
+  const harnessName = delegateLabel(harness);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [catalogTick, setCatalogTick] = useState(0);
   const menu = usePortalMenu({ closeOnOutsideClick: true, computePos: (rect) => {
     const down = direction === "down" && window.innerHeight - rect.bottom > 200 || rect.top < 200;
     return { left: Math.max(8, Math.min(rect.right - 200, window.innerWidth - 208)),
       top: down ? rect.bottom + 8 : undefined, bottom: down ? undefined : window.innerHeight - rect.top + 8 };
   } });
-  useEffect(() => { readHermesSettings().then(setSaved).catch(() => {}); }, []);
+  useEffect(() => { if (harness === "hermes") readHermesSettings().then(setSaved).catch(() => {}); }, [harness]);
   useEffect(() => {
     if (menu.open) menu.menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [menu.open, menu.menuRef]);
@@ -77,21 +82,21 @@ export function HermesModelPicker({ model, onChange, disabled, fluid, direction 
     if (source !== id) { setModels([]); setError(""); setQuery(""); setLoading(true); }
     setSource(id);
   }
-  const sourceGroups = useMemo(() => harnessModelSourceGroups(custom, customClis), [custom, customClis]);
-  const missingClis = useMissingDelegateClis(menu.open, sourceGroups.find((g) => g.label === "Subscription")?.items.map((item) => item.id));
+  const sourceGroups = useMemo(() => intelligenceSourceGroups(custom, customClis), [custom, customClis]);
+  const missingClis = useMissingDelegateClis(menu.open, sourceGroups.find((g) => g.label === "Subscription")?.items.map((item) => item.id === NOUS_SOURCE ? "hermes" : item.id));
   const sources = (sourceGroups.find((g) => g.label === category)?.items ?? []).slice()
-    .sort((a, b) => Number(missingClis.has(a.id)) - Number(missingClis.has(b.id)));
+    .sort((a, b) => Number(missingClis.has(a.id === NOUS_SOURCE ? "hermes" : a.id)) - Number(missingClis.has(b.id === NOUS_SOURCE ? "hermes" : b.id)));
   const sourceIds = sourceGroups.flatMap((g) => g.items.map((item) => item.id)).join("\n");
   useEffect(() => {
     if (!menu.open) return;
     void refreshCustomCli().then(setCustomClis).catch(() => {});
     let cancelled = false;
     void Promise.all(sourceIds.split("\n").filter(Boolean).map(async (id) => {
-      try { return [id, await readHermesSourceSupport(id)] as const; }
-      catch { return [id, { supported: false, reason: "Could not check this source's Hermes adapter." }] as const; }
+      try { return [id, await readHarnessSourceSupport(harness, id)] as const; }
+      catch { return [id, { supported: false, reason: "Could not check this source's harness adapter." }] as const; }
     })).then((rows) => { if (!cancelled) setSupport(Object.fromEntries(rows)); });
     return () => { cancelled = true; };
-  }, [menu.open, sourceIds]);
+  }, [menu.open, sourceIds, harness]);
   useEffect(() => {
     if (!menu.open || !source) return;
     let cancelled = false;
@@ -99,13 +104,13 @@ export function HermesModelPicker({ model, onChange, disabled, fluid, direction 
     void (async () => {
       try {
         if (category === "API" && !(await readProviderKeyStatus(source)).hasKey) throw new Error("Add this provider's API key in Settings → API.");
-        const list = await listProviderModels(source);
+        const list = source === NOUS_SOURCE ? await listHarnessSourceModels(harness, source) : await listProviderModels(source);
         if (!cancelled) setModels(list);
       } catch (e) { if (!cancelled) setError(errMessage(e)); }
       finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [menu.open, source, category]);
+  }, [menu.open, source, category, harness, catalogTick]);
   const filteredModels = useMemo(() => {
     const filtered = models.filter((id) => id.toLowerCase().includes(query.trim().toLowerCase()));
     if (query.trim() || !source) return filtered;
@@ -117,22 +122,24 @@ export function HermesModelPicker({ model, onChange, disabled, fluid, direction 
   const style = MODEL_ROW_STYLE;
   const select = (id: string) => {
     if (!source) return;
-    onChange(PREFIX + JSON.stringify({ provider: source, model: id }));
+    if (harness === "claude-code" && source === NOUS_SOURCE && !id.startsWith("anthropic/claude-") && !id.startsWith("claude-")) return;
+    if (harness !== "hermes" && source === harness) onChange(id);
+    else onChange((harness === "hermes" ? PREFIX : "harness-source:") + JSON.stringify({ provider: source, model: id }));
     menu.close();
     menu.triggerRef.current?.focus();
   };
-  const current = choice ?? (model === "default" ? saved : null);
+  const current = choice ?? (model === "default" ? (harness === "hermes" ? saved : null) : harness !== "hermes" ? { provider: harness, model } : null);
   return <div style={{ flex: fluid ? 1 : "0 1 112px", minWidth: 64, maxWidth: fluid ? undefined : 138 }}>
     <button type="button" ref={menu.triggerRef} disabled={disabled} aria-haspopup="menu" aria-expanded={menu.open}
       title={current ? `${current.provider} · ${current.model}` : model} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: fluid ? "flex-start" : "flex-end", gap: 5,
         width: "100%", height: 24, padding: "0 16px 0 2px", borderRadius: "var(--radius-sm)", border: "1px solid transparent",
-        background: menu.open ? "var(--bg-hover)" : "transparent", boxShadow: "none", color: menu.open ? "var(--fg-strong)" : "var(--fg-subtle)",
+        background: menu.open && !bareHover ? "var(--bg-hover)" : "transparent", boxShadow: "none", color: menu.open ? "var(--fg-strong)" : "var(--fg-subtle)",
         font: "inherit", fontSize: 11, fontWeight: 500, cursor: disabled ? "default" : "pointer",
         transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)" }}
-      onMouseEnter={(e) => { if (!disabled && !menu.open) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; } }}
+      onMouseEnter={(e) => { if (!disabled && !menu.open) { e.currentTarget.style.background = bareHover ? "transparent" : "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; } }}
       onMouseLeave={(e) => { if (!menu.open) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; } }}
       onClick={() => { if (menu.open) menu.close(); else { setCategory(null); setSource(null); menu.openMenu(); } }}>
-      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: fluid ? "left" : "right" }}>{(current?.model ?? model).split("/").pop()}</span>
+      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: fluid ? "left" : "right" }}>{(current?.model ?? (model || placeholder || "default")).split("/").pop()}</span>
       <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ position: "absolute", right: 2, color: "var(--fg-dim)", transform: menu.open ? "rotate(180deg)" : "none" }}><path d="M6 9l6 6 6-6" /></svg>
     </button>
     {menu.open && menu.pos && createPortal(<div ref={menu.menuRef}
@@ -158,7 +165,7 @@ export function HermesModelPicker({ model, onChange, disabled, fluid, direction 
         }
       }}>
       <div role="menu" data-menu-panel data-level="categories" className="popover-enter menu-glass" style={{ overflow: "hidden" }}>
-        <ModelPickerHeader icon={<ProviderLogo id="hermes" size={15} />} title="Hermes" caption="Choose an intelligence source" />
+        <ModelPickerHeader icon={<ProviderLogo id={harness} size={15} />} title={harnessName} caption="Choose an intelligence source" />
         <div style={{ padding: 4 }}>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
@@ -170,13 +177,13 @@ export function HermesModelPicker({ model, onChange, disabled, fluid, direction 
       </div>
       {category && categoryPos && <div role="menu" data-menu-panel data-level="providers" className="popover-enter menu-glass"
         style={{ position: "fixed", ...categoryPos, width: 220, maxHeight: Math.min(300, window.innerHeight - categoryPos.top - 8), display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <ModelPickerHeader icon={<ProviderLogo id="hermes" size={15} />} title={category} caption="Choose a provider" />
+        <ModelPickerHeader title={category} caption="Choose a provider" />
         <div className="menu-scroll" style={{ minHeight: 0, overflow: "auto", padding: 4 }}>
         {sources.map((p) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={source === p.id} data-source={p.id}
-          key={p.id} className="provider-category-row" aria-disabled={!support[p.id]?.supported} title={support[p.id]?.reason ?? (missingClis.has(p.id) ? `${p.name} CLI is not installed` : undefined)}
-          style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || missingClis.has(p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
+          key={p.id} className="provider-category-row" aria-disabled={!support[p.id]?.supported} title={support[p.id]?.reason ?? (missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? `${p.id === NOUS_SOURCE ? "Hermes" : p.name} CLI is not installed` : undefined)}
+          style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showSource(p.id, e.currentTarget)} onClick={(e) => showSource(p.id, e.currentTarget, true)}>
-          <ProviderLogo id={p.id} size={16} />
+          <ProviderLogo id={p.id === NOUS_SOURCE ? "hermes" : p.id as ProviderId} size={16} />
           <span style={{ flex: 1 }}>{p.name}</span>{support[p.id]?.supported ? <span aria-hidden>›</span> : <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
         </button>)}
         {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint ↗</button>}
@@ -186,14 +193,22 @@ export function HermesModelPicker({ model, onChange, disabled, fluid, direction 
         style={{ position: "fixed", ...sourcePos, width: 300, maxHeight: Math.min(360, window.innerHeight - sourcePos.top - 8), display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <ModelPickerHeader icon={<ProviderLogo id={source.startsWith("hermes-subscription:") ? "hermes" : source as ProviderId} size={15} />}
           title={sources.find((p) => p.id === source)?.name ?? "Models"} caption={loading ? "Loading models…" : `${models.length} models available`} />
-        {category === "Subscription" && <div style={{ padding: 9, fontSize: 11, color: "var(--fg-subtle)" }}>Uses this subscription through Hermes’s own authentication. The CLI model catalog supplies the choices.</div>}
+        {category === "Subscription" && <div style={{ padding: 9, fontSize: 11, color: "var(--fg-subtle)" }}>{source === NOUS_SOURCE ? "Uses your Nous Portal allowance. Hermes manages authentication." : harness === "hermes" ? "Uses this subscription through Hermes’s own authentication." : "Uses the harness’s own authentication."}</div>}
         <div style={{ flexShrink: 0, padding: "6px 8px", borderBottom: "1px solid var(--panel-border)" }}>
-        <input aria-label="Search or enter Hermes model" value={query} placeholder="Filter models…" style={MODEL_FILTER_STYLE}
+        <input aria-label="Search or enter model" value={query} placeholder="Filter models…" style={MODEL_FILTER_STYLE}
           onFocus={(e) => { e.currentTarget.style.borderColor = "color-mix(in srgb, var(--accent) 50%, var(--border))"; e.currentTarget.style.background = "var(--bg-elevated)"; }}
           onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg)"; }} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && query.trim() && !loading && !error) select(query.trim()); }} />
         </div>
         <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 4 }}>
         {loading && <div style={{ padding: 9, fontSize: 12 }}>Loading models…</div>}
+        {source === NOUS_SOURCE && <div style={{ padding: "4px 9px", fontSize: 11 }}>
+          <button type="button" style={style} disabled={loginBusy} onClick={async () => {
+            setLoginBusy(true); setError("");
+            try { await loginNousPortal(); setCatalogTick((n) => n + 1); }
+            catch (e) { setError(errMessage(e)); }
+            finally { setLoginBusy(false); }
+          }}>{loginBusy ? "Complete sign-in in your browser…" : "Sign in to Nous Portal ↗"}</button>
+        </div>}
         {error && <div style={{ padding: 9, fontSize: 12, color: "var(--fg-subtle)" }}>{error}<button type="button" style={style} onClick={() => { menu.close(); openSettingsSection(category === "Local" ? "local-ai" : category === "Subscription" ? "subscription" : "api"); }}>Open Settings ↗</button></div>}
         {!error && filteredModels.map((id, index) => <Fragment key={id}>
           {sectioned && index === 0 && <div style={sectionStyle}>Favorites</div>}

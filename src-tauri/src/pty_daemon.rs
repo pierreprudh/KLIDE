@@ -270,6 +270,8 @@ pub fn daemon_main(data_dir: PathBuf) -> ! {
             if idle_for >= IDLE_EXIT_MS {
                 state.log("idle — exiting");
                 let _ = std::fs::remove_file(socket_path(&state.data_dir));
+                crate::model_source_bridge::shutdown();
+                crate::claude_nous_bridge::shutdown();
                 std::process::exit(0);
             }
         });
@@ -392,6 +394,8 @@ fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
                 state.log("shutdown requested");
                 let _ = respond(&mut writer, &Response::Ok);
                 let _ = std::fs::remove_file(socket_path(&state.data_dir));
+                crate::model_source_bridge::shutdown();
+                crate::claude_nous_bridge::shutdown();
                 std::process::exit(0);
             }
             other => {

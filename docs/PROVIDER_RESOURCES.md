@@ -76,3 +76,74 @@ visible with a “Needs bridge” indicator and an explanatory tooltip. They do 
 silently replace Hermes with that CLI. Full harness/provider interchangeability
 still requires these model-endpoint bridges and compatibility adapters for the
 other harnesses. Shared catalog visibility is not proof of runtime compatibility.
+
+## Claude Code with Nous Portal
+
+Choose **Claude Code** as the harness. Open the model selector, then
+**Subscription → Nous Portal → a Claude model**. Use **Sign in to Nous Portal**
+in the model menu to complete Hermes's OAuth flow in your browser. Favorites
+use the same shared star store as the other model selectors.
+
+Klide starts an owned, loopback-only `hermes proxy start --provider nous` process
+and an Anthropic Messages adapter on separate ephemeral ports. Hermes handles
+subscription authentication and refresh. Claude Code receives a temporary local
+bridge credential, never the Nous subscription token. The selection file stores
+only the source and model ID. Stop/exit only shuts down Klide-owned processes.
+
+The adapter translates text, images, function tools/results, stop reasons, and
+streaming usage. It supports Claude models from the live Nous catalog; it does
+not expose other model families to Claude Code. Exact Anthropic token counting,
+signed thinking history, server-side Anthropic tools, and structured output
+formats are not supported. Untranslated content fails explicitly. Start a new
+interactive session when changing intelligence source. Headless conversations
+keep separate CLI sessions for the source/model so native subscription history
+is not resumed through the adapter.
+
+Hermes also lists Nous Portal directly in its intelligence selector and uses
+its own `nous` backend when that source is chosen. Other harness/source pairs
+retain their compatibility indicator until an adapter exists.
+
+References: [Hermes subscription proxy](https://hermes-agent.nousresearch.com/docs/user-guide/features/subscription-proxy),
+[Claude Code gateways](https://code.claude.com/docs/en/llm-gateway).
+
+## API and local sources across harnesses
+
+The same nested model selector is available for every built-in harness. Hermes,
+Claude Code, OpenCode, and Codex support registered API providers, compatible
+local runtimes, self-hosted OpenAI endpoints, and Nous Portal. Select the harness,
+then **model → API / Local / Self-hosted / Subscription → provider → model**.
+API credentials come from Klide's existing Settings → API configuration.
+For CLIs other than Hermes, choosing the harness itself under Subscription
+retains its native authentication and model reference. Hermes uses Configured
+default for its own saved setup. Other subscription/harness combinations remain disabled
+with their missing adapter explained; visibility does not mean compatibility.
+
+OpenCode gets per-process configuration in the installed version's schema, with
+a runtime source prefix that maps back to the exact selected model. Codex uses a
+per-invocation custom Responses provider rather than modifying `config.toml`.
+Klide translates Chat Completions or Anthropic Messages to Responses when needed,
+including namespaced functions and custom patch-tool inputs. Native Anthropic
+and OpenAI Responses requests are forwarded in their original wire format.
+Translated paths currently require streaming and support client-side function
+and custom tools, rather than provider-hosted tools. Codex's hosted web search
+and remote compaction are disabled for routed sources; local compaction remains.
+Claude Code with non-Claude models is experimental and is not supported by
+Anthropic. Exact token counting and signed thinking history are unavailable
+through translated paths. Routed reflection controls and composer vision are
+hidden; model context, maker, and billing metadata follow the selected source.
+
+API keys are resolved in the process host for each inference request. The CLI
+receives only a temporary loopback credential, with source/model stored as
+non-secret conversation routing. Terminal launch variables are restored after
+the login shell profile so that an existing API setup cannot silently override
+Klide's selection. Source changes take effect on a fresh interactive session;
+headless runs isolate their resumable sessions by source and model.
+
+Validation includes installed Claude Code, OpenCode 2, and Codex tool loops
+against isolated mock endpoints, including Codex through the Anthropic wire.
+Live hosted inference still needs the user's configured key or Nous login.
+
+References: [OpenCode 2 providers](https://dev.opencode.ai/v2/docs/providers/),
+[OpenCode 1 inline configuration](https://opencode.ai/docs/config/),
+[Codex custom providers](https://learn.chatgpt.com/docs/config-file/config-advanced),
+[Responses tool namespaces](https://developers.openai.com/api/docs/guides/function-calling).

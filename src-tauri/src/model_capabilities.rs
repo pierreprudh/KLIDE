@@ -665,6 +665,18 @@ pub async fn capabilities(
     model: &str,
     allow_activation_probe: bool,
 ) -> Result<ModelCapabilities, String> {
+    if providers::is_subscription_provider(provider) {
+        if let Some(source) = crate::harness_source::intelligence(model)? {
+            let metadata_provider = if source.provider == crate::harness_source::NOUS { provider } else { &source.provider };
+            let mut caps = resolve_with(&OllamaHttp, metadata_provider, &source.model, allow_activation_probe).await?;
+            // Routed delegates cannot forward composer images or the native
+            // wire's reflection controls through their CLI invocation.
+            caps.supports_vision = false;
+            caps.reasoning_levels.clear();
+            caps.price_class = price_class(provider, model);
+            return Ok(caps);
+        }
+    }
     resolve_with(&OllamaHttp, provider, model, allow_activation_probe).await
 }
 
@@ -866,6 +878,9 @@ fn wire_levels_if(reasons: bool) -> Vec<String> {
 /// no network, so the pricing command can stay synchronous.
 pub fn price_class(provider: &str, model: &str) -> PriceClass {
     if providers::is_subscription_provider(provider) {
+        if let Ok(Some(source)) = crate::harness_source::intelligence(model) {
+            return if source.provider == crate::harness_source::NOUS || source.provider.starts_with("hermes-subscription:") { PriceClass::Subscription } else { price_class(&source.provider, &source.model) };
+        }
         return PriceClass::Subscription;
     }
     if crate::agent::routing::is_auto(provider) {
@@ -899,6 +914,18 @@ pub fn cost_for_run(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn routed_delegate_prices_follow_the_intelligence_source() {
+        let api = r#"harness-source:{"provider":"openai","model":"gpt-4o"}"#;
+        assert_eq!(super::price_class("codex", api), super::price_class("openai", "gpt-4o"));
+        let local = r#"harness-source:{"provider":"ollama","model":"qwen-test"}"#;
+        assert_eq!(super::price_class("opencode", local), super::PriceClass::Local);
+        let subscription = r#"harness-source:{"provider":"hermes-subscription:nous","model":"anthropic/claude-test"}"#;
+        assert_eq!(super::price_class("claude-code", subscription), super::PriceClass::Subscription);
+        let hermes = r#"hermes-source:{"provider":"openai","model":"gpt-4o"}"#;
+        assert_eq!(super::price_class("hermes", hermes), super::price_class("openai", "gpt-4o"));
+    }
+
     #[test]
     fn anthropic_api_window_reaches_gauge_and_router() {
         let row = serde_json::json!({"id":"claude-sonnet-5-5", "max_input_tokens":1_000_000, "capabilities":{"image_input":{"supported":true},"effort":{"supported":true,"high":{"supported":true}}}});

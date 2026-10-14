@@ -330,7 +330,8 @@ pub trait Delegate: Sync {
         let cli = crate::cli::resolve_command(self.binary())?;
         let args = self.chat_args(cwd, model)?;
         let mut command = tokio::process::Command::new(cli);
-        command.current_dir(cwd).args(args);
+        let env = self.chat_source_env(cwd, model)?;
+        command.current_dir(cwd).args(args).args(self.chat_source_args(model, &env)?).envs(env);
         Ok(command)
     }
 
@@ -432,7 +433,7 @@ pub trait Delegate: Sync {
         spec: &ChatSpec,
     ) -> Option<Result<tokio::process::Command, String>> {
         let args = self.chat_stream_args(cwd, spec)?;
-        Some(crate::cli::resolve_command(self.binary()).map(|cli| {
+        Some(crate::cli::resolve_command(self.binary()).and_then(|cli| {
             let mut command = tokio::process::Command::new(cli);
             command.current_dir(cwd).args(args);
             if let Some(mcp) = spec.mcp {
@@ -440,8 +441,20 @@ pub trait Delegate: Sync {
                 command.envs(mcp.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
             }
             command.envs(self.chat_stream_env(spec));
-            command
+            let env = self.chat_source_env(cwd, spec.model)?;
+            command.args(self.chat_source_args(spec.model, &env)?).envs(env);
+            Ok(command)
         }))
+    }
+
+    /// Credentials and endpoint for an explicitly selected intelligence
+    /// source. The async chat host prepares long-running bridges beforehand.
+    fn chat_source_env(&self, _cwd: &str, _model: &str) -> Result<Vec<(String, String)>, String> {
+        Ok(Vec::new())
+    }
+
+    fn chat_source_args(&self, _model: &str, _env: &[(String, String)]) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
     }
 
     /// Environment a *headless* structured turn needs and a PTY launch must

@@ -12,11 +12,11 @@ export const MODEL_ROW_STYLE: CSSProperties = {
   textAlign: "left", cursor: "pointer", font: "inherit", fontSize: 12, fontWeight: 500,
   transition: "background var(--motion-fast) var(--ease-out)",
 };
-export function ModelPickerHeader({ icon, title, caption }: { icon: ReactNode; title: string; caption: string }) {
+export function ModelPickerHeader({ icon, title, caption }: { icon?: ReactNode; title: string; caption: string }) {
   return <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 9, padding: "10px 12px 9px",
     borderBottom: "1px solid var(--panel-border)", background: "color-mix(in srgb, var(--panel-highlight) 30%, transparent)" }}>
-    <span style={{ display: "grid", placeItems: "center", width: 26, height: 26, borderRadius: 8,
-      background: "var(--bg-elevated)", border: "1px solid var(--border)", flexShrink: 0 }}>{icon}</span>
+    {icon != null && <span style={{ display: "grid", placeItems: "center", width: 26, height: 26, borderRadius: 8,
+      background: "var(--bg-elevated)", border: "1px solid var(--border)", flexShrink: 0 }}>{icon}</span>}
     <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.005em" }}>{title}</div>
       <div style={{ fontSize: 10, color: "var(--fg-dim)", marginTop: 1 }}>{caption}</div>

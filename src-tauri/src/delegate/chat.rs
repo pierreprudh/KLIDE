@@ -196,17 +196,26 @@ pub async fn run_subscription_chat(
     } else {
         model
     };
+    let routed_source = crate::harness_source::selection(model)?;
+    if routed_source.is_some() {
+        let (harness, selected, root) = (adapter.id().to_string(), model.to_string(), cwd.clone());
+        tokio::task::spawn_blocking(move || crate::model_source_bridge::prepare(&harness, &selected, &root)).await
+            .map_err(|_| "Could not prepare the intelligence source bridge.")??;
+    }
     // Which conversation this turn belongs to. Without a run id there is
     // nothing to key a session on, so the turn stays a cold start.
     let key = run_id
         .filter(|id| !id.trim().is_empty())
-        .map(|id| session_key(&id, adapter.id()));
+        .map(|id| match &routed_source {
+            Some(source) => format!("{}:{}:{}", session_key(&id, adapter.id()), source.provider, source.model),
+            None => session_key(&id, adapter.id()),
+        });
     // A conversation carried in from the CLI's own session starts *there*:
     // the seed is remembered like a session the CLI reported, but only when
     // nothing is remembered yet — once a turn has run, the CLI's newest id
     // (a fork, a compaction) outranks what the conversation was opened with.
     if let (Some(k), Some(seed)) = (key.as_deref(), delegate_session.as_deref()) {
-        seed_session(k, seed);
+        if routed_source.is_none() { seed_session(k, seed); }
     }
     // Resume only when this adapter actually honours the id — claiming to and
     // then ignoring it would silently drop every earlier turn, since a resuming

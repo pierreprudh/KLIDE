@@ -87,6 +87,9 @@ pub fn validated_cwd(workspace_root: Option<String>) -> Result<Option<String>, S
 ///   "an adapter matched" — each host resolves the detector from the same
 ///   registry at spawn.
 pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
+    if let Some(source) = crate::harness_source::selection(req.model.as_deref().unwrap_or(""))? {
+        if !crate::harness_source::support(&req.provider, &source.provider).supported { return Err("This harness has no adapter for the selected intelligence source.".into()); }
+    }
     let adapter = delegate::lookup(&req.provider);
     let mut command = if let Some(adapter) = adapter {
         let mut command = if req.one_shot {
@@ -151,6 +154,12 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
     };
 
     let mut env = Vec::new();
+    if matches!(req.provider.as_str(), "claude-code" | "codex" | "opencode") {
+        if let Some(source) = crate::harness_source::selection(req.model.as_deref().unwrap_or(""))? {
+            if !crate::harness_source::support(&req.provider, &source.provider).supported { return Err("Unsupported intelligence source.".into()); }
+            env.push((crate::harness_source::ENV.into(), serde_json::to_string(&source).map_err(|e| e.to_string())?));
+        }
+    }
     if req.provider == "hermes" {
         if let Some(settings) = crate::hermes_settings::selection(req.model.as_deref())? {
             for arg in settings.args(req.model.as_deref())? {
@@ -185,6 +194,13 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
     })
 }
 
+/// Restore routed variables after a login shell has loaded its profile. The
+/// shell command contains references, never the resolved credentials.
+pub fn restore_source_env(command: &str, env: &[(String, String)]) -> String {
+    if env.is_empty() { return command.into(); }
+    let bindings = env.iter().map(|(key, _)| format!("{key}=\"${{KLIDE_ROUTE_{key}}}\"")).collect::<Vec<_>>().join(" ");
+    format!("env {bindings} {command}")
+}
 #[cfg(test)]
 mod tests {
     //! The decisions `delegate_pty_spawn` used to make inline, now pinned as
@@ -239,6 +255,32 @@ mod tests {
         assert!(!spec.command.contains("hermes-source:"));
         assert!(spec.env.contains(&(crate::hermes_settings::KEY_PROVIDER_ENV.into(), "ollama".into())));
         assert!(!spec.env.iter().any(|(key, _)| key.ends_with("API_KEY")));
+    }
+    #[test]
+    fn claude_nous_launch_keeps_harness_and_defers_secrets_to_host() {
+        for one_shot in [false, true] {
+            let mut req = request("claude-code");
+            req.one_shot = one_shot;
+            req.task = Some("Read app.rs".into());
+            req.model = Some(r#"harness-source:{"provider":"hermes-subscription:nous","model":"anthropic/claude-sonnet-test"}"#.into());
+            let spec = spawn_spec_for(req).unwrap();
+            assert_eq!(spec.provider, "claude-code");
+            assert!(spec.command.contains("--model 'anthropic/claude-sonnet-test'"));
+            assert!(!spec.command.contains("harness-source:"));
+            assert_eq!(spec.env, [(crate::harness_source::ENV.into(), r#"{"provider":"hermes-subscription:nous","model":"anthropic/claude-sonnet-test"}"#.into())]);
+            assert!(!spec.env.iter().any(|(name, _)| name.starts_with("ANTHROPIC_")));
+        }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn source_environment_survives_profile_overrides_without_logging_credentials() {
+        let values = vec![("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:1234".into()), ("ANTHROPIC_API_KEY".into(), "fixture-only-key".into())];
+        let command = restore_source_env(r#"/bin/sh -c 'printf "%s\n%s\n" "$ANTHROPIC_BASE_URL" "$ANTHROPIC_API_KEY"'"#, &values);
+        assert!(!command.contains("fixture-only-key"));
+        let output = std::process::Command::new("/bin/sh").arg("-c").arg(format!("ANTHROPIC_BASE_URL=wrong; ANTHROPIC_API_KEY=wrong; {command}"))
+            .env("KLIDE_ROUTE_ANTHROPIC_BASE_URL", &values[0].1).env("KLIDE_ROUTE_ANTHROPIC_API_KEY", &values[1].1).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "http://127.0.0.1:1234\nfixture-only-key\n");
     }
     #[test]
     fn claude_gets_a_config_file_flag_and_the_server_env_inside_it() {

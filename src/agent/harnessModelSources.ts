@@ -13,3 +13,11 @@ export function harnessModelSourceGroups(
       .flatMap((group) => group.items).filter((item) => item.available),
   }));
 }
+
+/** OAuth inference services are sources, distinct from their CLI harness. */
+export type IntelligenceSourceGroup = { label: string; items: { id: string; name: string; available: boolean }[] };
+export function intelligenceSourceGroups(custom: { id: string; label: string }[], customClis: { id: string; label: string }[] = []): IntelligenceSourceGroup[] {
+  return harnessModelSourceGroups(custom, customClis).map((group) => group.label === "Subscription"
+    ? { ...group, items: [...group.items, { id: "hermes-subscription:nous", name: "Nous Portal", available: true }] }
+    : group);
+}

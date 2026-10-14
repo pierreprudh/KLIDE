@@ -7,6 +7,13 @@ mod adapters;
 mod blocking;
 mod cli;
 mod hermes_settings;
+mod harness_source;
+mod source_endpoint;
+mod model_source_bridge;
+mod responses_bridge_wire;
+mod chat_anthropic_wire;
+mod claude_nous_bridge;
+mod anthropic_bridge_wire;
 mod deep_link;
 mod cli_update;
 mod agent;
@@ -189,6 +196,23 @@ async fn hermes_clear_settings() -> Result<(), String> {
 #[tauri::command]
 async fn hermes_source_support(provider: String) -> Result<hermes_settings::SourceSupport, String> {
     blocking::run(move || Ok(hermes_settings::source_support(&provider))).await
+}
+
+#[tauri::command]
+async fn harness_source_support(harness: String, provider: String) -> Result<hermes_settings::SourceSupport, String> {
+    blocking::run(move || Ok(harness_source::support(&harness, &provider))).await
+}
+#[tauri::command]
+async fn harness_source_models(harness: String, provider: String) -> Result<Vec<String>, String> {
+    if !harness_source::support(&harness, &provider).supported {
+        return Err("This source is not supported by the selected harness.".into());
+    }
+    if provider != harness_source::NOUS { return Err("Use the provider model catalog for this source.".into()); }
+    blocking::run(move || claude_nous_bridge::models(harness == "claude-code")).await
+}
+#[tauri::command]
+async fn harness_nous_login() -> Result<(), String> {
+    blocking::run(claude_nous_bridge::login).await
 }
 
 // ── Custom (self-hosted) providers ──────────────────────────────────────
@@ -1087,6 +1111,9 @@ pub fn run() {
             ai_subscription_status,
             hermes_read_settings,
             hermes_source_support,
+            harness_source_support,
+            harness_source_models,
+            harness_nous_login,
             hermes_save_settings,
             hermes_clear_settings,
             cli_update::cli_versions,
@@ -1217,6 +1244,8 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit) {
                 agent::shutdown_observers();
                 connector_pool::shutdown();
+                model_source_bridge::shutdown();
+                claude_nous_bridge::shutdown();
             }
         });
 }

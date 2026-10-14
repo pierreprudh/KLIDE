@@ -350,6 +350,18 @@ differs is on the row. TypeScript reads the row through the Provider catalog,
 it never restates a fact about one.
 _Avoid_: vendor, backend, LLM
 
+**Intelligence source**:
+The model service and account a Harness uses, chosen independently of the
+Harness itself. A compatible selection can be an API key, local/self-hosted
+endpoint, or subscription inference service. A subscription CLI is not by
+itself an inference endpoint. Nous Portal exposes one through Hermes's official
+subscription proxy; Klide's Messages and Responses adapters let Claude Code
+and Codex consume compatible inference, while OpenCode uses its native provider
+configuration. Capability checks decide which pairs run, and unsupported pairs
+remain visible with their missing adapter explained. Selecting a source never
+silently switches the Harness. Conversation routing records only source and
+model; the process host resolves credentials.
+
 **Provider catalog**:
 The Rust registry as the renderer reads it — every row published as plain
 data (`ai_list_providers`), mirrored into

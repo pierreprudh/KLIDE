@@ -108,7 +108,7 @@ impl Delegate for ClaudeCode {
     }
 
     fn model_arg(&self, model: &str) -> String {
-        format!(" --model {}", shell_quote(model))
+        format!(" --model {}", shell_quote(&crate::harness_source::model_value(model).unwrap_or_else(|_| model.into())))
     }
 
     fn effort_arg(&self, level: &str) -> Option<String> {
@@ -142,6 +142,7 @@ impl Delegate for ClaudeCode {
     }
 
     fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        if let Some(model) = model { crate::harness_source::selection(model)?; }
         let task = self.mission_task(task)?;
         let model_arg = self.mission_model_arg(model);
         Ok(format!(
@@ -154,9 +155,10 @@ impl Delegate for ClaudeCode {
     /// `acceptEdits` lets Goal-mode runs touch files without an interactive
     /// permission prompt nobody is there to answer.
     fn chat_args(&self, _cwd: &str, model: &str) -> Result<Vec<String>, String> {
+        let model = crate::harness_source::model_value(model)?;
         let mut args: Vec<String> = vec!["-p".into()];
         if !model.is_empty() {
-            args.extend(["--model".into(), model.into()]);
+            args.extend(["--model".into(), model]);
         }
         args.extend([
             "--permission-mode".into(),
@@ -226,6 +228,10 @@ impl Delegate for ClaudeCode {
     /// MCP timeout is a hard wall-clock limit, so the headless turn is told to
     /// wait as long as the bridge holds the prompt open. Headless only: the
     /// TUI answers its own prompts and keeps its own timeout.
+    fn chat_source_env(&self, cwd: &str, model: &str) -> Result<Vec<(String, String)>, String> {
+        crate::model_source_bridge::runtime_env(self.id(), model, cwd, false)
+    }
+
     fn chat_stream_env(&self, spec: &ChatSpec) -> Vec<(String, String)> {
         if spec.mcp.is_none() {
             return Vec::new();
