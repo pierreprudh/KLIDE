@@ -28,6 +28,8 @@ Klide keeps three questions in view:
 - **What needs attention?** Waiting, blocked, failed, and reviewable work rises to the top
 - **What changed?** Each run keeps its files, branch, transcript, validation state, cost, and memory evidence
 
+And one rule most tools don't offer: **any agent, any intelligence.** The agent you like and the intelligence you can pay for are two separate choices. Keep Claude Code, Codex, OpenCode, or Hermes as the agent, and point it at an API key, a local model, a self-hosted endpoint, or a subscription. The conversation stays the agent's; the mark in your history shows what actually answered.
+
 ## Three ways to work
 
 Klide opens on the surface that matches the task, and all three share the same runs, transcripts, and review state.
@@ -59,7 +61,7 @@ Coding agents work well in terminals, but their sessions, diffs, and evidence sp
 | **Run real agents** | Use Claude Code, Codex, OpenCode, OMP, Amp, Cursor, Factory, Hermes, or a custom CLI inside persistent pseudoterminal (PTY) sessions |
 | **Keep work visible** | See working, waiting, blocked, and completed runs across the workspace |
 | **Review before trust** | Approve commands, inspect proposed edits, comment on diffs, and check validation evidence |
-| **Choose where inference runs** | Start with Ollama or MLX, then opt into hosted providers or subscription CLIs |
+| **Any agent, any intelligence** | Keep Claude Code, Codex, OpenCode, or Hermes as the agent and choose what powers it: an API key, Ollama or MLX, a self-hosted endpoint, or a subscription such as Nous Portal |
 | **Resume with context** | Reopen transcripts, hand work to another agent, and save reviewed project memory |
 
 ## How work moves through Klide
@@ -89,6 +91,7 @@ Klide has three capability modes:
 | **Agent coordination** | One Rust-owned journal: runs address each other by a stable id, delegate CLIs join through an embedded MCP server, each Delegate session proves itself with its own secret, and another agent's words arrive in one fenced delivery, reviewed before they reach a conversation |
 | **Connectors** | The MCP servers you already configured in Claude Code, Codex, or OpenCode, local or remote; the assistant calls them in Plan and Goal (reads free, writes gated per tool), and GitHub connects in one click as the pinned account |
 | **Background work** | Background shells a Run can read, stop, or be woken by; GitHub CI observer cards that follow a pinned run and open its PR in Git Review; subscription conversations that keep running after the app quits |
+| **Intelligence sources** | One nested selector for every built-in agent: API, Local, Self-hosted, Subscription. Keys stay in the process host and the CLI only ever sees a temporary loopback credential. Claude Code and Codex reach other wires through Klide's Messages and Responses adapters, OpenCode through its native provider config, Hermes through its own backends. Pairs without an adapter yet (OMP, Amp, Cursor, Factory; one subscription CLI powering another) stay visible and say so |
 | **Workers** | `spawn_subagent` hands a task to a Delegate CLI as an approved, isolated Run of its own, watched live from the parent conversation |
 | **Documents** | Native workbook tools that create and revise a recalculated `.xlsx` through the normal review path, plus a built-in sheet surface for `.xlsx` and `.sheet.json` |
 | **Review and evidence** | Diff comments sent to agents, command approval, per-mode tool toggles enforced at dispatch, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
