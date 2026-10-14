@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A conversation keeps the agent and model it began on: the rail mark and group never move to a later turn's pair (records 0.6.9 refiled are healed on load), and in a Delegate thread the agent menu routes that CLI onto the picked Provider's model instead of swapping the CLI.
 - Enable provider/model effort controls across supported harness routes, including per-run Hermes reasoning and bridge-level overrides for Claude Code, Codex, and OpenCode.
 - Share the nested intelligence-source selector across coding harnesses, with existing favorites and explicit compatibility indicators.
 - Route Claude Code, OpenCode, and Codex through Klide API keys, local/self-hosted endpoints, and Nous Portal without changing the selected harness or persistent CLI configuration.
