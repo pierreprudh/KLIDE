@@ -368,13 +368,26 @@ Not a backend: the Harness router (`src-tauri/src/agent/routing.rs`) replaces
 it with a concrete Provider + model at run start, and `RunStarted` carries the
 resolved pair, so every surface shows what actually ran. The rule is: rule out
 what cannot do the job (no key, server down, no tools when the Mode needs
-them, a window the prompt won't fit); prefer starred models, cheapest first,
-then what is installed locally; lock the pick for the conversation — a
+them, a window the prompt won't fit); prefer starred models nearest the
+task's Rung, cheapest first, then each keyed Provider's ladder model for that
+Rung and what is installed locally; lock the pick for the conversation — a
 continuation reuses its origin, never routes again. `RouteResolved` records
 the reason and what was ruled out. Distinct from the Goal policy's `auto`
 (edits apply without review): that is a review setting, this is a Provider.
 _Avoid_: smart mode, auto-select, model router (the router is the mechanism;
 Auto is the choice the user makes)
+
+**Rung**:
+How much model a task shape asks for: `light`, `standard` or `strong`. Read
+off the request in `rung_for` (`src-tauri/src/agent/routing.rs`) — Chat is
+light, Plan and Goal are standard, a big first turn bumps one up — never off
+a model call. A hosted Provider row names one model per Rung (its
+`AutoLadder`; local and subscription rows have `NO_LADDER`), an installed
+local model sits at light, and the nearest Rung with a passing candidate
+answers when the wanted one has none. The declared rule is the prior any
+learned signal would have to beat.
+_Avoid_: tier (that is the Mission planner's cost tier), level (reasoning
+effort), difficulty score (it is three steps, not a number)
 
 **Model capabilities**:
 The one answer to what a model can do — context window, tools, vision,

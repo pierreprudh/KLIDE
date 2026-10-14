@@ -239,6 +239,8 @@ pub struct ProviderEntry {
     /// Models offered in the picker before they are installed or listed —
     /// MLX's curated list, Klide's own Ollama fine-tune. Empty for most.
     pub presets: &'static [&'static str],
+    /// The models Auto may pick here when nothing is starred, by rung.
+    pub auto: AutoLadder,
     /// A stable key the renderer maps to a logo + colour (`src/components/ai/
     /// icons.tsx` owns the drawing). Usually the id; two providers may share
     /// one brand.
@@ -266,6 +268,31 @@ pub struct ProviderEntry {
 const HOSTED_CAPS: ProviderCaps = ProviderCaps::HOSTED;
 const NO_PRESETS: &[&str] = &[];
 
+/// What a Provider offers Auto when the user starred nothing: one model per
+/// rung, cheapest first (`agent/routing.rs` owns the rungs and the rule that
+/// picks one from the task). A slot is `None` when the Provider has no good
+/// answer at that rung — the router then takes the nearest rung that has one.
+/// `NO_LADDER` on local rows (the bench is whatever is installed) and on
+/// subscription rows (a Delegate is never an Auto candidate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoLadder {
+    pub light: Option<&'static str>,
+    pub standard: Option<&'static str>,
+    pub strong: Option<&'static str>,
+}
+
+impl AutoLadder {
+    pub const fn is_empty(&self) -> bool {
+        self.light.is_none() && self.standard.is_none() && self.strong.is_none()
+    }
+}
+
+pub const NO_LADDER: AutoLadder = AutoLadder {
+    light: None,
+    standard: None,
+    strong: None,
+};
+
 /// The registry. One row per provider. Order is "local first, then hosted
 /// API, then subscription CLIs" — purely cosmetic, `lookup` scans.
 pub const LLAMACPP_DEFAULT_MODEL: &str = crate::llamacpp_models::KLIDE_MODEL;
@@ -283,6 +310,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some(OLLAMA_DEFAULT_MODEL),
         presets: OLLAMA_MODEL_PRESETS,
+        auto: NO_LADDER,
         brand: "ollama",
         credits: CreditsSource::None,
         is_local_server: true,
@@ -323,6 +351,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some(MLX_DEFAULT_MODEL),
         presets: MLX_MODEL_PRESETS,
+        auto: NO_LADDER,
         brand: "mlx",
         credits: CreditsSource::None,
         is_local_server: true,
@@ -354,6 +383,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some(LLAMACPP_DEFAULT_MODEL),
         presets: NO_PRESETS,
+        auto: NO_LADDER,
         brand: "llamacpp",
         credits: CreditsSource::None,
         is_local_server: true,
@@ -390,6 +420,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("local-model"),
         presets: NO_PRESETS,
+        auto: NO_LADDER,
         brand: "lmstudio",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -416,6 +447,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("local-model"),
         presets: NO_PRESETS,
+        auto: NO_LADDER,
         brand: "llamacpp",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -439,6 +471,11 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("claude-sonnet-4-6"),
         presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("claude-haiku-4-5"),
+            standard: Some("claude-sonnet-4-6"),
+            strong: Some("claude-opus-4-6"),
+        },
         brand: "anthropic",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -469,6 +506,11 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("gpt-4.1"),
         presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("gpt-5-mini"),
+            standard: Some("gpt-5"),
+            strong: None,
+        },
         brand: "openai",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -506,6 +548,11 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("mistral-large-latest"),
         presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("mistral-small-latest"),
+            standard: Some("mistral-medium-latest"),
+            strong: Some("mistral-large-latest"),
+        },
         brand: "mistral",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -537,6 +584,11 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("grok-4"),
         presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: None,
+            standard: Some("grok-4"),
+            strong: None,
+        },
         brand: "xai",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -573,6 +625,11 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("deepseek-chat"),
         presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("deepseek-chat"),
+            standard: Some("deepseek-chat"),
+            strong: Some("deepseek-reasoner"),
+        },
         brand: "deepseek",
         credits: CreditsSource::DeepSeek,
         is_local_server: false,
@@ -607,6 +664,11 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: None,
         default_model: Some("openai/gpt-4o"),
         presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("openrouter/auto"),
+            standard: Some("openrouter/auto"),
+            strong: Some("openrouter/auto"),
+        },
         brand: "openrouter",
         credits: CreditsSource::OpenRouter,
         is_local_server: false,
@@ -634,6 +696,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         }),
         default_model: None,
         presets: NO_PRESETS,
+        auto: NO_LADDER,
         brand: "claude-code",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -656,6 +719,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         }),
         default_model: None,
         presets: NO_PRESETS,
+        auto: NO_LADDER,
         brand: "codex",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -678,6 +742,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         }),
         default_model: None,
         presets: NO_PRESETS,
+        auto: NO_LADDER,
         brand: "opencode",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -710,6 +775,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         }),
         default_model: None,
         presets: NO_PRESETS,
+        auto: NO_LADDER,
         brand: "omp",
         credits: CreditsSource::None,
         is_local_server: false,
@@ -725,7 +791,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             delegate: &crate::delegate::AMP, default_models: &["default"],
             cached_models: || None,
         }),
-        default_model: None, presets: NO_PRESETS, brand: "amp",
+        default_model: None, presets: NO_PRESETS, auto: NO_LADDER, brand: "amp",
         credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
         caps: HOSTED_CAPS, context_window: None,
     },
@@ -737,7 +803,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             delegate: &crate::delegate::CURSOR, default_models: &["default"],
             cached_models: || None,
         }),
-        default_model: None, presets: NO_PRESETS, brand: "cursor",
+        default_model: None, presets: NO_PRESETS, auto: NO_LADDER, brand: "cursor",
         credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
         caps: HOSTED_CAPS, context_window: None,
     },
@@ -749,7 +815,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             delegate: &crate::delegate::FACTORY, default_models: &["default"],
             cached_models: || None,
         }),
-        default_model: None, presets: NO_PRESETS, brand: "factory",
+        default_model: None, presets: NO_PRESETS, auto: NO_LADDER, brand: "factory",
         credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
         caps: HOSTED_CAPS, context_window: None,
     },
@@ -761,7 +827,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             delegate: &crate::delegate::HERMES, default_models: &["default"],
             cached_models: crate::hermes_settings::cached_models,
         }),
-        default_model: None, presets: NO_PRESETS, brand: "hermes",
+        default_model: None, presets: NO_PRESETS, auto: NO_LADDER, brand: "hermes",
         credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
         caps: HOSTED_CAPS, context_window: None,
     },

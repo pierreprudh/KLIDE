@@ -9,8 +9,10 @@
 //!    tool support when the Mode needs tools, a context window the prompt
 //!    won't fit in. These are gates, not scores: nothing a model does well
 //!    puts it back in the pool.
-//! 2. **Prefer** what the user starred, cheapest first. Nothing starred? The
-//!    models installed locally, the Provider's default first.
+//! 2. **Prefer** what the user starred, nearest the task's rung, cheapest
+//!    first. Nothing starred? Each keyed Provider's ladder model for that
+//!    rung (`providers::AutoLadder`) and what Ollama has installed, so a
+//!    fresh install with one key gets a pick on day one.
 //! 3. **Lock** the pick for the life of the conversation: a continuation of an
 //!    `auto` thread reuses the pair its transcript already recorded
 //!    (`read_run_origin`) rather than routing again — context accounting,
@@ -24,7 +26,7 @@
 //! that feeds them provider facts.
 
 use crate::agent::types::{AgentMode, PreferredModel, StartRunRequest};
-use crate::providers::{self, KeySource};
+use crate::providers::{self, AutoLadder, KeySource};
 
 /// The Provider id the picker sends when the user chooses "Auto". Mirrored in
 /// `src/agent/providers.ts` (`AUTO_PROVIDER`); the drift test below keeps them
@@ -35,6 +37,81 @@ pub const AUTO_MODEL: &str = "auto";
 
 pub fn is_auto(provider: &str) -> bool {
     provider.eq_ignore_ascii_case(AUTO_PROVIDER)
+}
+
+/// How much model a task shape asks for. Three steps, not a score: a Provider
+/// row names one model per rung (`providers::AutoLadder`), the task picks a
+/// rung, and the nearest rung that has a passing Candidate wins — so a bench
+/// with nothing at the wanted rung still gets an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Rung {
+    Light,
+    Standard,
+    Strong,
+}
+
+impl Rung {
+    pub const ALL: [Rung; 3] = [Rung::Light, Rung::Standard, Rung::Strong];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Rung::Light => "light",
+            Rung::Standard => "standard",
+            Rung::Strong => "strong",
+        }
+    }
+
+    /// How many steps apart two rungs are. The ranking key: a Candidate at
+    /// the wanted rung is 0, one rung off is 1, the far end is 2.
+    pub fn distance(self, other: Rung) -> u8 {
+        (self as i8 - other as i8).unsigned_abs()
+    }
+
+    fn up(self) -> Rung {
+        match self {
+            Rung::Light => Rung::Standard,
+            Rung::Standard | Rung::Strong => Rung::Strong,
+        }
+    }
+
+    /// The ladder's model at this rung.
+    pub fn slot(self, ladder: &AutoLadder) -> Option<&'static str> {
+        match self {
+            Rung::Light => ladder.light,
+            Rung::Standard => ladder.standard,
+            Rung::Strong => ladder.strong,
+        }
+    }
+}
+
+/// A first turn at least this long is a big brief.
+pub const BIG_PROMPT_TOKENS: usize = 16_000;
+/// A first turn carrying at least this many attached files is a big brief.
+pub const BIG_ATTACHMENTS: usize = 4;
+
+/// The rung a task shape asks for. Chat is light; Plan and Goal are standard;
+/// a big first turn — a long brief or several attached files — bumps one rung
+/// up. Deliberately a few lines: the shape is read off the request, never off
+/// a model call, so nothing new runs in front of the user's message.
+pub fn rung_for(mode: &AgentMode, prompt_tokens: usize, attachments: usize) -> Rung {
+    let base = match mode {
+        AgentMode::Chat => Rung::Light,
+        AgentMode::Plan | AgentMode::Goal => Rung::Standard,
+    };
+    if prompt_tokens >= BIG_PROMPT_TOKENS || attachments >= BIG_ATTACHMENTS {
+        base.up()
+    } else {
+        base
+    }
+}
+
+/// Every rung a ladder names `model` at — OpenRouter's router sits on all
+/// three. Empty for a model on no ladder.
+pub fn rungs_on(ladder: &AutoLadder, model: &str) -> Vec<Rung> {
+    Rung::ALL
+        .into_iter()
+        .filter(|rung| rung.slot(ladder) == Some(model))
+        .collect()
 }
 
 /// One model the router may pick. Built by `gather_candidates`; ranked by
@@ -51,6 +128,22 @@ pub struct Candidate {
     /// USD per million input tokens. `None` = the price isn't known, which
     /// ranks after every known price — an unpriced pick is never "cheapest".
     pub input_per_million: Option<f64>,
+    /// The rungs this model fills: its Provider's ladder slots, or `Light`
+    /// for an installed local model. Empty means unplaced — a starred model
+    /// on no ladder — which ranks as if it were at the wanted rung.
+    pub rungs: Vec<Rung>,
+}
+
+impl Candidate {
+    /// Steps between this Candidate and the rung the task wants.
+    fn distance(&self, wanted: Rung) -> u8 {
+        self.rungs.iter().map(|r| r.distance(wanted)).min().unwrap_or(0)
+    }
+
+    /// The rung this Candidate answers the task from, when it has one.
+    fn nearest(&self, wanted: Rung) -> Option<Rung> {
+        self.rungs.iter().copied().min_by_key(|r| r.distance(wanted))
+    }
 }
 
 /// What the run needs from whatever model it lands on.
@@ -61,6 +154,8 @@ pub struct Needs {
     /// Tokens the first turn already carries: the message plus attachments
     /// plus the composer's context snapshot estimate.
     pub prompt_tokens: usize,
+    /// The rung the task shape asks for (`rung_for`).
+    pub rung: Rung,
 }
 
 impl Needs {
@@ -128,18 +223,19 @@ pub struct Resolved {
 }
 
 /// Order the pool so the first Candidate that passes `judge` is the one to
-/// run. Starred pairs first (cheapest first, unknown price last), then local
-/// models (the Provider's default first, then by name), then everything else
-/// by price. Ties break on provider then model so the order is stable across
-/// runs — a router that picks differently on identical input is a bug.
-pub fn rank(mut candidates: Vec<Candidate>, local_default: &str) -> Vec<Candidate> {
+/// run. Starred pairs first, then the rest; inside each, the Candidates
+/// nearest the wanted rung lead, then Ollama's default model, then cheapest
+/// first (unknown price last). A local model is free, so at its rung it
+/// leads every hosted one; at the wrong rung a keyed hosted model that fits
+/// the job leads it. Ties break on provider then model so the order is
+/// stable across runs — a router that picks differently on identical input
+/// is a bug.
+pub fn rank(mut candidates: Vec<Candidate>, local_default: &str, wanted: Rung) -> Vec<Candidate> {
     let tier = |c: &Candidate| -> u8 {
         if c.starred {
             0
-        } else if c.local {
-            1
         } else {
-            2
+            1
         }
     };
     let price = |c: &Candidate| -> f64 { c.input_per_million.unwrap_or(f64::INFINITY) };
@@ -147,7 +243,8 @@ pub fn rank(mut candidates: Vec<Candidate>, local_default: &str) -> Vec<Candidat
     candidates.sort_by(|a, b| {
         tier(a)
             .cmp(&tier(b))
-            // Within the local tier the Provider's default model leads.
+            .then_with(|| a.distance(wanted).cmp(&b.distance(wanted)))
+            // Among local models at one rung the Provider's default leads.
             .then_with(|| is_default(b).cmp(&is_default(a)))
             .then_with(|| price(a).total_cmp(&price(b)))
             .then_with(|| a.provider.cmp(&b.provider))
@@ -186,6 +283,13 @@ pub fn judge(candidate: &Candidate, facts: Result<Facts, Rejection>, needs: Need
     } else {
         "cheapest".to_string()
     });
+    if let Some(rung) = candidate.nearest(needs.rung) {
+        parts.push(if rung == needs.rung {
+            format!("{} rung", rung.word())
+        } else {
+            format!("{} rung for a {} job", rung.word(), needs.rung.word())
+        });
+    }
     parts.push(match candidate.input_per_million {
         Some(p) if p == 0.0 => "free".to_string(),
         Some(p) if p >= 1.0 => format!("${p:.0}/M"),
@@ -267,35 +371,40 @@ pub fn prompt_tokens(request: &StartRunRequest) -> usize {
 }
 
 pub fn needs_for(request: &StartRunRequest) -> Needs {
+    let prompt_tokens = prompt_tokens(request);
     Needs {
         tools: !matches!(request.mode, AgentMode::Chat),
-        prompt_tokens: prompt_tokens(request),
+        prompt_tokens,
+        rung: rung_for(&request.mode, prompt_tokens, request.attachments.len()),
     }
 }
 
 /// Build the pool: the user's starred pairs (from the request — stars live in
-/// the renderer's storage) plus whatever Ollama has installed. Delegate CLIs
-/// are never candidates: they run on a subscription with their own trust and
-/// cost model, and a routed run must stay inside the Harness.
+/// the renderer's storage), each keyed hosted Provider's ladder, and whatever
+/// Ollama has installed. Delegate CLIs are never candidates: they run on a
+/// subscription with their own trust and cost model, and a routed run must
+/// stay inside the Harness.
 pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
     let mut pool: Vec<Candidate> = Vec::new();
     for pref in preferred {
         if providers::is_subscription_provider(&pref.provider) || is_auto(&pref.provider) {
             continue;
         }
-        let known = providers::lookup(&pref.provider).is_some()
-            || crate::custom_providers::get(&pref.provider).is_some();
+        let entry = providers::lookup(&pref.provider);
+        let known = entry.is_some() || crate::custom_providers::get(&pref.provider).is_some();
         if !known {
             continue;
         }
-        let local = matches!(
-            providers::lookup(&pref.provider).map(|e| e.key),
-            Some(KeySource::Local)
-        );
+        let local = matches!(entry.map(|e| e.key), Some(KeySource::Local));
         let input_per_million = if local {
             Some(0.0)
         } else {
             crate::models::model_input_price(&pref.provider, &pref.model).await
+        };
+        let rungs = if local {
+            vec![Rung::Light]
+        } else {
+            entry.map(|e| rungs_on(&e.auto, &pref.model)).unwrap_or_default()
         };
         pool.push(Candidate {
             provider: pref.provider.clone(),
@@ -303,7 +412,43 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
             starred: true,
             local,
             input_per_million,
+            rungs,
         });
+    }
+    // Each keyed hosted Provider's ladder — the day-one pool for a user who
+    // starred nothing. The key check is done here rather than left to the
+    // gate so a Provider the user never set up is simply not on the bench,
+    // instead of filling `skipped` with "no API key" above the pick. It
+    // reads files (and the Keychain, when a key was pasted), so it runs
+    // behind the blocking door.
+    let keyed: Vec<&'static str> = crate::blocking::run_infallible(|| {
+        providers::PROVIDERS
+            .iter()
+            .filter(|e| !e.auto.is_empty() && matches!(e.key, KeySource::Hosted { .. }))
+            .filter(|e| matches!(providers::provider_key(e.id), Ok(Some(_))))
+            .map(|e| e.id)
+            .collect()
+    })
+    .await;
+    for id in keyed {
+        let Some(entry) = providers::lookup(id) else { continue };
+        for rung in Rung::ALL {
+            let Some(model) = rung.slot(&entry.auto) else { continue };
+            if let Some(existing) = pool.iter_mut().find(|c| c.provider == id && c.model == model) {
+                if !existing.rungs.contains(&rung) {
+                    existing.rungs.push(rung);
+                }
+                continue;
+            }
+            pool.push(Candidate {
+                provider: id.to_string(),
+                model: model.to_string(),
+                starred: false,
+                local: false,
+                input_per_million: crate::models::model_input_price(id, model).await,
+                rungs: vec![rung],
+            });
+        }
     }
     // Installed local models. A listing failure means Ollama is down — that is
     // a fact about the bench, not an error in routing, so the pool simply has
@@ -322,6 +467,7 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
                 starred: false,
                 local: true,
                 input_per_million: Some(0.0),
+                rungs: vec![Rung::Light],
             });
         }
     }
@@ -359,7 +505,7 @@ async fn inspect(candidate: Candidate) -> Result<Facts, Rejection> {
 pub async fn resolve(request: &StartRunRequest) -> Result<Resolved, String> {
     let needs = needs_for(request);
     let pool = gather_candidates(&request.preferred_models).await;
-    let ranked = rank(pool, providers::OLLAMA_DEFAULT_MODEL);
+    let ranked = rank(pool, providers::OLLAMA_DEFAULT_MODEL, needs.rung);
     pick(&ranked, needs, |c| inspect(c.clone())).await
 }
 
@@ -389,6 +535,7 @@ mod tests {
             starred: true,
             local: false,
             input_per_million: price,
+            rungs: vec![],
         }
     }
 
@@ -399,6 +546,19 @@ mod tests {
             starred: false,
             local: true,
             input_per_million: Some(0.0),
+            rungs: vec![Rung::Light],
+        }
+    }
+
+    /// An unstarred hosted model on its Provider's ladder.
+    fn rung(provider: &str, model: &str, price: f64, at: Rung) -> Candidate {
+        Candidate {
+            provider: provider.into(),
+            model: model.into(),
+            starred: false,
+            local: false,
+            input_per_million: Some(price),
+            rungs: vec![at],
         }
     }
 
@@ -412,10 +572,12 @@ mod tests {
     const GOAL: Needs = Needs {
         tools: true,
         prompt_tokens: 1_000,
+        rung: Rung::Standard,
     };
     const CHAT: Needs = Needs {
         tools: false,
         prompt_tokens: 1_000,
+        rung: Rung::Light,
     };
 
     #[test]
@@ -430,6 +592,7 @@ mod tests {
                 starred("anthropic", "claude-sonnet-4-6", Some(3.0)),
             ],
             "llama3.1:8b",
+            Rung::Light,
         );
         let order: Vec<&str> = ranked.iter().map(|c| c.model.as_str()).collect();
         assert_eq!(order, ["claude-sonnet-4-6", "qwen3:8b", "gpt-4.1"]);
@@ -444,6 +607,7 @@ mod tests {
                 starred("anthropic", "claude-haiku-4-5", Some(0.8)),
             ],
             "llama3.1:8b",
+            Rung::Standard,
         );
         let order: Vec<&str> = ranked.iter().map(|c| c.model.as_str()).collect();
         assert_eq!(order, ["claude-haiku-4-5", "claude-opus-4-6", "some/unpriced"]);
@@ -454,6 +618,7 @@ mod tests {
         let ranked = rank(
             vec![local("gemma3:4b"), local("llama3.1:8b:latest"), local("qwen3:8b")],
             "llama3.1:8b",
+            Rung::Light,
         );
         assert_eq!(ranked[0].model, "llama3.1:8b:latest");
     }
@@ -461,7 +626,7 @@ mod tests {
     #[test]
     fn ranking_is_stable_on_identical_input() {
         let pool = vec![local("b"), local("a"), starred("x", "m", Some(1.0))];
-        assert_eq!(rank(pool.clone(), "z"), rank(pool, "z"));
+        assert_eq!(rank(pool.clone(), "z", Rung::Standard), rank(pool, "z", Rung::Standard));
     }
 
     #[test]
@@ -471,6 +636,7 @@ mod tests {
         let ranked = rank(
             vec![starred("anthropic", "chatty", Some(1.0)), local("llama3.1:8b")],
             "llama3.1:8b",
+            GOAL.rung,
         );
         let picked = pick(&ranked, GOAL, |c| ok(c.model != "chatty", 128_000)).unwrap();
         assert_eq!(picked.model, "llama3.1:8b");
@@ -479,7 +645,7 @@ mod tests {
 
     #[test]
     fn chat_does_not_require_tools() {
-        let ranked = rank(vec![starred("anthropic", "chatty", Some(1.0))], "llama3.1:8b");
+        let ranked = rank(vec![starred("anthropic", "chatty", Some(1.0))], "llama3.1:8b", CHAT.rung);
         let picked = pick(&ranked, CHAT, |_| ok(false, 128_000)).unwrap();
         assert_eq!(picked.model, "chatty");
         assert_eq!(picked.reason, "starred · $1/M · 128k window");
@@ -496,6 +662,7 @@ mod tests {
                 starred("anthropic", "claude-sonnet-4-6", Some(3.0)),
             ],
             "llama3.1:8b",
+            GOAL.rung,
         );
         let picked = pick(&ranked, GOAL, |_| ok(true, 200_000)).unwrap();
         assert_eq!(picked.model, "claude-sonnet-4-6");
@@ -508,6 +675,7 @@ mod tests {
         let ranked = rank(
             vec![starred("anthropic", "claude-sonnet-4-6", Some(3.0)), local("llama3.1:8b")],
             "llama3.1:8b",
+            GOAL.rung,
         );
         let err = pick(&ranked, GOAL, |c| {
             if c.local {
@@ -529,15 +697,16 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
         let needs = Needs {
             tools: false,
             prompt_tokens: 10_000,
+            rung: Rung::Light,
         };
         assert_eq!(needs.min_window(), 24_096);
-        let ranked = rank(vec![local("small"), local("big")], "big");
+        let ranked = rank(vec![local("small"), local("big")], "big", Rung::Light);
         let picked = pick(&ranked, needs, |c| ok(true, if c.model == "small" { 8_192 } else { 128_000 }))
             .unwrap();
         assert_eq!(picked.model, "big");
         // `big` is the default and leads the tier, so nothing was skipped.
         assert!(picked.skipped.is_empty());
-        let only_small = rank(vec![local("small")], "big");
+        let only_small = rank(vec![local("small")], "big", Rung::Light);
         let err = pick(&only_small, needs, |_| ok(true, 8_192)).unwrap_err();
         assert!(err.contains("8k window, job needs 24k"), "{err}");
     }
@@ -549,6 +718,102 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             err,
             "Auto found no model for a chat: star a model in the picker, add an API key, or start Ollama."
         );
+    }
+
+    #[test]
+    fn rung_for_reads_the_task_shape_and_nothing_else() {
+        assert_eq!(rung_for(&AgentMode::Chat, 1_000, 0), Rung::Light);
+        assert_eq!(rung_for(&AgentMode::Plan, 1_000, 0), Rung::Standard);
+        assert_eq!(rung_for(&AgentMode::Goal, 1_000, 0), Rung::Standard);
+        // A big brief bumps one rung up; Strong has nowhere further to go.
+        assert_eq!(rung_for(&AgentMode::Goal, BIG_PROMPT_TOKENS, 0), Rung::Strong);
+        assert_eq!(rung_for(&AgentMode::Chat, 0, BIG_ATTACHMENTS), Rung::Standard);
+        assert_eq!(rung_for(&AgentMode::Goal, BIG_PROMPT_TOKENS, BIG_ATTACHMENTS), Rung::Strong);
+        assert_eq!(rung_for(&AgentMode::Chat, BIG_PROMPT_TOKENS - 1, BIG_ATTACHMENTS - 1), Rung::Light);
+    }
+
+    #[test]
+    fn the_wanted_rung_beats_price_in_the_unstarred_pool() {
+        let ladder = || {
+            vec![
+                rung("anthropic", "claude-opus-4-6", 15.0, Rung::Strong),
+                rung("anthropic", "claude-haiku-4-5", 0.8, Rung::Light),
+                rung("anthropic", "claude-sonnet-4-6", 3.0, Rung::Standard),
+            ]
+        };
+        let order = |wanted: Rung| -> Vec<String> {
+            rank(ladder(), "llama3.1:8b", wanted).into_iter().map(|c| c.model).collect()
+        };
+        assert_eq!(order(Rung::Light), ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"]);
+        // One rung off on either side: the cheaper neighbour first.
+        assert_eq!(order(Rung::Standard), ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-6"]);
+        assert_eq!(order(Rung::Strong), ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]);
+        let picked = pick(&rank(ladder(), "llama3.1:8b", GOAL.rung), GOAL, |_| ok(true, 200_000)).unwrap();
+        assert_eq!(picked.model, "claude-sonnet-4-6");
+        assert_eq!(picked.reason, "cheapest · standard rung · $3/M · tools · 200k window");
+    }
+
+    #[test]
+    fn a_keyed_standard_model_leads_a_free_local_one_for_a_standard_job() {
+        // Chat (light) goes local; a Goal (standard) goes to the keyed model
+        // that fits the job. Stars reorder this; nothing else does.
+        let pool = || vec![local("llama3.1:8b"), rung("anthropic", "claude-sonnet-4-6", 3.0, Rung::Standard)];
+        assert_eq!(rank(pool(), "llama3.1:8b", Rung::Light)[0].model, "llama3.1:8b");
+        assert_eq!(rank(pool(), "llama3.1:8b", Rung::Standard)[0].model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn a_rung_nobody_fills_falls_to_the_nearest_and_says_so() {
+        let ranked = rank(vec![local("llama3.1:8b")], "llama3.1:8b", Rung::Standard);
+        let picked = pick(&ranked, GOAL, |_| ok(true, 128_000)).unwrap();
+        assert_eq!(picked.model, "llama3.1:8b");
+        assert_eq!(picked.reason, "local · light rung for a standard job · free · tools · 128k window");
+    }
+
+    #[test]
+    fn stars_nearest_the_rung_lead_the_stars() {
+        let haiku = Candidate {
+            rungs: vec![Rung::Light],
+            ..starred("anthropic", "claude-haiku-4-5", Some(0.8))
+        };
+        let opus = Candidate {
+            rungs: vec![Rung::Strong],
+            ..starred("anthropic", "claude-opus-4-6", Some(15.0))
+        };
+        let first = |wanted: Rung| rank(vec![opus.clone(), haiku.clone()], "z", wanted)[0].model.clone();
+        assert_eq!(first(Rung::Light), "claude-haiku-4-5");
+        assert_eq!(first(Rung::Strong), "claude-opus-4-6");
+        // Equidistant: cheapest wins, as before.
+        assert_eq!(first(Rung::Standard), "claude-haiku-4-5");
+        // A star on no ladder ranks as if it sat at the wanted rung.
+        let unplaced = starred("custom:lab", "house-model", Some(1.0));
+        assert_eq!(rank(vec![opus.clone(), unplaced], "z", Rung::Strong)[0].model, "house-model");
+    }
+
+    #[test]
+    fn rungs_on_reads_every_slot_a_model_sits_at() {
+        let anthropic = providers::lookup("anthropic").unwrap();
+        assert_eq!(rungs_on(&anthropic.auto, "claude-sonnet-4-6"), vec![Rung::Standard]);
+        assert_eq!(rungs_on(&anthropic.auto, "claude-3-opus"), Vec::<Rung>::new());
+        let openrouter = providers::lookup("openrouter").unwrap();
+        assert_eq!(rungs_on(&openrouter.auto, "openrouter/auto"), Rung::ALL.to_vec());
+    }
+
+    #[test]
+    fn every_hosted_row_offers_auto_a_ladder_and_no_other_row_does() {
+        // A new hosted Provider that forgets its ladder would be invisible to
+        // Auto for a user who starred nothing; a local or subscription row
+        // with one would put a Delegate, or a model nobody installed, in the
+        // pool. Both are caught here, not in a bug report.
+        for entry in providers::PROVIDERS {
+            let hosted = matches!(entry.key, KeySource::Hosted { .. });
+            assert_eq!(
+                !entry.auto.is_empty(),
+                hosted,
+                "{}: hosted rows carry a ladder, others carry NO_LADDER",
+                entry.id
+            );
+        }
     }
 
     #[test]

@@ -406,6 +406,9 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
                     v.as_f64()
                         .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
                 })
+                // OpenRouter writes `-1` on a model whose price is decided per
+                // request (`openrouter/auto`): not a price, so not "cheapest".
+                .filter(|per_token| *per_token >= 0.0)
                 .map(|per_token| per_token * 1_000_000.0)
         };
         out.insert(
@@ -1232,6 +1235,13 @@ mod tests {
                     "id": "vendor/quiet",
                     "top_provider": { "context_length": 32_768 }
                 },
+                {
+                    // OpenRouter's router: price decided per request, written -1.
+                    "id": "openrouter/auto",
+                    "context_length": 2_000_000,
+                    "supported_parameters": ["tools"],
+                    "pricing": { "prompt": "-1", "completion": "-1" }
+                },
                 { "noid": 1 }
             ]
         });
@@ -1249,12 +1259,16 @@ mod tests {
         );
         // No pricing block → None, never 0.
         assert_eq!(meta["vendor/quiet"].input_per_million, None);
+        // A -1 price is "decided per request", not a price — never "cheapest".
+        assert_eq!(meta["openrouter/auto"].input_per_million, None);
+        assert_eq!(meta["openrouter/auto"].output_per_million, None);
+        assert_eq!(meta["openrouter/auto"].supports_tools, Some(true));
         assert_eq!(meta["some/base-model"].supports_tools, Some(false));
         // Falls back to top_provider.context_length; tool support unknown.
         assert_eq!(meta["vendor/quiet"].context_length, Some(32_768));
         assert_eq!(meta["vendor/quiet"].supports_tools, None);
         // Entry without an id is skipped, never panics.
-        assert_eq!(meta.len(), 3);
+        assert_eq!(meta.len(), 4);
     }
 
     #[test]
