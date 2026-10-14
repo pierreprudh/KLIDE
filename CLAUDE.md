@@ -660,7 +660,10 @@ with a concrete pair before anything downstream reads the provider — the
 failure budget, the summary, `RunStarted`, the adapters. The rule is small and
 deterministic: **gate** (key present, local server up, tool support when the
 Mode calls tools, context window ≥ 2× prompt + 4k), then **rank** (starred
-models cheapest-first, then installed Ollama models with the default first),
+models nearest the task's rung cheapest-first, then each keyed Provider's
+ladder model for that rung — `AutoLadder` on the registry row, light /
+standard / strong, picked by Mode and prompt size in `rung_for` — and
+installed Ollama models at light with the default first),
 then **lock** — a continuation of an `auto` thread reuses the pair its
 transcript recorded (`read_run_origin`) rather than routing again. The
 renderer sends its stars on the request (`preferredModels`; they live in
