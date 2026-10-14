@@ -208,7 +208,7 @@ Klide/
 │   │       ├── ChatMessage.tsx    renderMessageBody
 │   │       ├── MessageActions.tsx Hover per-message actions (copy, retry, branch, edit)
 │   │       ├── ModelPicker.tsx    Portaled model selector (filter, favorites, keyboard)
-│   │       ├── HarnessModelPicker.tsxA Delegate's nested model control — category → source → model — writes the routed string; favourites shared with the base picker
+│   │       ├── HarnessModelPicker.tsx A Delegate's nested model control — category → source → model — writes the routed string; favourites shared with the base picker
 │   │       ├── replayConversation.ts On-disk transcript → resumable panel Conversation
 │   │       ├── transcriptReducer.ts  Live Msg[] view of one run's fold (region splice, stable refs)
 │   │       ├── turnDriver.ts      Streaming state machine for one turn
@@ -247,7 +247,7 @@ Klide/
 │       ├── providerCatalog.ts   The one TS door onto the Rust Provider registry (label, group, default, presets, key env, brand, caps)
 │       ├── providerCatalog.generated.ts  GENERATED mirror of the registry rows — written by a Rust test, never edited
 │       ├── harnessSource.ts      The routed model string on the TS side — parse / build, and what an agent-menu pick means in a Delegate thread (route / refuse / switch)
-│       ├── harnessModelSources.tsThe nested source menu's groups (API / Local / Self-hosted / Subscription) derived from the shared catalog
+│       ├── harnessModelSources.ts The nested source menu's groups (API / Local / Self-hosted / Subscription) derived from the shared catalog
 │       ├── client.ts            Frontend agent harness client
 │       ├── foldEvents.ts        Sole owner of folding AgentEvent[] into conversation rows
 │       ├── completion.ts        Evidence for one completed attempt, from the shared transcript fold
@@ -280,9 +280,9 @@ Klide/
     │   ├── custom_providers.rs   User-added self-hosted OpenAI-wire endpoints
     │   ├── harness_source.rs     The routed model string — `harness-source:{provider,model}` — a Delegate's intelligence chosen apart from the Delegate; support matrix + the CLI's model ref
     │   ├── source_endpoint.rs    A source id → base URL, wire (Chat / Anthropic / Responses), key resolved per request; a Subscription row is never a source
-    │   ├── model_source_bridge.rsThe loopback bridge a routed CLI talks to — one per (harness, source, model, cwd), random token, translated per request; opt-in real-CLI tests + one live OpenRouter run
-    │   ├── anthropic_bridge_wire.rsAnthropic Messages ↔ Chat Completions (text, images, tools, stop reasons, streamed usage); unsupported blocks fail explicitly
-    │   ├── responses_bridge_wire.rsOpenAI Responses ↔ Chat / Messages (namespaced functions, custom patch tools); streaming only, no hosted tools
+    │   ├── model_source_bridge.rs The loopback bridge a routed CLI talks to — one per (harness, source, model, cwd), random token, translated per request; opt-in real-CLI tests + one live OpenRouter run
+    │   ├── anthropic_bridge_wire.rs Anthropic Messages ↔ Chat Completions (text, images, tools, stop reasons, streamed usage); unsupported blocks fail explicitly
+    │   ├── responses_bridge_wire.rs OpenAI Responses ↔ Chat / Messages (namespaced functions, custom patch tools); streaming only, no hosted tools
     │   ├── claude_nous_bridge.rs Nous Portal via `hermes proxy start --provider nous` + the env a routed Claude Code gets (base URL, loopback token, model vars, thinking off)
     │   ├── hermes_settings.rs    Hermes's configured default source (~/.klide/hermes.json), the `hermes-source:` selection, source support
     │   ├── custom_cli.rs         User-defined CLI agents via command templates
