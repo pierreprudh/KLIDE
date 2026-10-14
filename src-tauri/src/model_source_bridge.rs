@@ -851,4 +851,94 @@ mod tests {
     fn installed_codex_anthropic_tool_loop() {
         run_fixture("codex", Wire::Anthropic)
     }
+
+    /// Live and opt-in: the installed Claude Code on a real OpenRouter model
+    /// through the real bridge, the key resolved exactly as the app resolves
+    /// it (Settings → API, a `${OPENROUTER_API_KEY}` reference, or the
+    /// process env). Nothing is mocked; it spends a few hundred tokens.
+    /// `KLIDE_LIVE_SOURCE_MODEL` picks another OpenRouter model id.
+    #[test]
+    #[ignore = "opt-in: live OpenRouter inference through the installed Claude Code; needs the OpenRouter key and spends real tokens"]
+    fn installed_claude_live_openrouter_tool_loop() {
+        let model = std::env::var("KLIDE_LIVE_SOURCE_MODEL")
+            .unwrap_or_else(|_| "deepseek/deepseek-v4.1-flash".into());
+        let dir = std::env::temp_dir().join(format!(
+            "klide-claude-live-source-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(dir.join("claude")).unwrap();
+        std::fs::write(dir.join("fixture.txt"), "source-fixture-verified").unwrap();
+        // The key is scoped to a workspace, as in the app: the repo root by
+        // default (its `.env` may hold the reference), or `KLIDE_LIVE_SOURCE_SCOPE`.
+        let scope = std::env::var("KLIDE_LIVE_SOURCE_SCOPE")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/..").into());
+        let source = Selection {
+            provider: "openrouter".into(),
+            model: model.clone(),
+            effort: None,
+        };
+        let (base, token) = ensure("claude-code", &source, &scope).expect(
+            "the OpenRouter key must resolve the way the app resolves it: Settings → API, a ${OPENROUTER_API_KEY} reference, or the process env",
+        );
+        let binary = crate::cli::resolve_command("claude").unwrap();
+        let mut command = Command::new(binary);
+        command.current_dir(&dir).env_clear();
+        for name in ["PATH", "HOME", "USER", "TMPDIR", "SHELL"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command
+            .env("CLAUDE_CONFIG_DIR", dir.join("claude"))
+            .envs(crate::claude_nous_bridge::claude_env(base, token, &model))
+            .args([
+                "-p",
+                "Read fixture.txt and reply with exactly the word it contains, nothing else.",
+                "--model",
+                &model,
+                "--permission-mode",
+                "acceptEdits",
+                "--tools",
+                "Read",
+                "--max-turns",
+                "4",
+                "--output-format",
+                "json",
+            ]);
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200))
+        }
+        if child.try_wait().unwrap().is_none() {
+            let _ = child.kill();
+        }
+        let output = child.wait_with_output().unwrap();
+        shutdown();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("--- claude stdout ---\n{stdout}\n--- claude stderr ---\n{stderr}");
+        assert!(output.status.success(), "claude failed: {stdout}\n{stderr}");
+        let report: Value =
+            serde_json::from_str(stdout.trim()).expect("claude --output-format json");
+        assert!(
+            report["result"]
+                .as_str()
+                .unwrap_or("")
+                .contains("source-fixture-verified"),
+            "the answer did not come from the file: {}",
+            report["result"]
+        );
+        assert!(
+            report["usage"]["output_tokens"].as_u64().unwrap_or(0) > 0,
+            "no upstream usage reported: {report}"
+        );
+        eprintln!("model usage: {}", report["modelUsage"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
