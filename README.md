@@ -4,7 +4,7 @@
 
 ### Every agent visible. Every change reviewable.
 
-A local-first coding workspace for running local models and subscription coding agents side by side.
+A local-first coding workspace that runs local models and coding agents side by side — and lets any agent run on any intelligence.
 
 <br/>
 
@@ -20,7 +20,7 @@ A local-first coding workspace for running local models and subscription coding 
 
 ## One workspace for every coding agent
 
-Klide runs Ollama, MLX, Claude Code, Codex, OpenCode, and Oh My Pi (OMP) without hiding their native capabilities. You can inspect tool calls, follow terminal output, compare model cost and latency, and review changes from one workspace.
+Klide runs local models (Ollama, MLX, llama.cpp, Llama app, LM Studio), hosted APIs (Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, any OpenAI-compatible endpoint), and the coding agents you already pay for (Claude Code, Codex, OpenCode, Oh My Pi, Hermes, Amp, Cursor, Factory, or your own CLI) without hiding their native capabilities. You can inspect tool calls, follow terminal output, compare model cost and latency, and review changes from one workspace.
 
 Klide keeps three questions in view:
 
@@ -32,25 +32,25 @@ And one rule most tools don't offer: **any agent, any intelligence.** The agent 
 
 ## Three ways to work
 
-Klide opens on the surface that matches the task, and all three share the same runs, transcripts, and review state.
+Klide opens on the surface that matches the task, and all three share the same runs, transcripts, conversations, and review state. One rail — projects, agents, and past conversations — stands on the left of every surface.
 
 ### Welcome — start or resume a project
 
-Open a folder, start a new project, or clone a repository from one quiet page, with your recent workspaces numbered underneath. `⌘O`, `⌘N`, and `⌘⇧N` reach the three actions, and `⌘1`–`⌘5` reopen a recent workspace without touching the mouse. Beside the list, a framed big-pixel nature film drifts through five scenes in a fresh order each launch; it holds a single still when the system asks for reduced motion.
+Open a folder, start a new project, or clone a repository from one quiet page, with your recent workspaces numbered underneath. `⌘O`, `⌘N`, and `⌘⇧N` reach the three actions, and `⌘1`–`⌘5` reopen a recent workspace without touching the mouse. Beside the list, a framed big-pixel nature film drifts through five scenes in a calm loop.
 
 <img src=".github/assets/welcome.png" alt="Klide welcome screen: wordmark, Welcome back, Open folder, New project, Clone and Settings actions, numbered recent folders, and a framed pixel-art moonlit lake at night" width="900" />
 
 ### Focus — one task, one conversation
 
-A rail of projects, providers, and past conversations on the left; a single centered conversation in the middle. Everything a run did before its answer folds to one line, an answer can draw a diagram in place, and the branch and edit policy sit under the composer.
+A single centered conversation on any agent: a local model, a hosted API, or a subscription CLI running headless, with no API key anywhere in Klide. Everything a run did before its answer folds to one line, a plan or a question opens as a card beside the conversation, an answer can draw a diagram in place, `⌘N` opens a second conversation beside the first, and the shared terminal docks under the canvas so a run keeps streaming while you shell.
 
 <img src=".github/assets/focus.png" alt="Klide focus mode: the project and conversation rail on the left, one centered conversation where the answer folds its work to a single line and draws an inline diagram of how two files relate" width="900" />
 
-### Free mode — every agent on one canvas
+### Workbench — the editor, with every agent on one canvas
 
-Floating, resizable panels over the editor. Run a hosted model and the delegate CLIs side by side, each in its own live terminal, compare their answers, and keep the file you are reviewing open behind them.
+The editor-first layout: explorer, tabs, Monaco, terminal, and AI panels. Anchor the panels, pick a fixed preset, build a grid, or float them freely over the editor — run a hosted model and the delegate CLIs side by side, each in its own live terminal, compare their answers, and keep the file you are reviewing open behind them.
 
-<img src=".github/assets/free-mode.png" alt="Klide free mode: an OpenRouter conversation beside three delegate panels running Oh My Pi, OpenCode and Claude Code as live terminals" width="900" />
+<img src=".github/assets/free-mode.png" alt="Klide workbench in free mode: an OpenRouter conversation beside three delegate panels running Oh My Pi, OpenCode and Claude Code as live terminals" width="900" />
 
 ## Why Klide
 
@@ -58,7 +58,7 @@ Coding agents work well in terminals, but their sessions, diffs, and evidence sp
 
 | | |
 |---|---|
-| **Run real agents** | Use Claude Code, Codex, OpenCode, OMP, Amp, Cursor, Factory, Hermes, or a custom CLI inside persistent pseudoterminal (PTY) sessions |
+| **Run real agents** | Use Claude Code, Codex, OpenCode, Oh My Pi, Hermes, Amp, Cursor, Factory, or a custom CLI inside persistent pseudoterminal (PTY) sessions, or as headless Focus turns |
 | **Keep work visible** | See working, waiting, blocked, and completed runs across the workspace |
 | **Review before trust** | Approve commands, inspect proposed edits, comment on diffs, and check validation evidence |
 | **Any agent, any intelligence** | Keep Claude Code, Codex, OpenCode, or Hermes as the agent and choose what powers it: an API key, Ollama or MLX, a self-hosted endpoint, or a subscription such as Nous Portal |
@@ -75,32 +75,37 @@ flowchart LR
     Next --> Run
 ```
 
-Klide has three capability modes:
+Klide has two modes in the composer, and one command above them:
 
 | Mode | Agent access |
 |---|---|
-| `Chat` | Answers without workspace tools |
 | `Plan` | Reads the workspace and proposes an approach |
-| `Goal` | Uses tools with diff review and permission-gated commands |
+| `Work` | Edits and runs commands — the default. The foot bar sets the policy: review every edit, auto-accept edits, or full auto |
+| `/goal <objective>` | One Work turn with a finish line: the run keeps going until the check you configured passes, and a failed check ends it in error |
+
+A model that cannot call tools collapses to a tool-less chat. `Tab` toggles the mode.
 
 ## Features
 
 | Area | Included |
 |---|---|
 | **Agent operations** | Mission Control, shared run lifecycle, attention queue, transcripts, session resume, cross-agent handoff, sub-agent visibility |
+| **Any agent, any intelligence** | One nested selector — API, Local, Self-hosted, Subscription — for Claude Code, Codex, OpenCode, and Hermes. Keys stay in the process host and the CLI only ever sees a temporary loopback credential. Claude Code and Codex reach other wires through Klide's Messages and Responses adapters, OpenCode through its native provider config, Hermes through its own backends; reasoning effort follows the routed model. Pairs without an adapter yet (Oh My Pi, Amp, Cursor, Factory; one subscription CLI powering another) stay visible and say so |
 | **Agent coordination** | One Rust-owned journal: runs address each other by a stable id, delegate CLIs join through an embedded MCP server, each Delegate session proves itself with its own secret, and another agent's words arrive in one fenced delivery, reviewed before they reach a conversation |
-| **Connectors** | The MCP servers you already configured in Claude Code, Codex, or OpenCode, local or remote; the assistant calls them in Plan and Goal (reads free, writes gated per tool), and GitHub connects in one click as the pinned account |
+| **Connectors** | The MCP servers you already configured in Claude Code, Codex, or OpenCode, local or remote; the assistant calls them in Plan and Work (reads free, writes gated per tool), and GitHub connects in one click as the pinned account |
 | **Background work** | Background shells a Run can read, stop, or be woken by; GitHub CI observer cards that follow a pinned run and open its PR in Git Review; subscription conversations that keep running after the app quits |
-| **Intelligence sources** | One nested selector for every built-in agent: API, Local, Self-hosted, Subscription. Keys stay in the process host and the CLI only ever sees a temporary loopback credential. Claude Code and Codex reach other wires through Klide's Messages and Responses adapters, OpenCode through its native provider config, Hermes through its own backends. Pairs without an adapter yet (OMP, Amp, Cursor, Factory; one subscription CLI powering another) stay visible and say so |
-| **Workers** | `spawn_subagent` hands a task to a Delegate CLI as an approved, isolated Run of its own, watched live from the parent conversation |
+| **Workers** | `spawn_subagent` hands a task to a Delegate CLI as an approved, isolated Run of its own, watched live from the parent conversation or dispatched in the background with its report delivered when it settles |
 | **Documents** | Native workbook tools that create and revise a recalculated `.xlsx` through the normal review path, plus a built-in sheet surface for `.xlsx` and `.sheet.json` |
 | **Review and evidence** | Diff comments sent to agents, command approval, per-mode tool toggles enforced at dispatch, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
 | **Parallel work** | Git worktrees, worktree setup recipes, agent races on the same task, evidence comparison, and merge controls |
 | **Editor and shell** | Monaco editor with eight themes, file explorer, tabs, search, command palette, Git review, commit graph, and persistent PTY terminals |
-| **Workspace surfaces** | Welcome launcher, focus mode, free-mode floating panels, fixed layout presets, and a freeform grid builder |
-| **Models** | Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, OpenAI-compatible endpoints, about forty more behind the opencodex gateway, and `auto` resolved once in Rust at run start |
-| **Delegate CLIs** | Claude Code, Codex, OpenCode, and OMP in persistent PTYs or as streaming Focus turns; each CLI's own `/` commands in the composer, Claude Code's reasoning effort levels, `/config` drawn as a settings card, version and updater per CLI, and per-login usage in the account menu |
-| **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, image and document attachments, skills, dynamic tools, search over previous conversations, native recall over reviewed Project Memory with provenance, and `html` / `svg` visuals drawn in the answer |
+| **Workspace surfaces** | Welcome, Focus, and the Workbench with anchored, free-floating, fixed-preset, and freeform-grid layouts |
+| **Models** | Ollama, MLX, llama.cpp, Llama app, LM Studio, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, OpenAI-compatible endpoints, about forty more behind the opencodex gateway, and `auto`, which picks a rung from the task shape and each keyed provider's ladder, resolved once in Rust at run start with the reasoning recorded on the run |
+| **Delegate CLIs** | Claude Code, Codex, and OpenCode (1 and 2) in persistent PTYs or as streaming Focus turns, with imported history, structured tool events, per-session MCP wiring, and account switching; Oh My Pi with imported history, streaming Focus turns but no MCP wiring yet; Hermes, Amp, Cursor, Factory, and custom CLIs in terminal sessions, Mission dispatch, and plain-text Focus turns; each CLI's own `/` commands in the composer, reasoning effort, `/config` drawn as a settings card, version and updater per CLI, and per-login usage in the account menu |
+| **Sight** | A model without image support borrows another model's eyes: a dropped photo is described by a vision model, local-first, with the description and its attribution kept in the conversation |
+| **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, image and document attachments, skills, dynamic tools, search over previous conversations, native recall over reviewed Project Memory with provenance, lessons proposed for review after meaningful work, and `html` / `svg` visuals drawn in the answer |
+| **From other apps** | `klide://` links open a pre-filled conversation, a file at a line, a project, or resume a CLI session; Ask Kit in the macOS Services menu sends selected text to a new conversation; a `/klide` skill lets Claude Code, Codex, OpenCode, or Oh My Pi hand its own session to Klide, and Kit can open one of theirs |
+| **Local security** | Workspace-rooted file access, operating-system keychain storage, project command allowlists, network permissions, a user-choosable transcript folder with measured cleanup, and Rust deciding what a run may open, reveal, or must refuse |
 
 OpenCode 2 is supported alongside V1, with native streaming, session resume,
 slash commands, status callbacks and Mission Control history. Klide uses a
@@ -109,8 +114,6 @@ stream from the durable transcript. V2 credentials stay managed by OpenCode;
 Klide's file-snapshot account switcher remains V1-only. See the
 [OpenCode delegate notes](docs/OPENCODE_DELEGATE.md) for details and the local
 smoke test.
-| **From other apps** | `klide://` links open a pre-filled conversation, a file at a line, a project, or resume a Claude Code session; Ask Kit in the macOS Services menu sends selected text to a new conversation; a `/klide` skill lets Claude Code hand its own session to Klide |
-| **Local security** | Workspace-rooted file access, operating-system keychain storage, project command allowlists, network permissions, a user-choosable transcript folder with measured cleanup, and Rust deciding what a run may open, reveal, or must refuse |
 
 ## Get started
 
@@ -151,19 +154,19 @@ The first Rust build takes about three to five minutes. Later builds reuse the c
 
 Once Klide opens:
 
-1. Open a workspace folder
-2. Open the AI panel and select a provider
-3. Press `Tab` in the composer to switch between `Plan` and `Work`
-4. Open Mission Control to follow active and completed work
+1. Open a workspace folder from Welcome
+2. In Focus, or in the Workbench's AI panel, pick an agent in the composer: a local model, a hosted API, or an installed CLI
+3. Press `Tab` in the composer to switch between `Work` and `Plan`
+4. Open Mission Control from the rail to follow active and completed work
 
 `⌘P` jumps to a file, `⌘⇧P` opens the command palette, and `⌘/` shows the full shortcut cheatsheet.
 
 One task, end to end:
 
-1. Open a folder, open the AI panel, and select `Ollama` in the provider selector
+1. Open a folder and select `Ollama` in the composer's agent selector
 2. Leave the composer's `+` menu on `Work` — the default — or press `Tab` to reach `Plan`
 3. Describe the change and press `↵`
-4. The mode note under the composer reads `reviewing edits`: `Validate` applies the edit, `Cancel` drops it, and `⤢` opens the changes in the editor
+4. The note under the composer reads `reviewing edits`: `Validate` applies the edit, `Cancel` drops it, `Request changes` sends your note back to the agent, and `⤢` opens the changes in the editor
 5. Press `⌘⇧G` to see the applied edit in `Git Review`, or open `Mission Control` to follow the run
 
 ## Use the Klide model
@@ -183,9 +186,9 @@ The model appears in Klide's Ollama picker after the download finishes.
 | Provider | Setup | Endpoint | Managed by |
 | --- | --- | --- | --- |
 | Ollama | Install Ollama; select a downloaded model in Klide | `localhost:11434` | Klide can start and stop the server |
-| MLX-LM 0.31.3¹ | Install `mlx-lm`; start from Local Servers settings | `localhost:8080` | Klide can start and stop the server |
-| llama.cpp | Choose a model in Local Servers settings; install and start in one action | `localhost:8081` | Klide |
-| [Llama app](https://llama.app) | **Llama → Llama app → Get Llama** in Local Servers settings; choose a model in Llama, then select it in Klide | `localhost:9931/v1` | Llama app; Klide discovers its models |
+| MLX-LM 0.31.3¹ | Install `mlx-lm`; start from Settings → Local AI | `localhost:8080` | Klide can start and stop the server |
+| llama.cpp | Choose a model in Settings → Local AI; install and start in one action | `localhost:8081` | Klide |
+| [Llama app](https://llama.app) | **Llama → Llama app → Get Llama** in Settings → Local AI; choose a model in Llama, then select it in Klide | `localhost:9931/v1` | Llama app; Klide discovers its models |
 | LM Studio | Start its local server; select LM Studio in Klide | `localhost:1234/v1` | LM Studio |
 
 Llama app discovers the shared GGUF cache. Set its model context to at least **16k**
@@ -194,21 +197,21 @@ Klide-managed llama.cpp starts with 16k context.
 See the [live setup and tool smoke test](scripts/local-inference/results/SMOKE.md)
 for verified behavior and the tested small model’s limitations.
 
-Local Servers groups both llama.cpp setups under **Llama**, with a **Klide / Llama app**
+Settings → Local AI groups both llama.cpp setups under **Llama**, with a **Klide / Llama app**
 switch. It remembers the selection and shows only that Llama setup in the AI and Focus provider selectors.
 Switching the setup does not start or stop a server or change existing conversations.
 
-Amp (`amp`), Cursor (`cursor-agent`), Factory (`droid`), and Hermes (`hermes`)
-also appear in Subscription settings and the provider pickers. Install and
-configure each CLI using its own setup flow. Klide supports interactive terminal
-sessions, one-shot Mission dispatch, and plain-text Focus turns. These four
-adapters currently have no imported CLI history, structured tool events,
-per-session MCP wiring, or account switching. Models default to each CLI's own
-configuration; Amp manages model selection itself. Hermes can also use an API
-provider and key configured directly in Settings → Subscription → Hermes API setup.
-DeepSeek is already available
-as a native API provider using `DEEPSEEK_API_KEY`. Official setup links and
-logo sources are listed in [Provider resources](docs/PROVIDER_RESOURCES.md).
+Hermes (`hermes`), Amp (`amp`), Cursor (`cursor-agent`), and Factory (`droid`)
+also appear in Settings → Subscription and the agent pickers; an installed CLI
+sorts first and a missing one is dimmed. Install and configure each CLI with its
+own setup flow. Klide runs these four in interactive terminal sessions, one-shot
+Mission dispatch, and plain-text Focus turns; they have no imported CLI history,
+structured tool events, per-session MCP wiring, or account switching yet, and
+Amp manages model selection itself. Hermes, like Claude Code, Codex, and
+OpenCode, can run on any intelligence source Klide knows — see the feature table
+— and Settings → Subscription → Hermes API setup holds its configured default.
+DeepSeek is a native API provider using `DEEPSEEK_API_KEY`. Official setup links
+and logo sources are listed in [Provider resources](docs/PROVIDER_RESOURCES.md).
 
 ### Connection flow
 
@@ -306,37 +309,34 @@ The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordin
 
 ## Project status
 
-Klide is under active development. Its frontend tests, production build, Rust suite, PTY socket integration, and release-bundle boot check pass. Unsigned Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs one pass through Privacy & Security.
+Klide is under active development. Its frontend tests, production build, Rust suite, PTY socket integration, and release-bundle boot check pass. Unsigned Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs the Open Anyway step above.
 
-Since v0.6.5, main has gained the following, each under the name it shipped with:
+The current line is **0.6.10** (2026-10-13). On main since then, unreleased:
 
-- **GitHub observer cards** — a `gh run watch` becomes a live CI card in the conversation and the Focus side panel; it names failed checks and opens the PR in Git Review
-- **Claude Code effort** — low to max reasoning effort for terminal and Focus turns
-- **Connectors: the assistant can call them, GitHub connects in one click** — reads run as asked, writes ask per tool; remote servers and `${VAR}` references work
-- **Each CLI's own commands in the `/` menu** — Claude Code, OpenCode, and Oh My Pi bring theirs, and Claude Code's `/config` answer is drawn as a settings card
-- **`klide://` links and Ask Kit in the Services menu** — Raycast, Shortcuts, a terminal, or selected text in any app opens a pre-filled conversation, a file at a line, or a project
-- **Keep subscription conversations running after app exit** — the turn finishes in the background host and reattaches on reopen; Settings → Storage lists and cleans saved conversations
-- **OpenCode turns type out as they're written** — streamed from `opencode serve` instead of landing in one block
-- **Account menu: usage per CLI** — each login shows its session and weekly allowance, with account switching
-- **Cerulean theme**, an **editor dock with a clean full-height top**, and a composer that grows for a long paste behind one provider-picker design
-- **Settings → Harness → Tools per mode now takes effect** — a turned-off Tool is neither offered nor dispatched
+- **Any agent, any intelligence** — Claude Code, Codex, and OpenCode run on Klide's API keys, local and self-hosted endpoints, and Nous Portal without changing the agent; reasoning effort follows the routed model; a conversation keeps the agent it began on and its history mark shows the model that powers it
 
-Underneath, the September architecture review landed as nine merged pull requests: **one Gate subject** every permission check reads, **a Run lease** that releases everything it holds however the loop ends, **one fenced delivery** for everything the operator did not type, **a per-session bridge secret** for Delegate CLIs, **a real CSS tokenizer** in the visual sanitizer, **Rust deciding Open / Reveal / Refuse** for documents, **one process module** for every command a Run starts, **the Mission supervisor as the only dispatcher**, and **a coordination journal store that is safe across processes**.
+Recent cuts, each under the name it shipped with:
 
-v0.6.9 — OpenCode 2 (2026-10-12) adds native answer and reasoning streaming, durable recovery, session resume, native commands, and complete model discovery. Provider commands lead the slash menu, and conversations and new tasks retain the correct provider/model pair.
+- **0.6.10** (2026-10-13) — Amp, Cursor, Factory, and Hermes as CLI providers with official marks; Hermes on any API, local, or self-hosted source; harness/model independence recorded as a product principle
+- **0.6.9 — OpenCode 2** (2026-10-12) — native answer and reasoning streaming, durable recovery, session resume, native commands, complete model discovery, provider commands first in the `/` menu
+- **0.6.8** (2026-10-07) — Sight, so a model without image support borrows another model's eyes; app and background runs share admission and crash recovery; the Memory inbox; Mistral metadata; agent commands in the login shell's environment; the Welcome film
+- **0.6.7** (2026-10-06) — managed llama.cpp at 16k context, Llama app as a local provider, the local inference benchmark below
+- **0.6.6** (2026-10-05) — a failed `/goal` check ends the run in error; Project Memory proposes evidence-backed lessons for review
+- **Since v0.6.5** — GitHub observer cards, Claude Code effort, connectors the assistant can call with one-click GitHub, each CLI's own `/` commands, `klide://` links and Ask Kit, subscription conversations that keep running after the app quits, OpenCode turns that stream, usage per CLI in the account menu, the Cerulean theme, Tools per mode enforced at dispatch, and CLI sessions both ways: `klide://resume` and the `/klide` skill hand a Claude Code, Codex, OpenCode, or Oh My Pi session to Klide, and `list_cli_sessions` / `open_cli_session` let Kit open one
 
-v0.6.4 — Workers, Connectors, Visuals (2026-09-20) precedes it. A Harness Run can hand a task to another CLI agent as a worker — a dispatch the operator approves, an isolated worktree, a Run of its own — instead of shelling out to `claude -p`. Klide connects to the MCP servers already configured in the tools you use. And an answer can draw: an `html` or `svg` fence renders as a sanitized, themed picture in the conversation.
+Underneath, the September architecture review landed as nine merged pull requests: **one Gate subject** every permission check reads, **a Run lease** that releases everything it holds however the loop ends, **one fenced delivery** for everything the operator did not type, **a per-session bridge secret** for Delegate CLIs, and the rest of the seams Mission Control, the Harness, and the Delegates now share.
 
-The cuts before it are on the same line. v0.6.3 — Coordination and Documents let Runs address each other through one Rust-owned journal, with every agent's words reviewed before they reach a conversation, and let a run write a real `.xlsx` that Klide recalculates and opens. v0.6.2 — Memory, Routing, Recovery gave the agent native recall over reviewed Project Memory, resolved the `auto` model choice once in Rust at run start, and made a run near the turn cap finish instead of erroring. v0.6.1 — Subscriptions and Reach let Focus use every provider Klide supports, ran delegate CLIs there on their own subscription, and added around forty upstreams behind the opencodex gateway.
+v0.6.4 — Workers, Connectors, Visuals (2026-09-20) let a Harness Run hand a task to another CLI agent as a worker — a dispatch the operator approves, an isolated worktree, a Run of its own — connected Klide to the MCP servers already configured in the tools you use, and let an answer draw a picture in the conversation. v0.6.3 — Coordination and Documents let Runs address each other through one Rust-owned journal, with every agent's words reviewed before they reach a conversation, and let a run write a real `.xlsx` that Klide recalculates and opens. v0.6.2 — Memory, Routing, Recovery gave the agent native recall over reviewed Project Memory, resolved the `auto` model choice once in Rust at run start, and made a run near the turn cap finish instead of erroring. v0.6.1 — Subscriptions and Reach let Focus use every provider Klide supports, ran delegate CLIs there on their own subscription, and added around forty upstreams behind the opencodex gateway.
 
 The v0.6 orchestration milestone itself — Missions as outcomes, budget and capacity in the dispatch path, capability routing, automatic validation contracts — is still open, so treat those surfaces as unfinished.
 
 Current priorities:
 
-- Next cut: dogfood Sight image drops and background run recovery; continue the v0.6 patch line.
-- v0.5.1: dogfood the full race/restart/permission/merge/cleanup path
-- v0.5.1: publish a signed/notarized macOS build, then validate Windows and Linux
-- v0.6: make Missions, budgets, capacity, routing, and validation contracts one dependable orchestration layer
+- Dogfood the new intelligence routes live: Claude Code on Ollama, Codex on DeepSeek and on the Anthropic wire, OpenCode on a local model, Claude Code on Nous Portal
+- Close the pairs without an adapter before "any" goes on a landing page: Oh My Pi, Amp, Cursor, Factory, and one subscription CLI powering another
+- v0.5.1: dogfood the spreadsheet path and the full race/restart/permission/merge/cleanup path in the app
+- v0.5.1: notarize the macOS bundle, then validate Windows and Linux
+- v0.6: make Missions the primary outcome, with visible budget and capacity, capability routing, automatic validation contracts, and durable background execution with local-to-cloud handoff
 
 See the [changelog](./CHANGELOG.md) for shipped milestones.
 
