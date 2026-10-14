@@ -13,7 +13,10 @@ Vocabulary is `CONTEXT.md`'s: **Provider**, **Run**, **Mode**, **Harness**,
 
 Auto is a gate followed by a preference. The gate is not a score: nothing a
 model does well puts it back in the pool once it has been ruled out. The
-preference is the user's own — their stars — not a leaderboard.
+preference is the user's own — their stars — and, when they starred nothing,
+a **rung** read off the task shape: Chat is light, Plan and Goal are
+standard, a big brief is strong. Each Provider row names one model per rung.
+Nothing learned, nothing called in front of the message.
 
 ## Where it lives
 
@@ -45,7 +48,7 @@ is one router and one place it runs.
 
 ```mermaid
 flowchart TD
-    A[Pool<br/>your stars + what Ollama has installed] --> B[Rank]
+    A[Pool<br/>your stars + each keyed Provider's ladder<br/>+ what Ollama has installed] --> B[Rank<br/>stars first, nearest the task's rung, cheapest]
     B --> C{"Gate, in rank order<br/>stop at the first pass"}
     C -->|API key missing| X1[ruled out]
     C -->|local server down| X2[ruled out]
@@ -55,17 +58,47 @@ flowchart TD
 ```
 
 **Pool.** The user's starred pairs (every picker's star list, sent on the
-request as `preferredModels`) plus every model Ollama reports installed.
-Delegate CLIs are never candidates: they run on a subscription with their own
-trust and cost model, and a routed run has to stay inside the Harness.
+request as `preferredModels`), each keyed hosted Provider's **ladder**, and
+every model Ollama reports installed. Delegate CLIs are never candidates:
+they run on a subscription with their own trust and cost model, and a routed
+run has to stay inside the Harness.
 
-**Rank.** Three tiers, stable within each:
+**Rungs.** Three steps — `light`, `standard`, `strong` — and a Provider row
+names one model per step (`AutoLadder` on the `ProviderEntry`, `NO_LADDER`
+on local and subscription rows). The task shape picks the step, in
+`rung_for`: Chat is light, Plan and Goal are standard, and a first turn of
+16k tokens or four attached files bumps one rung up. An installed local model
+sits at `light`. A ladder slot may be empty (xAI names no light model); the
+nearest rung that has a candidate answers instead. The ladder is the day-one
+pool: a fresh install with one API key and no stars gets a pick.
+
+| Row | light | standard | strong |
+|---|---|---|---|
+| Anthropic | claude-haiku-4-5 | claude-sonnet-4-6 | claude-opus-4-6 |
+| OpenAI | gpt-5-mini | gpt-5 | — |
+| Mistral | mistral-small-latest | mistral-medium-latest | mistral-large-latest |
+| xAI | — | grok-4 | — |
+| DeepSeek | deepseek-chat | deepseek-chat | deepseek-reasoner |
+| OpenRouter | openrouter/auto | openrouter/auto | openrouter/auto |
+
+OpenRouter's row puts its own router on every rung: `openrouter/auto` is a
+trained classifier over their whole marketplace, run inside the request
+Klide was sending anyway. A user whose only key is OpenRouter gets that
+router for free; a user with a direct key beside it gets the direct model,
+because an unpriced candidate ranks after every priced one.
+
+**Rank.** Two tiers, stable within each:
 
 | Tier | Members | Order inside the tier |
 |---|---|---|
-| 1 | starred | cheapest input price first; unknown price last |
-| 2 | local, unstarred | the Provider's default model, then by name |
-| 3 | everything else | cheapest first |
+| 1 | starred | nearest the task's rung; then cheapest input price, unknown price last |
+| 2 | ladder + local | nearest the task's rung; then Ollama's default; then cheapest |
+
+A starred model takes its rung from its Provider's ladder; a star on no
+ladder (a self-hosted endpoint) ranks as if it sat at the wanted rung. A
+local model is free, so at its rung it leads every hosted one — Chat goes
+local — and at the wrong rung a keyed model that fits the job leads it — a
+Goal goes to the standard model. Stars reorder this; nothing else does.
 
 Ties break on provider name, then model name. A router that picks differently
 on identical input is a bug, so the order is total.
@@ -108,9 +141,14 @@ code.
 ```json
 { "type": "route_resolved",
   "provider": "anthropic", "model": "claude-sonnet-4-6",
-  "reason": "starred · $3/M · tools · 200k window",
+  "reason": "cheapest · standard rung · $3/M · tools · 200k window",
   "skipped": ["anthropic claude-haiku-4-5: cannot use tools"] }
 ```
+
+The reason names the rung the pick answered from. When nothing sat at the
+wanted rung it says so — `local · light rung for a standard job · free ·
+tools · 128k window` — so a Goal that landed on an 8B model is readable as a
+bench with nothing better on it, not a routing mistake.
 
 `skipped` names every candidate that ranked *above* the pick and what ruled it
 out. The decision is auditable, not just its outcome.
@@ -150,7 +188,11 @@ Four things every router above agrees on, all of which this follows:
 
 - **Not per-turn.** One decision per conversation, locked.
 - **Not a classifier.** No model call in front of a message; the task shape
-  (Mode, prompt size) is the signal, and it is free.
+  (Mode, prompt size, attachments) is the signal, and it is free. The one
+  trained router on the bench is OpenRouter's, and it rides the request
+  that was leaving anyway.
+- **Not learned.** The ladder is declared on the row and the rung rule is a
+  few lines. Both are readable and editable without data.
 - **Not a delegate dispatcher.** Claude Code, Codex, OpenCode and Oh My Pi are
   never candidates.
 - **Not silent.** Every pick and every rejection is on the Transcript.
@@ -172,19 +214,27 @@ Four things every router above agrees on, all of which this follows:
 
 In the order they earn their place:
 
-1. **Privacy as a gate.** A `local-only` policy that rules out every hosted
+1. **Lock `openrouter/auto` to its answer.** OpenRouter names the model
+   that actually answered in the response's `model` field. Recording that
+   as the Run's origin would lock the conversation to the concrete model
+   from turn two on, keeping the prompt cache; today it locks to the router
+   slug and OpenRouter may re-route each turn.
+2. **Privacy as a gate.** A `local-only` policy that rules out every hosted
    Provider. The gate has the slot; the setting does not exist yet.
-2. **Stars in Rust.** Today the renderer sends them on the request, so a
+3. **Stars in Rust.** Today the renderer sends them on the request, so a
    headless Mission attempt has none. A file under `~/.klide/` would let every
    producer see the same preference.
-3. **Auto at Mission approval.** Approval freezes a concrete pair into the
+4. **Auto at Mission approval.** Approval freezes a concrete pair into the
    task file, so a Mission never arrives as `auto`. Resolving at approval
    time, and writing the pair back, is the right seam — not dispatch.
-4. **Escalation as a new attempt.** When `steering.rs` or `failure_budget.rs`
+5. **Escalation as a new attempt.** When `steering.rs` or `failure_budget.rs`
    trips, park the attempt and retry one tier up with `escalation: true`.
    Missions already have the attempt model; the panel wants a
    "Retry with a stronger model" action. Never a swap inside the run.
-5. **Outcome-aware tie-breaks.** The run ledger records accepted vs rejected
-   attempts per model on this repo — RouteLLM's preference signal, honestly
-   collected. Small, so it belongs inside a tier as a tie-break, never as the
-   classifier.
+6. **Outcome-aware tie-breaks.** The run ledger records accepted vs rejected
+   attempts on this repo — RouteLLM's preference signal, honestly collected.
+   Keyed by task shape × rung, not by model: a per-model table has hundreds
+   of cells that never fill on one bench, a shape × rung table has a dozen.
+   Small, so it belongs inside a tier as a tie-break, never as the
+   classifier, and the declared rung rule stays the prior until a cell has
+   enough rows to beat it.
