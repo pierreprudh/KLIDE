@@ -342,16 +342,9 @@ pub(super) async fn run_via_server(
             let messages = recover_history(&client, &url, &path, server.username(), &password, server.history_boundary()).await?;
             for item in server.recover_history(&messages) { emitter.handle(item); }
         }
-        if !status.success() {
-            let stderr_text = stderr.await.unwrap_or_default();
-            let stderr_text = stderr_text.trim();
-            return Err(if stderr_text.is_empty() {
-                format!("{label} exited with {status}")
-            } else {
-                format!("{label} exited with {status}: {stderr_text}")
-            });
-        }
-        emitter.finish()
+        let failure = (!status.success()).then(|| status.to_string());
+        let stderr_text = match &failure { Some(_) => stderr.await.unwrap_or_default(), None => String::new() };
+        turn_result(label, failure.as_deref(), emitter.finish(), &stderr_text)
     })
     .await
     .unwrap_or_else(|_| {
@@ -402,6 +395,23 @@ pub(super) async fn recover_history(
     Ok(messages)
 }
 
+/// What a finished run reports. A rejection the stream carried
+/// (`{"type":"error"}` on stdout, `session.error` on the event feed) is *why*
+/// the CLI exited 1, so it outranks the bare exit status — which, with stderr
+/// empty as OpenCode leaves it in JSON mode, used to say nothing at all
+/// ("OpenCode exited with exit status: 1" for a Go model the account's region
+/// setting refuses).
+fn turn_result(label: &str, failure: Option<&str>, finished: Result<String, String>, stderr: &str) -> Result<String, String> {
+    match (failure, finished) {
+        (_, Err(error)) => Err(error),
+        (None, Ok(answer)) => Ok(answer),
+        (Some(status), Ok(_)) => {
+            let stderr = stderr.trim();
+            Err(if stderr.is_empty() { format!("{label} exited with {status}") } else { format!("{label} exited with {status}: {stderr}") })
+        }
+    }
+}
+
 /// A password for one server's lifetime.
 fn mint_password() -> Result<String, String> {
     let mut bytes = [0u8; 16];
@@ -414,6 +424,16 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
+
+    #[test]
+    fn a_provider_rejection_outranks_the_exit_status() {
+        let rejection = "Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.";
+        assert_eq!(turn_result("OpenCode", Some("exit status: 1"), Err(rejection.into()), ""), Err(rejection.to_string()));
+        assert_eq!(turn_result("OpenCode", None, Err(rejection.into()), ""), Err(rejection.to_string()));
+        assert_eq!(turn_result("OpenCode", Some("exit status: 1"), Ok(String::new()), ""), Err("OpenCode exited with exit status: 1".to_string()));
+        assert_eq!(turn_result("OpenCode", Some("exit status: 1"), Ok(String::new()), " boom \n"), Err("OpenCode exited with exit status: 1: boom".to_string()));
+        assert_eq!(turn_result("OpenCode", None, Ok("hi".into()), "ignored"), Ok("hi".to_string()));
+    }
 
     #[tokio::test]
     async fn recovery_pages_back_to_the_resumed_turn_boundary() {

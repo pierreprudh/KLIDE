@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An OpenCode turn the provider refused now says why. OpenCode exits 1 with an empty stderr in JSON mode and puts the rejection on its stream, which the exit path used to discard: "OpenCode exited with exit status: 1" for a Go model the account's region setting refuses now reads "This Go model requires Global regions…".
 - An opt-in live test (`installed_claude_live_openrouter_tool_loop`, `cargo test -- --ignored`) runs the installed Claude Code through the bridge to OpenRouter's DeepSeek with the key resolved the way the app resolves it, and asserts the tool loop and the upstream usage.
 - A conversation keeps the agent and model it began on: the rail mark and group never move to a later turn's pair (records 0.6.9 refiled are healed on load), and in a Delegate thread the agent menu routes that CLI onto the picked Provider's model instead of swapping the CLI.
 - Enable provider/model effort controls across supported harness routes, including per-run Hermes reasoning and bridge-level overrides for Claude Code, Codex, and OpenCode.
