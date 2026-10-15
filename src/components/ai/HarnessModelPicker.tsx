@@ -19,7 +19,7 @@ import { openSettingsSection } from "../../settingsNavigation";
 
 const PREFIX = "hermes-source:";
 const CATEGORIES = ["API", "Local", "Self-hosted", "Subscription"];
-/** The row that lists the agent's own models, its configured default first. */
+/** The row named after the agent itself — its own models, its configured default first. */
 const OWN = "own";
 function readChoice(model: string, harness: string): { provider: string; model: string } | null {
   const prefix = harness === "hermes" ? PREFIX : "harness-source:";
@@ -187,7 +187,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === OWN} data-own className="provider-category-row"
           style={{ ...style, background: category === OWN ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showOwn(e.currentTarget)} onClick={(e) => showOwn(e.currentTarget, true)}>
-          Configured default <span style={{ float: "right" }} aria-hidden>›</span>
+          {harnessName} <span style={{ float: "right" }} aria-hidden>›</span>
         </button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
