@@ -34,10 +34,11 @@ type Props = {
   onApproveForProject?: () => void;
   pattern?: string;
   onApprovePattern?: (pattern: string) => void;
-  /** Put the Run this card belongs to on the full-auto rung: this command
-   *  runs, and so does every later one, unasked. Offered only where the Run
-   *  has no foot bar of its own to say so — a worker drawn on its parent's
-   *  conversation. */
+  /** Full auto, said on the card. On a command card: put the Run this card
+   *  belongs to on the full-auto rung — this command runs, and so does every
+   *  later one, unasked (offered where the Run has no foot bar of its own: a
+   *  worker drawn on its parent's conversation). On a worker dispatch card:
+   *  dispatch, and start the worker on that rung. */
   onFullAuto?: () => void;
   /** The card the run is blocked on answers the keyboard: ⏎ approves once,
    *  esc denies — from anywhere that isn't a text field. (The composer
@@ -184,6 +185,7 @@ function WordAction({
   label,
   tone,
   keycap,
+  title,
   onClick,
 }: {
   label: string;
@@ -191,6 +193,8 @@ function WordAction({
    *  rest, full strength under the pointer, never the danger red. */
   tone: "danger" | "accent" | "neutral";
   keycap?: string;
+  /** What the word means here, when the word alone would not say. */
+  title?: string;
   onClick: () => void;
 }) {
   const fg = tone === "accent" ? "var(--accent)" : "var(--fg-subtle)";
@@ -199,8 +203,8 @@ function WordAction({
     <button
       type="button"
       onClick={onClick}
-      aria-label={keycap ? `${label} (${keycap})` : label}
-      title={keycap ? `${label} (${keycap})` : label}
+      aria-label={title ?? (keycap ? `${label} (${keycap})` : label)}
+      title={title ?? (keycap ? `${label} (${keycap})` : label)}
       style={{
         flexShrink: 0,
         display: "inline-flex",
@@ -445,8 +449,13 @@ export function InlineCommandReview({
           // divider.
           <span aria-hidden="true" style={{ width: 1, height: 14, background: "var(--border)", margin: "0 2px" }} />
         )}
-        {kind === "command" && onFullAuto && (
-          <WordAction label="Full auto" tone="neutral" onClick={onFullAuto} />
+        {(kind === "command" || kind === "worker") && onFullAuto && (
+          <WordAction
+            label="Full auto"
+            title={kind === "worker" ? "Dispatch on full auto: the worker runs its commands without asking" : "Run this and every later command without asking"}
+            tone="neutral"
+            onClick={onFullAuto}
+          />
         )}
         <WordAction label={rejectLabel} tone="danger" keycap={hotkeys ? "Esc" : undefined} onClick={onReject} />
         <WordAction label={approveOnceLabel} tone="accent" keycap={hotkeys ? "↵" : undefined} onClick={onApproveOnce} />

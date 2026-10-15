@@ -364,6 +364,8 @@ where
     let mut worktree_path: Option<String> = None;
     let mut source_commit: Option<String> = None;
     let worker_label = worker.map(|w| w.label());
+    // Set by the dispatch card's answer, read when the worker's spec is built.
+    let mut dispatch_full_auto = false;
     if let Some(worker) = worker {
         let label = worker_label.clone().unwrap_or_default();
         let Some(root) = ctx.request.workspace_root.clone() else {
@@ -471,7 +473,7 @@ where
                     metadata: None,
                 }));
             }
-            permission::GateDecision::Approved { .. } => {}
+            permission::GateDecision::Approved { worker_full_auto: chosen, .. } => dispatch_full_auto = chosen,
         }
 
         if is_repo {
@@ -509,11 +511,14 @@ where
         ts: now_ms(),
     })?;
 
+    // The worker's rung: the parent's, as it stands now, or the dispatch
+    // card's own "Full auto" — either puts the worker on it.
     let parent_full_auto = {
         let mut on = false;
         ctx.sup.with_handle(ctx.id, &mut |h| on = h.subject.full_auto(h.trust.commands_policy()));
         on
     };
+    let worker_full_auto = parent_full_auto || dispatch_full_auto;
     let mut spec = match worker {
         // A Delegate worker is the CLI running as itself: its own provider, the
         // model the call asked for or the CLI's own default, and a prompt that
@@ -537,11 +542,11 @@ where
             max_turns: ctx.request.max_turns,
             command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: Some(false),
-            // The parent's rung, as it stands now, rides the dispatch: a
-            // conversation on full auto gets a worker that runs its commands
-            // unasked (each recorded as answered by policy). Otherwise the
-            // worker asks, on the card its parent's row draws.
-            auto_approve_commands: parent_full_auto.then_some(true),
+            // The parent's rung, as it stands now, or the dispatch card's
+            // choice rides the dispatch: a worker on full auto runs its
+            // commands unasked (each recorded as answered by policy).
+            // Otherwise the worker asks, on the card its parent's row draws.
+            auto_approve_commands: worker_full_auto.then_some(true),
         },
         // An API worker is Klide's own Harness on another house's model: Kit's
         // tools and conventions, the role appended, edits applied and commands

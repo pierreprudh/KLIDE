@@ -8962,6 +8962,32 @@ mod worker_dispatch_tests {
         assert_eq!(String::from_utf8_lossy(&worktrees.stdout).lines().count(), 1, "no worktree was created");
     }
 
+    /// The dispatch card's own "Full auto": a parent that still reviews can
+    /// start this one worker on the rung, by saying so on the card.
+    #[tokio::test]
+    async fn a_dispatch_approved_as_full_auto_starts_the_worker_on_the_rung() {
+        let root = git_repo("card-rung");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("card-rung");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (_events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Implement slugify", "worker": "claude-code" }));
+        let (outcome, _, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "default"),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once","workerFullAuto":true}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(spawned[0].auto_approve_commands, Some(true), "the card's choice rides the dispatch");
+    }
+
     /// The parent's rung reaches the worker: a conversation on full auto
     /// dispatches a worker that runs its commands unasked. The dispatch card
     /// itself still asks — the rung silences commands and nothing else.

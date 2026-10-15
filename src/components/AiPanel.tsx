@@ -3679,6 +3679,12 @@ This user request requires workspace inspection. Before answering, you MUST call
     void controller.resolve({ gate: "permission", decision: { behavior: "deny" } });
   }
 
+  /** The dispatch card's "Full auto": approve the dispatch and start the
+   *  worker on the full-auto rung, whatever this conversation's own is. */
+  function dispatchFullAuto() {
+    void controller.resolve({ gate: "permission", decision: { behavior: "allow", scope: "once", workerFullAuto: true } });
+  }
+
   /** What a refused card answer says, by what was being answered. */
   function gateFailureLabel(decision: GateDecision): string {
     switch (decision.gate) {
@@ -4865,6 +4871,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" ? undefined : () => approveCommand("project")}
             pattern={pendingPermission.suggestedPattern}
             onApprovePattern={(pattern) => approveCommand("project", pattern)}
+            onFullAuto={pendingPermission.kind === "worker" ? dispatchFullAuto : undefined}
             hotkeys
           />
         )}

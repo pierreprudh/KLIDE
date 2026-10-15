@@ -146,7 +146,16 @@ export type PermissionDecision =
   /** `via` names a policy that answered in the user's place — the full-auto
    *  rung flipped while the card was up — so a transcript never reads as a
    *  click the user did not make. */
-  | { behavior: "allow"; scope: "once" | "run" | "project" | "user"; pattern?: string; via?: "full_auto" }
+  | {
+      behavior: "allow";
+      scope: "once" | "run" | "project" | "user";
+      pattern?: string;
+      via?: "full_auto";
+      /** On a worker dispatch: start the worker on the full-auto rung, so it
+       *  runs its commands unasked (each still recorded as answered by
+       *  policy). Read by the spawn in Rust, ignored by every other gate. */
+      workerFullAuto?: boolean;
+    }
   | { behavior: "deny"; message?: string }
   | { behavior: "ask_later" };
 

@@ -416,6 +416,9 @@ pub enum GateDecision {
         /// The allowlist pattern the user chose, if they widened it (command
         /// capability only). Falls back to the literal key when absent.
         pattern: Option<String>,
+        /// On a worker dispatch: the card's "Full auto" — start the worker on
+        /// the full-auto rung. Meaningless to every other gate.
+        worker_full_auto: bool,
     },
     Rejected,
     /// The user cancelled the whole run while the prompt was up.
@@ -618,6 +621,7 @@ where
                 .get("pattern")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            worker_full_auto: decision_val.get("workerFullAuto").and_then(|v| v.as_bool()).unwrap_or(false),
         }
     } else {
         GateDecision::Rejected
@@ -638,7 +642,7 @@ pub fn record(
     decision: &GateDecision,
 ) {
     match decision {
-        GateDecision::Approved { scope, pattern } => {
+        GateDecision::Approved { scope, pattern, .. } => {
             if scope == "run" || scope == "project" {
                 with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_approved(cap, run_key));
             }
