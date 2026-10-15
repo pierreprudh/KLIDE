@@ -19,6 +19,8 @@ import { openSettingsSection } from "../../settingsNavigation";
 
 const PREFIX = "hermes-source:";
 const CATEGORIES = ["API", "Local", "Self-hosted", "Subscription"];
+/** The row that lists the agent's own models, its configured default first. */
+const OWN = "own";
 function readChoice(model: string, harness: string): { provider: string; model: string } | null {
   const prefix = harness === "hermes" ? PREFIX : "harness-source:";
   if (!model.startsWith(prefix)) return null;
@@ -74,6 +76,16 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     setCategoryPos(submenuPosition(row, 220, 300));
     if (category !== name) { setCategory(name); setSource(null); setSourcePos(null); }
   }
+  /** The agent's own models open straight from the categories panel — no provider level in between. */
+  function showOwn(row: HTMLElement, focus = false) {
+    const own = harness === "hermes" ? saved?.provider ?? null : harness;
+    setCategory(OWN); setCategoryPos(null);
+    setSourcePos(submenuPosition(row, 300, 360));
+    focusModels.current = focus;
+    if (own && source === own && focus) menu.menuRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+    if (source !== own) { setModels([]); setError(""); setQuery(""); setLoading(own !== null); }
+    setSource(own);
+  }
   function showSource(id: string, row: HTMLElement, focus = false) {
     if (!support[id]?.supported) { setSource(null); setSourcePos(null); return; }
     setSourcePos(submenuPosition(row, 300, 360));
@@ -87,6 +99,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const sources = (sourceGroups.find((g) => g.label === category)?.items ?? []).slice()
     .sort((a, b) => Number(missingClis.has(a.id === NOUS_SOURCE ? "hermes" : a.id)) - Number(missingClis.has(b.id === NOUS_SOURCE ? "hermes" : b.id)));
   const sourceIds = sourceGroups.flatMap((g) => g.items.map((item) => item.id)).join("\n");
+  const ownTitle = harness === "hermes" && saved ? sourceGroups.flatMap((g) => g.items).find((item) => item.id === saved.provider)?.name ?? saved.provider : harnessName;
   useEffect(() => {
     if (!menu.open) return;
     void refreshCustomCli().then(setCustomClis).catch(() => {});
@@ -147,14 +160,18 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
       onKeyDown={(e) => {
         if (e.key === "Escape") { menu.close(); menu.triggerRef.current?.focus(); }
         const target = e.target as HTMLElement;
-        if (e.key === "ArrowRight" && target.dataset.category) {
+        if (e.key === "ArrowRight" && target.dataset.own) {
+          e.preventDefault(); showOwn(target, true);
+          requestAnimationFrame(() => menu.menuRef.current?.querySelector<HTMLInputElement>('[data-level="models"] input')?.focus());
+        } else if (e.key === "ArrowRight" && target.dataset.category) {
           e.preventDefault(); showCategory(target.dataset.category, target);
           requestAnimationFrame(() => menu.menuRef.current?.querySelector<HTMLButtonElement>('[data-level="providers"] button')?.focus());
         } else if (e.key === "ArrowRight" && target.dataset.source) {
           e.preventDefault(); showSource(target.dataset.source, target, true);
         } else if (e.key === "ArrowLeft" && target.closest('[data-level="models"]')) {
           e.preventDefault(); setSource(null);
-          menu.menuRef.current?.querySelector<HTMLButtonElement>('[data-level="providers"] button')?.focus();
+          if (category === OWN) { setCategory(null); setSourcePos(null); }
+          menu.menuRef.current?.querySelector<HTMLButtonElement>(category === OWN ? '[data-level="categories"] button' : '[data-level="providers"] button')?.focus();
         } else if (e.key === "ArrowLeft" && target.closest('[data-level="providers"]')) {
           e.preventDefault(); setCategory(null); setSource(null);
           menu.menuRef.current?.querySelector<HTMLButtonElement>('[data-level="categories"] button')?.focus();
@@ -167,7 +184,11 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
       <div role="menu" data-menu-panel data-level="categories" className="popover-enter menu-glass" style={{ overflow: "hidden" }}>
         <ModelPickerHeader icon={<ProviderLogo id={harness} size={15} />} title={harnessName} caption="Choose an intelligence source" />
         <div style={{ padding: 4 }}>
-        <button type="button" role="menuitem" style={style} onMouseEnter={() => { setCategory(null); setSource(null); }} onClick={() => { onChange("default"); menu.close(); }}>Configured default</button>
+        <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === OWN} data-own className="provider-category-row"
+          style={{ ...style, background: category === OWN ? "var(--menu-row-active)" : undefined }}
+          onMouseEnter={(e) => showOwn(e.currentTarget)} onClick={(e) => showOwn(e.currentTarget, true)}>
+          Configured default <span style={{ float: "right" }} aria-hidden>›</span>
+        </button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showCategory(name, e.currentTarget)} onClick={(e) => showCategory(name, e.currentTarget)}>
@@ -189,10 +210,11 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint ↗</button>}
         </div>
       </div>}
-      {source && sourcePos && <div role="menu" data-menu-panel data-level="models" className="popover-enter menu-glass"
+      {(source || category === OWN) && sourcePos && <div role="menu" data-menu-panel data-level="models" className="popover-enter menu-glass"
         style={{ position: "fixed", ...sourcePos, width: 300, maxHeight: Math.min(360, window.innerHeight - sourcePos.top - 8), display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <ModelPickerHeader icon={<ProviderLogo id={source.startsWith("hermes-subscription:") ? "hermes" : source as ProviderId} size={15} />}
-          title={sources.find((p) => p.id === source)?.name ?? "Models"} caption={loading ? "Loading models…" : `${models.length} models available`} />
+        <ModelPickerHeader icon={<ProviderLogo id={!source || source.startsWith("hermes-subscription:") ? (source ? "hermes" : harness) : source as ProviderId} size={15} />}
+          title={category === OWN ? ownTitle : sources.find((p) => p.id === source)?.name ?? "Models"}
+          caption={category === OWN ? (harness === "hermes" ? (saved ? "Hermes’s configured source" : "No configured source yet") : `${harnessName}’s own models`) : loading ? "Loading models…" : `${models.length} models available`} />
         {category === "Subscription" && <div style={{ padding: 9, fontSize: 11, color: "var(--fg-subtle)" }}>{source === NOUS_SOURCE ? "Uses your Nous Portal allowance. Hermes manages authentication." : harness === "hermes" ? "Uses this subscription through Hermes’s own authentication." : "Uses the harness’s own authentication."}</div>}
         <div style={{ flexShrink: 0, padding: "6px 8px", borderBottom: "1px solid var(--panel-border)" }}>
         <input aria-label="Search or enter model" value={query} placeholder="Filter models…" style={MODEL_FILTER_STYLE}
@@ -200,6 +222,14 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg)"; }} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && query.trim() && !loading && !error) select(query.trim()); }} />
         </div>
         <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 4 }}>
+        {category === OWN && !query.trim() && <>
+          <button type="button" role="menuitem" className="provider-category-row" style={{ ...style, background: model === "default" ? "var(--menu-row-active)" : undefined, fontWeight: model === "default" ? 550 : 500 }}
+            onClick={() => { onChange("default"); menu.close(); menu.triggerRef.current?.focus(); }}>
+            Default<div style={{ fontSize: 10, fontWeight: 500, color: "var(--fg-dim)", marginTop: 2 }}>{harness === "hermes" ? saved ? saved.model : "Set a source in Settings" : `What ${harnessName} starts on`}</div>
+          </button>
+          {harness === "hermes" && !saved && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("subscription"); }}>Open Settings ↗</button>}
+          <div style={{ height: 1, background: "var(--panel-border)", margin: "4px 5px" }} aria-hidden />
+        </>}
         {loading && <div style={{ padding: 9, fontSize: 12 }}>Loading models…</div>}
         {source === NOUS_SOURCE && <div style={{ padding: "4px 9px", fontSize: 11 }}>
           <button type="button" style={style} disabled={loginBusy} onClick={async () => {
@@ -210,7 +240,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           }}>{loginBusy ? "Complete sign-in in your browser…" : "Sign in to Nous Portal ↗"}</button>
         </div>}
         {error && <div style={{ padding: 9, fontSize: 12, color: "var(--fg-subtle)" }}>{error}<button type="button" style={style} onClick={() => { menu.close(); openSettingsSection(category === "Local" ? "local-ai" : category === "Subscription" ? "subscription" : "api"); }}>Open Settings ↗</button></div>}
-        {!error && filteredModels.map((id, index) => <Fragment key={id}>
+        {!error && source && filteredModels.map((id, index) => <Fragment key={id}>
           {sectioned && index === 0 && <div style={sectionStyle}>Favorites</div>}
           {sectioned && index === favoriteCount && <div style={sectionStyle}>All models</div>}
           <button type="button" role="menuitem" className="provider-category-row hermes-model-row" style={{ ...style, background: current?.provider === source && current.model === id ? "var(--menu-row-active)" : undefined }} onClick={() => select(id)}>
