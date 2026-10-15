@@ -21,6 +21,7 @@ import {
   loadPanelSession,
   persistConversation,
   renameStoredConversation,
+  suggestConversationTitle,
   saveConversations,
   savePanelSession,
 } from "./storedConversations";
@@ -487,6 +488,25 @@ describe("forgetting a conversation", () => {
 
     expect(deleted).toEqual(["a"]);
     expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["b"]);
+  });
+});
+
+describe("suggestConversationTitle — the CLI's name for a thread nobody named", () => {
+  it("names an unnamed thread once, and never one the person named", () => {
+    saveConversations([
+      conversation({ id: "fresh", title: "hello who are you", updatedAt: 2 }),
+      conversation({ id: "named", title: "Payments", updatedAt: 1, renamed: true }),
+    ]);
+    suggestConversationTitle("fresh", "Introduce OpenCode in Klide");
+    suggestConversationTitle("named", "Something else");
+    suggestConversationTitle("missing", "Nothing");
+    const byId = Object.fromEntries(loadConversations<Conversation>().map((c) => [c.id, c]));
+    expect(byId.fresh?.title).toBe("Introduce OpenCode in Klide");
+    expect(byId.fresh?.renamed).toBe(true);
+    expect(byId.named?.title).toBe("Payments");
+    // The next session's name does not rename the thread again.
+    suggestConversationTitle("fresh", "A second session's name");
+    expect(loadConversations<Conversation>().find((c) => c.id === "fresh")?.title).toBe("Introduce OpenCode in Klide");
   });
 });
 

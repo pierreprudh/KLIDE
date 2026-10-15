@@ -543,6 +543,7 @@ impl AgentEvent {
             | AgentEvent::ToolCallFinished { ts, .. }
             | AgentEvent::ObservedToolCall { ts, .. }
             | AgentEvent::ObservedToolResult { ts, .. }
+            | AgentEvent::ConversationTitled { ts, .. }
             | AgentEvent::PermissionRequested { ts, .. }
             | AgentEvent::PermissionResolved { ts, .. }
             | AgentEvent::DiffProposed { ts, .. }
@@ -715,6 +716,15 @@ pub enum AgentEvent {
         tool_call_id: String,
         ok: bool,
         content: String,
+        ts: i64,
+    },
+    /// The delegate CLI named the conversation's session itself (OpenCode
+    /// titles a session with a small model after its first message). A
+    /// suggestion for the conversation's title: the panel adopts it for a
+    /// thread nobody has named, and a name the person typed always wins.
+    ConversationTitled {
+        run_id: String,
+        title: String,
         ts: i64,
     },
     PermissionRequested {

@@ -668,6 +668,10 @@ impl super::chat_server::ChatServer for OpenCodeServer {
         self.v2.as_ref()?.history_path()
     }
 
+    fn session_path(&self) -> Option<String> {
+        self.v2.as_ref()?.session_path()
+    }
+
     fn set_history_boundary(&mut self, id: Option<String>) {
         if let Some(turn) = &mut self.v2 { turn.boundary = id; }
     }

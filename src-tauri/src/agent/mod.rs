@@ -2388,6 +2388,16 @@ async fn loop_body(
         let stream_first_token = first_token_ms.clone();
         let stream = Channel::<StreamChunk>::new(move |body| {
             if let Ok(chunk) = body.deserialize::<StreamChunk>() {
+                // The CLI's name for its session: the rail's business, not
+                // the transcript's — no delta, no first-token clock.
+                if let Some(title) = chunk.title {
+                    let _ = stream_channel.send(AgentEvent::ConversationTitled {
+                        run_id: stream_run_id.clone(),
+                        title,
+                        ts: now_ms(),
+                    });
+                    return Ok(());
+                }
                 // A delegate CLI reporting work it already did. Forwarded as a
                 // distinct event, never as a ToolCallStarted: Klide did not
                 // dispatch it, no capability applied, and no permission or diff

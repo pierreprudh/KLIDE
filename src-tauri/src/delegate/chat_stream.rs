@@ -24,6 +24,9 @@ pub(crate) enum StreamItem {
     Error(String),
     /// The session id this turn runs under — what `--resume` needs later.
     Session(String),
+    /// The name the CLI gave its session. OpenCode titles a session with a
+    /// small model after its first message; the conversation may adopt it.
+    Title(String),
     /// The `/` commands this CLI answers itself (see `cli_commands.rs`).
     Commands(super::cli_commands::CliCommands),
     /// A whole assistant text block, delivered once the model finished it.

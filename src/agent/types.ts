@@ -273,6 +273,10 @@ export type AgentEvent =
       ts: number;
     }
   | { type: "observed_tool_result"; runId: string; toolCallId: string; ok: boolean; content: string; ts: number }
+  /** The delegate CLI named its session itself (OpenCode titles a session
+   *  with a small model after its first message). A suggestion for the
+   *  conversation's title; a name the person typed always wins. */
+  | { type: "conversation_titled"; runId: string; title: string; ts: number }
   | { type: "permission_requested"; runId: string; request: PermissionRequest; ts: number }
   | { type: "permission_resolved"; runId: string; requestId: string; decision: PermissionDecision; ts: number }
   | { type: "diff_proposed"; runId: string; proposal: DiffProposal; ts: number }

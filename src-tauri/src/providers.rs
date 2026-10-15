@@ -1560,6 +1560,10 @@ pub(crate) struct StreamChunk {
     /// tools through `tool_calls` and Klide runs them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) observed: Option<ObservedToolActivity>,
+    /// The name a delegate CLI gave its session, when it names its own.
+    /// Only the structured delegate path fills this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
 }
 
 impl StreamChunk {

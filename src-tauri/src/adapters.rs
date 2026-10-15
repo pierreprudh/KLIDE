@@ -287,6 +287,7 @@ impl StreamingProvider for OllamaAdapter {
                 content: c.to_string(),
                 thinking: t.to_string(),
                 observed: None,
+                title: None,
             });
         }
         if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
@@ -631,6 +632,7 @@ impl StreamingProvider for OpenAiAdapter {
                     content: c.to_string(),
                     thinking: String::new(),
                     observed: None,
+                    title: None,
                 });
             }
         }
@@ -650,6 +652,7 @@ impl StreamingProvider for OpenAiAdapter {
                     content: String::new(),
                     thinking: r.to_string(),
                     observed: None,
+                    title: None,
                 });
             }
         }
@@ -1212,6 +1215,7 @@ impl StreamingProvider for AnthropicAdapter {
                                     content: t.to_string(),
                                     thinking: String::new(),
                                     observed: None,
+                                    title: None,
                                 });
                             }
                         }
@@ -1226,6 +1230,7 @@ impl StreamingProvider for AnthropicAdapter {
                                     content: String::new(),
                                     thinking: t.to_string(),
                                     observed: None,
+                                    title: None,
                                 });
                             }
                         }

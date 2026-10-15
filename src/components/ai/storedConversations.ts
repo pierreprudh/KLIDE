@@ -530,6 +530,17 @@ export function dropCachedImages(): number {
  *  derived title; an empty name is a no-op, not an erasure. The record is
  *  marked `renamed` so later snapshots keep it (see `upsertConversation`),
  *  and its place in the list is unchanged — naming a thread is not using it. */
+/** Adopt the name a Delegate CLI gave its session — once. The first
+ *  suggestion names a thread nobody has named; it is recorded as a rename, so
+ *  the snapshots that recompute the title keep it, and so a later suggestion
+ *  (each new CLI session gets its own) never renames the thread again. A name
+ *  the person typed is never touched. */
+export function suggestConversationTitle(id: string, title: string): void {
+  const previous = loadConversations<Conversation>().find((c) => c.id === id);
+  if (!previous || previous.renamed) return;
+  renameStoredConversation(id, title);
+}
+
 export function renameStoredConversation(id: string, title: string): Conversation[] {
   const nextTitle = title.replace(/\s+/g, " ").trim();
   const current = loadConversations<Conversation>();

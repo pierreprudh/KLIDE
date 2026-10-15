@@ -191,6 +191,7 @@ import {
   deriveTitle,
   loadConversations,
   persistConversation,
+  suggestConversationTitle,
 } from "./ai/storedConversations";
 import {
   genId,
@@ -3765,6 +3766,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       onMeasuredPromptTokens: setMeasuredPromptTokens,
       onMeasuredUsage: setMeasuredUsageTokens,
       onMeasuredContextWindow: setReportedContextWindow,
+      // A top-level Run's id is its conversation's; a subagent's never matches
+      // a stored thread and falls through.
+      onTitled: suggestConversationTitle,
       onOpenCliSession: (session) => onOpenCliSession?.(session),
       onFileChanged: (path) => {
         runChangedPathsRef.current.add(path);

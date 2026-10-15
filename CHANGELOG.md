@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An OpenCode conversation takes the name OpenCode gives its session. The CLI titles a session with its small model beside the first turn; Klide reads the session record once the turn is over and the rail adopts the name for a thread nobody has named yet. A name you typed is never touched, and the first name sticks even though each new CLI session gets one of its own.
 - An OpenCode turn the provider refused now says why. OpenCode exits 1 with an empty stderr in JSON mode and puts the rejection on its stream, which the exit path used to discard: "OpenCode exited with exit status: 1" for a Go model the account's region setting refuses now reads "This Go model requires Global regions…".
 - An opt-in live test (`installed_claude_live_openrouter_tool_loop`, `cargo test -- --ignored`) runs the installed Claude Code through the bridge to OpenRouter's DeepSeek with the key resolved the way the app resolves it, and asserts the tool loop and the upstream usage.
 - A conversation keeps the agent and model it began on: the rail mark and group never move to a later turn's pair (records 0.6.9 refiled are healed on load), and in a Delegate thread the agent menu routes that CLI onto the picked Provider's model instead of swapping the CLI.

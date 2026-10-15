@@ -32,18 +32,27 @@ impl Turn {
         }
     }
 
-    pub fn history_path(&self) -> Option<String> {
+    /// The session id as a path segment — only when it is one. Session IDs
+    /// are opaque, never URLs supplied by a CLI.
+    fn session_segment(&self) -> Option<&str> {
         let session = self.session.as_deref()?;
-        // Session IDs are opaque path segments, never URLs supplied by a CLI.
-        if !session
+        session
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return None;
-        }
+            .then_some(session)
+    }
+
+    pub fn history_path(&self) -> Option<String> {
+        let session = self.session_segment()?;
         Some(format!(
             "/api/session/{session}/message?order=desc&limit=100"
         ))
+    }
+
+    /// `GET /api/session/:id` — the session's own record, its title included.
+    pub fn session_path(&self) -> Option<String> {
+        let session = self.session_segment()?;
+        Some(format!("/api/session/{session}"))
     }
 
     pub fn feed_stdout(&mut self, line: &str) -> Vec<StreamItem> {

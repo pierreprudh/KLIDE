@@ -73,6 +73,8 @@ pub(crate) trait ChatServer: Send + Sync {
     fn set_history_boundary(&mut self, _id: Option<String>) {}
     fn history_boundary(&self) -> Option<&str> { None }
     fn recover_history(&mut self, _messages: &[serde_json::Value]) -> Vec<StreamItem> { Vec::new() }
+    /// The session's own record, when the CLI names its sessions itself.
+    fn session_path(&self) -> Option<String> { None }
     /// Arguments that start the server on a free loopback port.
     fn serve_args(&self) -> Vec<String>;
     /// A line of the server's stdout that names the URL it listens on.
@@ -342,6 +344,15 @@ pub(super) async fn run_via_server(
             let messages = recover_history(&client, &url, &path, server.username(), &password, server.history_boundary()).await?;
             for item in server.recover_history(&messages) { emitter.handle(item); }
         }
+        // The CLI names the session itself, with a small model, beside the
+        // first turn. Read once the turn is over, when the name has had the
+        // whole turn to land; one still pending is simply absent, and the
+        // next turn on the session reads it.
+        if let Some(path) = server.session_path() {
+            if let Some(title) = session_title(&client, &url, &path, server.username(), &password).await {
+                emitter.handle(StreamItem::Title(title));
+            }
+        }
         let failure = (!status.success()).then(|| status.to_string());
         let stderr_text = match &failure { Some(_) => stderr.await.unwrap_or_default(), None => String::new() };
         turn_result(label, failure.as_deref(), emitter.finish(), &stderr_text)
@@ -395,6 +406,25 @@ pub(super) async fn recover_history(
     Ok(messages)
 }
 
+/// The session's title from `GET /api/session/:id`, or nothing: a failed
+/// read is not a turn failure.
+async fn session_title(client: &reqwest::Client, url: &str, path: &str, username: &str, password: &str) -> Option<String> {
+    let response = client.get(format!("{url}{path}"))
+        .basic_auth(username, Some(password))
+        .timeout(Duration::from_secs(5)).send().await.ok()?;
+    if !response.status().is_success() { return None; }
+    session_title_in(&response.json::<serde_json::Value>().await.ok()?)
+}
+
+/// `{"data": {"title": …}}` as the session API answers (a bare record is read
+/// too). The placeholder a session carries until the CLI names it —
+/// "New session - <timestamp>", "Child session - …" — is not a name.
+fn session_title_in(value: &serde_json::Value) -> Option<String> {
+    let title = value.pointer("/data/title").or_else(|| value.get("title"))?.as_str()?.trim();
+    let placeholder = ["New session", "Child session", "Untitled"].iter().any(|p| title.starts_with(p));
+    (!title.is_empty() && !placeholder).then(|| title.to_string())
+}
+
 /// What a finished run reports. A rejection the stream carried
 /// (`{"type":"error"}` on stdout, `session.error` on the event feed) is *why*
 /// the CLI exited 1, so it outranks the bare exit status — which, with stderr
@@ -424,6 +454,16 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
+
+    #[test]
+    fn a_session_title_is_read_from_the_record_and_never_a_placeholder() {
+        assert_eq!(session_title_in(&serde_json::json!({"data": {"id": "ses_1", "title": " Fix the picker order "}})), Some("Fix the picker order".to_string()));
+        assert_eq!(session_title_in(&serde_json::json!({"title": "Fix the picker order"})), Some("Fix the picker order".to_string()));
+        assert_eq!(session_title_in(&serde_json::json!({"data": {"title": "New session - 2026-10-15T14:05:23.616Z"}})), None);
+        assert_eq!(session_title_in(&serde_json::json!({"data": {"title": "Child session - 2026-10-15T14:05:23.616Z"}})), None);
+        assert_eq!(session_title_in(&serde_json::json!({"data": {"title": ""}})), None);
+        assert_eq!(session_title_in(&serde_json::json!({"data": {}})), None);
+    }
 
     #[test]
     fn a_provider_rejection_outranks_the_exit_status() {

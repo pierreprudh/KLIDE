@@ -260,6 +260,8 @@ export type RunControllerHooks = {
   onMeasuredPromptTokens?(tokens: number): void;
   onMeasuredUsage?(usage: { prompt: number; completion: number }): void;
   onMeasuredContextWindow?(tokens: number): void;
+  /** The delegate CLI named its session; `runId` is the conversation id. */
+  onTitled?(runId: string, title: string): void;
   /** The harness wrote a workspace file. */
   onFileChanged?(path: string): void;
   /** The executor parked on `consult_advisor`; the panel services it. */
@@ -514,6 +516,7 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
       onMeasuredPromptTokens: (tokens) => deps().hooks.onMeasuredPromptTokens?.(tokens),
       onMeasuredUsage: (usage) => deps().hooks.onMeasuredUsage?.(usage),
       onMeasuredContextWindow: (tokens) => deps().hooks.onMeasuredContextWindow?.(tokens),
+      onTitled: (runId, title) => deps().hooks.onTitled?.(runId, title),
       onDetached: () => {
         viewBehind.reason = "region-detached";
       },

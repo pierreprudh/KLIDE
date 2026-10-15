@@ -181,7 +181,7 @@ pub async fn run_subscription_chat(
             let chunk: StreamChunk = serde_json::from_str(&json).map_err(|e| tauri::Error::Anyhow(e.into()))?;
             thinking_sink.lock().unwrap().push_str(&chunk.thinking);
             if let Some(reported) = &chunk.usage { *usage_sink.lock().unwrap() = Some(reported.clone()); }
-            if chunk.content.is_empty() && chunk.thinking.is_empty() && chunk.observed.is_none() { return Ok(()); }
+            if chunk.content.is_empty() && chunk.thinking.is_empty() && chunk.observed.is_none() && chunk.title.is_none() { return Ok(()); }
             downstream.send(chunk)?;
         }
         Ok(())
@@ -633,6 +633,11 @@ impl<'a> Emitter<'a> {
                 if let Some(key) = self.session_key {
                     remember_session(key, &session);
                 }
+            }
+            // The CLI's name for its session rides its own chunk; nothing
+            // about the answer changes.
+            StreamItem::Title(title) => {
+                let _ = self.on_chunk.send(StreamChunk { title: Some(title), ..Default::default() });
             }
             // Every turn refreshes the composer's `/` menu for free.
             StreamItem::Commands(commands) => {
