@@ -187,12 +187,9 @@ function summarizeArgs(args: unknown): string {
   return "";
 }
 
-// `spawn_subagent` reads as a delegation, not a tool call: a middot, the
-// @role it handed to, and the task in plain prose — expandable to the full task
-// when it's long. No JSON, no "spawn_subagent(...)" — the report follows below.
-// A call that named a worker wears that Delegate's mark and name in front of
-// the role, the same way the dispatch card does: "Claude Code implementer".
-function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRunId?: string; settled: boolean }) {
+// A delegation stays inline: worker identity, a thin activity rail, and one
+// status disclosure. Receipts and the child transcript live behind that row.
+function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string }) {
   const o = (args ?? {}) as Record<string, unknown>;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
   const worker = typeof o.worker === "string" && o.worker.trim() ? (o.worker.trim() as ProviderId) : null;
@@ -200,71 +197,47 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
   // fold writes it onto the call. A CLI on its own default carries none.
   const workerModel = worker && typeof o.model === "string" && o.model.trim() && o.model !== "default" ? o.model.trim() : null;
   const task = typeof o.task === "string" ? o.task.replace(/\s+/g, " ").trim() : "";
-  const long = task.length > 96;
-  const short = long ? task.slice(0, 95) + "…" : task;
+
   // A background dispatch settles its call at once while the child is still
   // working, so the call being settled says nothing about the child: keep
   // following it until its own transcript settles.
-  const background = o.background === true;
+  const background = o.background === true || !!receipt;
   const live = !settled || background;
   // While the child works, its own Run is the only thing happening — watch it.
   // Once the report lands the parent shows that instead, and the child's rows
   // stay one click away (fetched only if that click comes).
   const [opened, setOpened] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const toggle = () => { setRevealed(true); setOpened((was) => !was); };
   const watch = useSubagentWatch(childRunId, !!childRunId && (live || opened));
   // Only once its transcript has been read: an unresolved call whose child
   // actually died with the app would otherwise flash "starting" and vanish.
   const watching = !!childRunId && live && watch.loaded && isWatchable(watch.activity);
   const rows = useMemo(
-    () => (opened && watch.events.length ? foldedToMsgs(foldAgentEvents(watch.events)) : []),
-    [opened, watch.events],
+    () => (revealed && watch.events.length ? foldedToMsgs(foldAgentEvents(watch.events)) : []),
+    [revealed, watch.events],
   );
   return (
-    <>
-    {/* `data-child-run` is the address the report row scrolls back to. */}
-    <details data-child-run={childRunId} style={{ margin: "5px 0 -3px", scrollMarginTop: 72 }}>
-      <summary style={{ display: "flex", alignItems: "center", gap: 7, padding: 0, cursor: long ? "pointer" : "default", listStyle: "none", userSelect: "none", minWidth: 0 }}>
-        <span aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0 }}>·</span>
-        <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>{background ? "Dispatched to" : "Delegated to"}</span>
-        {worker && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, fontSize: 12, color: "var(--fg-strong)" }}>
-            <ProviderLogo id={worker} size={13} />
-            <span>{providerName(worker)}</span>
-            {workerModel && <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{workerModel}</span>}
-          </span>
-        )}
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 500, color: "var(--accent)", flexShrink: 0 }}>{worker ? subagent : `@${subagent}`}</span>
-        {short && (
-          <span style={{ fontSize: 12, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>· {short}</span>
-        )}
-      </summary>
-      {long && (
-        <div style={{ margin: "3px 0 3px 13px", padding: "6px 10px", fontSize: 12, lineHeight: 1.55, color: "var(--fg-subtle)", background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
-          {task}
-        </div>
-      )}
-    </details>
-    {/* "View activity" is the settled shape — or the child turned out not to
-        be watchable once its transcript was read. Before that read nothing
-        shows, so a running child doesn't flash the button before its line. */}
-    {childRunId && !opened && !watching && (settled || watch.loaded) && (
-      <button type="button" onClick={() => setOpened(true)} style={{ border: 0, background: "none", color: "var(--fg-dim)", fontSize: 12, cursor: "pointer", marginLeft: 24 }}>View activity</button>
-    )}
-    {(watching || opened || (live && watch.loaded && watch.activity.status === "failed")) && (
+    <div data-child-run={childRunId} style={{ margin: "8px 0", scrollMarginTop: 72, minWidth: 0, padding: "10px 12px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        {worker && <ProviderLogo id={worker} size={14} />}
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)" }}>{worker ? providerName(worker) : `@${subagent}`}</span>
+        {worker && <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>{subagent}</span>}
+      </div>
+      <div style={{ margin: "10px 0 0 7px", padding: "1px 0 2px 18px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
+      {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
       <SubagentWatchLine
-        activity={watch.activity}
-        open={opened}
-        onToggle={() => setOpened((was) => !was)}
-        hasRows={watch.events.length > 0}
+        activity={!watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
+        open={opened} onToggle={toggle} hasRows={true}
       />
-    )}
-    {/* The child's own gate, drawn here because nothing else is attached to
-        its channel: a worker that asks before a command would otherwise wait
-        on nobody until it timed out. */}
-    {childRunId && watching && watch.activity.pendingPermission && (
-      <SubagentPermissionCard runId={childRunId} request={watch.activity.pendingPermission} />
-    )}
-    {opened && (
+      <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
+      <div>
+      {revealed && <div style={{ marginTop: 8, fontSize: 11, color: "var(--fg-dim)", overflowWrap: "anywhere" }}>
+        {workerModel && <div>Model: {workerModel}</div>}
+        {childRunId && <div>Run: <code>{childRunId}</code></div>}
+        {receipt && <div style={{ marginTop: 4 }}>{renderMarkdown(receipt)}</div>}
+      </div>}
+    {revealed && (
       <SubagentWatchBody>
         {rows.length === 0 ? (
           <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
@@ -275,7 +248,16 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
         )}
       </SubagentWatchBody>
     )}
-    </>
+      </div>
+      </div>
+    {/* The child's own gate, drawn here because nothing else is attached to
+        its channel: a worker that asks before a command would otherwise wait
+        on nobody until it timed out. */}
+    {childRunId && watching && watch.activity.pendingPermission && (
+      <SubagentPermissionCard runId={childRunId} request={watch.activity.pendingPermission} />
+    )}
+      </div>
+    </div>
   );
 }
 
@@ -562,7 +544,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
       // "Running spawn_subagent…" placeholder is attached as a result too, so
       // "has a result" is not "settled" — that read would hide the live
       // watcher for the whole time it exists to cover.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} />
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (
@@ -570,7 +552,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
     );
   // A watchable child owns its live status line; the tool placeholder would
   // repeat the same running animation underneath it. Keep actual reports.
-  if (!result || (name === "spawn_subagent" && childRunId && /^Running /.test(result.msg.content))) return call;
+  if (!result || (name === "spawn_subagent" && childRunId && /^(Running |Dispatched )/.test(result.msg.content))) return call;
   return (
     <>
       {call}
@@ -1454,6 +1436,28 @@ export function WorkingSince({ since }: { since?: number }) {
   );
 }
 
+/** Delegation responses share one reasoning disclosure without losing later reasoning. */
+export function delegationThinking(msgs: Msg[]): Map<number, string> {
+  const grouped = new Map<number, string>();
+  let segment: number[] = [];
+  const flush = () => {
+    if (segment.some((i) => { const msg = msgs[i]; return msg.role === "assistant" && msg.toolCalls?.some((call) => call.name === "spawn_subagent"); })) {
+      const thoughts = segment.filter((i) => !!extractThinking(msgs[i]));
+      if (thoughts.length) {
+        grouped.set(thoughts[0], thoughts.map((i) => extractThinking(msgs[i])).join("\n\n"));
+        for (const i of thoughts.slice(1)) grouped.set(i, "");
+      }
+    }
+    segment = [];
+  };
+  msgs.forEach((msg, i) => {
+    if (msg.role !== "assistant" && msg.role !== "tool") flush();
+    if (msg.role === "assistant") segment.push(i);
+  });
+  flush();
+  return grouped;
+}
+
 type MessageBodyOptions = {
   /** Lets a delivered-agent-message row fetch its bodies from the journal. */
   workspaceRoot?: string | null;
@@ -1464,6 +1468,7 @@ type MessageBodyOptions = {
   /** The turn's reasoning is drawn elsewhere — folded into the run that led
    *  to it (`ToolRun.answer`) — so the body must not draw it again. */
   hideThinking?: boolean;
+  thinkingOverride?: string;
   /** This turn already sits inside a conversation-level fold; its own rows
    *  stay flat rather than folding a second time under the sentence. */
   inRun?: boolean;
@@ -1474,7 +1479,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, inRun }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, thinkingOverride, inRun }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
   }
@@ -1543,7 +1548,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
     const visibleContent = stripToolNarration(content, !!m.toolCalls?.length);
     // Everything the model thought out loud, however it arrived — structured
     // block, inline <think> leak, or plan-JSON fallback (see extractThinking).
-    const mergedThinking = extractThinking(m);
+    const mergedThinking = thinkingOverride ?? extractThinking(m);
     // Streaming: no content yet → show thinking open. After arrival: closed.
     const streaming =
       active &&
@@ -1553,7 +1558,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
     return (
       <>
         {mergedThinking && !hideThinking && (
-          <ThinkingBlock text={mergedThinking} streaming={streaming} startedAt={m.thinkingStartedAt} thinkingMs={m.thinkingMs} />
+          <ThinkingBlock text={mergedThinking} streaming={streaming} startedAt={m.thinkingStartedAt} thinkingMs={thinkingOverride !== undefined ? undefined : m.thinkingMs} />
         )}
         {visibleContent && (
           <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: 14, lineHeight: 1.6 }}>
@@ -1626,6 +1631,7 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
       workspaceRoot={opts?.workspaceRoot}
       results={opts?.results}
       onOpenRun={opts?.onOpenRun}
+      thinkingOverride={opts?.thinkingOverride}
       hideThinking={opts?.hideThinking}
       inRun={opts?.inRun}
     />

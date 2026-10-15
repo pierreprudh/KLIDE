@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { extractThinking, normalizeThinking, renderMessageBody, type AttachedResult } from "./ChatMessage";
+import { delegationThinking, extractThinking, normalizeThinking, renderMessageBody, type AttachedResult } from "./ChatMessage";
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -208,7 +208,23 @@ describe("a delegation row while the child works", () => {
 
   it("does not treat the pending 'Running' placeholder as the child's report", () => {
     const pending: AttachedResult = { msg: { role: "tool", content: "Running spawn_subagent...", toolName: "spawn_subagent" }, active: true };
-    expect(delegation(pending)).not.toContain("View activity");
+    expect(delegation(pending)).not.toContain("subagent report");
+    const html = delegation(pending);
+    expect(html).toContain("Starting…");
+    expect(html).toContain("border-left:1px solid var(--border)");
+    expect(html).not.toContain("border:1px solid var(--border)");
+    expect(html).toContain("View activity: Starting…");
+  });
+
+  it("keeps a background dispatch receipt behind the activity disclosure", () => {
+    const receipt: AttachedResult = { msg: { role: "tool", content: "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", toolName: "spawn_subagent" }, active: false };
+    const html = delegation(receipt);
+    expect(html).toContain("Map the fold.");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("Completed");
+    expect(html).toContain("klide-orbit-loader");
+    expect(html).not.toContain("Dispatched Claude Code");
+    expect(html).not.toContain("subagent report");
   });
 
   it("offers the child's activity once the report has landed", () => {
@@ -226,5 +242,22 @@ describe("normalizeThinking", () => {
 
   it("drops a bare fence and folds the lines around it", () => {
     expect(normalizeThinking("so:\n```\nconst a = 1\n```\ndone")).toBe("so: const a = 1 done");
+  });
+});
+
+
+describe("delegation reasoning", () => {
+  it("combines reasoning above the worker and keeps a later report separate", () => {
+    const msgs: Msg[] = [
+      { role: "assistant", content: "", thinking: "Choose the worker.", toolCalls: [{ name: "spawn_subagent", args: {} }] },
+      { role: "tool", content: "Dispatched worker", toolName: "spawn_subagent" },
+      { role: "assistant", content: "Meanwhile…", thinking: "Continue the conversation." },
+      { role: "system", content: "Report arrived" },
+      { role: "assistant", content: "Done", thinking: "Check the result." },
+    ];
+    const thoughts = delegationThinking(msgs);
+    expect(thoughts.get(0)).toBe("Choose the worker.\n\nContinue the conversation.");
+    expect(thoughts.get(2)).toBe("");
+    expect(thoughts.has(4)).toBe(false);
   });
 });

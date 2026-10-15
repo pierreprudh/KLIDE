@@ -11,6 +11,7 @@
 // when the child settles and its report takes the space instead.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CaretRightIcon } from "@phosphor-icons/react";
 import { DotGridLoader } from "./icons";
 import { useElapsed } from "./WorkingRow";
 import { subagentActivity, watchSubagentRun, type SubagentActivity } from "./subagentWatch";
@@ -119,43 +120,42 @@ export function SubagentWatchLine({
   const asking = working ? activity.pendingPermission : null;
   const step = asking ? { name: "", detail: asking.summary } : activity.current;
   // Between steps the child is thinking; before its first event it is starting.
-  const label = asking
+  const label = !open
+    ? asking ? "Needs approval" : working ? (activity.status === "starting" ? "Starting…" : "Running") : activity.status === "done" ? "Completed" : activity.error?.startsWith("Interrupted:") ? "Interrupted" : "Stopped"
+    : asking
     ? "asking"
     : step
       ? stepVerb(step.name)
       : activity.status === "starting"
         ? "starting"
-        : activity.status === "done" ? "finished" : activity.status === "failed" ? (activity.error?.startsWith("Interrupted:") ? "interrupted" : "stopped") : "thinking";
+        : activity.status === "done" ? "finished" : activity.status === "failed" ? (activity.error?.startsWith("Interrupted:") ? "interrupted" : "stopped") : "running";
 
   const counts: string[] = [];
   if (activity.steps > 0) counts.push(`${activity.steps} ${activity.steps === 1 ? "step" : "steps"}`);
   if (activity.tokens > 0) counts.push(`${activity.tokens.toLocaleString()} tok`);
 
   return (
-    <button
-      type="button"
-      onClick={hasRows ? onToggle : undefined}
-      aria-expanded={hasRows ? open : undefined}
+    <div
       style={{
         display: "flex",
         alignItems: "center",
         gap: 8,
         width: "100%",
-        margin: "4px 0 0 13px",
-        padding: "2px 0 2px 11px",
+        margin: "6px 0 0",
+        padding: "2px 0",
         background: "none",
         border: "none",
-        borderLeft: "1px solid var(--border)",
+        borderLeft: "none",
         borderRadius: 0,
         textAlign: "left",
-        cursor: hasRows ? "pointer" : "default",
+        cursor: "default",
         color: "var(--fg-dim)",
         minWidth: 0,
       }}
     >
-      {working && !asking && <DotGridLoader size={10} label={label} />}
+      {working && !asking && <DotGridLoader size={11} label={label} />}
       <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>{label}</span>
-      {step?.detail && (
+      {open && step?.detail && (
         <span
           style={{
             fontFamily: "var(--font-mono)",
@@ -170,7 +170,7 @@ export function SubagentWatchLine({
         </span>
       )}
       <span style={{ flex: 1 }} />
-      {counts.length > 0 && (
+      {open && counts.length > 0 && (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
           {counts.join(" · ")}
         </span>
@@ -180,7 +180,14 @@ export function SubagentWatchLine({
           {elapsed}
         </span>
       )}
-    </button>
+      {hasRows && (
+        <button type="button" onClick={(event) => { event.stopPropagation(); onToggle(); }}
+          aria-expanded={open} aria-label={`${open ? "Hide" : "View"} activity: ${label}`}
+          style={{ display: "grid", placeItems: "center", width: 32, height: 28, padding: 0, border: 0, background: "none", color: "var(--fg-subtle)", cursor: "pointer", flexShrink: 0 }}>
+          <CaretRightIcon aria-hidden size={14} pointerEvents="none" className="klide-subagent-chevron" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -249,7 +256,7 @@ export function SubagentWatchBody({ children }: { children: React.ReactNode }) {
       className="ai-msg-in"
       style={{
         margin: "2px 0 4px 13px",
-        padding: "2px 0 2px 11px",
+        padding: "2px 0",
         borderLeft: "1px solid var(--border)",
       }}
     >

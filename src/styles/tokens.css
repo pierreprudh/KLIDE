@@ -9245,3 +9245,24 @@ button:focus-visible .menu-leadout {
 .hermes-model-star { opacity: 0; }
 .hermes-model-row:hover .hermes-model-star,
 .hermes-model-row:focus-within .hermes-model-star { opacity: 1; }
+.klide-subagent-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 220ms var(--ease-out);
+}
+.klide-subagent-reveal[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.klide-subagent-reveal > div {
+  min-height: 0;
+  overflow: hidden;
+}
+.klide-subagent-chevron {
+  transition: transform 180ms var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-subagent-reveal,
+  .klide-subagent-chevron {
+    transition: none;
+  }
+}

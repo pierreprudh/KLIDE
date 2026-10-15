@@ -124,7 +124,7 @@ import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon, MissionWorkflowIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
-import { PendingInboxRow, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
+import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
@@ -1305,6 +1305,7 @@ export function AiPanel({
   // rather than inside the loop keeps one renderer for a tool row — the rows
   // you get back on open are the very same elements, not a second drawing of
   // them.
+  const delegationThoughts = useMemo(() => delegationThinking(msgs), [msgs]);
   const toolPairing = useMemo(() => pairToolResults(msgs), [msgs]);
   const toolRuns = useMemo(() => groupToolRuns(msgs, toolPairing), [msgs, toolPairing]);
   // Which messages have handed their mark to a folded row's header. A turn
@@ -4466,7 +4467,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i) })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i) })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
