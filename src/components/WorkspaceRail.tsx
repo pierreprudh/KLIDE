@@ -502,6 +502,18 @@ function ConvoRow({
   // Captured once: see `useEntranceValue`. Recomputing this from the row's
   // current index is what made the tree replay on every list update.
   const entranceDelay = useEntranceValue(revealDelay);
+  // A name giving way to another — the CLI naming the session a few seconds
+  // into the first turn, or a rename — cross-fades at reading speed: the
+  // outgoing text lifts and fades while the new one settles in. The first
+  // render is not a change, and an outgoing layer that finished is dropped.
+  const [swap, setSwap] = useState<{ from: string; key: number } | null>(null);
+  const previousTitle = useRef(convo.title);
+  useEffect(() => {
+    if (previousTitle.current === convo.title) return;
+    const from = previousTitle.current;
+    previousTitle.current = convo.title;
+    if (from && convo.title) setSwap((s) => ({ from, key: (s?.key ?? 0) + 1 }));
+  }, [convo.title]);
   // Where the ⋯ menu is open, if it is. Anchored under the button it came
   // from, or at the pointer for a right-click on the row.
   const [menuAt, setMenuAt] = useState<{ x: number; y: number; align: "start" | "end" } | null>(null);
@@ -597,7 +609,21 @@ function ConvoRow({
       >
         <span className="klide-focus-convo-content">
           {markNode}
-          <span className="klide-focus-convo-title">{displayTitle}</span>
+          <span className="klide-focus-convo-title" data-swapping={swap ? true : undefined}>
+            {swap ? (
+              <span
+                key={`out-${swap.key}`}
+                className="klide-focus-convo-title-out"
+                aria-hidden="true"
+                onAnimationEnd={() => setSwap((s) => (s?.key === swap.key ? null : s))}
+              >
+                {swap.from}
+              </span>
+            ) : null}
+            <span key={swap ? `in-${swap.key}` : "in"} className="klide-focus-convo-title-in">
+              {displayTitle}
+            </span>
+          </span>
           {/* The trailing slot says one thing at a time. While a run is going,
               "4m ago" is the least interesting fact about the row — the panel's
               own working animation takes the slot instead, so the same motion

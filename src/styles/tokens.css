@@ -5547,11 +5547,48 @@ button:focus-visible .menu-leadout {
 }
 
 .klide-focus-convo-title {
+  position: relative;
   min-width: 0;
   overflow: hidden;
   flex: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* One name giving way to another (the CLI naming a session mid-turn, a
+   rename): the outgoing text lifts and fades on its own layer while the new
+   one rises into place — --motion-slower, the cross-fade speed the eye can
+   read both at. The out layer sits over the same box so the ellipsis rules
+   hold for both, and it is removed when its animation ends. */
+.klide-focus-convo-title-in,
+.klide-focus-convo-title-out {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.klide-focus-convo-title-out {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: klide-focus-title-out var(--motion-slower) var(--ease-out) both;
+}
+.klide-focus-convo-title[data-swapping="true"] .klide-focus-convo-title-in {
+  animation: klide-focus-title-in var(--motion-slower) var(--ease-out) both;
+}
+@keyframes klide-focus-title-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-3px); }
+}
+@keyframes klide-focus-title-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No layer to animate out: the new name simply replaces the old one. */
+  .klide-focus-convo-title-out { display: none; }
+  .klide-focus-convo-title[data-swapping="true"] .klide-focus-convo-title-in { animation: none; }
 }
 
 /* The active route carries "you are here"; the row itself stays calm. Its text
