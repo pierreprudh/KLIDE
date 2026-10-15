@@ -2126,11 +2126,15 @@ async fn loop_body(
     // `ConversationTitled` whenever it lands — the same event OpenCode's own
     // session name arrives on. Awaited briefly before the run settles, so a
     // slow namer still reaches the live panel rather than only the record.
-    let mut naming_task = request.naming.as_ref().filter(|_| !resuming && request.parent_id.is_none() && request.mission_task_id.is_none()).and_then(|naming| {
-        let namer = naming::pick(naming.model.as_ref(), &request.provider, &request.model)?;
+    let mut naming_task = request.naming.as_ref().filter(|_| !resuming && request.parent_id.is_none() && request.mission_task_id.is_none()).map(|naming| {
         let (sequence, runs_dir, id, supervisor, on_event) = (sequence.clone(), runs_dir.clone(), id.clone(), supervisor.clone(), on_event.clone());
+        let (pinned, provider, model) = (naming.model.clone(), request.provider.clone(), request.model.clone());
         let (first_message, workspace_root) = (request.initial_text.clone(), cwd.clone());
-        Some(tokio::spawn(async move {
+        tokio::spawn(async move {
+            // Picking reads the keychain for the keyed Providers: blocking
+            // work, off the turn's own path.
+            let namer = tokio::task::spawn_blocking(move || naming::pick(pinned.as_ref(), &provider, &model)).await.ok().flatten();
+            let Some(namer) = namer else { return };
             let Some(title) = naming::name(&namer, &first_message, workspace_root).await else { return };
             let event = AgentEvent::ConversationTitled { run_id: id.clone(), title, ts: now_ms() };
             let Ok(mut seq) = sequence.lock() else { return };
@@ -2139,7 +2143,7 @@ async fn loop_body(
                 *seq += 1;
                 let _ = on_event.send(event);
             }
-        }))
+        })
     });
     let blind_photos = sight::blind_photos(&request).await;
     if !blind_photos.is_empty() {

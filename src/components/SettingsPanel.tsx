@@ -1774,7 +1774,7 @@ export function SettingsPanel({
                   />
                   <Row
                     title="Naming model"
-                    description="Who writes the name. Automatic is the thread's own provider at its light model (Haiku for an Anthropic thread, the installed default for a local one), so a name never costs more than the conversation does. A thread on a local model names locally whatever is pinned here, so nothing leaves the machine that was not already leaving it. Subscription CLIs name through their routed source, or the local default."
+                    description="Who writes the name. Automatic is the cheap tier: the thread's own vendor's cheapest model when you have its key (Haiku, GPT nano, DeepSeek chat, Ministral), else the cheapest keyed model anywhere — a name costs well under a thousandth of a dollar. A thread on a local model names locally whatever is pinned here, so nothing leaves the machine that was not already leaving it. Subscription CLIs name through their routed source's vendor, the cheapest keyed model, or the local default."
                     control={
                       <ModelPairControl
                         label="Naming"

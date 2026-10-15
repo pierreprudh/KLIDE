@@ -10,13 +10,16 @@
 //! nobody has named it, the setting is on); this module decides *who* names
 //! it and *what* a name is.
 //!
-//! Who: never a bigger model than the conversation's own. A hosted thread
-//! names through its Provider's light rung (`AutoLadder`), a local thread
-//! through its own model — a thread on a local model never names through a
-//! hosted one, pin or no pin, so nothing leaves the machine that was not
-//! already leaving it. A Delegate names through its routed source when it
-//! has one, else through the local default, since the CLI's own turn would
-//! be slow and spend the subscription on six words.
+//! Who: the cheap tier. Each hosted Provider has one model here that names
+//! for a fraction of a cent (DeepSeek's chat model, GPT nano, Haiku, …); a
+//! hosted thread names on its own vendor's when the key is there, else on
+//! the cheapest keyed one anywhere, else on its Provider's light rung. A
+//! local thread names through its own model — a thread on a local model
+//! never names through a hosted one, pin or no pin, so nothing leaves the
+//! machine that was not already leaving it. A Delegate names through its
+//! routed source's vendor when it has one, else the cheapest keyed model,
+//! else the local default — never the CLI's own turn, which would be slow
+//! and spend the subscription on six words.
 
 use std::time::Duration;
 
@@ -43,6 +46,22 @@ const NAME_TOKENS: usize = 32;
 const MESSAGE_CHARS: usize = 1_500;
 /// Longer than this is a sentence, not a name.
 const MAX_CHARS: usize = 60;
+
+/// The cheap tier: one model per hosted Provider, in the order to try when
+/// the thread's own vendor has none keyed. Every one of these names a
+/// conversation for well under a thousandth of a dollar.
+pub const CHEAP: &[(&str, &str)] = &[
+    ("deepseek", "deepseek-chat"),
+    ("openai", "gpt-5-nano"),
+    ("openrouter", "deepseek/deepseek-v4.1-flash"),
+    ("mistral", "ministral-8b-latest"),
+    ("xai", "grok-4-fast-non-reasoning"),
+    ("anthropic", "claude-haiku-4-5"),
+];
+
+fn cheap_on(provider: &str) -> Option<PreferredModel> {
+    CHEAP.iter().find(|(id, _)| *id == provider).map(|(id, model)| PreferredModel { provider: id.to_string(), model: model.to_string() })
+}
 
 pub const SYSTEM_PROMPT: &str = "You name conversations between a software engineer and an AI coding assistant. \
 Given the person's first message, reply with a name for the conversation and nothing else: \
@@ -101,8 +120,14 @@ fn is_local(provider: &str) -> bool {
 }
 
 /// Who names a conversation running on `provider` / `model`, with `pinned`
-/// from Settings when there is one.
+/// from Settings when there is one. Reads the keychain for the keyed
+/// Providers, so it belongs off the turn's own path.
 pub fn pick(pinned: Option<&PreferredModel>, provider: &str, model: &str) -> Option<PreferredModel> {
+    pick_with(pinned, provider, model, &|id| providers::key_status(id).map(|s| s.has_key).unwrap_or(false))
+}
+
+/// `pick`, with "does this Provider have a key" supplied.
+pub fn pick_with(pinned: Option<&PreferredModel>, provider: &str, model: &str, has_key: &dyn Fn(&str) -> bool) -> Option<PreferredModel> {
     let source = source(provider, model);
     let local = source.as_ref().is_some_and(|s| is_local(&s.provider));
     if let Some(pinned) = pinned {
@@ -111,14 +136,23 @@ pub fn pick(pinned: Option<&PreferredModel>, provider: &str, model: &str) -> Opt
             return Some(pinned.clone());
         }
     }
+    if local {
+        return source;
+    }
+    // The thread's own vendor's cheap model, so a name sends the words to
+    // nobody new; else the cheapest keyed vendor there is.
+    if let Some(cheap) = source.as_ref().and_then(|s| cheap_on(&s.provider)).filter(|c| has_key(&c.provider)) {
+        return Some(cheap);
+    }
+    if let Some(cheap) = CHEAP.iter().filter(|(id, _)| has_key(id)).map(|(id, model)| PreferredModel { provider: id.to_string(), model: model.to_string() }).next() {
+        return Some(cheap);
+    }
     let Some(source) = source else {
-        // A Delegate on its subscription alone: the local default, if any.
+        // A Delegate on its subscription alone, nothing keyed: the local
+        // default, if any.
         let entry = providers::lookup("ollama")?;
         return entry.default_model.map(|model| PreferredModel { provider: "ollama".into(), model: model.into() });
     };
-    if local {
-        return Some(source);
-    }
     match providers::lookup(&source.provider) {
         Some(entry) if entry.group == ProviderGroup::Hosted => Some(PreferredModel {
             provider: source.provider.clone(),
@@ -194,36 +228,57 @@ mod tests {
         assert!(p.chars().count() < 1_700);
     }
 
+    fn keyed(ids: &'static [&'static str]) -> impl Fn(&str) -> bool {
+        move |id| ids.contains(&id)
+    }
+
     #[test]
-    fn a_hosted_thread_names_on_its_providers_light_rung() {
+    fn a_hosted_thread_names_on_its_own_vendors_cheap_model_when_keyed() {
+        assert_eq!(pick_with(None, "anthropic", "claude-fable-5-1", &keyed(&["anthropic", "deepseek"])), Some(pair("anthropic", "claude-haiku-4-5")));
+        assert_eq!(pick_with(None, "openai", "gpt-5.6", &keyed(&["openai"])), Some(pair("openai", "gpt-5-nano")));
+    }
+
+    #[test]
+    fn otherwise_the_cheapest_keyed_vendor_names_it() {
+        // An OpenRouter thread with a DeepSeek key: DeepSeek is cheaper than the router.
+        assert_eq!(pick_with(None, "openrouter", "openrouter/auto", &keyed(&["deepseek", "anthropic"])), Some(pair("deepseek", "deepseek-chat")));
+        // Only Anthropic keyed: Haiku, even for an OpenAI thread.
+        assert_eq!(pick_with(None, "openai", "gpt-5.6", &keyed(&["anthropic"])), Some(pair("anthropic", "claude-haiku-4-5")));
+    }
+
+    #[test]
+    fn nothing_keyed_falls_back_to_the_light_rung_then_the_own_model() {
         let light = providers::lookup("anthropic").unwrap().auto.light.unwrap();
-        assert_eq!(pick(None, "anthropic", "claude-fable-5-1"), Some(pair("anthropic", light)));
+        assert_eq!(pick_with(None, "anthropic", "claude-fable-5-1", &keyed(&[])), Some(pair("anthropic", light)));
+        assert_eq!(pick_with(None, "xai", "grok-4", &keyed(&[])), Some(pair("xai", "grok-4")));
     }
 
     #[test]
     fn a_local_thread_names_on_its_own_model_and_never_through_a_hosted_pin() {
-        assert_eq!(pick(None, "ollama", "llama3.1:8b"), Some(pair("ollama", "llama3.1:8b")));
-        assert_eq!(pick(Some(&pair("anthropic", "claude-haiku-5-5")), "ollama", "llama3.1:8b"), Some(pair("ollama", "llama3.1:8b")));
-        assert_eq!(pick(Some(&pair("ollama", "qwen3:4b")), "ollama", "llama3.1:8b"), Some(pair("ollama", "qwen3:4b")));
+        let all = keyed(&["anthropic", "openai", "deepseek"]);
+        assert_eq!(pick_with(None, "ollama", "llama3.1:8b", &all), Some(pair("ollama", "llama3.1:8b")));
+        assert_eq!(pick_with(Some(&pair("anthropic", "claude-haiku-5-5")), "ollama", "llama3.1:8b", &all), Some(pair("ollama", "llama3.1:8b")));
+        assert_eq!(pick_with(Some(&pair("ollama", "qwen3:4b")), "ollama", "llama3.1:8b", &all), Some(pair("ollama", "qwen3:4b")));
     }
 
     #[test]
     fn a_pin_names_a_hosted_thread() {
-        assert_eq!(pick(Some(&pair("ollama", "qwen3:4b")), "anthropic", "claude-fable-5-1"), Some(pair("ollama", "qwen3:4b")));
-        assert_eq!(pick(Some(&pair("openai", "gpt-5.6-mini")), "anthropic", "claude-fable-5-1"), Some(pair("openai", "gpt-5.6-mini")));
+        assert_eq!(pick_with(Some(&pair("ollama", "qwen3:4b")), "anthropic", "claude-fable-5-1", &keyed(&["anthropic"])), Some(pair("ollama", "qwen3:4b")));
+        assert_eq!(pick_with(Some(&pair("openai", "gpt-5.6-mini")), "anthropic", "claude-fable-5-1", &keyed(&["anthropic"])), Some(pair("openai", "gpt-5.6-mini")));
     }
 
     #[test]
-    fn a_delegate_names_through_its_routed_source_else_the_local_default() {
+    fn a_delegate_names_through_its_sources_vendor_the_cheapest_key_or_the_local_default() {
         let routed = r#"harness-source:{"provider":"openrouter","model":"deepseek/deepseek-v4.1-flash"}"#;
-        let light = providers::lookup("openrouter").unwrap().auto.light.unwrap();
-        assert_eq!(pick(None, "opencode", routed), Some(pair("openrouter", light)));
+        assert_eq!(pick_with(None, "opencode", routed, &keyed(&["openrouter", "anthropic"])), Some(pair("openrouter", "deepseek/deepseek-v4.1-flash")));
+        assert_eq!(pick_with(None, "claude-code", "claude-fable-5-1", &keyed(&["anthropic", "openai"])), Some(pair("openai", "gpt-5-nano")));
         let local_default = providers::lookup("ollama").unwrap().default_model.unwrap();
-        assert_eq!(pick(None, "claude-code", "claude-fable-5-1"), Some(pair("ollama", local_default)));
+        assert_eq!(pick_with(None, "claude-code", "claude-fable-5-1", &keyed(&[])), Some(pair("ollama", local_default)));
     }
 
     #[test]
-    fn a_self_hosted_thread_keeps_its_own_model() {
-        assert_eq!(pick(None, "custom:opencodex", "ollama/qwen3.5:9b"), Some(pair("custom:opencodex", "ollama/qwen3.5:9b")));
+    fn a_self_hosted_thread_keeps_its_own_model_unless_a_cheap_key_exists() {
+        assert_eq!(pick_with(None, "custom:opencodex", "ollama/qwen3.5:9b", &keyed(&[])), Some(pair("custom:opencodex", "ollama/qwen3.5:9b")));
+        assert_eq!(pick_with(None, "custom:opencodex", "ollama/qwen3.5:9b", &keyed(&["deepseek"])), Some(pair("deepseek", "deepseek-chat")));
     }
 }
