@@ -186,6 +186,10 @@
      drawer gliding out. Longer than --motion-slow on purpose: a whole column
      arriving is a bigger thing than a control, and hurrying it reads as a snap. */
   --explorer-reveal: 320ms;
+  /* A rail row's name being rewritten left to right. Longer than
+     --motion-slower: the front has a whole line to cross, and the eye follows
+     it the way it follows a line being typed. */
+  --rail-name-write: 560ms;
 }
 
 /* Sage Garden — Klide Light with the temperature corrected. Same bone-cream
@@ -5556,10 +5560,13 @@ button:focus-visible .menu-leadout {
 }
 
 /* One name giving way to another (the CLI naming a session mid-turn, a
-   rename): the outgoing text lifts and fades on its own layer while the new
-   one rises into place — --motion-slower, the cross-fade speed the eye can
-   read both at. The out layer sits over the same box so the ellipsis rules
-   hold for both, and it is removed when its animation ends. */
+   rename) is rewritten left to right: one soft front sweeps across the row,
+   erasing the old name ahead of it and writing the new one behind it. Two
+   layers over the same box, each under a mirrored gradient mask that slides
+   the same way — the masks are complementary, so the front never shows both
+   names at once and never a gap. Unhurried and even (--ease-soft over
+   --rail-name-write), the way a line is written rather than flashed. The out
+   layer is removed when its animation ends. */
 .klide-focus-convo-title-in,
 .klide-focus-convo-title-out {
   display: block;
@@ -5572,23 +5579,37 @@ button:focus-visible .menu-leadout {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  animation: klide-focus-title-out var(--motion-slower) var(--ease-out) both;
+  -webkit-mask-image: linear-gradient(90deg, transparent 45%, #000 55%);
+  mask-image: linear-gradient(90deg, transparent 45%, #000 55%);
+  -webkit-mask-size: 250% 100%;
+  mask-size: 250% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  animation: klide-focus-title-sweep var(--rail-name-write) var(--ease-soft) both;
 }
 .klide-focus-convo-title[data-swapping="true"] .klide-focus-convo-title-in {
-  animation: klide-focus-title-in var(--motion-slower) var(--ease-out) both;
+  -webkit-mask-image: linear-gradient(90deg, #000 45%, transparent 55%);
+  mask-image: linear-gradient(90deg, #000 45%, transparent 55%);
+  -webkit-mask-size: 250% 100%;
+  mask-size: 250% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  animation: klide-focus-title-sweep var(--rail-name-write) var(--ease-soft) both;
 }
-@keyframes klide-focus-title-out {
-  from { opacity: 1; transform: translateY(0); }
-  to { opacity: 0; transform: translateY(-3px); }
-}
-@keyframes klide-focus-title-in {
-  from { opacity: 0; transform: translateY(3px); }
-  to { opacity: 1; transform: translateY(0); }
+/* The same slide for both masks: the in layer's black half arrives from the
+   left as the out layer's black half leaves to the right. */
+@keyframes klide-focus-title-sweep {
+  from { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+  to { -webkit-mask-position: 0% 0; mask-position: 0% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  /* No layer to animate out: the new name simply replaces the old one. */
+  /* No layer to erase: the new name simply replaces the old one. */
   .klide-focus-convo-title-out { display: none; }
-  .klide-focus-convo-title[data-swapping="true"] .klide-focus-convo-title-in { animation: none; }
+  .klide-focus-convo-title[data-swapping="true"] .klide-focus-convo-title-in {
+    animation: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 
 /* The active route carries "you are here"; the row itself stays calm. Its text
