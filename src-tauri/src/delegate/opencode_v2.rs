@@ -16,6 +16,9 @@ pub(super) struct Turn {
     results: HashSet<String>,
     pub boundary: Option<String>,
     pub settled: bool,
+    /// The feed already delivered the session's name; the record read after
+    /// the turn has nothing to add.
+    pub titled: bool,
 }
 
 impl Turn {
@@ -29,6 +32,7 @@ impl Turn {
             results: HashSet::new(),
             boundary: None,
             settled: false,
+            titled: false,
         }
     }
 
@@ -50,7 +54,9 @@ impl Turn {
     }
 
     /// `GET /api/session/:id` — the session's own record, its title included.
+    /// Nothing once the feed has named the session.
     pub fn session_path(&self) -> Option<String> {
+        if self.titled { return None; }
         let session = self.session_segment()?;
         Some(format!("/api/session/{session}"))
     }
@@ -148,6 +154,15 @@ impl Turn {
                     opencode_error(data.get("error"))
                 };
                 self.result(id, ok, content)
+            }
+            // The small model named the session, beside the turn — the name
+            // reaches the rail while the answer is still streaming.
+            "session.renamed" => {
+                let Some(title) = data.get("title").and_then(Value::as_str).and_then(crate::delegate::chat_server::named_title) else {
+                    return Vec::new();
+                };
+                self.titled = true;
+                vec![StreamItem::Title(title)]
             }
             "session.execution.succeeded" => {
                 self.settled = true;
@@ -530,6 +545,19 @@ mod tests {
     fn event(turn: &mut Turn, kind: &str, mut data: Value) -> Vec<StreamItem> {
         data["sessionID"] = session().into();
         turn.feed(&json!({"type":kind,"data":data}).to_string())
+    }
+
+    #[test]
+    fn the_session_name_arrives_on_the_feed_and_the_record_read_stands_down() {
+        let mut turn = Turn::new(Some(session()));
+        assert!(turn.session_path().is_some());
+        assert!(event(&mut turn, "session.renamed", json!({"title": "New session - 2026-10-15T14:05:23.616Z"})).is_empty());
+        assert!(turn.session_path().is_some());
+        assert_eq!(event(&mut turn, "session.renamed", json!({"title": " Understanding the stack "})), [StreamItem::Title("Understanding the stack".into())]);
+        assert!(turn.session_path().is_none());
+        // Another session's name is not this conversation's.
+        let mut other = Turn::new(Some("ses_other".into()));
+        assert!(event(&mut other, "session.renamed", json!({"title": "Theirs"})).is_empty());
     }
 
     #[test]

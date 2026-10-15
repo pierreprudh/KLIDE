@@ -417,10 +417,15 @@ async fn session_title(client: &reqwest::Client, url: &str, path: &str, username
 }
 
 /// `{"data": {"title": …}}` as the session API answers (a bare record is read
-/// too). The placeholder a session carries until the CLI names it —
-/// "New session - <timestamp>", "Child session - …" — is not a name.
+/// too).
 fn session_title_in(value: &serde_json::Value) -> Option<String> {
-    let title = value.pointer("/data/title").or_else(|| value.get("title"))?.as_str()?.trim();
+    named_title(value.pointer("/data/title").or_else(|| value.get("title"))?.as_str()?)
+}
+
+/// A title that is a name. The placeholder a session carries until the CLI
+/// names it — "New session - <timestamp>", "Child session - …" — is not one.
+pub(super) fn named_title(title: &str) -> Option<String> {
+    let title = title.trim();
     let placeholder = ["New session", "Child session", "Untitled"].iter().any(|p| title.starts_with(p));
     (!title.is_empty() && !placeholder).then(|| title.to_string())
 }
