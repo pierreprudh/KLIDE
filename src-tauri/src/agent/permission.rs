@@ -131,10 +131,12 @@ impl GateSubject {
     }
 
     /// Is the run on the full-auto rung right now? `live` is the rung flipped
-    /// while the Run works, which only a conversation honors.
+    /// while the Run works. A conversation honors it from its foot bar; a
+    /// spawned child honors it from the card its parent's conversation draws
+    /// for it. A Mission attempt keeps what approval froze.
     pub fn full_auto(&self, live: Option<bool>) -> bool {
         match (self.lineage, live) {
-            (RunLineage::Conversation, Some(live)) => live,
+            (RunLineage::Conversation | RunLineage::SubagentChild, Some(live)) => live,
             _ => self.requested_full_auto,
         }
     }
@@ -315,11 +317,12 @@ pub fn apply_command_policy(
     handle: &super::AgentRunHandle,
     auto_approve: bool,
 ) -> Result<bool, String> {
-    if handle.subject.lineage != RunLineage::Conversation {
-        return Err(format!(
-            "The command policy belongs to a conversation; this Run is a {:?}.",
-            handle.subject.lineage
-        ));
+    // A Mission attempt's policy was frozen at approval; no live flip reaches
+    // it. A conversation flips its own, and a child's is flipped from the
+    // card its parent's conversation draws — the operator who would otherwise
+    // click Run on every prompt.
+    if handle.subject.lineage == RunLineage::MissionAttempt {
+        return Err("The command policy of a Mission attempt was fixed at approval; this Run is one.".to_string());
     }
     handle.trust.set_commands_policy(auto_approve);
     if !auto_approve || handle.trust.pending_capability() != Some(Capability::Command) {
@@ -802,7 +805,11 @@ mod tests {
         child_request.auto_approve_commands = Some(true);
         let child = GateSubject::from_request(&child_request);
         assert_eq!(child.lineage, RunLineage::SubagentChild);
-        assert!(child.full_auto(Some(false)), "the request's own choice stands");
+        assert!(child.full_auto(None), "the request's own choice stands until something flips it");
+        assert!(!child.full_auto(Some(false)), "and the parent's card can flip it, either way");
+        let mut asking_child = subject_request("goal", &[]);
+        asking_child.parent_id = Some("parent".into());
+        assert!(GateSubject::from_request(&asking_child).full_auto(Some(true)), "a child that asked is put on full auto from its parent's card");
 
         let mut attempt_request = subject_request("goal", &[]);
         attempt_request.mission_id = Some("mission".into());

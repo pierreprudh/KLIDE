@@ -16,7 +16,7 @@ import { useElapsed } from "./WorkingRow";
 import { subagentActivity, watchSubagentRun, type SubagentActivity } from "./subagentWatch";
 import { permissionCard } from "./permissionCard";
 import { InlineCommandReview } from "../InlineCommandReview";
-import { resolvePermission } from "../../agent/client";
+import { resolvePermission, setRunCommandPolicy } from "../../agent/client";
 import { notify } from "../../toast";
 import { errMessage } from "../../errors";
 import type { AgentEvent, PermissionDecision, PermissionRequest } from "../../agent/types";
@@ -193,7 +193,10 @@ export function SubagentWatchLine({
  * child's Run id, so the Harness or the Delegate CLI continues exactly as if
  * the prompt had been its own. The card hides on the click; the child's
  * `permission_resolved` confirms it, and a refused answer brings it back.
- * No hotkeys: the parent's own card, when there is one, owns ⏎ and esc.
+ * "Full auto" is the child's rung, flipped the way the foot bar flips the
+ * parent's: this command and every later one run unasked, each still
+ * recorded as answered by policy. No hotkeys: the parent's own card, when
+ * there is one, owns ⏎ and esc.
  */
 export function SubagentPermissionCard({ runId, request }: { runId: string; request: PermissionRequest }) {
   const card = useMemo(() => permissionCard(runId, request), [runId, request]);
@@ -208,6 +211,14 @@ export function SubagentPermissionCard({ runId, request }: { runId: string; requ
   };
   const approve = (scope: "once" | "run" | "project", pattern?: string) =>
     answer(pattern ? { behavior: "allow", scope, pattern } : { behavior: "allow", scope });
+  const fullAuto = () => {
+    setAnswered(request.id);
+    // Flipping the rung answers the card that is up, so no separate resolve.
+    void setRunCommandPolicy({ runId, autoApproveCommands: true }).catch((error) => {
+      setAnswered(null);
+      notify(`Couldn't put the worker on full auto: ${errMessage(error)}`, { tone: "error" });
+    });
+  };
   return (
     <div style={{ margin: "6px 0 2px 24px" }}>
       <InlineCommandReview
@@ -225,6 +236,7 @@ export function SubagentPermissionCard({ runId, request }: { runId: string; requ
         onApproveForProject={card.kind === "message" || card.kind === "worker" ? undefined : () => approve("project")}
         pattern={card.suggestedPattern}
         onApprovePattern={(pattern) => approve("project", pattern)}
+        onFullAuto={fullAuto}
       />
     </div>
   );

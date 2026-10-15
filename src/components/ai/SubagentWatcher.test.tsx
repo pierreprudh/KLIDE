@@ -5,6 +5,7 @@ import type { PermissionRequest } from "../../agent/types";
 // The card's IPC and toast are module-level imports; neither exists in node.
 vi.mock("../../agent/client", () => ({
   resolvePermission: vi.fn(async () => {}),
+  setRunCommandPolicy: vi.fn(async () => true),
   readAgentRunEvents: vi.fn(async () => []),
   reattachAgentRun: vi.fn(async () => ({ detach: () => {} })),
   getAgentRunStatus: vi.fn(async () => "running"),
@@ -34,6 +35,9 @@ describe("SubagentPermissionCard", () => {
     expect(html).toContain("The CLI asked before acting.");
     // Once / run / project: a worker's shell command is approved like the panel's own.
     expect(html.toLowerCase()).toContain("project");
+    // And the one option the panel's card never needs: the worker has no foot
+    // bar, so its rung is flipped from here.
+    expect(html).toContain("Full auto");
   });
 });
 

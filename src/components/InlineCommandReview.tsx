@@ -34,6 +34,11 @@ type Props = {
   onApproveForProject?: () => void;
   pattern?: string;
   onApprovePattern?: (pattern: string) => void;
+  /** Put the Run this card belongs to on the full-auto rung: this command
+   *  runs, and so does every later one, unasked. Offered only where the Run
+   *  has no foot bar of its own to say so — a worker drawn on its parent's
+   *  conversation. */
+  onFullAuto?: () => void;
   /** The card the run is blocked on answers the keyboard: ⏎ approves once,
    *  esc denies — from anywhere that isn't a text field. (The composer
    *  handles its own ⏎ / esc while it is empty, so the user never has to
@@ -182,12 +187,14 @@ function WordAction({
   onClick,
 }: {
   label: string;
-  tone: "danger" | "accent";
+  /** `neutral` is a standing choice said in a word ("Full auto"): dim at
+   *  rest, full strength under the pointer, never the danger red. */
+  tone: "danger" | "accent" | "neutral";
   keycap?: string;
   onClick: () => void;
 }) {
   const fg = tone === "accent" ? "var(--accent)" : "var(--fg-subtle)";
-  const hoverFg = tone === "accent" ? "var(--accent-hover)" : "var(--diff-remove)";
+  const hoverFg = tone === "accent" ? "var(--accent-hover)" : tone === "danger" ? "var(--diff-remove)" : "var(--fg-strong)";
   return (
     <button
       type="button"
@@ -280,6 +287,7 @@ export function InlineCommandReview({
   onApproveForProject,
   pattern,
   onApprovePattern,
+  onFullAuto,
   hotkeys = false,
 }: Props) {
   // A command that is entirely a Python script shows as one: the mark where
@@ -436,6 +444,9 @@ export function InlineCommandReview({
           // A hairline between the options and the decision, the card's one
           // divider.
           <span aria-hidden="true" style={{ width: 1, height: 14, background: "var(--border)", margin: "0 2px" }} />
+        )}
+        {kind === "command" && onFullAuto && (
+          <WordAction label="Full auto" tone="neutral" onClick={onFullAuto} />
         )}
         <WordAction label={rejectLabel} tone="danger" keycap={hotkeys ? "Esc" : undefined} onClick={onReject} />
         <WordAction label={approveOnceLabel} tone="accent" keycap={hotkeys ? "↵" : undefined} onClick={onApproveOnce} />

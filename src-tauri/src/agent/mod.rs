@@ -3305,7 +3305,9 @@ pub(crate) fn apply_mission_run_policy(handle: &AgentRunHandle, review_edits: bo
 /// makes the Run ask again from its next command. Returns whether a card was
 /// answered. Errors when no such Run is live: there is nothing to apply to,
 /// and the next Run carries the rung on its request anyway. Errors too for a
-/// Mission attempt or a child Run, which no conversation's rung reaches.
+/// Mission attempt, whose policy approval froze. A spawned child accepts it:
+/// its card is drawn on the parent's conversation, and this is that card's
+/// "full auto".
 #[tauri::command]
 pub async fn agent_set_command_policy(
     app: tauri::AppHandle,
@@ -7489,16 +7491,27 @@ mod permission_gate_tests {
         assert!(matches!(permission::precheck(&ctx, permission::Capability::Command, "another-command", false), permission::Precheck::Ask));
     }
 
-    /// A Mission attempt and a spawned child keep the policy their request
-    /// set: no conversation's flip reaches them.
+    /// A Mission attempt keeps the policy approval froze: no flip reaches it.
     #[test]
-    fn the_rung_cannot_be_flipped_on_a_run_that_is_not_a_conversation() {
-        for lineage in [permission::RunLineage::MissionAttempt, permission::RunLineage::SubagentChild] {
-            let mut handle = make_handle();
-            handle.subject.lineage = lineage;
-            assert!(permission::apply_command_policy(&handle, true).is_err(), "{lineage:?}");
-            assert_eq!(handle.trust.commands_policy(), None, "{lineage:?} policy untouched");
-        }
+    fn the_rung_cannot_be_flipped_on_a_mission_attempt() {
+        let mut handle = make_handle();
+        handle.subject.lineage = permission::RunLineage::MissionAttempt;
+        assert!(permission::apply_command_policy(&handle, true).is_err());
+        assert_eq!(handle.trust.commands_policy(), None, "policy untouched");
+        assert!(!handle.subject.full_auto(Some(true)), "a live flip means nothing to an attempt");
+    }
+
+    /// A spawned child's prompt is drawn on its parent's conversation, so the
+    /// operator there may put the child on full auto — and the relay reads
+    /// the flipped rung on its next prompt.
+    #[test]
+    fn the_rung_can_be_flipped_on_a_child_from_its_parents_card() {
+        let mut handle = make_handle();
+        handle.subject.lineage = permission::RunLineage::SubagentChild;
+        assert!(!handle.subject.full_auto(handle.trust.commands_policy()), "a child starts on its request's rung");
+        assert_eq!(permission::apply_command_policy(&handle, true), Ok(false), "no card is up to answer");
+        assert_eq!(handle.trust.commands_policy(), Some(true));
+        assert!(handle.subject.full_auto(handle.trust.commands_policy()), "the flip is what the relay reads");
     }
 
     /// Full auto runs commands unprompted; another agent's words still reach
@@ -8923,6 +8936,34 @@ mod worker_dispatch_tests {
         assert_eq!(String::from_utf8_lossy(&worktrees.stdout).lines().count(), 1, "no worktree was created");
     }
 
+    /// The parent's rung reaches the worker: a conversation on full auto
+    /// dispatches a worker that runs its commands unasked. The dispatch card
+    /// itself still asks — the rung silences commands and nothing else.
+    #[tokio::test]
+    async fn a_worker_inherits_the_parents_full_auto_rung_at_dispatch() {
+        let root = git_repo("inherit-rung");
+        let sup = FakeSupervisor::with_run("run");
+        sup.with_handle("run", &mut |h| h.trust.set_commands_policy(true));
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("inherit-rung");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (_events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Implement slugify", "worker": "claude-code" }));
+        let (outcome, _, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "default"),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(spawned[0].auto_approve_commands, Some(true), "the parent's rung rides the dispatch");
+    }
+
     #[tokio::test]
     async fn an_approved_worker_runs_the_delegate_as_itself_in_a_worktree() {
         let root = git_repo("approved");
@@ -8946,7 +8987,7 @@ mod worker_dispatch_tests {
         assert_eq!(spawned.len(), 1);
         let spec = &spawned[0];
         assert_eq!(spec.provider, "claude-code", "the worker is the child's provider");
-        assert_eq!(spec.auto_approve_commands, None, "a CLI has its own policy; Klide's rung stays off");
+        assert_eq!(spec.auto_approve_commands, None, "the parent is not on full auto, so the worker asks");
         assert_eq!(spec.model, crate::delegate::CLI_DEFAULT_MODEL, "no model asked for → the CLI's own default");
         assert_eq!(spec.mode, AgentMode::Goal);
         assert_eq!(spec.require_diff_review, Some(false));

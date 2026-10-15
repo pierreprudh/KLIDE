@@ -509,6 +509,11 @@ where
         ts: now_ms(),
     })?;
 
+    let parent_full_auto = {
+        let mut on = false;
+        ctx.sup.with_handle(ctx.id, &mut |h| on = h.subject.full_auto(h.trust.commands_policy()));
+        on
+    };
     let mut spec = match worker {
         // A Delegate worker is the CLI running as itself: its own provider, the
         // model the call asked for or the CLI's own default, and a prompt that
@@ -532,7 +537,11 @@ where
             max_turns: ctx.request.max_turns,
             command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: Some(false),
-            auto_approve_commands: None,
+            // The parent's rung, as it stands now, rides the dispatch: a
+            // conversation on full auto gets a worker that runs its commands
+            // unasked (each recorded as answered by policy). Otherwise the
+            // worker asks, on the card its parent's row draws.
+            auto_approve_commands: parent_full_auto.then_some(true),
         },
         // An API worker is Klide's own Harness on another house's model: Kit's
         // tools and conventions, the role appended, edits applied and commands
