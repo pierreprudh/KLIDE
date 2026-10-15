@@ -167,12 +167,12 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
       <div role="menu" data-menu-panel data-level="categories" className="popover-enter menu-glass" style={{ overflow: "hidden" }}>
         <ModelPickerHeader icon={<ProviderLogo id={harness} size={15} />} title={harnessName} caption="Choose an intelligence source" />
         <div style={{ padding: 4 }}>
+        <button type="button" role="menuitem" style={style} onMouseEnter={() => { setCategory(null); setSource(null); }} onClick={() => { onChange("default"); menu.close(); }}>Configured default</button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showCategory(name, e.currentTarget)} onClick={(e) => showCategory(name, e.currentTarget)}>
           {name} <span style={{ float: "right" }} aria-hidden>›</span>
         </button>)}
-        <button type="button" role="menuitem" style={style} onMouseEnter={() => { setCategory(null); setSource(null); }} onClick={() => { onChange("default"); menu.close(); }}>Configured default</button>
         </div>
       </div>
       {category && categoryPos && <div role="menu" data-menu-panel data-level="providers" className="popover-enter menu-glass"
