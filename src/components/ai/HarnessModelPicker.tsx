@@ -19,7 +19,7 @@ import { openSettingsSection } from "../../settingsNavigation";
 
 const PREFIX = "hermes-source:";
 const CATEGORIES = ["API", "Local", "Self-hosted", "Subscription"];
-/** The row named after the agent itself — its own models, its configured default first. */
+/** The row named after the agent itself — its own models. */
 const OWN = "own";
 function readChoice(model: string, harness: string): { provider: string; model: string } | null {
   const prefix = harness === "hermes" ? PREFIX : "harness-source:";
@@ -222,14 +222,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg)"; }} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && query.trim() && !loading && !error) select(query.trim()); }} />
         </div>
         <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 4 }}>
-        {category === OWN && !query.trim() && <>
-          <button type="button" role="menuitem" className="provider-category-row" style={{ ...style, background: model === "default" ? "var(--menu-row-active)" : undefined, fontWeight: model === "default" ? 550 : 500 }}
-            onClick={() => { onChange("default"); menu.close(); menu.triggerRef.current?.focus(); }}>
-            Default<div style={{ fontSize: 10, fontWeight: 500, color: "var(--fg-dim)", marginTop: 2 }}>{harness === "hermes" ? saved ? saved.model : "Set a source in Settings" : `What ${harnessName} starts on`}</div>
-          </button>
-          {harness === "hermes" && !saved && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("subscription"); }}>Open Settings ↗</button>}
-          <div style={{ height: 1, background: "var(--panel-border)", margin: "4px 5px" }} aria-hidden />
-        </>}
+        {category === OWN && harness === "hermes" && !saved && <div style={{ padding: 9, fontSize: 12, color: "var(--fg-subtle)" }}>Hermes has no configured source yet.<button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("subscription"); }}>Open Settings ↗</button></div>}
         {loading && <div style={{ padding: 9, fontSize: 12 }}>Loading models…</div>}
         {source === NOUS_SOURCE && <div style={{ padding: "4px 9px", fontSize: 11 }}>
           <button type="button" style={style} disabled={loginBusy} onClick={async () => {
