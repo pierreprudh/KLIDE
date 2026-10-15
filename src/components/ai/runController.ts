@@ -516,7 +516,6 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
       onMeasuredPromptTokens: (tokens) => deps().hooks.onMeasuredPromptTokens?.(tokens),
       onMeasuredUsage: (usage) => deps().hooks.onMeasuredUsage?.(usage),
       onMeasuredContextWindow: (tokens) => deps().hooks.onMeasuredContextWindow?.(tokens),
-      onTitled: (runId, title) => deps().hooks.onTitled?.(runId, title),
       onDetached: () => {
         viewBehind.reason = "region-detached";
       },
@@ -524,6 +523,13 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
     });
 
     const handleEvent = (event: AgentEvent) => {
+      // A name for the conversation is the thread's, not this turn's: it may
+      // land after the turn settled (a slow namer, a reattached Run), and it
+      // is still this conversation's name. The store decides whether it takes.
+      if (event.type === "conversation_titled") {
+        deps().hooks.onTitled?.(event.runId, event.title);
+        return;
+      }
       if (generation !== mine) {
         // This turn's generation was retired mid-Run (the panel left the
         // conversation, or a Stop bumped it). Dropping the event is right — it

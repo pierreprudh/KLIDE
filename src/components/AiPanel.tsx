@@ -193,6 +193,7 @@ import {
   persistConversation,
   suggestConversationTitle,
 } from "./ai/storedConversations";
+import { namingRequestFor } from "./ai/conversationNaming";
 import {
   genId,
   estimateTokens,
@@ -353,6 +354,9 @@ type AiHarnessSettings = {
   autoMemoryOnRunDone?: boolean;
   advisorProvider?: string;
   advisorModel?: string;
+  nameConversations?: boolean;
+  namingProvider?: string;
+  namingModel?: string;
 };
 
 
@@ -3288,6 +3292,14 @@ This user request requires workspace inspection. Before answering, you MUST call
       // on its first headless turn; the Rust side ignores it once the CLI has
       // reported a newer id of its own.
       delegateSession: conversationSession.delegateSession ?? undefined,
+      // A name for a new thread, asked beside its first turn
+      // (`conversationNaming.ts` says when; Rust `agent::naming` says who).
+      naming: namingRequestFor({
+        settings: harnessSettings,
+        messages: msgsRef.current,
+        renamed: loadConversations<Conversation>().find((c) => c.id === conversationSessionRef.current.conversationId)?.renamed === true,
+        subagent: !!turn.subagent,
+      }),
     };
   }
 

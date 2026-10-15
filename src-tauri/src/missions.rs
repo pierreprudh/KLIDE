@@ -1025,6 +1025,7 @@ fn start_request_for(
         // Mission attempt never arrives as `auto` and has no stars to carry.
         preferred_models: vec![],
         eyes: None,
+        naming: None,
         routed: None,
     })
 }

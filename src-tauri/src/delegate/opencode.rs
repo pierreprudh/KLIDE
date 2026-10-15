@@ -744,6 +744,15 @@ impl super::chat_server::ChatServer for OpenCodeServer {
                 self.settled = true;
                 vec![StreamItem::Error(opencode_error(props.get("error")))]
             }
+            // v1 names its sessions too; the name rides the session record.
+            "session.updated" => props
+                .get("info")
+                .and_then(|info| info.get("title"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(super::chat_server::named_title)
+                .map(StreamItem::Title)
+                .into_iter()
+                .collect(),
             "message.updated" => {
                 let info = props.get("info").cloned().unwrap_or_default();
                 if str_at(&info, "role").as_deref() == Some("assistant") {
@@ -1530,6 +1539,15 @@ mod tests {
         assert_eq!(got, vec![StreamItem::TextPart { id: "p".into(), text: "again".into() }]);
         assert_eq!(server.listening_url("opencode server listening on http://127.0.0.1:4096"), Some("http://127.0.0.1:4096".into()));
         assert_eq!(server.listening_url("listening on http://0.0.0.0:4096"), None);
+    }
+
+    #[test]
+    fn a_v1_session_name_arrives_on_its_feed() {
+        use super::super::chat_server::ChatServer;
+        let mut server = OpenCodeServer::new(Some("ses_A"));
+        assert!(server.feed(r#"{"type":"session.updated","properties":{"info":{"sessionID":"ses_A","id":"ses_A","title":"New session - 2026-10-15T14:05:23.616Z"}}}"#).is_empty());
+        assert_eq!(server.feed(r#"{"type":"session.updated","properties":{"info":{"sessionID":"ses_A","id":"ses_A","title":"Picker row order"}}}"#), vec![StreamItem::Title("Picker row order".into())]);
+        assert!(server.feed(r#"{"type":"session.updated","properties":{"info":{"sessionID":"ses_B","id":"ses_B","title":"Theirs"}}}"#).is_empty());
     }
 
     #[test]

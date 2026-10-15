@@ -30,6 +30,7 @@ mod retained;
 pub mod routing;
 mod run_core;
 pub mod sight;
+pub mod naming;
 mod steering;
 pub mod subagents;
 mod tool_handlers;
@@ -737,6 +738,7 @@ async fn run_subagent_to_completion(
         max_turns: spec.max_turns,
         preferred_models: vec![],
         eyes: None,
+        naming: None,
         routed: None,
         command_timeout_secs: spec.command_timeout_secs,
         test_after_edit_command: None,
@@ -2119,6 +2121,26 @@ async fn loop_body(
     // the user message: the panel draws the wait as a running
     // `look_at_image` step and the result as what the eyes read. Nothing
     // here runs for a turn without photos or a model that sees.
+    // A name for the conversation, asked for by the panel on a thread's first
+    // turn (`agent::naming`): one light call beside the turn, delivered as
+    // `ConversationTitled` whenever it lands — the same event OpenCode's own
+    // session name arrives on. Awaited briefly before the run settles, so a
+    // slow namer still reaches the live panel rather than only the record.
+    let mut naming_task = request.naming.as_ref().filter(|_| !resuming && request.parent_id.is_none() && request.mission_task_id.is_none()).and_then(|naming| {
+        let namer = naming::pick(naming.model.as_ref(), &request.provider, &request.model)?;
+        let (sequence, runs_dir, id, supervisor, on_event) = (sequence.clone(), runs_dir.clone(), id.clone(), supervisor.clone(), on_event.clone());
+        let (first_message, workspace_root) = (request.initial_text.clone(), cwd.clone());
+        Some(tokio::spawn(async move {
+            let Some(title) = naming::name(&namer, &first_message, workspace_root).await else { return };
+            let event = AgentEvent::ConversationTitled { run_id: id.clone(), title, ts: now_ms() };
+            let Ok(mut seq) = sequence.lock() else { return };
+            if append_event(&runs_dir, &id, *seq, &event).is_ok() {
+                supervisor.broadcast(&id, *seq, &event);
+                *seq += 1;
+                let _ = on_event.send(event);
+            }
+        }))
+    });
     let blind_photos = sight::blind_photos(&request).await;
     if !blind_photos.is_empty() {
         let eyes = sight::eyes_for(&request).await;
@@ -2891,6 +2913,9 @@ async fn loop_body(
                         }
                         goal::GateVerdict::Finish { marker: None } => {}
                     }
+                }
+                if let Some(task) = naming_task.as_mut().filter(|task| !task.is_finished()) {
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(4), task).await;
                 }
                 emit(AgentEvent::RunResult {
                     run_id: id.clone(),

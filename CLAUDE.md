@@ -221,6 +221,7 @@ Klide/
 │   │       ├── summarize.ts       Summarize-and-handoff + auto-skill detect
 │   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, refuse binaries (AttachmentTray.tsx: staged strip)
 │   │       ├── sight.ts           The composer's half of eyes for a blind model — may a photo be dropped, what the hint says, who looked
+│   │       ├── conversationNaming.ts When a run asks for a name — first turn, nobody named it, not a subagent — and the pinned pair
 │   │       ├── toolRuns.ts        Everything before the answer folds to one line — "Worked for 19s ›" over a hairline, opened for the rows
 │   │       ├── CompletionCard.tsx A finished run's evidence — what changed, what it ran, documents to open
 │   │       ├── QuestionCard.tsx   A question the run is waiting on, answered in place
@@ -330,6 +331,7 @@ Klide/
     │       ├── run_core.rs        Tauri-free turn prep — provider quirks, message assembly, compaction
     │       ├── routing.rs         The `auto` Provider → one concrete provider+model at run start (gate, rank, lock)
     │       ├── sight.rs           Eyes for a blind model — another model describes a turn's photos before a model that can't see them reads the turn
+    │       ├── naming.rs          A name for a conversation nobody has named — who names it (never a bigger model than the thread's own), what a name is, one light call beside the first turn
     │       ├── tools.rs           Tool registry (schema + capability + execution, including native memory recall)
     │       ├── spreadsheet_tools.rs Native workbook Tools — recalculated and exported before review
     │       ├── artifacts.rs       What a command left behind — the dirty set bracketed around a run_command

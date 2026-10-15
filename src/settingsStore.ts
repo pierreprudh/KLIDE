@@ -42,6 +42,15 @@ export type HarnessSettings = {
    *  src/components/ai/sight.ts and Rust `agent::sight`. */
   eyesProvider?: string;
   eyesModel?: string;
+  /** Name a conversation on its first turn, the way OpenCode names its
+   *  sessions: one light call beside the turn, the rail rewrites the row.
+   *  Absent → on. The pair is a pin for who names it; absent → automatic
+   *  (the thread's own Provider at its light rung, a local thread's own
+   *  model). See src/components/ai/conversationNaming.ts and Rust
+   *  `agent::naming`. */
+  nameConversations?: boolean;
+  namingProvider?: string;
+  namingModel?: string;
   /** Max tool turns per run before handing back to the user. Absent → harness
    *  default (50). A runaway-loop guard; raise it for big multi-file / multi-
    *  agent tasks. The conversation can always be continued past the cap. */

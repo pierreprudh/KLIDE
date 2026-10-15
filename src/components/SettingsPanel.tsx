@@ -1760,6 +1760,33 @@ export function SettingsPanel({
                     }
                   />
 
+                  {/* Conversation names — the rail row takes a name beside the first turn */}
+                  <Row
+                    title="Name conversations"
+                    description="Give a new thread a name beside its first turn, the way OpenCode names its sessions: one short call on a light model, and the rail row is rewritten when it lands. A name you type yourself always wins and is never replaced."
+                    control={
+                      <Toggle
+                        checked={harnessSettings?.nameConversations !== false}
+                        onChange={(v) => onHarnessSettingsChange?.({ ...harnessSettings, nameConversations: v ? undefined : false })}
+                        label="Name conversations"
+                      />
+                    }
+                  />
+                  <Row
+                    title="Naming model"
+                    description="Who writes the name. Automatic is the thread's own provider at its light model (Haiku for an Anthropic thread, the installed default for a local one), so a name never costs more than the conversation does. A thread on a local model names locally whatever is pinned here, so nothing leaves the machine that was not already leaving it. Subscription CLIs name through their routed source, or the local default."
+                    control={
+                      <ModelPairControl
+                        label="Naming"
+                        provider={harnessSettings?.namingProvider ?? ""}
+                        model={harnessSettings?.namingModel ?? ""}
+                        groups={["Local", "API"]}
+                        automatic="Automatic — the thread's own provider, light"
+                        onChange={(p, m) => onHarnessSettingsChange?.({ ...harnessSettings, namingProvider: p || undefined, namingModel: m || undefined })}
+                      />
+                    }
+                  />
+
                   {/* Memory drafting */}
                   <Row
                     title="Auto-draft memory on run done"

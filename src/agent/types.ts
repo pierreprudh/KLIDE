@@ -435,6 +435,10 @@ export type StartAgentRunInput = {
    *  one behind a key). Rust reads it only when a turn carries a photo the
    *  run's model cannot see (`agent::sight`). */
   eyes?: { provider: string; model: string };
+  /** Ask Rust to name this conversation (`agent::naming`): sent on a thread's
+   *  first turn when nobody has named it. `model` is the pair Settings pins;
+   *  absent = automatic. */
+  naming?: { model?: { provider: string; model: string } };
   /** Optional durable Mission attempt linkage. Task id and Run id stay distinct. */
   missionId?: string;
   missionTaskId?: string;

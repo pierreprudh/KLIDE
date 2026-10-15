@@ -172,6 +172,11 @@ pub struct StartRunRequest {
     /// (`agent::sight`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eyes: Option<PreferredModel>,
+    /// The panel asks for the conversation to be named: a thread's first
+    /// turn, nobody has named it, the setting is on. Carries the pair
+    /// Settings pins, if any (`agent::naming` picks otherwise).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub naming: Option<super::naming::NamingRequest>,
     /// Backend-populated: how an `auto` request was routed, so the loop can
     /// record the decision on the Transcript right after `RunStarted`. Renderer
     /// input is ignored — the router is the only writer.

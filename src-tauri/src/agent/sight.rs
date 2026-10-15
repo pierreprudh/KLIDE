@@ -618,6 +618,7 @@ mod tests {
             mission_task_id: None,
             preferred_models: Vec::new(),
             eyes: None,
+            naming: None,
             routed: None,
         }
     }

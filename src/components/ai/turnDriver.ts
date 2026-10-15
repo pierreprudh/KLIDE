@@ -38,9 +38,6 @@ export type TurnDriverOptions = {
   /** The window the turn actually ran in, when the provider sizes one per
    *  request (Ollama). The gauge divides by it. */
   onMeasuredContextWindow?: (tokens: number) => void;
-  /** The CLI named its session; `runId` is the conversation for a top-level
-   *  Run. Not a transcript row — the rail's title. */
-  onTitled?: (runId: string, title: string) => void;
   /** The run's region was edited from outside and the transcript stopped
    *  writing — see `RunTranscript.isDetached`. Everything after this point
    *  reaches disk and not the screen. */
@@ -238,12 +235,6 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
       // same way a dispatched call does — the whitelist below is the *only*
       // thing that decides what renders live, so an event missing from it folds
       // on replay and is invisible while the turn is actually happening.
-      // The CLI's own name for the session. Nothing on the transcript moves;
-      // the panel decides whether the conversation takes the name.
-      case "conversation_titled": {
-        opts.onTitled?.(event.runId, event.title);
-        return true;
-      }
       case "observed_tool_call": {
         // First observable output of the turn. A delegate often opens with
         // several file reads before it says anything, and measuring TTFT to its
