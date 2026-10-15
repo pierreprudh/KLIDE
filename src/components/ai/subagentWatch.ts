@@ -16,7 +16,7 @@
 // `foldAgentEvents` — the ONE fold — so a child's rows read like the parent's.
 
 import { readAgentRunEvents, reattachAgentRun, getAgentRunStatus, isActiveRunStatus } from "../../agent/client";
-import type { AgentEvent } from "../../agent/types";
+import type { AgentEvent, PermissionRequest } from "../../agent/types";
 
 /** What the child is doing right now: the tool name, and its own summary of
  *  the argument ("src/time.ts"). Null between steps. */
@@ -41,9 +41,14 @@ export type SubagentActivity = {
   current: SubagentStep | null;
   /** Why it failed, when it did. */
   error?: string;
+  /** The permission the child is blocked on, if any. A child Run raises its
+   *  gates on its own channel, where no panel is attached — a background
+   *  worker has no card of its own — so the parent's dispatch row draws this
+   *  one and answers it with the child's Run id. */
+  pendingPermission: PermissionRequest | null;
 };
 
-const EMPTY: SubagentActivity = { status: "starting", steps: 0, turns: 0, tokens: 0, current: null };
+const EMPTY: SubagentActivity = { status: "starting", steps: 0, turns: 0, tokens: 0, current: null, pendingPermission: null };
 
 /**
  * Fold a child Run's events into the one line the parent conversation shows.
@@ -61,12 +66,22 @@ export function subagentActivity(events: AgentEvent[]): SubagentActivity {
   let turns = 0;
   let tokens = 0;
   let error: string | undefined;
+  let pendingPermission: PermissionRequest | null = null;
 
   for (const event of events) {
     switch (event.type) {
       case "run_started":
         startedMs = event.ts;
         status = "working";
+        break;
+      case "permission_requested":
+        pendingPermission = event.request;
+        status = "working";
+        break;
+      case "permission_resolved":
+        // Only the matching answer clears it: a stale resolution for an
+        // abandoned request must not drop the prompt the child still waits on.
+        if (pendingPermission?.id === event.requestId) pendingPermission = null;
         break;
       case "tool_call_started":
       case "observed_tool_call":
@@ -90,11 +105,13 @@ export function subagentActivity(events: AgentEvent[]): SubagentActivity {
         status = event.result.status === "done" ? "done" : "failed";
         if (event.result.status !== "done") error = event.result.message ?? event.result.status;
         open.clear();
+        pendingPermission = null;
         break;
       case "run_error":
         status = "failed";
         error = event.error.message;
         open.clear();
+        pendingPermission = null;
         break;
       default:
         break;
@@ -103,7 +120,7 @@ export function subagentActivity(events: AgentEvent[]): SubagentActivity {
 
   let current: SubagentStep | null = null;
   for (const step of open.values()) current = step;
-  return { status, startedMs, steps, turns, tokens, current, error };
+  return { status, startedMs, steps, turns, tokens, current, error, pendingPermission };
 }
 
 /** True while the child is still worth listening to. */

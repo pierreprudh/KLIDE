@@ -14,7 +14,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { DotGridLoader } from "./icons";
 import { useElapsed } from "./WorkingRow";
 import { subagentActivity, watchSubagentRun, type SubagentActivity } from "./subagentWatch";
-import type { AgentEvent } from "../../agent/types";
+import { permissionCard } from "./permissionCard";
+import { InlineCommandReview } from "../InlineCommandReview";
+import { resolvePermission } from "../../agent/client";
+import { notify } from "../../toast";
+import { errMessage } from "../../errors";
+import type { AgentEvent, PermissionDecision, PermissionRequest } from "../../agent/types";
 
 export type SubagentWatchState = {
   activity: SubagentActivity;
@@ -109,13 +114,18 @@ export function SubagentWatchLine({
 }) {
   const elapsed = useElapsed(activity.status === "starting" || activity.status === "working" ? activity.startedMs : undefined);
   const working = activity.status === "starting" || activity.status === "working";
-  const step = activity.current;
+  // Blocked on a person, not on the model: no loader, and the line says what
+  // it is asking for — the card below is where the answer goes.
+  const asking = working ? activity.pendingPermission : null;
+  const step = asking ? { name: "", detail: asking.summary } : activity.current;
   // Between steps the child is thinking; before its first event it is starting.
-  const label = step
-    ? stepVerb(step.name)
-    : activity.status === "starting"
-      ? "starting"
-      : activity.status === "done" ? "finished" : activity.status === "failed" ? (activity.error?.startsWith("Interrupted:") ? "interrupted" : "stopped") : "thinking";
+  const label = asking
+    ? "asking"
+    : step
+      ? stepVerb(step.name)
+      : activity.status === "starting"
+        ? "starting"
+        : activity.status === "done" ? "finished" : activity.status === "failed" ? (activity.error?.startsWith("Interrupted:") ? "interrupted" : "stopped") : "thinking";
 
   const counts: string[] = [];
   if (activity.steps > 0) counts.push(`${activity.steps} ${activity.steps === 1 ? "step" : "steps"}`);
@@ -143,7 +153,7 @@ export function SubagentWatchLine({
         minWidth: 0,
       }}
     >
-      {working && <DotGridLoader size={10} label={label} />}
+      {working && !asking && <DotGridLoader size={10} label={label} />}
       <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>{label}</span>
       {step?.detail && (
         <span
@@ -171,6 +181,52 @@ export function SubagentWatchLine({
         </span>
       )}
     </button>
+  );
+}
+
+/**
+ * The permission a child Run is waiting on, answered from the parent's row.
+ *
+ * The child raised it on `agent-run:{child}` — the relay's words: "a headless
+ * turn has no terminal of its own, so the question comes here" — and nothing
+ * was listening there. Same card as the panel's own gate, resolved against the
+ * child's Run id, so the Harness or the Delegate CLI continues exactly as if
+ * the prompt had been its own. The card hides on the click; the child's
+ * `permission_resolved` confirms it, and a refused answer brings it back.
+ * No hotkeys: the parent's own card, when there is one, owns ⏎ and esc.
+ */
+export function SubagentPermissionCard({ runId, request }: { runId: string; request: PermissionRequest }) {
+  const card = useMemo(() => permissionCard(runId, request), [runId, request]);
+  const [answered, setAnswered] = useState<string | null>(null);
+  if (answered === request.id) return null;
+  const answer = (decision: PermissionDecision) => {
+    setAnswered(request.id);
+    void resolvePermission({ runId, requestId: request.id, decision }).catch((error) => {
+      setAnswered(null);
+      notify(`Couldn't answer the worker: ${errMessage(error)}`, { tone: "error" });
+    });
+  };
+  const approve = (scope: "once" | "run" | "project", pattern?: string) =>
+    answer(pattern ? { behavior: "allow", scope, pattern } : { behavior: "allow", scope });
+  return (
+    <div style={{ margin: "6px 0 2px 24px" }}>
+      <InlineCommandReview
+        command={card.command}
+        kind={card.kind}
+        detail={card.reason}
+        externalPaths={card.externalPaths}
+        interpreter={card.interpreter}
+        peer={card.peer}
+        worker={card.worker}
+        connector={card.connector}
+        onReject={() => answer({ behavior: "deny" })}
+        onApproveOnce={() => approve("once")}
+        onApproveForRun={card.kind === "worker" ? undefined : () => approve("run")}
+        onApproveForProject={card.kind === "message" || card.kind === "worker" ? undefined : () => approve("project")}
+        pattern={card.suggestedPattern}
+        onApprovePattern={(pattern) => approve("project", pattern)}
+      />
+    </div>
   );
 }
 

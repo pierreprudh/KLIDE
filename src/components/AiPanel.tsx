@@ -48,7 +48,8 @@ import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
 import { errMessage, providerFailureMessage } from "../errors";
 import { InlineDiffReview } from "./InlineDiffReview";
-import { InlineCommandReview, type CommandInterpreter } from "./InlineCommandReview";
+import { InlineCommandReview } from "./InlineCommandReview";
+import { permissionCard } from "./ai/permissionCard";
 import { conversationToConvo, deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   lensItemsForPrompt,
@@ -112,7 +113,6 @@ import type {
   AgentAttachment as Attachment,
   AgentMode,
   ProviderId,
-  PermissionRequest,
   StartAgentRunInput,
 } from "../agent/types";
 import { enabledRunSkills, enabledSkillsPrompt, type Skill } from "../skills";
@@ -3218,67 +3218,10 @@ This user request requires workspace inspection. Before answering, you MUST call
   // `permissionCard` so a recovered request and a live one look the same.
   const pendingPermissionGate = runView.gates.permission;
   const pendingPermission = useMemo(
-    () => pendingPermissionGate ? permissionCard(pendingPermissionGate.runId, pendingPermissionGate.request) : null,
+    () => pendingPermissionGate ? permissionCard(pendingPermissionGate.runId, pendingPermissionGate.request, peerIndex) : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pendingPermissionGate, peerIndex],
   );
-
-  function suggestCommandPattern(command: string): string | undefined {
-    const words = (command.match(/"[^"]+"|'[^']+'|\S+/g) ?? [])
-      .map((word) => word.replace(/^["']|["']$/g, ""))
-      .filter(Boolean);
-    const stop = words.findIndex((word) => word === "&&" || word === "||" || word === ";" || word === "|");
-    const head = (stop >= 0 ? words.slice(0, stop) : words).filter(Boolean);
-    if (head.length < 2) return undefined;
-    const keep = head[0] === "npm" && head[1] === "run" && head[2] ? 3 : 2;
-    return `${head.slice(0, keep).join(" ")} *`;
-  }
-
-  /** One permission request → the card the panel draws for it. Shared by the
-   *  live event and by the transcript recovery, so an approval looks the same
-   *  whether it arrived while you were watching or while you were away. */
-  function permissionCard(runId: string, req: PermissionRequest) {
-    // `input` is the one genuinely open field on the wire — the command gate
-    // sends {command, cwd, externalPaths, matchedAllowRule}, a network
-    // capability sends whatever it declared. Everything else is typed, and the
-    // Rust `frontend_mirror_matches_agent_wire` test keeps it that way.
-    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; interpreter?: CommandInterpreter | null; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
-    const isCommand = !!input.command;
-    // An incoming-message gate carries the sender and the text; the card shows
-    // the text where the command would be and names the peer as the chat does.
-    const isMessage = !isCommand && !!input.fromRunId;
-    // A worker dispatch carries the Delegate and the role; the card shows the
-    // task where the command would be, with "Claude Code · implementer →" in
-    // front of it, and the branch the worker will edit on as its detail.
-    const isWorker = !isCommand && !isMessage && !!input.worker;
-    // A connector tool shows its mark and the tool it would run — the card's
-    // command line is `add_issue_comment`, not a network target.
-    const isConnector = !isCommand && !isMessage && !isWorker && !!input.connector && !!input.tool;
-    const command = input.command
-      ?? (isMessage ? input.body ?? "" : undefined)
-      ?? (isWorker ? input.task ?? "" : undefined)
-      ?? (isConnector ? input.tool : undefined)
-      ?? req.summary ?? req.toolName ?? "permission request";
-    return {
-      runId,
-      requestId: req.id,
-      toolName: req.toolName ?? "permission",
-      kind: isCommand ? ("command" as const) : isMessage ? ("message" as const) : isWorker ? ("worker" as const) : isConnector ? ("connector" as const) : ("network" as const),
-      connector: isConnector ? input.connector : undefined,
-      command,
-      peer: isMessage ? peerName(input.fromRunId!, peerIndex)
-        : isWorker ? `${input.workerLabel ?? input.worker} ${input.subagent ?? "worker"}`
-          : isConnector ? input.connectorLabel ?? input.connector
-            : undefined,
-      worker: isWorker ? (input.worker as ProviderId) : undefined,
-      envelopeId: isMessage ? input.envelopeId : undefined,
-      summary: req.summary ?? command,
-      reason: req.reason ?? "",
-      externalPaths: Array.isArray(input.externalPaths) ? input.externalPaths : [],
-      interpreter: isCommand ? input.interpreter ?? undefined : undefined,
-      suggestedPattern: isCommand ? suggestCommandPattern(command) : undefined,
-    };
-  }
 
   /**
    * Everything the harness needs to start one turn — the system prompt, the

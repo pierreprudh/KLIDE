@@ -82,8 +82,9 @@ them.
   the child is already registered for; no second door. Shipped 2026-10-13,
   in-app dogfood owed.
 - [ ] Aggregate capacity for dispatch (`capacityPlanner.ts` is a model, not in
-  the Rust admission path) and routing of a background child's permission
-  prompts onto the parent's card.
+  the Rust admission path). A child's permission prompts reach the parent's
+  dispatch row since 2026-10-15; a conversation that is not on screen still
+  learns of one only by opening it.
 - [ ] Make worker setup an approved, visible stage; workers currently skip the
   configured setup script. Report setup failure before spending model tokens.
 - [ ] Join worker results to validation evidence and a review/apply action;

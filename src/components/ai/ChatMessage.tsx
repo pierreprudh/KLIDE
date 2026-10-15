@@ -21,7 +21,7 @@ import { formatElapsed, useElapsed } from "./WorkingRow";
 import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 
 import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, toolCallKey, toolRunLabel } from "./toolRuns";
-import { SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
+import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
 import { isWatchable } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
@@ -254,6 +254,12 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
         onToggle={() => setOpened((was) => !was)}
         hasRows={watch.events.length > 0}
       />
+    )}
+    {/* The child's own gate, drawn here because nothing else is attached to
+        its channel: a worker that asks before a command would otherwise wait
+        on nobody until it timed out. */}
+    {childRunId && watching && watch.activity.pendingPermission && (
+      <SubagentPermissionCard runId={childRunId} request={watch.activity.pendingPermission} />
     )}
     {opened && (
       <SubagentWatchBody>

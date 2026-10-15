@@ -43,7 +43,42 @@ const assistant = (text: string, completionTokens?: number): AgentEvent => ({
   ts: at(),
 });
 
+const asked = (id: string, command: string): AgentEvent => ({
+  type: "permission_requested",
+  runId: CHILD,
+  request: {
+    id,
+    runId: CHILD,
+    toolCallId: `call-${id}`,
+    toolName: "Bash",
+    input: { command, cwd: "/w", externalPaths: [] },
+    summary: `The agent asks to run ${command}`,
+    reason: "The CLI asked before acting.",
+    options: [],
+  },
+  ts: at(),
+});
+const answered = (requestId: string): AgentEvent =>
+  ({ type: "permission_resolved", runId: CHILD, requestId, decision: "allow_once", ts: at() }) as unknown as AgentEvent;
+const errored = (): AgentEvent =>
+  ({ type: "run_error", runId: CHILD, error: { code: "provider_unavailable", message: "timed out" }, ts: at() }) as unknown as AgentEvent;
+
 describe("subagentActivity", () => {
+  it("surfaces the permission the child is blocked on, until its own answer clears it", () => {
+    const blocked = subagentActivity([started(), asked("p1", "git add hello.txt")]);
+    expect(blocked.status).toBe("working");
+    expect(blocked.pendingPermission?.id).toBe("p1");
+    expect(blocked.pendingPermission?.summary).toContain("git add hello.txt");
+    // An answer to some other request is not an answer to this one.
+    expect(subagentActivity([started(), asked("p1", "git add hello.txt"), answered("p0")]).pendingPermission?.id).toBe("p1");
+    expect(subagentActivity([started(), asked("p1", "git add hello.txt"), answered("p1")]).pendingPermission).toBeNull();
+  });
+
+  it("a settled child waits on nothing, whatever its last gate said", () => {
+    expect(subagentActivity([started(), asked("p1", "xxd hello.txt"), errored()])).toMatchObject({ status: "failed", pendingPermission: null });
+    expect(subagentActivity([])).toMatchObject({ pendingPermission: null });
+  });
+
   it("is 'starting' before the child has said anything", () => {
     expect(subagentActivity([])).toMatchObject({ status: "starting", steps: 0, current: null });
   });
