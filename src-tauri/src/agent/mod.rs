@@ -2580,7 +2580,7 @@ async fn loop_body(
                     text: text.clone(),
                 }
             }))
-            .chain(worker_reports.iter().map(|(child_id, _, text)| {
+            .chain(worker_reports.iter().map(|(child_id, _, text, _)| {
                 delivery::DeliveredItem::WorkerReport {
                     run_id: child_id.clone(),
                     text: text.clone(),
@@ -2608,13 +2608,14 @@ async fn loop_body(
                 })?;
                 background::acknowledge(&id, shell_id);
             }
-            for (child_id, ok, text) in &worker_reports {
+            for (child_id, ok, text, commit) in &worker_reports {
                 emit(AgentEvent::SubagentResolved {
                     run_id: id.clone(),
                     request_id: child_id.clone(),
                     result: text.clone(),
                     ok: Some(*ok),
                     background: true,
+                    commit: commit.clone(),
                     ts: now_ms(),
                 })?;
                 workers::acknowledge(&id, child_id);
@@ -6371,7 +6372,7 @@ mod run_loop_tests {
         workers::register(id, child, "Claude Code", "implementer", Some("klide/worker-slugify-1"), Some("/wt/slugify"));
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request.clone(), caller).await;
         assert_eq!(workers::notification_state(id, child), Some(false), "a normal reply must not forget a working child");
-        workers::settle(id, child, true, "Added slugify with tests. — Claude Code worked in the worktree `/wt/slugify`.".into());
+        workers::settle(id, child, true, "Added slugify with tests. — Claude Code worked in the worktree `/wt/slugify`.".into(), None);
         assert_eq!(workers::notification_state(id, child), Some(true));
 
         let mut wake = request.clone();

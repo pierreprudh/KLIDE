@@ -17,6 +17,8 @@ import { ConnectorMark } from "../linkMark";
 import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
+import { conversationMark } from "../../modelIdentity";
+import { AgentMark } from "../fileMarks";
 import { formatElapsed, useElapsed } from "./WorkingRow";
 import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 
@@ -219,7 +221,8 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
   );
   return (
     <>
-    <details style={{ margin: "5px 0 -3px" }}>
+    {/* `data-child-run` is the address the report row scrolls back to. */}
+    <details data-child-run={childRunId} style={{ margin: "5px 0 -3px", scrollMarginTop: 72 }}>
       <summary style={{ display: "flex", alignItems: "center", gap: 7, padding: 0, cursor: long ? "pointer" : "default", listStyle: "none", userSelect: "none", minWidth: 0 }}>
         <span aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0 }}>·</span>
         <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>{background ? "Dispatched to" : "Delegated to"}</span>
@@ -276,19 +279,64 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
   );
 }
 
-// A background worker's report opened this response. Same quiet machinery
-// line as an observer's, but it says who: the worker's mark and name, the
-// role, and whether it finished or failed. The answer below is Kit's reading
-// of the report; the report itself is one click away on the dispatch row.
+// A background worker's report opened this response. The row is the link
+// between the two agents, drawn the way two conversations talking are: the
+// worker's mark, a short hairline, this conversation's mark — then who
+// reported, and the commit the Harness observed. Click it to scroll back to
+// the dispatch row the report answers; the report itself stays one click
+// away there. The answer below is Kit's reading of it.
+const REPORT_MARK = 14;
+const REPORT_TRACK = 44;
 function WorkerReportRow({ report }: { report: NonNullable<Extract<Msg, { role: "system" }>["workerReport"]> }) {
   const worker = report.worker ? (report.worker as ProviderId) : null;
+  const mine = conversationMark(report.model, report.provider, REPORT_MARK) ?? { node: <AgentMark size={11} />, label: "Klide agent" };
+  const [hover, setHover] = useState(false);
+  const jump = () => {
+    if (typeof document === "undefined") return;
+    const target = document.querySelector(`[data-child-run="${CSS.escape(report.childRunId)}"]`);
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  const mark = (node: ReactNode, label: string) => (
+    <span aria-hidden style={{ display: "grid", placeItems: "center", width: REPORT_MARK, height: REPORT_MARK, flexShrink: 0 }} title={label}>{node}</span>
+  );
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>
-      {worker && <ProviderLogo id={worker} size={13} />}
-      <span style={{ color: worker ? "var(--fg-subtle)" : undefined }}>{worker ? providerName(worker) : "Background worker"}</span>
-      {report.role && <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-dim)" }}>{report.role}</span>}
+    <button
+      type="button"
+      onClick={jump}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      aria-label={`${worker ? providerName(worker) : "Background worker"}${report.role ? ` ${report.role}` : ""} ${report.ok ? "reported" : "failed"} — show the dispatch`}
+      title="Show the dispatch"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        margin: "12px 0 5px",
+        padding: 0,
+        border: "none",
+        background: "none",
+        font: "inherit",
+        fontSize: 12,
+        color: "var(--fg-dim)",
+        cursor: "pointer",
+        textAlign: "left",
+        opacity: hover ? 1 : 0.78,
+        transition: "opacity var(--motion-fast) var(--ease-out)",
+      }}
+    >
+      {mark(worker ? <ProviderLogo id={worker} size={REPORT_MARK} /> : <AgentMark size={11} />, worker ? providerName(worker) : "Background worker")}
+      <span aria-hidden style={{ width: REPORT_TRACK, height: 1, flexShrink: 0, background: "color-mix(in srgb, var(--border-strong) 55%, transparent)" }} />
+      {mark(mine.node, mine.label)}
+      <span style={{ color: "var(--fg-subtle)", marginLeft: 2 }}>{worker ? providerName(worker) : "Background worker"}</span>
+      {report.role && <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5 }}>{report.role}</span>}
       <span>{report.ok ? "reported" : "failed"}</span>
-    </div>
+      {report.commit && (
+        <>
+          <span aria-hidden>·</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>{report.commit.slice(0, 7)}</span>
+        </>
+      )}
+    </button>
   );
 }
 

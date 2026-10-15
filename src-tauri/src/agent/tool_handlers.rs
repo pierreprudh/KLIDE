@@ -617,8 +617,8 @@ where
         let role = def.id;
         tokio::spawn(async move {
             let (ok, report) = settled_child(child.await, role);
-            let (report, _) = outcome.describe(report).await;
-            workers::settle(&parent_id, &child_id, ok, report);
+            let (report, checkout) = outcome.describe(report).await;
+            workers::settle(&parent_id, &child_id, ok, report, observed_head(&checkout));
         });
         let where_now = match (branch.as_deref(), worktree_path.as_deref()) {
             (Some(branch), Some(path)) => format!("on branch `{branch}` in worktree `{path}`"),
@@ -665,6 +665,7 @@ where
         result: report.clone(),
         ok: Some(ok),
         background: false,
+        commit: observed_head(&checkout),
         ts: now_ms(),
     })?;
 
@@ -702,6 +703,11 @@ struct WorkerOutcome {
     branch: Option<String>,
     worktree_path: Option<String>,
     source_commit: Option<String>,
+}
+
+/// The HEAD the Harness saw in the worker's checkout, when it could look.
+fn observed_head(checkout: &Option<Result<subagents::WorkerCheckoutEvidence, String>>) -> Option<String> {
+    checkout.as_ref().and_then(|c| c.as_ref().ok()).map(|evidence| evidence.head_commit.clone())
 }
 
 impl WorkerOutcome {

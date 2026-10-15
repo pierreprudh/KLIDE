@@ -48,7 +48,12 @@ struct Dispatch {
 struct Report {
     ok: bool,
     text: String,
+    /// The HEAD observed in the worker's checkout, when there was one.
+    commit: Option<String>,
 }
+
+/// A report ready for the parent: `(child id, ok, text, observed HEAD)`.
+pub type Completion = (String, bool, String, Option<String>);
 
 /// A dispatch as a surface or a test sees it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -119,20 +124,20 @@ pub fn register(
 
 /// The child settled: keep its report (already carrying the Git evidence the
 /// foreground path appends) until a turn of the parent delivers it.
-pub fn settle(parent_id: &str, child_id: &str, ok: bool, text: String) {
+pub fn settle(parent_id: &str, child_id: &str, ok: bool, text: String, commit: Option<String>) {
     if let Ok(mut dispatches) = registry().lock() {
         if let Some(dispatch) = dispatches.get_mut(child_id).filter(|d| d.parent_id == parent_id) {
             if dispatch.report.is_none() {
-                dispatch.report = Some(Report { ok, text });
+                dispatch.report = Some(Report { ok, text, commit });
             }
         }
     }
 }
 
-/// Reports ready for the parent's model: `(child id, ok, text)`. Each is
-/// rendered once, fenced, inside the turn-boundary delivery; the registry
-/// keeps it until `acknowledge` says the transcript has it.
-pub fn completions(parent_id: &str) -> Vec<(String, bool, String)> {
+/// Reports ready for the parent's model. Each is rendered once, fenced,
+/// inside the turn-boundary delivery; the registry keeps it until
+/// `acknowledge` says the transcript has it.
+pub fn completions(parent_id: &str) -> Vec<Completion> {
     let Ok(dispatches) = registry().lock() else {
         return Vec::new();
     };
@@ -144,7 +149,7 @@ pub fn completions(parent_id: &str) -> Vec<(String, bool, String)> {
     ready.sort_by_key(|(d, _)| d.started_ms);
     ready
         .into_iter()
-        .map(|(d, report)| (d.child_id.clone(), report.ok, delivery_text(d, report)))
+        .map(|(d, report)| (d.child_id.clone(), report.ok, delivery_text(d, report), report.commit.clone()))
         .collect()
 }
 
@@ -238,18 +243,19 @@ mod tests {
         assert_eq!(notification_state("parent-a", "child-1"), Some(false), "working");
         assert!(completions("parent-a").is_empty());
 
-        settle("parent-b", "child-1", true, "not mine".into());
+        settle("parent-b", "child-1", true, "not mine".into(), None);
         assert_eq!(notification_state("parent-a", "child-1"), Some(false), "another Run cannot settle it");
 
-        settle("parent-a", "child-1", true, "Added slugify with tests.".into());
+        settle("parent-a", "child-1", true, "Added slugify with tests.".into(), Some("78c3c5b".into()));
         assert_eq!(notification_state("parent-a", "child-1"), Some(true), "report ready");
         assert_eq!(notification_state("parent-b", "child-1"), None, "ownership is checked, not guessed");
 
         let ready = completions("parent-a");
         assert_eq!(ready.len(), 1);
-        let (child, ok, text) = &ready[0];
+        let (child, ok, text, commit) = &ready[0];
         assert_eq!(child, "child-1");
         assert!(ok);
+        assert_eq!(commit.as_deref(), Some("78c3c5b"), "the observed HEAD rides beside the text");
         assert!(text.starts_with("[Worker report] Claude Code as implementer — background Run child-1 finished."), "{text}");
         assert!(text.contains("Branch `klide/worker-x` in worktree `/wt/x`."));
         assert!(text.contains("Added slugify with tests."));
@@ -266,7 +272,7 @@ mod tests {
     #[test]
     fn a_failed_child_is_reported_as_failed_and_a_plain_folder_says_so() {
         register("parent-c", "child-2", "Codex", "tester", None, None);
-        settle("parent-c", "child-2", false, "Subagent \"tester\" failed: provider unavailable".into());
+        settle("parent-c", "child-2", false, "Subagent \"tester\" failed: provider unavailable".into(), None);
         let ready = completions("parent-c");
         assert_eq!(ready.len(), 1);
         assert!(!ready[0].1);
@@ -280,8 +286,8 @@ mod tests {
     #[test]
     fn the_first_settlement_wins() {
         register("parent-d", "child-3", "Anthropic", "implementer", None, None);
-        settle("parent-d", "child-3", true, "first".into());
-        settle("parent-d", "child-3", false, "second".into());
+        settle("parent-d", "child-3", true, "first".into(), None);
+        settle("parent-d", "child-3", false, "second".into(), None);
         let ready = completions("parent-d");
         assert!(ready[0].1 && ready[0].2.contains("first") && !ready[0].2.contains("second"));
     }

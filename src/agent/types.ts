@@ -302,7 +302,9 @@ export type AgentEvent =
    *  (the tool result carries the same text). A `background` child's is
    *  written when the report is delivered to the parent's model, and opens a
    *  new response the way `observer_completed` does. */
-  | { type: "subagent_resolved"; runId: string; requestId: string; result: string; ok?: boolean; background?: boolean; ts: number }
+  /** `commit` is the HEAD the Harness observed in the worker's checkout —
+   *  Git evidence, not the worker's claim; absent without a worktree. */
+  | { type: "subagent_resolved"; runId: string; requestId: string; result: string; ok?: boolean; background?: boolean; commit?: string; ts: number }
   | { type: "advisor_requested"; runId: string; requestId: string; question: string; ts: number }
   | { type: "advisor_resolved"; runId: string; requestId: string; advice: string; ts: number }
   /** The auto-compactor collapsed the older turns into `summary` to free

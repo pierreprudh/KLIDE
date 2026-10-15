@@ -921,6 +921,11 @@ pub enum AgentEvent {
         ok: Option<bool>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         background: bool,
+        /// The HEAD the Harness observed in the worker's checkout after it
+        /// settled — Git evidence, not the worker's claim. Absent for a
+        /// subagent with no worktree, or when the inspection failed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
         ts: i64,
     },
     /// The model called `consult_advisor` and is paused waiting for guidance

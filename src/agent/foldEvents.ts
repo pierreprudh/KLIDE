@@ -128,8 +128,10 @@ export type FoldedRow =
     }
   | { kind: "observer"; shellId: string }
   /** A background worker's report was delivered: a new response opens here,
-   *  as after an observer. The child is named so the row can say who. */
-  | { kind: "workerReport"; childRunId: string; ok: boolean; worker?: string; role?: string }
+   *  as after an observer. The child is named so the row can say who, the
+   *  observed HEAD so it can say what landed, and the pair this conversation
+   *  was on so the row can draw its own mark beside the worker's. */
+  | { kind: "workerReport"; childRunId: string; ok: boolean; worker?: string; role?: string; commit?: string; provider?: ProviderId; model?: string }
   | {
       kind: "steering";
       reason: string;
@@ -589,7 +591,16 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       producedFiles.clear();
       commands.clear();
       completionWarnings.clear();
-      rows.push({ kind: "workerReport", childRunId: event.requestId, ok: event.ok ?? true, worker, role });
+      rows.push({
+        kind: "workerReport",
+        childRunId: event.requestId,
+        ok: event.ok ?? true,
+        worker,
+        role,
+        commit: event.commit,
+        provider: dispatch?.provider,
+        model: dispatch?.model,
+      });
       return { changed: [rows.length - 1] };
     }
 
@@ -913,7 +924,7 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
     return [{
       role: "system",
       content: row.ok ? "Background worker reported" : "Background worker failed",
-      workerReport: { childRunId: row.childRunId, ok: row.ok, worker: row.worker, role: row.role },
+      workerReport: { childRunId: row.childRunId, ok: row.ok, worker: row.worker, role: row.role, commit: row.commit, provider: row.provider, model: row.model },
     }];
   }
   if (row.kind === "steering") {
