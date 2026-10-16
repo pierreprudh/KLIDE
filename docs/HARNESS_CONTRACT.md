@@ -193,6 +193,17 @@ approved for the run or rejected this run is answered without asking again, and
 a project rule matches even when the flag could not carry it. Only a shell
 command (`Bash`) has the project scope; any other prompt is a plain question.
 
+A Hermes Focus turn over ACP reaches the same card through the same bridge:
+its `session/request_permission` becomes a `Permission` call, and Klide answers
+only with an option Hermes offered, always once — broader scopes stay in
+Klide's engine. *Which* calls ask is Hermes's policy, not Klide's: every edit
+(each turn returns the session to Hermes's `default` mode) and any command its
+own detection flags as dangerous. Any other `terminal` or `execute_code` call
+runs with no card, under Hermes's rules, and stays an `ObservedToolCall`.
+Hermes has no mode that asks for every command, and ACP offers the host no way
+to run them itself, so Klide cannot narrow this short of removing Hermes's
+terminal tools.
+
 A worker dispatch has its own gate and its own rule. Without a `worker`,
 `spawn_subagent` may name only read-only roles and the child runs on the
 parent's provider under the parent's tool rules; an editing role with no worker

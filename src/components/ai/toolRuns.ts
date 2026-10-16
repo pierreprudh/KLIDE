@@ -187,6 +187,14 @@ function callsIn(m: Msg): number {
   return m.role === "assistant" ? m.toolCalls?.length ?? 0 : 0;
 }
 
+function observedIn(msgs: Msg[], start: number, end: number): boolean {
+  for (let i = start; i < end; i++) {
+    const m = msgs[i];
+    if (m.role === "tool" && m.observedBy) return true;
+  }
+  return false;
+}
+
 function namesIn(m: Msg): string[] {
   if (m.role === "assistant") return (m.toolCalls ?? []).map((t) => t.name);
   return m.role === "tool" && m.toolName ? [m.toolName] : [];
@@ -243,6 +251,12 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     if (next?.role === "assistant" && hasThinking(next)) {
       answer = end;
       if (next.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + next.thinkingMs;
+    }
+    // A delegate's turn is one CLI turn measured once, on the answer that
+    // closes it: its tool rows carry no span of their own. That span is the
+    // work — without it the line would fall back to "11 tool calls".
+    if (workedMs === undefined && next?.role === "assistant" && next.meta?.ms !== undefined && observedIn(msgs, start, end)) {
+      workedMs = next.meta.ms;
     }
     runs.push({ start, end, calls, names, thinkingMs, workedMs, answer });
     start = -1;
