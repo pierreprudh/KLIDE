@@ -270,7 +270,7 @@ describe("a question the run asked, once answered", () => {
     const html = exchange("Kebab, like the rest of the repo.");
     expect(html).toContain("Which slug style — kebab or snake?");
     expect(html).toContain("Kebab, like the rest of the repo.");
-    expect(html).toContain('class="ask-card"');
+    expect(html).toContain("ask-card-answered");
     expect(html).not.toContain("userAnswerQuestion");
   });
 

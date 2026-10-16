@@ -307,21 +307,15 @@ function AnsweredQuestionCard({ args, answer }: { args: unknown; answer: string 
   const said = answer.trim();
   const skipped = said === "" || said === SKIPPED_ANSWER;
   return (
-    <div className="ask-card-container">
-      <section className={`ask-card${skipped ? " ask-card-skipped" : ""}`} aria-label="Question answered">
-        <div className="ask-card-identity">
-          <AskIcon size={28} />
-          <span className="ask-card-title">Question</span>
-        </div>
-        <div className="ask-card-content">
-          <span className="ask-card-indicator" aria-hidden="true">{skipped ? "" : "✓"}</span>
-          <div className="ask-card-line">
-            <span className="ask-card-question">{question || "Question"}</span>
-            <span className="ask-card-answer">{skipped ? "Skipped" : said}</span>
-          </div>
-        </div>
-      </section>
-    </div>
+    <section className={`ask-card ${skipped ? "ask-card-skipped" : "ask-card-answered"}`} aria-label="Question answered">
+      <span className="ask-card-mark" aria-hidden="true"><AskIcon size={24} /></span>
+      <div className="ask-card-head">
+        <span className="ask-card-title">Question</span>
+        {question && <span className="ask-card-question">{question}</span>}
+      </div>
+      <span className="ask-card-indicator" aria-hidden="true">{skipped ? "" : "✓"}</span>
+      <span className="ask-card-answer">{skipped ? "Skipped" : said}</span>
+    </section>
   );
 }
 
