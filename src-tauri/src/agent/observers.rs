@@ -7,7 +7,7 @@
 //! (`background.rs`), and a worker it dispatched without waiting
 //! (`workers.rs`). One watcher serves both; `Followup` only says which
 //! registry to ask.
-use super::{background, run_is_active, start_run, workers, types::{AgentMode, StartRunRequest}};
+use super::{background, run_is_active, start_run, with_run_handle, workers, RunSupervisor, types::{AgentMode, StartRunRequest}};
 use tauri::Emitter;
 
 /// What a follow-up turn is for. The id is what the registry is asked about.
@@ -20,6 +20,33 @@ pub(super) enum Followup {
 }
 
 impl Followup {
+    fn prepare_request(&self, run_id: &str, mut request: StartRunRequest) -> StartRunRequest {
+        request.run_id = Some(run_id.to_string());
+        request.initial_text.clear();
+        request.attachments.clear();
+        request.context = None;
+        if matches!(self, Self::Observer(_)) {
+            request.auto_approve_commands = Some(false);
+            request.require_diff_review = Some(true);
+            request.mode = AgentMode::Plan;
+            request.max_turns = Some(4);
+        }
+        // A worker completion resumes the original task, including the
+        // operator's command and edit policy. Dispatch still has its own gate.
+        request
+    }
+
+    /// A worker's follow-up runs on the rung the conversation stands on now,
+    /// not the one it stood on at dispatch: a flip made while the parent's Run
+    /// is up carries. Once that Run is gone the last value read stays. A shell
+    /// notification never borrows the rung.
+    pub(super) fn adopt_live_policy(&self, sup: &dyn RunSupervisor, run_id: &str, request: &mut StartRunRequest) {
+        if !matches!(self, Self::Worker(_)) { return; }
+        if let Some(full_auto) = with_run_handle(sup, run_id, |h| h.subject.full_auto(h.trust.commands_policy())) {
+            request.auto_approve_commands = Some(full_auto);
+        }
+    }
+
     /// None = delivered or cancelled, false = still working, true = ready.
     pub(super) fn state(&self, run_id: &str) -> Option<bool> {
         match self {
@@ -33,21 +60,12 @@ impl Followup {
     }
 }
 
-pub(super) fn watch(app: tauri::AppHandle, run_id: String, followup: Followup, mut request: StartRunRequest) {
-    request.run_id = Some(run_id.clone());
-    request.initial_text.clear();
-    request.attachments.clear();
-    request.context = None;
-    // A notification explains a result. It never inherits full-auto write or
-    // command authority from the turn that launched the observer or
-    // dispatched the worker.
-    request.mode = AgentMode::Plan;
-    request.auto_approve_commands = Some(false);
-    request.require_diff_review = Some(true);
-    request.max_turns = Some(4);
+pub(super) fn watch(app: tauri::AppHandle, run_id: String, followup: Followup, request: StartRunRequest) {
+    let mut request = followup.prepare_request(&run_id, request);
     let task: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            followup.adopt_live_policy(&super::TauriSupervisor::new(app.clone()), &run_id, &mut request);
             match followup.state(&run_id) {
                 None => return,
                 Some(false) => continue,
@@ -82,4 +100,92 @@ pub(super) fn watch(app: tauri::AppHandle, run_id: String, followup: Followup, m
         }
     });
     tauri::async_runtime::spawn(task);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::test_support::{test_request, FakeSupervisor};
+
+    #[test]
+    fn worker_followup_preserves_full_auto_and_original_budget() {
+        let mut original = test_request("/tmp/workers", &[]);
+        original.max_turns = Some(32);
+        original.auto_approve_commands = Some(true);
+        let request = Followup::Worker("child".into()).prepare_request("parent", original);
+        assert!(matches!(request.mode, AgentMode::Goal));
+        assert_eq!(request.max_turns, Some(32));
+        assert_eq!(request.auto_approve_commands, Some(true));
+        assert_eq!(request.require_diff_review, Some(false));
+        assert_eq!(request.run_id.as_deref(), Some("parent"));
+        assert!(request.initial_text.is_empty());
+        assert!(request.attachments.is_empty());
+        assert!(request.context.is_none());
+    }
+
+    #[test]
+    fn shell_notifications_and_plan_workers_stay_read_only() {
+        let request = Followup::Observer("shell".into())
+            .prepare_request("parent", test_request("/tmp/workers", &[]));
+        assert!(matches!(request.mode, AgentMode::Plan));
+        assert_eq!(request.max_turns, Some(4));
+        assert_eq!(request.auto_approve_commands, Some(false));
+        assert_eq!(request.require_diff_review, Some(true));
+        let mut original = test_request("/tmp/workers", &[]);
+        original.mode = AgentMode::Plan;
+        original.max_turns = None;
+        let request = Followup::Worker("child".into()).prepare_request("parent", original);
+        assert!(matches!(request.mode, AgentMode::Plan));
+        assert_eq!(request.max_turns, None);
+    }
+
+    #[test]
+    fn worker_followup_keeps_review_policy_when_full_auto_is_off() {
+        let mut original = test_request("/tmp/workers", &[]);
+        original.auto_approve_commands = Some(false);
+        original.require_diff_review = Some(true);
+        let request = Followup::Worker("child".into()).prepare_request("parent", original);
+        assert_eq!(request.auto_approve_commands, Some(false));
+        assert_eq!(request.require_diff_review, Some(true));
+    }
+
+    /// Test 3: dispatched on review, flipped to Full auto from the foot bar
+    /// while the parent still runs — the follow-up runs on the flip.
+    #[test]
+    fn a_rung_flipped_after_dispatch_reaches_the_worker_followup() {
+        let mut original = test_request("/tmp/workers", &[]);
+        original.auto_approve_commands = Some(false);
+        let sup = FakeSupervisor::for_request("parent", &original);
+        let worker = Followup::Worker("child".into());
+        let mut request = worker.prepare_request("parent", original.clone());
+        worker.adopt_live_policy(&sup, "parent", &mut request);
+        assert_eq!(request.auto_approve_commands, Some(false), "no flip yet");
+
+        sup.with_handle("parent", &mut |h| h.trust.set_commands_policy(true));
+        worker.adopt_live_policy(&sup, "parent", &mut request);
+        assert_eq!(request.auto_approve_commands, Some(true), "the flip carries");
+
+        sup.with_handle("parent", &mut |h| h.trust.set_commands_policy(false));
+        worker.adopt_live_policy(&sup, "parent", &mut request);
+        assert_eq!(request.auto_approve_commands, Some(false), "and so does flipping back");
+
+        // The parent's Run has ended: the last value read stays.
+        sup.with_handle("parent", &mut |h| h.trust.set_commands_policy(true));
+        worker.adopt_live_policy(&sup, "parent", &mut request);
+        sup.runs.lock().unwrap().clear();
+        worker.adopt_live_policy(&sup, "parent", &mut request);
+        assert_eq!(request.auto_approve_commands, Some(true));
+    }
+
+    #[test]
+    fn a_shell_notification_never_borrows_the_live_rung() {
+        let mut original = test_request("/tmp/workers", &[]);
+        original.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("parent", &original);
+        sup.with_handle("parent", &mut |h| h.trust.set_commands_policy(true));
+        let shell = Followup::Observer("shell".into());
+        let mut request = shell.prepare_request("parent", original);
+        shell.adopt_live_policy(&sup, "parent", &mut request);
+        assert_eq!(request.auto_approve_commands, Some(false));
+    }
 }

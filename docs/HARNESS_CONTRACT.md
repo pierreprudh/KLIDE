@@ -260,9 +260,13 @@ what it published once settled. Its report — the same text the foreground path
 would have returned, Git evidence included — is *delivered*, not returned: it
 rides the turn-boundary delivery beside peer mail and observer completions,
 fenced under `[worker <child run id> reported]`, at the first boundary of the
-parent's next turn, or of a Plan follow-up turn the Harness starts for it when
-the conversation is idle (the same watcher that wakes an observer). A full-auto
-turn never carries it, exactly as for an observer completion. The transcript
+parent's next turn, or of a follow-up turn the Harness starts for it when
+the conversation is idle (the same watcher that wakes an observer). Worker
+follow-ups preserve the parent's mode, turn budget, and edit/command policy,
+including full auto. Live command-policy changes observed while the parent
+is active carry forward too. Reports remain fenced as untrusted data; a new
+worker dispatch still uses its own approval gate. Shell observer notifications
+remain bounded Plan turns without full-auto command authority. The transcript
 records the delivery as a `SubagentResolved` with `background: true` and `ok`,
 which opens a response of its own. Cancelling the parent's turn does not stop a
 background child: the operator approved it on its own card, and `agent_cancel`
