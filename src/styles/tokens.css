@@ -877,15 +877,100 @@ textarea.klide-diff-comment-input:focus-visible {
   transition: background var(--motion-fast) var(--ease-out);
 }
 
-/* Nav rail + search-result hover lives in CSS, not React state — so moving the
-   mouse over the rail no longer re-renders the whole Settings tree. The nav
-   item only lights up when it isn't the active section (the FLIP capsule
-   already marks that one). */
+/* Persistent groups interpolate their natural height in both directions.
+   Collapsed links are inert, so the visual exit never leaves hidden tab stops. */
 .klide-settings-nav-item {
-  transition: color 0.15s var(--ease-out), background var(--motion-fast) var(--ease-out);
+  transition: color 180ms var(--ease-out), background 220ms var(--ease-out),
+    border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
+}
+.klide-settings-nav-item::before {
+  content: "";
+  position: absolute;
+  left: -15px;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--fg-strong);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 220ms var(--ease-out);
+}
+.klide-settings-nav-item[data-active="true"]::before {
+  opacity: 1;
 }
 .klide-settings-nav-item[data-active="false"]:hover {
   background: var(--bg-hover);
+}
+.klide-settings-chevron {
+  display: inline-block;
+  font-size: 14px;
+  transition: transform 300ms var(--ease-out);
+}
+.klide-settings-nav-item[aria-expanded="true"] .klide-settings-chevron {
+  transform: rotate(90deg);
+}
+.klide-settings-subpages-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 300ms var(--ease-out),
+    opacity 180ms var(--ease-out), visibility 0s 300ms;
+}
+.klide-settings-subpages-reveal[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition: grid-template-rows 300ms var(--ease-out),
+    opacity 220ms var(--ease-out), visibility 0s;
+}
+.klide-settings-subpages-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-settings-nav-item,
+  .klide-settings-nav-item::before,
+  .klide-settings-chevron,
+  .klide-settings-subpages-reveal[data-open] {
+    transition: none;
+  }
+}
+.klide-settings-subpages {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 5px 40px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-strong, var(--border));
+}
+.klide-settings-subpage {
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-subtle);
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 0.15s var(--ease-out), background var(--motion-fast) var(--ease-out);
+}
+.klide-settings-subpage:hover {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+}
+.klide-settings-subpage[aria-current="page"] {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+.klide-settings-subpage:focus-visible,
+.klide-settings-nav-item:focus-visible {
+  outline: 2px solid var(--fg-strong);
+  outline-offset: -2px;
 }
 .klide-settings-search-row {
   transition: background var(--motion-fast) var(--ease-out);

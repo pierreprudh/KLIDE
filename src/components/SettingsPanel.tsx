@@ -1,6 +1,8 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -29,7 +31,7 @@ import { ModelPicker } from "./ai/ModelPicker";
 import { DEFAULT_ADVISOR_PROVIDER, DEFAULT_ADVISOR_MODEL } from "../agent/advisor";
 import { refreshCustomCli, type CustomCli } from "../customCli";
 import { SETTINGS, settingsSearchIndex, useSetting, type SettingsSectionId } from "../settingsStore";
-import { useFlipIndicator } from "../hooks/useFlipIndicator";
+import { SETTINGS_PAGES, defaultSettingsPage, settingsPageForSearch } from "../settingsPages";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
 import {
@@ -260,7 +262,13 @@ const panelOnlyIndex: SettingIndexEntry[] = [
 // Merged and shown in section order, so derived and hand rows interleave the
 // way the section rail reads.
 const sectionRank = new Map(sections.map((s, i) => [s.id, i]));
-const settingsIndex: SettingIndexEntry[] = [...settingsSearchIndex(), ...panelOnlyIndex].sort(
+const subpageIndex: SettingIndexEntry[] = sections.flatMap((section) =>
+  (SETTINGS_PAGES[section.id] ?? []).map((page) => ({
+    label: page.label, section: section.id, keywords: "",
+  }))
+);
+const settingsIndex: SettingIndexEntry[] = [...settingsSearchIndex(), ...panelOnlyIndex, ...subpageIndex]
+  .filter((entry, index, entries) => entries.findIndex((other) => other.section === entry.section && other.label === entry.label) === index).sort(
   (a, b) => (sectionRank.get(a.section) ?? 99) - (sectionRank.get(b.section) ?? 99)
 );
 
@@ -485,9 +493,29 @@ export function SettingsPanel({
   const [activeSection, setActiveSection] = useState<SectionId>(
     isSectionId(initialSection) ? initialSection : "general"
   );
-  // The active-section card + capsule is a single element that FLIP-slides
-  // between rows on switch (same hook as the activity bar / tab underline).
-  const navFlip = useFlipIndicator(activeSection, { size: 31, active: true });
+  const [selectedPages, setSelectedPages] = useState<Partial<Record<SectionId, string>>>({});
+  const activePage = selectedPages[activeSection] ?? defaultSettingsPage(activeSection);
+  const [visitedPages, setVisitedPages] = useState<Set<string>>(
+    () => new Set([defaultSettingsPage(isSectionId(initialSection) ? initialSection : "general")])
+  );
+  const contentScroller = useRef<HTMLDivElement>(null);
+  const pageContent = useRef<HTMLDivElement>(null);
+  // Animate the existing pane rather than remounting it: drafts, focus and
+  // provider controls survive navigation. A rapid switch cancels the old fade.
+  useLayoutEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+        document.documentElement.hasAttribute("data-motion-still")) return;
+    const animation = pageContent.current?.animate(
+      [{ opacity: 0 }, { opacity: 1 }],
+      { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+    );
+    return () => animation?.cancel();
+  }, [activeSection, activePage]);
+  function goToPage(section: SectionId, page = selectedPages[section] ?? defaultSettingsPage(section)) {
+    setSelectedPages((prev) => ({ ...prev, [section]: page }));
+    setVisitedPages((prev) => prev.has(page) ? prev : new Set(prev).add(page));
+    goToSection(section, page);
+  }
   // "Look for a setting" query. While non-empty, the nav is replaced by a
   // flat list of matching settings, each labelled with its section.
   const [settingQuery, setSettingQuery] = useState("");
@@ -498,9 +526,11 @@ export function SettingsPanel({
   const [visitedSections, setVisitedSections] = useState<Set<SectionId>>(
     () => new Set([isSectionId(initialSection) ? initialSection : "general"])
   );
-  function goToSection(id: SectionId) {
+  function goToSection(id: SectionId, page = selectedPages[id] ?? defaultSettingsPage(id)) {
     setVisitedSections((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    setVisitedPages((prev) => prev.has(page) ? prev : new Set(prev).add(page));
     setActiveSection(id);
+    contentScroller.current?.scrollTo({ top: 0 });
   }
   const [draft, setDraft] = useState(() => emptyDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -584,6 +614,7 @@ export function SettingsPanel({
   }
 
   function loadIntoBuilder(preset: LayoutPreset) {
+    goToPage("layout", "layout-builder");
     setEditingId(preset.id);
     setDraft({
       name: preset.name,
@@ -610,6 +641,7 @@ export function SettingsPanel({
       onCustomLayoutsChange([...customLayouts, { ...draft, name, id: makePresetId() }]);
     }
     resetBuilder();
+    goToPage("layout", "layout-presets");
   }
 
   function deletePreset(id: string) {
@@ -700,6 +732,7 @@ export function SettingsPanel({
           flexDirection: "column",
           gap: 12,
           minHeight: 0,
+          overflowY: "auto",
         }}
       >
         <button
@@ -740,7 +773,7 @@ export function SettingsPanel({
             onKeyDown={(e) => {
               if (e.key === "Escape") setSettingQuery("");
               if (e.key === "Enter" && settingMatches.length > 0) {
-                goToSection(settingMatches[0].section);
+                goToPage(settingMatches[0].section, settingsPageForSearch(settingMatches[0].section, settingMatches[0].label));
                 setSettingQuery("");
               }
             }}
@@ -809,7 +842,7 @@ export function SettingsPanel({
                     type="button"
                     className="klide-settings-search-row"
                     onClick={() => {
-                      goToSection(entry.section);
+                      goToPage(entry.section, settingsPageForSearch(entry.section, entry.label));
                       setSettingQuery("");
                     }}
                     style={{
@@ -836,75 +869,69 @@ export function SettingsPanel({
           </div>
         ) : (
         <nav
-          ref={navFlip.trackRef}
-          data-flip={navFlip.flip}
-          className="klide-fade-swap"
-          style={{ position: "relative", display: "flex", flexDirection: "column", gap: 7 }}
+          className="klide-fade-swap klide-settings-nav"
+          aria-label="Settings"
+          style={{ position: "relative", display: "flex", flexDirection: "column", gap: 7, flexShrink: 0, paddingBottom: 2 }}
         >
-          {/* The single moving card — slides between rows on switch. The
-              capsule rides along as its child so both animate together. */}
-          <span
-            className="klide-flip-indicator"
-            aria-hidden="true"
-            style={{
-              ...navFlip.style,
-              left: 22,
-              right: 0,
-              height: 31,
-              boxSizing: "border-box",
-              borderRadius: 9,
-              background: "var(--bg-elevated)",
-              border: "1px solid var(--border)",
-              boxShadow: "var(--shadow-raised)",
-            }}
-          >
-            <span
-              style={{
-                position: "absolute",
-                left: -15,
-                top: "50%",
-                transform: "translateY(-50%)",
-                width: 3,
-                height: 16,
-                borderRadius: 3,
-                background: "var(--fg-strong)",
-              }}
-            />
-          </span>
           {sections.map((section) => {
             const active = activeSection === section.id;
             return (
+              <div key={section.id} style={{ position: "relative" }}>
               <button
-                key={section.id}
-                ref={navFlip.setItemRef(section.id)}
                 type="button"
                 className="klide-settings-nav-item"
                 data-active={active}
-                onClick={() => goToSection(section.id)}
+                onClick={() => goToPage(section.id)}
+                aria-current={active && !SETTINGS_PAGES[section.id] ? "page" : undefined}
+                aria-expanded={SETTINGS_PAGES[section.id] ? active : undefined}
+                aria-controls={SETTINGS_PAGES[section.id] ? `settings-subpages-${section.id}` : undefined}
                 style={{
                   position: "relative",
                   zIndex: 1,
                   height: 29,
                   padding: "0 10px",
                   marginLeft: 22,
+                  width: "calc(100% - 22px)",
                   display: "flex",
                   alignItems: "center",
                   gap: 9,
                   color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-                  background: "transparent",
+                  background: active ? "var(--bg-elevated)" : "transparent",
+                  boxShadow: active ? "var(--shadow-raised)" : "none",
                   borderRadius: 9,
                   justifyContent: "flex-start",
                   fontSize: 13,
                   fontWeight: active ? 600 : 400,
-                  border: "1px solid transparent",
+                  border: "1px solid",
+                  borderColor: active ? "var(--border)" : "transparent",
                   cursor: "pointer",
                 }}
               >
                 <span style={{ width: 16, height: 16, display: "grid", placeItems: "center", flexShrink: 0 }}>
                   {section.icon}
                 </span>
-                {section.label}
+                <span style={{ flex: 1, textAlign: "left" }}>{section.label}</span>
+                {SETTINGS_PAGES[section.id] && <span aria-hidden="true" className="klide-settings-chevron">›</span>}
               </button>
+              {SETTINGS_PAGES[section.id] && (
+                <div id={`settings-subpages-${section.id}`}
+                  className="klide-settings-subpages-reveal" data-open={active}
+                  inert={!active} aria-hidden={!active}>
+                <div className="klide-settings-subpages-clip">
+                <div className="klide-settings-subpages">
+                  {SETTINGS_PAGES[section.id]!.map((page) => (
+                    <button key={page.id} type="button"
+                      className="klide-settings-subpage"
+                      aria-current={activePage === page.id ? "page" : undefined}
+                      onClick={() => goToPage(section.id, page.id)}>
+                      {page.label}
+                    </button>
+                  ))}
+                </div>
+                </div>
+                </div>
+              )}
+              </div>
             );
           })}
         </nav>
@@ -924,12 +951,13 @@ export function SettingsPanel({
         }}
       >
       <div
+        ref={contentScroller}
         style={{
           overflow: "auto", minWidth: 0,
         }}
       >
         <div
-          className="klide-settings-enter"
+          ref={pageContent}
           style={{
             // Every section is ragged-left and fills the pane. A generous max
             // keeps line lengths sane on ultra-wide displays; Stats goes fully
@@ -951,6 +979,7 @@ export function SettingsPanel({
               }}
             >
               {sectionTitle}
+              {SETTINGS_PAGES[activeSection] && <span style={{ color: "var(--fg-subtle)", fontWeight: 400 }}> / {SETTINGS_PAGES[activeSection]!.find((page) => page.id === activePage)?.label}</span>}
             </h1>
             <p
               style={{
@@ -965,6 +994,7 @@ export function SettingsPanel({
           </header>
 
           <Section id="general" active={activeSection} mounted={visitedSections.has("general")}>
+              <Section id="general-startup" active={activePage} mounted={visitedPages.has("general-startup")}>
             <SettingBlock title="Startup">
               <Panel>
                 <Row
@@ -983,6 +1013,8 @@ export function SettingsPanel({
             <SettingBlock title="From other apps">
               <FromOtherApps />
             </SettingBlock>
+              </Section>
+              <Section id="general-files" active={activePage} mounted={visitedPages.has("general-files")}>
             <SettingBlock title="Files">
               <Panel>
                 <Row
@@ -1027,6 +1059,8 @@ export function SettingsPanel({
                 />
               </Panel>
             </SettingBlock>
+              </Section>
+              <Section id="general-panels" active={activePage} mounted={visitedPages.has("general-panels")}>
             <SettingBlock title="Panels">
               <Panel>
                 <Row
@@ -1075,9 +1109,11 @@ export function SettingsPanel({
                 />
               </Panel>
             </SettingBlock>
+              </Section>
           </Section>
 
           <Section id="appearance" active={activeSection} mounted={visitedSections.has("appearance")}>
+              <Section id="appearance-theme" active={activePage} mounted={visitedPages.has("appearance-theme")}>
               <SettingBlock title="Theme">
                 <Panel>
                   <Row
@@ -1140,6 +1176,8 @@ export function SettingsPanel({
                   )}
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="appearance-conversation" active={activePage} mounted={visitedPages.has("appearance-conversation")}>
               <SettingBlock title="Conversation">
                 <Panel>
                   <Row
@@ -1155,46 +1193,19 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="appearance-welcome" active={activePage} mounted={visitedPages.has("appearance-welcome")}>
               <SettingBlock title="Welcome">
                 <Panel>
                   <WelcomeFilmCards value={welcomeFilm} onChange={onWelcomeFilmChange} />
                 </Panel>
               </SettingBlock>
-              <SettingBlock title="Layout">
-                <Panel>
-                  <Row
-                    title="Explorer width"
-                    description="Width of the file explorer panel."
-                    control={
-                      <Range
-                        label="Explorer width"
-                        value={panelLayout.explorer?.w ?? 280}
-                        min={200}
-                        max={600}
-                        onChange={(w) => onPanelWidthChange("explorer", w)}
-                        suffix="px"
-                      />
-                    }
-                  />
-                  <Row
-                    title="AI panel width"
-                    description="Width of the assistant panel."
-                    control={
-                      <Range
-                        label="AI panel width"
-                        value={panelLayout.ai?.[0]?.rect.w ?? 360}
-                        min={280}
-                        max={720}
-                        onChange={(w) => onPanelWidthChange("ai", w)}
-                        suffix="px"
-                      />
-                    }
-                  />
-                </Panel>
-              </SettingBlock>
+
+              </Section>
           </Section>
 
           <Section id="layout" active={activeSection} mounted={visitedSections.has("layout")}>
+              <Section id="layout-presets" active={activePage} mounted={visitedPages.has("layout-presets")}>
               <SettingBlock title="Presets">
                 <Panel>
                   {[...BUILTIN_PRESETS, ...customLayouts].map((preset) => {
@@ -1276,6 +1287,8 @@ export function SettingsPanel({
                 </Panel>
               </SettingBlock>
 
+              </Section>
+              <Section id="layout-builder" active={activePage} mounted={visitedPages.has("layout-builder")}>
               <SettingBlock title={editingId ? "Edit layout" : "Build a layout"}>
                 <Panel>
                   <Row
@@ -1352,6 +1365,8 @@ export function SettingsPanel({
                 </Panel>
               </SettingBlock>
 
+              </Section>
+              <Section id="layout-grid" active={activePage} mounted={visitedPages.has("layout-grid")}>
               <SettingBlock title="Workspace grid">
                 <div
                   style={{
@@ -1370,9 +1385,45 @@ export function SettingsPanel({
                   <GridLayoutBuilder />
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="layout-sizes" active={activePage} mounted={visitedPages.has("layout-sizes")}>
+              <SettingBlock title="Panel sizes">
+                <Panel>
+                  <Row
+                    title="Explorer width"
+                    description="Width of the file explorer panel."
+                    control={
+                      <Range
+                        label="Explorer width"
+                        value={panelLayout.explorer?.w ?? 280}
+                        min={200}
+                        max={600}
+                        onChange={(w) => onPanelWidthChange("explorer", w)}
+                        suffix="px"
+                      />
+                    }
+                  />
+                  <Row
+                    title="AI panel width"
+                    description="Width of the assistant panel."
+                    control={
+                      <Range
+                        label="AI panel width"
+                        value={panelLayout.ai?.[0]?.rect.w ?? 360}
+                        min={280}
+                        max={720}
+                        onChange={(w) => onPanelWidthChange("ai", w)}
+                        suffix="px"
+                      />
+                    }
+                  />
+                </Panel>
+              </SettingBlock>
+              </Section>
           </Section>
 
           <Section id="ai" active={activeSection} mounted={visitedSections.has("ai")}>
+              <Section id="ai-model" active={activePage} mounted={visitedPages.has("ai-model")}>
               <SettingBlock title="Provider">
                 <Panel>
                   {PROVIDER_GROUPS.map((group, groupIdx) => (
@@ -1440,6 +1491,8 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="ai-inference" active={activePage} mounted={visitedPages.has("ai-inference")}>
               <SettingBlock title="Inference">
                 <Panel>
                   {providerHasContextWindowSetting(settingsProvider) ? (
@@ -1534,6 +1587,12 @@ export function SettingsPanel({
                       />
                     }
                   />
+                </Panel>
+              </SettingBlock>
+              </Section>
+              <Section id="ai-execution" active={activePage} mounted={visitedPages.has("ai-execution")}>
+              <SettingBlock title="Tool execution">
+                <Panel>
                   <Row
                     title="Parallel tool calls"
                     description="When the agent asks for several read-only tools in one step, run them at once instead of one-by-one. File edits always stay sequential for diff review."
@@ -1664,7 +1723,9 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-              <SettingBlock title="Harness">
+              </Section>
+              <Section id="ai-harness" active={activePage} mounted={visitedPages.has("ai-harness")}>
+              <SettingBlock title="Tools per mode">
                 <Panel>
                   {/* Tools per mode — one toggle chip per tool. Enabled chips
                       carry the accent tint + check; disabled ones are quiet and
@@ -1731,6 +1792,12 @@ export function SettingsPanel({
                     ))}
                   </div>
 
+                </Panel>
+              </SettingBlock>
+              </Section>
+              <Section id="ai-automation" active={activePage} mounted={visitedPages.has("ai-automation")}>
+              <SettingBlock title="Assistant models & memory">
+                <Panel>
                   {/* Advisor pairing — which model a consult_advisor call escalates to */}
                   <Row
                     title="Advisor model"
@@ -1800,6 +1867,12 @@ export function SettingsPanel({
                     }
                   />
 
+                </Panel>
+              </SettingBlock>
+              </Section>
+              <Section id="ai-prompts" active={activePage} mounted={visitedPages.has("ai-prompts")}>
+              <SettingBlock title="System prompts">
+                <Panel>
                   {/* System prompts per mode */}
                   <div style={{ padding: "16px 18px" }}>
                     <div className="klide-row-title" style={{ marginBottom: 3 }}>System prompts</div>
@@ -1836,6 +1909,8 @@ export function SettingsPanel({
                   </div>
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="ai-sessions" active={activePage} mounted={visitedPages.has("ai-sessions")}>
               <SettingBlock title="Delegate sessions">
                 <Panel>
                   <DelegateDaemonRow />
@@ -1863,6 +1938,7 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </Section>
           </Section>
 
           <Section id="local-ai" active={activeSection} mounted={visitedSections.has("local-ai")}>
@@ -1890,6 +1966,7 @@ export function SettingsPanel({
           </Section>
 
           <Section id="api" active={activeSection} mounted={visitedSections.has("api")}>
+              <Section id="api-keys" active={activePage} mounted={visitedPages.has("api-keys")}>
               <SettingBlock title="API Keys">
                 <ApiKeySummary />
                 <Panel>
@@ -1913,15 +1990,6 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-              <SettingBlock title="Balance">
-                <ProviderBalanceBlock />
-              </SettingBlock>
-              <SettingBlock title="Provider gateway">
-                <GatewayBlock />
-              </SettingBlock>
-              <SettingBlock title="Self-hosted endpoints">
-                <CustomEndpointsBlock onProviderKeyChange={onProviderKeyChange} />
-              </SettingBlock>
               <SettingBlock title="Notes">
                 <Panel>
                   <Row
@@ -1936,6 +2004,23 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="api-balance" active={activePage} mounted={visitedPages.has("api-balance")}>
+              <SettingBlock title="Balance">
+                <ProviderBalanceBlock />
+              </SettingBlock>
+              </Section>
+              <Section id="api-gateway" active={activePage} mounted={visitedPages.has("api-gateway")}>
+              <SettingBlock title="Provider gateway">
+                <GatewayBlock />
+              </SettingBlock>
+              </Section>
+              <Section id="api-endpoints" active={activePage} mounted={visitedPages.has("api-endpoints")}>
+              <SettingBlock title="Self-hosted endpoints">
+                <CustomEndpointsBlock onProviderKeyChange={onProviderKeyChange} />
+              </SettingBlock>
+
+              </Section>
           </Section>
 
           <Section
@@ -1951,6 +2036,7 @@ export function SettingsPanel({
               <CenteredLoader label="Checking subscriptions…" />
             ) : (
               <>
+              <Section id="subscription-accounts" active={activePage} mounted={visitedPages.has("subscription-accounts")}>
               <SettingBlock title="Connections & Accounts">
                 <Panel>
                   {/* GitHub first: it's the identity the whole app wears —
@@ -2003,6 +2089,8 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="subscription-setup" active={activePage} mounted={visitedPages.has("subscription-setup")}>
               <SettingBlock title="Documentation">
                 <Panel>
                   {subscriptionProviderEntries.filter((provider) => PROVIDER_DOCS[provider.id]).map((provider) => (
@@ -2047,6 +2135,8 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="subscription-models" active={activePage} mounted={visitedPages.has("subscription-models")}>
               <SettingBlock title="Model Options">
                 <Panel>
                   {subscriptionProviderEntries.map((provider) => {
@@ -2069,9 +2159,13 @@ export function SettingsPanel({
                   })}
                 </Panel>
               </SettingBlock>
+              </Section>
+              <Section id="subscription-custom" active={activePage} mounted={visitedPages.has("subscription-custom")}>
               <SettingBlock title="Custom CLI agents">
                 <CustomCliAgentsBlock onChange={setCustomCliAgents} />
               </SettingBlock>
+              </Section>
+              <Section id="subscription-mode" active={activePage} mounted={visitedPages.has("subscription-mode")}>
               <SettingBlock title="Mode">
                 <Panel>
                   <Row
@@ -2090,6 +2184,7 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </Section>
               </>
             )}
           </Section>
