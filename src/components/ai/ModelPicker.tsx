@@ -47,6 +47,8 @@ function trimPrice(n: number): string {
 const MENU_MAX_HEIGHT = 360;
 
 type Props = {
+  /** Pick directly from this provider's catalog, as worker dispatch does. */
+  catalogOnly?: boolean;
   provider: ProviderId;
   model: string;
   availableModels: string[];
@@ -106,7 +108,7 @@ function modelsVerb(id: ProviderId): string {
 }
 
 export function ModelPicker(props: Props) {
-  return isDelegateId(props.provider) ? <HarnessModelPicker key={props.provider} {...props} harness={props.provider} /> : <StandardModelPicker {...props} />;
+  return isDelegateId(props.provider) && !props.catalogOnly ? <HarnessModelPicker key={props.provider} {...props} harness={props.provider} /> : <StandardModelPicker {...props} />;
 }
 
 function StandardModelPicker({

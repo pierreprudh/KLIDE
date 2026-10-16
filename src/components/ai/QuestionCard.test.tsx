@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../hooks/useCustomProviders", () => ({ useCustomProviders: () => [] }));
 
 import { QuestionCard } from "./QuestionCard";
 
@@ -29,6 +31,11 @@ describe("QuestionCard", () => {
   it("names itself on the canvas, where the conversation is not the label", () => {
     expect(render({ variant: "island" })).toContain(">Question<");
     expect(render({ variant: "inline" })).not.toContain(">Question<");
+  });
+
+  it("labels the full OpenCode catalog picker on a worker dispatch", () => {
+    const html = render({ choices: { kind: "dispatch", options: ["opencode"], preselected: "opencode" }, onChoose: () => {} });
+    expect(html).toContain("Browse all models…");
   });
 
   // An empty answer is not an answer: the run stays parked until there is text
