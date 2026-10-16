@@ -20,6 +20,14 @@ export function IconBase({ children }: { children: ReactNode }) {
   );
 }
 
+export function ChevronRightIcon() {
+  return (
+    <IconBase>
+      <path d="m9 5 7 7-7 7" />
+    </IconBase>
+  );
+}
+
 export function ArrowLeftIcon() {
   return (
     <IconBase>

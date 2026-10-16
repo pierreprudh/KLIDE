@@ -41,19 +41,22 @@ export function FromOtherApps() {
     <Panel>
       <Row
         title="Ask Kit from any app"
-        description="Select text anywhere, right-click → Services → Ask Kit. It opens a new conversation with that text in the composer, not sent."
+        description="Send selected text to a new Klide conversation without submitting it."
+        help="Select text in another app, then right-click → Services → Ask Kit. Review the text in the composer before sending."
         control={
           <Toggle checked={installed === true} onChange={(v) => void toggle(v)} label="Ask Kit from any app" />
         }
       />
       <Row
         title="Continue in Klide from Claude Code"
-        description="Installs a /klide skill for Claude Code. In any terminal session, “open this conversation in Klide” resumes that same session in an AI panel, in its project."
+        description="Resume a Claude Code terminal conversation in Klide."
+        help="Installs the /klide skill for Claude Code. Ask “open this conversation in Klide” to resume the same session in its project."
         control={<Toggle checked={skill === true} onChange={(v) => void toggleSkill(v)} label="Continue in Klide from Claude Code" />}
       />
       <Row
         title="Klide links"
-        description="For Raycast quicklinks, Shortcuts or a terminal: klide://new?prompt=…, klide://open?path=/file:42, klide://project?path=/folder, klide://resume?provider=claude-code&session=<id>. A link fills the composer or resumes a session; it never sends."
+        description="Open files, projects, or conversations from Raycast, Shortcuts, or a terminal."
+        help="Use klide://new?prompt=…, klide://open?path=/file:42, klide://project?path=/folder, or klide://resume?provider=claude-code&session=<id>. Links fill the composer or resume a session; they never send a message."
         control={<CodeText>open "klide://new?prompt=hi"</CodeText>}
       />
     </Panel>

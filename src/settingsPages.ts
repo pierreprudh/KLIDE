@@ -3,16 +3,6 @@ import type { SettingsSectionId } from "./settingsStore";
 type SettingsPage = { id: string; label: string };
 
 export const SETTINGS_PAGES: Partial<Record<SettingsSectionId, readonly SettingsPage[]>> = {
-  "general": [
-    { id: "general-startup", label: "Startup & apps" },
-    { id: "general-files", label: "Files & tabs" },
-    { id: "general-panels", label: "Panel visibility" },
-  ],
-  "appearance": [
-    { id: "appearance-theme", label: "Theme" },
-    { id: "appearance-conversation", label: "Conversation" },
-    { id: "appearance-welcome", label: "Welcome" },
-  ],
   "layout": [
     { id: "layout-presets", label: "Presets" },
     { id: "layout-builder", label: "Layout builder" },
@@ -48,11 +38,6 @@ export function defaultSettingsPage(section: SettingsSectionId): string {
 }
 
 const SEARCH_PAGES: Record<string, string> = {
-  "Auto-save": "general-files",
-  "Files & tabs": "general-files",
-  "Panel visibility": "general-panels",
-  "Profile picture in conversations": "appearance-conversation",
-  "Welcome film": "appearance-welcome",
   "Panel sizes": "layout-sizes",
   "Layout presets": "layout-presets",
   "Context window": "ai-inference",
@@ -76,4 +61,42 @@ export function settingsPageForSearch(section: SettingsSectionId, label: string)
   const destination = SEARCH_PAGES[label];
   return pages?.find((page) => page.id === destination || page.label === label)?.id
     ?? defaultSettingsPage(section);
+}
+
+// Search uses friendly group labels; the page may use a shorter control title.
+const SEARCH_TARGETS: Record<string, string> = {
+  "Automatic light/dark theme": "Auto theme",
+  "Profile picture in conversations": "Your profile picture",
+  "Welcome film": "Welcome",
+  "Panel visibility": "Panels",
+  "Layout presets": "Presets",
+  "Local servers (Ollama / MLX)": "Local Servers",
+  "Provider gateway (opencodex)": "Provider gateway",
+  "CLI subscriptions": "Connections & Accounts",
+  "GitHub account": "GitHub",
+  "Editor font size": "Font size",
+  "Diff review before edits": "Require diff review",
+  "Tool overrides": "Tools per mode",
+  "Max parallel tools": "Parallel tool calls",
+  "Max turns": "Max tool turns",
+  "Auto-draft memory on run done": "Auto-draft memory on run done",
+  "Saved conversations & disk usage": "Saved conversations",
+  "Usage & stats": "Activity",
+  "Custom endpoints": "Self-hosted endpoints",
+};
+
+/** null means the result describes the whole page, so reveal its heading. */
+export function settingsSearchTarget(section: SettingsSectionId, label: string, query = ""): string | null {
+  if (label === "Effort & reflection") {
+    return /reflection|thinking|reason/i.test(query) ? "Reflection" : "Effort";
+  }
+  if (label === "Files & tabs") {
+    if (/hidden|dotfile/i.test(query)) return "Show hidden files";
+    if (/clos|unsaved|confirm/i.test(query)) return "Confirm before closing unsaved tabs";
+    return "Files";
+  }
+  if (SEARCH_TARGETS[label]) return SEARCH_TARGETS[label];
+  if (label === "Connectors (MCP servers)" ||
+      SETTINGS_PAGES[section]?.some((page) => page.label === label)) return null;
+  return label;
 }

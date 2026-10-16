@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ProviderLogo } from "../ai/icons";
+import { resolveModelLogo } from "../../modelIdentity";
 import { defaultModelForProvider } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
@@ -118,14 +119,18 @@ export function HermesSetup() {
     <SettingBlock title="Hermes on a Klide source">
       <Panel>
         <Row title="Model provider" description="Run Hermes with an API key. No Hermes subscription required."
-          leading={<ProviderLogo id="hermes" />}
-          control={<select className="klide-field" aria-label="Hermes model provider" value={provider} disabled={loading || busy}
+          leading={<ProviderLogo id="hermes" size={28} />}
+          control={<div className="klide-settings-model-choice">
+            <span aria-hidden="true"><ProviderLogo id={provider as ProviderId} size={16} /></span>
+            <select className="klide-field" aria-label="Hermes model provider" value={provider} disabled={loading || busy}
             onChange={(e) => { const id = e.target.value; setProvider(id); setModel(defaultModelForProvider(id as ProviderId)); setKey(""); setError(""); }}>
             {BACKENDS.map((backend) => <option key={backend.id} value={backend.id}>{backend.label}</option>)}
-          </select>} />
+          </select></div>} />
         <Row title="Model" description="Choose a model or enter its exact provider model ID."
-          control={<><input className="klide-field" aria-label="Hermes model" value={model} disabled={loading || busy} list="hermes-models"
-            onChange={(e) => setModel(e.target.value)} /><datalist id="hermes-models">{models.map((id) => <option key={id} value={id} />)}</datalist></>} />
+          control={<div className="klide-settings-model-choice">
+            <span aria-hidden="true"><ProviderLogo id={provider as ProviderId} size={16} /></span>
+            <input className="klide-field" aria-label="Hermes model" value={model} disabled={loading || busy} list="hermes-models"
+            onChange={(e) => setModel(e.target.value)} /><datalist id="hermes-models">{models.map((id) => <option key={id} value={id} />)}</datalist></div>} />
         <Row title="API key" description={hasKey ? "A key is already configured in Klide. Leave blank to reuse it." : "Saved in Klide's keychain and shared with this API provider."}
           control={<input className="klide-field" aria-label="Hermes API key" type="password" autoComplete="off" value={key} disabled={loading || busy}
             placeholder={hasKey ? "Use existing key" : "Paste API key"} onChange={(e) => setKey(e.target.value)} />} />
@@ -156,10 +161,13 @@ export function HermesOwnSetupRow({ setup, klideConfigured, busy, onSetModel }: 
     : !model ? "Hermes has no model yet. Run `hermes setup` in a terminal, or give Hermes a Klide source below."
     : `${describeOwnSetup(setup)}. ${klideConfigured ? "The Klide source below takes over; choose “Use Hermes defaults” there to run on this." : "What a Hermes conversation runs on unless its picker chooses a Klide source."}`;
   return (
-    <Row title={model ?? "Not set up yet"} description={description} leading={<ProviderLogo id="hermes" />}
-      control={<div style={{ display: "flex", gap: 8 }}>
+    <Row title={model ?? "Not set up yet"} description={description} leading={<ProviderLogo id="hermes" size={28} />}
+      control={<div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div className="klide-settings-model-choice">
+        {(value || setup?.provider) && <span aria-hidden="true">{resolveModelLogo(value, 16) ?? (setup?.provider ? <ProviderLogo id={setup.provider as ProviderId} size={16} /> : null)}</span>}
         <input className="klide-field" aria-label="Hermes’s own model" value={value} placeholder="provider/model" disabled={busy || !setup}
           onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && changed && !busy) onSetModel(value.trim()); }} />
+        </div>
         <LinkButton disabled={busy || !changed} onClick={() => onSetModel(value.trim())}>{busy ? "Saving…" : "Set model"}</LinkButton>
       </div>} />
   );

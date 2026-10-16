@@ -19,7 +19,7 @@ import { providerDefaultModel, providerLabel } from "../../agent/providerCatalog
  *  and the model it warms up with are the row's, not props. */
 export function LocalServerRow({ provider }: { provider: string }) {
   if (provider === "llamaapp") return <Row
-    leading={<ProviderLogo id="llamaapp" size={24} />}
+    leading={<ProviderLogo id="llamaapp" size={28} />}
     title="Llama app"
     description="Install Llama, choose a model, then select Llama app in the AI panel. Use at least 16k model context for tools. Connects on localhost:9931."
     control={<LinkButton onClick={() => void openUrl("https://llama.app")}>Get Llama</LinkButton>}
@@ -33,7 +33,7 @@ function LlamaLocalSetup() {
   }
   return <>
     <Row
-      leading={<ProviderLogo id="llamacpp" size={24} />}
+      leading={<ProviderLogo id="llamacpp" size={28} />}
       title="Llama"
       description="Choose who manages llama.cpp. The selected setup appears in the provider selector."
       control={<Segmented
@@ -96,7 +96,7 @@ function ManagedLocalServerRow({ provider }: { provider: string }) {
 
   return (
     <Row
-      leading={<ProviderLogo id={provider as ProviderId} size={24} />}
+      leading={<ProviderLogo id={provider as ProviderId} size={28} />}
       title={title}
       description={error ? error : running ? "Server is reachable on localhost." : "Server is not running. Start it to enable chat."}
       control={

@@ -4,7 +4,8 @@
 // cards, theme chips, steppers, ranges) and small text/icon helpers.
 // Extracted from SettingsPanel.tsx; purely presentational.
 
-import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ChevronRightIcon } from "./icons";
 import type { ThemeId } from "../../theme";
 import { SIZE_OPTIONS, type RegionSize } from "../../layouts";
 
@@ -37,8 +38,7 @@ export function clamp(value: number, min: number, max: number): number {
 
 // `action` puts one control on the heading line — for a block whose action is
 // about the whole block rather than any one row (re-checking every CLI, say).
-// Without it the heading keeps its exact margin, so every existing block is
-// pixel-identical.
+// Headings use the same spacing with or without an action.
 export function SettingBlock({
   title,
   children,
@@ -49,7 +49,7 @@ export function SettingBlock({
   action?: ReactNode;
 }) {
   return (
-    <section className="klide-settings-section">
+    <section className="klide-settings-section" data-setting={title} tabIndex={-1}>
       {action ? (
         <div
           style={{
@@ -57,7 +57,7 @@ export function SettingBlock({
             alignItems: "center",
             justifyContent: "space-between",
             gap: 12,
-            margin: "0 0 10px",
+            margin: "0 0 16px",
           }}
         >
           <h2 className="klide-settings-heading" style={{ margin: 0 }}>
@@ -66,7 +66,9 @@ export function SettingBlock({
           {action}
         </div>
       ) : (
-        <h2 className="klide-settings-heading">{title}</h2>
+        <h2 className="klide-settings-heading">
+          {title}
+        </h2>
       )}
       {children}
     </section>
@@ -82,28 +84,50 @@ export function Row({
   description,
   control,
   leading,
+  help,
+  controlLayout = "compact",
 }: {
   title: string;
   description: string;
   control: ReactNode;
   leading?: ReactNode;
+  help?: ReactNode;
+  controlLayout?: "compact" | "wide";
 }) {
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpId = useId();
   return (
     <div
       className="klide-settings-row"
+      data-control-layout={controlLayout}
+      data-setting={title}
+      tabIndex={-1}
     >
-      <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="klide-settings-row-label">
         {leading && (
-          <div style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>
+          <div className="klide-settings-row-icon" aria-hidden="true">
             {leading}
           </div>
         )}
         <div style={{ minWidth: 0 }}>
-          <div className="klide-row-title">{title}</div>
+          <div className="klide-settings-row-heading">
+            <div className="klide-row-title">{title}</div>
+            {help && (
+              <button type="button" className="klide-settings-help-button"
+                aria-label={`Learn more about ${title}`} title={`More about ${title}`}
+                aria-expanded={helpOpen} aria-controls={helpId}
+                onClick={() => setHelpOpen((open) => !open)}>
+                <ChevronRightIcon />
+              </button>
+            )}
+          </div>
           <div className="klide-row-description">{description}</div>
+          {help && (
+            <div id={helpId} hidden={!helpOpen} className="klide-row-description klide-settings-help-content">{help}</div>
+          )}
         </div>
       </div>
-      {control}
+      <div className="klide-settings-row-control">{control}</div>
     </div>
   );
 }
@@ -240,13 +264,7 @@ export function Select({
       aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="klide-field"
-      style={{
-        minWidth: 180,
-        height: 30,
-        padding: "0 30px 0 10px",
-        cursor: "pointer",
-      }}
+      className="klide-field klide-settings-select"
     >
       {options.map((option) => (
         <option key={option} value={option}>
@@ -373,10 +391,8 @@ export function ThemeSwatch({ colors, size = 26 }: { colors: string[]; size?: nu
   );
 }
 
-// A horizontal set of selectable theme options — swatch + name in a flat
-// hairline row. The premium replacement for a native <select>: you see each
-// theme's palette at a glance and pick in one click. The active option carries
-// a stronger border + text.
+// Theme choices show a small workbench preview so the palette is visible
+// before switching. The preview is decorative; the option name labels the radio.
 export function ThemeChips({
   value,
   options,
@@ -389,41 +405,25 @@ export function ThemeChips({
   label: string;
 }) {
   return (
-    <div
-      role="radiogroup"
-      aria-label={label}
-      style={{ display: "flex", flexWrap: "wrap", gap: 7, justifyContent: "flex-end" }}
-    >
-      {options.map((opt) => {
-        const active = opt.id === value;
-        return (
-          <button
-            key={opt.id}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(opt.id)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              height: 34,
-              padding: "0 12px 0 7px",
-              borderRadius: "var(--radius-sm)",
-              cursor: "pointer",
-              border: `1px solid ${active ? "var(--border-strong)" : "var(--border)"}`,
-              background: "var(--bg-elevated)",
-              color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-              fontSize: 12.5,
-              fontWeight: active ? 600 : 500,
-              transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
-            }}
-          >
-            <ThemeSwatch colors={opt.swatches} size={18} />
-            {opt.name}
-          </button>
-        );
-      })}
+    <div role="radiogroup" aria-label={label} className="klide-settings-theme-options">
+      {options.map((opt) => (
+        <button key={opt.id} type="button" role="radio"
+          aria-checked={opt.id === value} onClick={() => onChange(opt.id)}
+          className="klide-settings-theme-option">
+          <span className="klide-settings-theme-preview" aria-hidden="true" style={{
+            "--preview-bg": opt.swatches[0],
+            "--preview-surface": opt.swatches[1],
+            "--preview-accent": opt.swatches[2],
+            "--preview-ink": opt.swatches[3],
+          } as CSSProperties}>
+            <span className="klide-settings-theme-preview-bar"><i /><i /><i /></span>
+            <span className="klide-settings-theme-preview-sidebar"><i /><i /><i /></span>
+            <span className="klide-settings-theme-preview-body"><i /><i /><span /><span /></span>
+            <span className="klide-settings-theme-preview-selection" />
+          </span>
+          <span className="klide-settings-theme-name">{opt.name}</span>
+        </button>
+      ))}
     </div>
   );
 }

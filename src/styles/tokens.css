@@ -853,28 +853,426 @@ textarea.klide-diff-comment-input:focus-visible {
   overflow: hidden;
 }
 
+.klide-settings-content {
+  padding: 44px 48px 88px;
+}
+.klide-settings-page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.klide-settings-breadcrumb {
+  margin-bottom: 7px;
+  color: var(--fg-subtle);
+  font-size: 13px;
+  font-weight: 500;
+}
+.klide-settings-page-header h1 {
+  margin: 0;
+  color: var(--fg-strong);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.klide-settings-page-header p {
+  margin: 10px 0 0;
+  color: var(--fg-subtle);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.klide-settings-row-label {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.klide-settings-row-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  color: var(--fg-subtle);
+}
+.klide-settings-row-icon svg {
+  width: 28px;
+  height: 28px;
+}
+.klide-settings-row .klide-row-title {
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 550;
+}
+.klide-settings-row .klide-row-description {
+  margin-top: 5px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+@media (max-width: 1000px) {
+  .klide-settings-content {
+    padding: 32px 24px 64px;
+  }
+}
+
 .klide-settings-section {
-  margin-bottom: 30px;
+  margin-bottom: 28px;
 }
 
 .klide-settings-heading {
-  margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
   color: var(--fg-strong);
-  font-size: 12px;
-  line-height: 1.25;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .klide-settings-row {
-  min-height: 64px;
-  padding: 14px 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  min-height: 68px;
+  padding: 14px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 18px;
+  gap: 28px;
   transition: background var(--motion-fast) var(--ease-out);
+}
+
+/* Quiet, open sections: the controls carry their own boundaries. */
+.klide-settings-content .klide-surface {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.klide-settings-row:last-child {
+  border-bottom: none;
+}
+.klide-settings-row-label .klide-row-description {
+  max-width: 56ch;
+}
+.klide-settings-row-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  justify-self: end;
+  gap: 8px;
+  min-width: 0;
+  max-width: 480px;
+}
+.klide-settings-row-control > * {
+  max-width: 100%;
+}
+.klide-settings-row-control .klide-seg {
+  justify-content: flex-end;
+}
+/* Visual option groups need a stable column; compact choices keep their
+   natural width and align with the trailing edge of the settings pane. */
+.klide-settings-row[data-control-layout="wide"] {
+  grid-template-columns: minmax(200px, 0.85fr) minmax(0, 1.2fr);
+  align-items: start;
+  padding-block: 20px;
+}
+.klide-settings-row[data-control-layout="wide"] .klide-settings-row-control {
+  width: 100%;
+  max-width: none;
+}
+.klide-settings-row-icon {
+  align-self: center;
+}
+.klide-settings-select,
+.klide-settings-provider-select {
+  min-width: 180px;
+  min-height: 36px;
+  padding: 0 32px 0 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+/* The logo and value belong to one field, with a shared focus ring. */
+.klide-settings-model-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: clamp(220px, 24vw, 300px);
+  min-width: 0;
+  max-width: 100%;
+  min-height: 38px;
+  padding: 0 12px 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 38%, var(--bg-elevated));
+  transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
+}
+.klide-settings-model-pair > .klide-settings-model-choice {
+  width: 240px;
+}
+.klide-settings-model-choice:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.klide-settings-model-choice > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+.klide-settings-model-choice > .klide-field {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+}
+.klide-settings-model-choice > .klide-field:focus {
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-settings-model-choice {
+    transition: none;
+  }
+}
+.klide-settings-theme-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  width: 100%;
+  gap: 14px 12px;
+}
+.klide-settings-theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.klide-settings-theme-preview {
+  position: relative;
+  display: block;
+  height: 78px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--preview-surface);
+  transition: border-color 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+}
+.klide-settings-theme-option:hover .klide-settings-theme-preview {
+  border-color: var(--fg-dim);
+}
+.klide-settings-theme-option[aria-checked="true"] .klide-settings-theme-preview {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.klide-settings-theme-preview-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding-left: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--preview-ink) 8%, transparent);
+}
+.klide-settings-theme-preview-bar i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--preview-ink) 22%, transparent);
+}
+.klide-settings-theme-preview-sidebar {
+  position: absolute;
+  inset: 12px auto 0 0;
+  width: 23%;
+  padding: 11px 5px;
+  background: var(--preview-bg);
+}
+.klide-settings-theme-preview-sidebar i {
+  display: block;
+  height: 3px;
+  margin-bottom: 7px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--preview-ink) 12%, transparent);
+}
+.klide-settings-theme-preview-sidebar i:first-child {
+  background: var(--preview-accent);
+}
+.klide-settings-theme-preview-body {
+  position: absolute;
+  inset: 24px 10px 10px 32%;
+}
+.klide-settings-theme-preview-body > i {
+  display: block;
+  width: 76%;
+  height: 3px;
+  margin-bottom: 5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--preview-ink) 18%, transparent);
+}
+.klide-settings-theme-preview-body > i:first-child {
+  width: 45%;
+  background: color-mix(in srgb, var(--preview-ink) 60%, transparent);
+}
+.klide-settings-theme-preview-body > span {
+  display: block;
+  height: 10px;
+  margin-top: 7px;
+  border: 1px solid color-mix(in srgb, var(--preview-ink) 10%, transparent);
+  border-radius: 3px;
+}
+.klide-settings-theme-preview-selection {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--preview-surface);
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  opacity: 0;
+}
+.klide-settings-theme-option[aria-checked="true"] .klide-settings-theme-preview-selection {
+  opacity: 1;
+}
+.klide-settings-theme-name {
+  color: var(--fg-subtle);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.klide-settings-theme-option[aria-checked="true"] .klide-settings-theme-name {
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+.klide-settings-theme-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 5px;
+  border-radius: 6px;
+}
+@media (max-width: 900px) {
+  .klide-settings-row[data-control-layout="wide"] {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .klide-settings-row-label .klide-row-description {
+    max-width: 52ch;
+  }
+  .klide-settings-theme-options {
+    max-width: 520px;
+  }
+}
+@media (max-width: 680px) {
+  .klide-settings-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .klide-settings-row-control {
+    justify-self: start;
+    justify-content: flex-start;
+    max-width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-settings-theme-preview {
+    transition: none;
+  }
+}
+
+.klide-settings-row-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.klide-settings-help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.klide-settings-help-button svg,
+.klide-settings-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+.klide-settings-help-button svg {
+  transition: transform 180ms var(--ease-out);
+}
+.klide-settings-help-button[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-settings-help-button svg {
+    transition: none;
+  }
+}
+.klide-settings-help-button:hover,
+.klide-settings-help-button[aria-expanded="true"] {
+  color: var(--fg-strong);
+}
+.klide-settings-help-button:focus-visible {
+  outline: 2px solid var(--fg-strong);
+  outline-offset: 2px;
+}
+.klide-settings-row .klide-settings-help-content {
+  margin-top: 8px;
+}
+[data-setting] {
+  scroll-margin-block: 24px;
+}
+:where([data-setting], .klide-settings-page-header h1):focus:not([data-search-highlight]) {
+  outline: none;
+}
+[data-search-highlight="true"] {
+  border-radius: 6px;
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  animation: klide-settings-search-highlight 2s var(--ease-out) both;
+}
+:root[data-motion-still] [data-search-highlight="true"] {
+  animation: none;
+}
+@keyframes klide-settings-search-highlight {
+  0%, 45% {
+    outline-color: color-mix(in srgb, var(--accent) 65%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-search-highlight="true"] {
+    animation: none;
+  }
 }
 
 /* Persistent groups interpolate their natural height in both directions.
@@ -883,28 +1281,14 @@ textarea.klide-diff-comment-input:focus-visible {
   transition: color 180ms var(--ease-out), background 220ms var(--ease-out),
     border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
 }
-.klide-settings-nav-item::before {
-  content: "";
-  position: absolute;
-  left: -15px;
-  top: 50%;
-  width: 3px;
-  height: 16px;
-  border-radius: 3px;
-  background: var(--fg-strong);
-  transform: translateY(-50%);
-  opacity: 0;
-  transition: opacity 220ms var(--ease-out);
-}
-.klide-settings-nav-item[data-active="true"]::before {
-  opacity: 1;
-}
 .klide-settings-nav-item[data-active="false"]:hover {
   background: var(--bg-hover);
 }
 .klide-settings-chevron {
-  display: inline-block;
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  width: 14px;
+  height: 14px;
   transition: transform 300ms var(--ease-out);
 }
 .klide-settings-nav-item[aria-expanded="true"] .klide-settings-chevron {
@@ -946,14 +1330,17 @@ textarea.klide-diff-comment-input:focus-visible {
   border-left: 1px solid var(--border-strong, var(--border));
 }
 .klide-settings-subpage {
-  min-height: 28px;
-  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 7px 10px;
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
   color: var(--fg-subtle);
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.4;
   cursor: pointer;
   transition: color 0.15s var(--ease-out), background var(--motion-fast) var(--ease-out);
@@ -1198,9 +1585,7 @@ textarea.klide-diff-comment-input:focus-visible {
   border-bottom: none;
 }
 
-.klide-settings-row:hover {
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
-}
+
 
 .klide-row-title {
   color: var(--fg-strong);

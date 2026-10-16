@@ -115,7 +115,7 @@ export function CustomEndpointRow({
             <ChevronDown />
           </span>
           <span style={{ display: "grid", placeItems: "center", color: "var(--fg-subtle)", flexShrink: 0 }}>
-            <ProviderLogo id={endpoint.id as ProviderId} size={15} />
+            <ProviderLogo id={endpoint.id as ProviderId} size={24} />
           </span>
           <div style={{ minWidth: 0 }}>
             <div className="klide-row-title">{endpoint.label}</div>
@@ -562,7 +562,7 @@ export function CliDialogHeader({ editing }: { editing: boolean }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
       <span style={{ display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: "var(--radius-md)", color: "var(--accent)", background: "var(--accent-soft)", flexShrink: 0 }}>
-        <ProviderLogo id={"cli:custom" as ProviderId} size={15} />
+        <ProviderLogo id={"cli:custom" as ProviderId} size={24} />
       </span>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg-strong)" }}>
@@ -982,7 +982,7 @@ export function CustomCliAgentsBlock({
             <div key={agent.id} className="klide-settings-row">
               <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ color: "var(--fg-subtle)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-                  <ProviderLogo id={agent.id as ProviderId} size={15} />
+                  <ProviderLogo id={agent.id as ProviderId} size={24} />
                 </span>
                 <div style={{ minWidth: 0 }}>
                   <div className="klide-row-title">{agent.label}</div>
@@ -1009,7 +1009,7 @@ export function CustomCliAgentsBlock({
           title="Custom CLI agent"
           description="Add any terminal coding agent with a command template. Use {task}, {model}, and {resume} placeholders."
           control={<LinkButton onClick={startAdd}>Add agent</LinkButton>}
-          leading={<ProviderLogo id={"cli:custom" as ProviderId} />}
+          leading={<ProviderLogo id={"cli:custom" as ProviderId} size={28} />}
         />
       </Panel>
       {error && <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>}

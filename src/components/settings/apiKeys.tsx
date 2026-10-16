@@ -386,7 +386,7 @@ export const BalanceDonut = memo(function BalanceDonut({
     >
       <DonutChart size={84} segments={segments} centerValue={centerValue} centerLabel={centerLabel} />
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: "100%" }}>
-        <ProviderLogo id={provider.id as ProviderId} size={14} />
+        <ProviderLogo id={provider.id as ProviderId} size={24} />
         <span
           style={{
             color: selected ? "var(--fg-strong)" : "var(--fg)",
@@ -730,7 +730,7 @@ export function ProviderBalanceBlock() {
             }}
           >
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              {selProvider && <ProviderLogo id={selProvider.id as ProviderId} size={16} />}
+              {selProvider && <ProviderLogo id={selProvider.id as ProviderId} size={24} />}
               <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>
                 {selProvider ? `${selProvider.title} usage` : "All API providers"}
               </span>

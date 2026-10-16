@@ -31,7 +31,8 @@ import { ModelPicker } from "./ai/ModelPicker";
 import { DEFAULT_ADVISOR_PROVIDER, DEFAULT_ADVISOR_MODEL } from "../agent/advisor";
 import { refreshCustomCli, type CustomCli } from "../customCli";
 import { SETTINGS, settingsSearchIndex, useSetting, type SettingsSectionId } from "../settingsStore";
-import { SETTINGS_PAGES, defaultSettingsPage, settingsPageForSearch } from "../settingsPages";
+import { SETTINGS_PAGES, defaultSettingsPage, settingsPageForSearch, settingsSearchTarget } from "../settingsPages";
+import { findSettingsSearchTarget, revealSettingsSearchTarget } from "./settings/searchReveal";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
 import {
@@ -83,6 +84,7 @@ import {
   ArrowLeftIcon,
   BarChartIcon,
   CloudIcon,
+  ChevronRightIcon,
   CodeIcon,
   GearIcon,
   GridIcon,
@@ -404,16 +406,15 @@ function ModelPairControl({
     };
   }, [provider]);
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+    <div className="klide-settings-model-pair" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
       <select
         aria-label={`${label} provider`}
-        className="klide-field"
+        className="klide-field klide-settings-provider-select"
         value={provider}
         onChange={(e) => {
           const p = e.target.value;
           onChange(p, p ? DEFAULT_MODELS[p as ProviderId] ?? "" : "");
         }}
-        style={{ height: 34, padding: "0 10px", fontSize: 12 }}
       >
         {automatic && <option value="">{automatic}</option>}
         {groups.map((g) => (
@@ -429,13 +430,17 @@ function ModelPairControl({
         ))}
       </select>
       {provider && (
-        <ModelPicker
-          provider={provider as ProviderId}
-          model={model}
-          availableModels={models}
-          direction="down"
-          onChange={(m) => onChange(provider, m)}
-        />
+        <div className="klide-settings-model-choice">
+          <span aria-hidden="true"><ProviderLogo id={provider as ProviderId} size={16} /></span>
+          <ModelPicker
+            provider={provider as ProviderId}
+            model={model}
+            availableModels={models}
+            direction="down"
+            fluid
+            onChange={(m) => onChange(provider, m)}
+          />
+        </div>
       )}
     </div>
   );
@@ -520,6 +525,35 @@ export function SettingsPanel({
   // flat list of matching settings, each labelled with its section.
   const [settingQuery, setSettingQuery] = useState("");
   const settingMatches = useMemo(() => matchSettings(settingQuery), [settingQuery]);
+  const [searchReveal, setSearchReveal] = useState<{ name: string | null } | null>(null);
+  function openSearchResult(entry: SettingIndexEntry) {
+    goToPage(entry.section, settingsPageForSearch(entry.section, entry.label));
+    setSearchReveal({ name: settingsSearchTarget(entry.section, entry.label, settingQuery) });
+    setSettingQuery("");
+  }
+  useEffect(() => {
+    if (!searchReveal) return;
+    const content = pageContent.current;
+    const scroller = contentScroller.current;
+    if (!content || !scroller) return;
+    let clearHighlight: (() => void) | undefined;
+    // Subscription rows can arrive after the page's connection check.
+    const reveal = () => {
+      const target = findSettingsSearchTarget(content, searchReveal.name);
+      if (!target) return false;
+      clearHighlight = revealSettingsSearchTarget(scroller, target);
+      return true;
+    };
+    if (reveal()) return () => clearHighlight?.();
+    const observer = new MutationObserver(() => {
+      if (reveal()) observer.disconnect();
+    });
+    observer.observe(content, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      clearHighlight?.();
+    };
+  }, [searchReveal]);
   // Sections that have been opened at least once. Only these mount their
   // subtree (see `Section`); the rest stay unmounted so their per-provider
   // status `invoke`s don't fire on open. The starting section is pre-seeded.
@@ -527,6 +561,7 @@ export function SettingsPanel({
     () => new Set([isSectionId(initialSection) ? initialSection : "general"])
   );
   function goToSection(id: SectionId, page = selectedPages[id] ?? defaultSettingsPage(id)) {
+    setSearchReveal(null);
     setVisitedSections((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
     setVisitedPages((prev) => prev.has(page) ? prev : new Set(prev).add(page));
     setActiveSection(id);
@@ -716,8 +751,8 @@ export function SettingsPanel({
         minWidth: 0,
         minHeight: 0,
         display: "grid",
-        gridTemplateColumns: "236px minmax(0, 1fr)",
-        background: "var(--bg)",
+        gridTemplateColumns: "248px minmax(0, 1fr)",
+        background: "var(--bg-elevated)",
       }}
     >
       <aside
@@ -725,8 +760,8 @@ export function SettingsPanel({
         // traffic lights sit on — and it pays for that band in its own padding.
         data-tauri-drag-region
         style={{
-          borderRight: "1px solid var(--border)",
-          background: "var(--bg-elevated)",
+          borderRight: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+          background: "var(--bg)",
           padding: "calc(16px + var(--titlebar-h)) 10px 16px",
           display: "flex",
           flexDirection: "column",
@@ -773,8 +808,7 @@ export function SettingsPanel({
             onKeyDown={(e) => {
               if (e.key === "Escape") setSettingQuery("");
               if (e.key === "Enter" && settingMatches.length > 0) {
-                goToPage(settingMatches[0].section, settingsPageForSearch(settingMatches[0].section, settingMatches[0].label));
-                setSettingQuery("");
+                openSearchResult(settingMatches[0]);
               }
             }}
             placeholder="Look for a setting…"
@@ -841,10 +875,7 @@ export function SettingsPanel({
                     key={`${entry.section}:${entry.label}`}
                     type="button"
                     className="klide-settings-search-row"
-                    onClick={() => {
-                      goToPage(entry.section, settingsPageForSearch(entry.section, entry.label));
-                      setSettingQuery("");
-                    }}
+                    onClick={() => openSearchResult(entry)}
                     style={{
                       display: "flex",
                       flexDirection: "column",
@@ -896,14 +927,13 @@ export function SettingsPanel({
                   alignItems: "center",
                   gap: 9,
                   color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-                  background: active ? "var(--bg-elevated)" : "transparent",
-                  boxShadow: active ? "var(--shadow-raised)" : "none",
+                  background: active ? "var(--bg-hover)" : "transparent",
                   borderRadius: 9,
                   justifyContent: "flex-start",
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: active ? 600 : 400,
                   border: "1px solid",
-                  borderColor: active ? "var(--border)" : "transparent",
+                  borderColor: "transparent",
                   cursor: "pointer",
                 }}
               >
@@ -911,7 +941,7 @@ export function SettingsPanel({
                   {section.icon}
                 </span>
                 <span style={{ flex: 1, textAlign: "left" }}>{section.label}</span>
-                {SETTINGS_PAGES[section.id] && <span aria-hidden="true" className="klide-settings-chevron">›</span>}
+                {SETTINGS_PAGES[section.id] && <span aria-hidden="true" className="klide-settings-chevron"><ChevronRightIcon /></span>}
               </button>
               {SETTINGS_PAGES[section.id] && (
                 <div id={`settings-subpages-${section.id}`}
@@ -924,7 +954,7 @@ export function SettingsPanel({
                       className="klide-settings-subpage"
                       aria-current={activePage === page.id ? "page" : undefined}
                       onClick={() => goToPage(section.id, page.id)}>
-                      {page.label}
+                      <span>{page.label}</span>
                     </button>
                   ))}
                 </div>
@@ -958,43 +988,26 @@ export function SettingsPanel({
       >
         <div
           ref={pageContent}
+          className="klide-settings-content"
           style={{
-            // Every section is ragged-left and fills the pane. A generous max
-            // keeps line lengths sane on ultra-wide displays; Stats goes fully
-            // edge-to-edge since its charts want all the width they can get.
+            // Center a readable column within the main pane. Stats uses the
+            // available width so its charts have room to breathe.
             width: "100%",
-            maxWidth: activeSection === "stats" ? "none" : 1280,
-            margin: 0,
-            padding: "32px 36px 64px",
+            maxWidth: activeSection === "stats" ? "none" : 960,
+            margin: "0 auto",
           }}
         >
-          <header style={{ margin: "0 0 32px" }}>
-            <h1
-              style={{
-                margin: 0,
-                color: "var(--fg-strong)",
-                fontSize: 20,
-                lineHeight: 1.2,
-                fontWeight: 600,
-              }}
-            >
-              {sectionTitle}
-              {SETTINGS_PAGES[activeSection] && <span style={{ color: "var(--fg-subtle)", fontWeight: 400 }}> / {SETTINGS_PAGES[activeSection]!.find((page) => page.id === activePage)?.label}</span>}
-            </h1>
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: "var(--fg-subtle)",
-                fontSize: 13,
-                lineHeight: 1.45,
-              }}
-            >
-              {SECTION_SUBTITLES[activeSection]}
-            </p>
+          <header className="klide-settings-page-header">
+            <div>
+              {SETTINGS_PAGES[activeSection] && <div className="klide-settings-breadcrumb">{sectionTitle}</div>}
+              <h1 tabIndex={-1}>
+                {SETTINGS_PAGES[activeSection]?.find((page) => page.id === activePage)?.label ?? sectionTitle}
+              </h1>
+              <p>{SECTION_SUBTITLES[activeSection]}</p>
+            </div>
           </header>
 
           <Section id="general" active={activeSection} mounted={visitedSections.has("general")}>
-              <Section id="general-startup" active={activePage} mounted={visitedPages.has("general-startup")}>
             <SettingBlock title="Startup">
               <Panel>
                 <Row
@@ -1013,13 +1026,12 @@ export function SettingsPanel({
             <SettingBlock title="From other apps">
               <FromOtherApps />
             </SettingBlock>
-              </Section>
-              <Section id="general-files" active={activePage} mounted={visitedPages.has("general-files")}>
             <SettingBlock title="Files">
               <Panel>
                 <Row
                   title="Auto-save"
-                  description="Save edited files after a 1-second typing pause, or when the window loses focus. Files changed on disk are never overwritten silently."
+                  description="Save after a 1-second pause or when the window loses focus."
+                  help="Files changed on disk are never overwritten silently."
                   control={
                     <Segmented
                       label="Auto-save"
@@ -1059,8 +1071,6 @@ export function SettingsPanel({
                 />
               </Panel>
             </SettingBlock>
-              </Section>
-              <Section id="general-panels" active={activePage} mounted={visitedPages.has("general-panels")}>
             <SettingBlock title="Panels">
               <Panel>
                 <Row
@@ -1109,11 +1119,9 @@ export function SettingsPanel({
                 />
               </Panel>
             </SettingBlock>
-              </Section>
           </Section>
 
           <Section id="appearance" active={activeSection} mounted={visitedSections.has("appearance")}>
-              <Section id="appearance-theme" active={activePage} mounted={visitedPages.has("appearance-theme")}>
               <SettingBlock title="Theme">
                 <Panel>
                   <Row
@@ -1131,6 +1139,7 @@ export function SettingsPanel({
                     <>
                       <Row
                         title="Light theme"
+                        controlLayout="wide"
                         description="Theme used when your system is in light mode."
                         control={
                           <ThemeChips
@@ -1147,6 +1156,7 @@ export function SettingsPanel({
                       />
                       <Row
                         title="Dark theme"
+                        controlLayout="wide"
                         description="Theme used when your system is in dark mode."
                         control={
                           <ThemeChips
@@ -1176,8 +1186,6 @@ export function SettingsPanel({
                   )}
                 </Panel>
               </SettingBlock>
-              </Section>
-              <Section id="appearance-conversation" active={activePage} mounted={visitedPages.has("appearance-conversation")}>
               <SettingBlock title="Conversation">
                 <Panel>
                   <Row
@@ -1193,15 +1201,12 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-              </Section>
-              <Section id="appearance-welcome" active={activePage} mounted={visitedPages.has("appearance-welcome")}>
               <SettingBlock title="Welcome">
                 <Panel>
                   <WelcomeFilmCards value={welcomeFilm} onChange={onWelcomeFilmChange} />
                 </Panel>
               </SettingBlock>
 
-              </Section>
           </Section>
 
           <Section id="layout" active={activeSection} mounted={visitedSections.has("layout")}>
@@ -1463,7 +1468,7 @@ export function SettingsPanel({
                                 boxShadow: isActive ? "inset 0 1px 0 var(--panel-highlight)" : "none",
                               }}
                             >
-                              <ProviderLogo id={p.id} size={13} />
+                              <ProviderLogo id={p.id} size={24} />
                               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {p.name}
                               </span>
@@ -1481,12 +1486,15 @@ export function SettingsPanel({
                     title="AI model"
                     description="Model used by the active provider for chat and agent runs."
                     control={
+                      <div className="klide-settings-model-choice">
+                      <span aria-hidden="true"><ProviderLogo id={settingsProvider} size={16} /></span>
                       <Select
                         value={aiModel}
                         onChange={onAiModelChange}
                         options={availableAiModels.length > 0 ? availableAiModels : [aiModel]}
                         label="AI model"
                       />
+                      </div>
                     }
                   />
                 </Panel>
@@ -1498,7 +1506,8 @@ export function SettingsPanel({
                   {providerHasContextWindowSetting(settingsProvider) ? (
                     <Row
                       title="Context window"
-                      description={
+                      description="Conversation capacity. Auto grows as needed; a cap limits memory use."
+                      help={
                         detectedWindow > 0
                           ? `${aiModel} is trained to ${contextSizeLabel(detectedWindow)}. Auto starts at a ${contextSizeLabel(Math.min(32_768, detectedWindow))} working window and grows with the conversation up to that; a cap holds it lower when memory matters. Sent to Ollama as num_ctx.`
                           : `How much room ${aiModel} gets for a conversation. Auto starts at a 32K working window and grows with the conversation up to the model's trained limit; a cap holds it lower when memory matters.`
@@ -1520,7 +1529,8 @@ export function SettingsPanel({
                   ) : (
                     <Row
                       title="Context window"
-                      description={
+                      description="Set by the provider. Klide tracks usage against the model’s limit."
+                      help={
                         detectedWindow > 0
                           ? `${aiModel}'s window is a property of the model, not a setting: the provider serves ${contextSizeLabel(detectedWindow)} and no request can ask for less. Klide tracks usage against it.`
                           : `A hosted or self-hosted model's window is set by the provider, not by Klide. Klide tracks usage against the advertised size once the model is reachable.`
@@ -1541,7 +1551,8 @@ export function SettingsPanel({
                   )}
                   <Row
                     title="Effort"
-                    description={`How much reply budget ${aiModel} gets per turn. Higher effort gives the model more room to reason and explain, but it can be slower and uses more of the window. Ollama only.`}
+                    description="Reply budget per turn. Higher effort is slower and uses more context. Ollama only."
+                    help={`Controls how many tokens ${aiModel} can use to reason and answer. Auto keeps the default budget.`}
                     control={
                       <Segmented
                         label="Effort"
@@ -1595,7 +1606,8 @@ export function SettingsPanel({
                 <Panel>
                   <Row
                     title="Parallel tool calls"
-                    description="When the agent asks for several read-only tools in one step, run them at once instead of one-by-one. File edits always stay sequential for diff review."
+                    description="Run read-only tools in parallel. File edits stay sequential for review."
+                    help="Applies when the assistant requests several read-only tools in the same step."
                     control={
                       <Segmented
                         label="Parallel tool calls"
@@ -1614,7 +1626,8 @@ export function SettingsPanel({
                   />
                   <Row
                     title="Max tool turns"
-                    description="How many tool rounds the agent runs before handing back to you — a runaway-loop guard, not a task limit. Raise it for big multi-file or multi-agent work. You can always continue past it by sending another message. Default 50."
+                    description="Tool rounds before the assistant pauses. Default: 50."
+                    help="Raise the limit for larger tasks. This guards against runaway loops; send another message to continue after the limit."
                     control={
                       <Segmented
                         label="Max tool turns"
@@ -1634,7 +1647,8 @@ export function SettingsPanel({
                   />
                   <Row
                     title="Command timeout"
-                    description="How long an agent-run shell command (run_command) may run before it's killed — a hang guard against dev servers / watch tasks / prompts. Raise it for slow builds. Default 180s."
+                    description="Time allowed for each shell command. Default: 180 seconds."
+                    help="Commands still running after the limit are stopped. Increase it for slow builds; commands that wait for input or run continuously may reach the limit."
                     control={
                       <Segmented
                         label="Command timeout"
@@ -1654,7 +1668,8 @@ export function SettingsPanel({
                   />
                   <Row
                     title="Test after edit"
-                    description="Optional command Klide runs after an accepted file edit or create. Leave empty to rely on the built-in Rust/JSON syntax check only."
+                    description="Optional test command to run after an accepted file change."
+                    help="Leave empty to use only the built-in Rust and JSON syntax checks."
                     control={
                       <input
                         aria-label="Test after edit command"
@@ -1679,7 +1694,8 @@ export function SettingsPanel({
                   />
                   <Row
                     title="Concurrent requests"
-                    description="How many requests a Klide-launched Ollama serves at once — raise it to run several AI panels in parallel. Restart the local server to apply."
+                    description="Simultaneous Ollama requests. Restart the local server to apply."
+                    help="Increase this to use several AI panels at once. Applies to Ollama servers launched by Klide."
                     control={
                       <Segmented
                         label="Concurrent requests"
@@ -1801,7 +1817,8 @@ export function SettingsPanel({
                   {/* Advisor pairing — which model a consult_advisor call escalates to */}
                   <Row
                     title="Advisor model"
-                    description="Which model answers a consult_advisor call. A run's own (often cheap or local) model drives the task and escalates a hard decision to this stronger advisor — it returns guidance, not a takeover. Available in Plan and Goal."
+                    description="Model consulted for difficult decisions in Plan and Goal modes."
+                    help="The assistant continues to run the task. The advisor answers consult_advisor calls with guidance."
                     control={
                       <AdvisorControl
                         provider={harnessSettings?.advisorProvider ?? DEFAULT_ADVISOR_PROVIDER}
@@ -1814,7 +1831,8 @@ export function SettingsPanel({
                   {/* Eyes — who describes a photo for a model that cannot see one */}
                   <Row
                     title="Eyes model (OCR)"
-                    description="Which model reads an image (OCR) when the model you're talking to can't see it: text, screenshots, diagrams, photos. Automatic tries an installed local vision model first (the picture stays on this machine), then a hosted model you have a key for. Describing happens once per turn, before the message goes out, and the thread says who looked. Subscription CLIs can't be eyes yet."
+                    description="Reads images for models without vision. Automatic tries a local model first."
+                    help="Automatic falls back to a hosted model you have a key for. Local processing keeps the image on this machine. Images are described once per turn before sending, and the conversation identifies the model used. Subscription CLIs are not supported."
                     control={
                       <ModelPairControl
                         label="Eyes"
@@ -1830,7 +1848,8 @@ export function SettingsPanel({
                   {/* Conversation names — the rail row takes a name beside the first turn */}
                   <Row
                     title="Name conversations"
-                    description="Give a new thread a name beside its first turn, the way OpenCode names its sessions: one short call on a light model, and the rail row is rewritten when it lands. A name you type yourself always wins and is never replaced."
+                    description="Automatically name new conversations. Names you type are kept."
+                    help="Uses one short model request after the first turn. The name appears in the sidebar when ready."
                     control={
                       <Toggle
                         checked={harnessSettings?.nameConversations !== false}
@@ -1841,7 +1860,8 @@ export function SettingsPanel({
                   />
                   <Row
                     title="Naming model"
-                    description="Who writes the name. Automatic is the cheap tier: the thread's own vendor's cheapest model when you have its key (Haiku, GPT nano, DeepSeek chat, Ministral), else the cheapest keyed model anywhere — a name costs well under a thousandth of a dollar. A thread on a local model names locally whatever is pinned here, so nothing leaves the machine that was not already leaving it. Subscription CLIs name through their routed source's vendor, the cheapest keyed model, or the local default."
+                    description="Model used for conversation names. Local conversations are named locally."
+                    help="Automatic uses a low-cost model from the conversation’s provider when a key is available, then another provider with a saved key. Subscription CLIs use their routed provider, another saved key, or the local default."
                     control={
                       <ModelPairControl
                         label="Naming"
@@ -1857,7 +1877,8 @@ export function SettingsPanel({
                   {/* Memory drafting */}
                   <Row
                     title="Auto-draft memory on run done"
-                    description="When a Klide agent run finishes cleanly, generate a Project Memory note from the conversation and park it as a draft to review (accept / edit / skip) in the Memory modal before it becomes durable. The Summarize header action still writes directly."
+                    description="Draft a memory note after a successful run. Review it before saving."
+                    help="Accept, edit, or skip the draft in Project Memory. The Summarize action in the header still saves directly."
                     control={
                       <Toggle
                         checked={harnessSettings?.autoMemoryOnRunDone !== false}
@@ -1953,7 +1974,8 @@ export function SettingsPanel({
                 <Panel>
                   <Row
                     title="Managed by Klide"
-                    description="Klide can start and stop the server process. If the server is already running externally, it will be detected and left alone."
+                    description="Start and stop local servers from Klide."
+                    help="Servers already running outside Klide are detected and left running."
                     control={<CodeText>Process</CodeText>}
                   />
                   <Row
@@ -1985,7 +2007,7 @@ export function SettingsPanel({
               <SettingBlock title="Documentation">
                 <Panel>
                   <Row title="DeepSeek" description="Official API setup and reference."
-                    leading={<ProviderLogo id="deepseek" />}
+                    leading={<ProviderLogo id="deepseek" size={28} />}
                     control={<LinkButton onClick={() => void openExternal(PROVIDER_DOCS.deepseek)}>Open docs</LinkButton>}
                   />
                 </Panel>
@@ -2062,7 +2084,7 @@ export function SettingsPanel({
                             </StatusText>
                           )
                         }
-                        leading={<ProviderLogo id={provider.id as ProviderId} />}
+                        leading={<ProviderLogo id={provider.id as ProviderId} size={28} />}
                       />
                     );
                   })}
@@ -2085,7 +2107,7 @@ export function SettingsPanel({
                           : "Server offline"}
                       </StatusText>
                     }
-                    leading={<ProviderLogo id={"ollama" as ProviderId} />}
+                    leading={<ProviderLogo id={"ollama" as ProviderId} size={28} />}
                   />
                 </Panel>
               </SettingBlock>
@@ -2096,7 +2118,7 @@ export function SettingsPanel({
                   {subscriptionProviderEntries.filter((provider) => PROVIDER_DOCS[provider.id]).map((provider) => (
                     <Row key={provider.id} title={provider.title}
                       description="Official installation and CLI documentation."
-                      leading={<ProviderLogo id={provider.id as ProviderId} />}
+                      leading={<ProviderLogo id={provider.id as ProviderId} size={28} />}
                       control={<LinkButton onClick={() => void openExternal(PROVIDER_DOCS[provider.id])}>Open docs</LinkButton>}
                     />
                   ))}
@@ -2123,7 +2145,7 @@ export function SettingsPanel({
                             : provider.description
                         }
                         control={<ModelList models={options} />}
-                        leading={<ProviderLogo id={provider.id as ProviderId} />}
+                        leading={<ProviderLogo id={provider.id as ProviderId} size={28} />}
                       />
                     );
                   })}
@@ -2131,7 +2153,7 @@ export function SettingsPanel({
                     title="Ollama"
                     description="Sign in opens a browser; sign out clears the local session."
                     control={<ModelList models={["ollama signin", "ollama signout"]} />}
-                    leading={<ProviderLogo id={"ollama" as ProviderId} />}
+                    leading={<ProviderLogo id={"ollama" as ProviderId} size={28} />}
                   />
                 </Panel>
               </SettingBlock>
@@ -2153,7 +2175,7 @@ export function SettingsPanel({
                             <StatusText tone="idle">Unavailable</StatusText>
                           )
                         }
-                        leading={<ProviderLogo id={provider.id as ProviderId} />}
+                        leading={<ProviderLogo id={provider.id as ProviderId} size={28} />}
                       />
                     );
                   })}
@@ -2330,8 +2352,9 @@ function DelegateDaemonRow() {
   return (
     <Row
       title="Persistent delegate sessions"
+      help="Claude Code, Codex, OpenCode, and Oh My Pi run in a background process. Reopen Klide to return to their sessions."
       description={
-        "Run delegate CLIs (Claude Code, Codex, OpenCode, Oh My Pi) in a detached background host so they keep working when Klide quits. Experimental." +
+        "Keep delegate agents running when Klide quits. Experimental." +
         (detail ? ` ${detail}` : "")
       }
       control={
