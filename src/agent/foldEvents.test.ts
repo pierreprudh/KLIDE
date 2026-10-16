@@ -298,7 +298,7 @@ describe("foldAgentEvents", () => {
         toolFinished("c5", "Dispatched Claude Code as implementer in the background as Run `sub_run-1_c5`"),
         assistantMessage("Claude Code is on it; I'll tell you when it reports."),
         { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
-        { type: "subagent_resolved", runId: RUN, requestId: `sub_${RUN}_c5`, result: "[Worker report] Untrusted worker prose", ok: true, background: true, commit: "78c3c5bf52852449aad98062e491520e3514fc47", ts: at() },
+        { type: "subagent_resolved", runId: RUN, requestId: `sub_${RUN}_c5`, result: "[Worker report] Untrusted worker prose", ok: true, background: true, commit: "78c3c5bf52852449aad98062e491520e3514fc47", ts: 1792189705264 },
         assistantMessage("Claude Code finished slugify on its branch."),
         { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
       ]));
@@ -310,6 +310,8 @@ describe("foldAgentEvents", () => {
       const report = rows.find((r) => r.role === "system" && r.workerReport);
       if (!report || report.role !== "system") throw new Error("expected the report row");
       expect(report.workerReport).toEqual({ childRunId: `sub_${RUN}_c5`, ok: true, worker: "claude-code", role: "implementer", commit: "78c3c5bf52852449aad98062e491520e3514fc47" });
+      // The reply it opens has no user message; its clock starts here.
+      expect(report.ts).toBe(1792189705264);
       expect(rows.filter((r) => r.role === "assistant").map((r) => r.content)).toEqual([
         "dispatching",
         "Claude Code is on it; I'll tell you when it reports.",

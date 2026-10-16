@@ -84,6 +84,9 @@ export type Msg =
        *  `commit` is the HEAD the Harness observed, `provider` / `model` the
        *  pair this conversation was on when the report landed. */
       workerReport?: { childRunId: string; ok: boolean; worker?: string; role?: string; commit?: string; provider?: ProviderId; model?: string };
+      /** When an observer or worker report opened its reply, epoch ms — the
+       *  turn's start where there is no user message to count from. */
+      ts?: number;
       /** Set when this system message is a context-compaction marker, so the
        *  chat renders it as a compaction card instead of a text blob.
        *  `content` is kept as a plain-text fallback (serialization, search).
