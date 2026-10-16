@@ -54,12 +54,17 @@ export const MIN_STACKED_CALLS = 3;
 /** Mirrors `PLAN_MISSION_TOOL` in src-tauri/src/agent/tools.rs. */
 export const PLAN_MISSION_TOOL = "plan_mission";
 
+/** The Pause tool a run asks the operator one question through — the name
+ *  src-tauri/src/agent/tools.rs registers it under. */
+export const USER_QUESTION_TOOL = "userAnswerQuestion";
+
 /** Tool calls that are the agent addressing the operator, not machinery: a
  *  planned Mission is drawn as a card the operator approves on, a delegation
- *  is a row the operator watches. Folding either into "5 tool calls" hides
+ *  is a row the operator watches, a question and its answer are an exchange
+ *  the conversation keeps. Folding any of them into "5 tool calls" hides
  *  the one thing the turn was for, so a message that makes one of these
  *  calls ends a run the way a sentence does. */
-export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "spawn_subagent"]);
+export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "spawn_subagent", USER_QUESTION_TOOL]);
 
 /** What a turn would show the reader: its content with every reasoning
  *  encoding taken out — the structured `thinking` field is already absent,

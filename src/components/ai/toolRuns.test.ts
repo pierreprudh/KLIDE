@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { groupToolRuns, pairToolResults, toolRunLabel, PLAN_MISSION_TOOL } from "./toolRuns";
+import { groupToolRuns, pairToolResults, toolRunLabel, PLAN_MISSION_TOOL, USER_QUESTION_TOOL } from "./toolRuns";
 
 const call = (name: string): Msg => ({
   role: "assistant",
@@ -118,6 +118,16 @@ describe("groupToolRuns", () => {
 
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ start: 1, end: 9, calls: 4 });
+  });
+
+  it("ends a run at a question — asking the operator is not machinery", () => {
+    // Three reads, then the question and its answer, then more reads: the
+    // exchange stays in the conversation as a card, never inside "4 tool
+    // calls" with the work around it.
+    const msgs = [asks("go"), ...burst("read_file", 3), call(USER_QUESTION_TOOL), result(USER_QUESTION_TOOL), ...burst("read_file", 3)];
+    const runs = groupToolRuns(msgs, pairToolResults(msgs));
+
+    expect(runs.map((r) => [r.start, r.end])).toEqual([[1, 7], [9, 15]]);
   });
 
   it("keeps a delegation out of a run, so the watched row stays in view", () => {

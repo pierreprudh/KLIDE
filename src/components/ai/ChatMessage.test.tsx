@@ -256,6 +256,42 @@ describe("a delegation row while the child works", () => {
   });
 });
 
+describe("a question the run asked, once answered", () => {
+  const exchange = (answer: string): string =>
+    renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "q0", name: "userAnswerQuestion", args: { question: "Which slug style — kebab or snake?" } }] },
+        false,
+        { results: new Map([["q0", { msg: { role: "tool", content: answer, toolName: "userAnswerQuestion" }, active: false }]]) },
+      ),
+    );
+
+  it("stays in the conversation as the exchange, not as a mono tool row", () => {
+    const html = exchange("Kebab, like the rest of the repo.");
+    expect(html).toContain("Which slug style — kebab or snake?");
+    expect(html).toContain("Kebab, like the rest of the repo.");
+    expect(html).not.toContain("userAnswerQuestion");
+  });
+
+  it("says a skipped question was skipped rather than quoting the harness", () => {
+    const html = exchange("[user skipped this question]");
+    expect(html).toContain("Skipped");
+    expect(html).not.toContain("[user skipped this question]");
+  });
+
+  it("keeps the plain row while the run is still waiting on the answer", () => {
+    const html = renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "q0", name: "userAnswerQuestion", args: { question: "Kebab or snake?" } }] },
+        false,
+        { results: new Map([["q0", { msg: { role: "tool", content: "Running userAnswerQuestion...", toolName: "userAnswerQuestion" }, active: true }]]) },
+      ),
+    );
+    expect(html).toContain("userAnswerQuestion");
+    expect(html).not.toContain("Question answered");
+  });
+});
+
 describe("normalizeThinking", () => {
   it("keeps a fence the model mentions as prose, not a code block", () => {
     expect(normalizeThinking("the wrapper is ```html visualizer. I'll use ```svg fence. Hmm")).toBe(

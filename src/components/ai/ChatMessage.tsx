@@ -10,6 +10,7 @@ import {
 } from "./coordinationPeers";
 import { readCoordinationSnapshot, type CoordinationEnvelope, type CoordinationEnvelopeSnapshot } from "../../agent/coordination";
 import { DotGridLoader, ProviderLogo, ToolIcon } from "./icons";
+import { AskIcon } from "../../icons";
 import { SIGHT_TOOL } from "../../agent/foldEvents";
 import { eyesName } from "./sight";
 import { formatCost } from "../../runs";
@@ -22,7 +23,7 @@ import { AgentMark } from "../fileMarks";
 import { formatElapsed, useElapsed } from "./WorkingRow";
 import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 
-import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, toolCallKey, toolRunLabel } from "./toolRuns";
+import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, USER_QUESTION_TOOL, toolCallKey, toolRunLabel } from "./toolRuns";
 import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
 import { childTranscriptRows, isWatchable, neverStarted } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
@@ -282,6 +283,65 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined }: { arg
         )}
       </div>
     </div>
+  );
+}
+
+/** What the Harness hands the model for a question the operator skipped
+ *  (src-tauri/src/agent/tool_handlers.rs). The card says "Skipped" instead. */
+const SKIPPED_ANSWER = "[user skipped this question]";
+
+/** The question a run asked and what the operator answered, kept in the
+ *  conversation after the live card above the composer has gone.
+ *
+ *  That card is "waiting on you" — an accent-tinted hairline and a box to
+ *  type in. This one is the record of the exchange, in the same shape so it
+ *  reads as the thing they answered: the ask mark, the question in the
+ *  strong face, a rule, the answer in the reading face under the same
+ *  column. It stands in for the mono `userAnswerQuestion` row and the
+ *  `└ answer` under it, which drew the one moment that was a conversation
+ *  as machinery. A skipped question says so in the dim face rather than
+ *  quoting the harness's bracketed note. */
+function AnsweredQuestionCard({ args, answer }: { args: unknown; answer: string }) {
+  const o = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+  const question = typeof o.question === "string" ? o.question.trim() : "";
+  const said = answer.trim();
+  const skipped = said === "" || said === SKIPPED_ANSWER;
+  return (
+    <section
+      aria-label="Question answered"
+      style={{
+        margin: "8px 0",
+        background: "color-mix(in srgb, var(--bg-elevated) 90%, transparent)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)",
+        overflow: "hidden",
+        minWidth: 0,
+      }}
+    >
+      <div style={{ display: "flex", gap: 8, padding: "10px 14px" }}>
+        <span aria-hidden="true" style={{ flexShrink: 0, height: 18, display: "grid", placeItems: "center", color: "var(--fg-subtle)" }}>
+          <AskIcon size={14} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+          {question || "Question"}
+        </div>
+      </div>
+      <div
+        style={{
+          // Lines up under the question text, past the mark's column — where
+          // the answer box sat on the live card.
+          padding: "8px 14px 10px 36px",
+          borderTop: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+          fontSize: 13,
+          lineHeight: 1.5,
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          color: skipped ? "var(--fg-dim)" : "var(--fg)",
+        }}
+      >
+        {skipped ? "Skipped" : said}
+      </div>
+    </section>
   );
 }
 
@@ -562,6 +622,10 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
   // header says the same title read as two objects for one gesture.
   const receipt = name === PLAN_MISSION_TOOL && result && !result.active ? parsePlanMissionReceipt(result.msg.content) : null;
   if (receipt) return <MissionCard receipt={receipt} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} />;
+  // A question, once answered, is the exchange itself: the card replaces the
+  // mono row and its result. While the run still waits, the live card above
+  // the composer carries the question and the plain row is enough here.
+  if (name === USER_QUESTION_TOOL && result && !result.active) return <AnsweredQuestionCard args={args} answer={result.msg.content} />;
   const call =
     name === "spawn_subagent" ? (
       // The child is still going until a *real* report lands. The pending
