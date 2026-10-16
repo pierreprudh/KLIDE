@@ -158,7 +158,14 @@ fn updates(
             };
             let mut items = vec![];
             if !tools.contains_key(id) {
-                let name = u["title"].as_str().unwrap_or("Hermes tool").to_string();
+                // An untitled update for an id no `tool_call` opened is the
+                // close of Hermes's own approval bubble (`edit-approval-1`),
+                // not work — the edit it asked about has its own row.
+                let name = match u["title"].as_str() {
+                    Some(title) => title.to_string(),
+                    None if u["sessionUpdate"] == "tool_call" => "Hermes tool".to_string(),
+                    None => return vec![],
+                };
                 tools.insert(id.into(), name.clone());
                 items.push(StreamItem::ToolCall {
                     id: id.into(),
@@ -181,10 +188,10 @@ fn updates(
             }
             items
         }
-        Some("session_info_update") => u["title"]
-            .as_str()
-            .map(|t| vec![StreamItem::Title(t.into())])
-            .unwrap_or_default(),
+        // Hermes titles a session from the prompt it was sent, which opens
+        // with Klide's preamble ("You are running as a subscription CLI
+        // backend…"), and retitles it on later turns. Klide names the
+        // conversation itself (agent/naming.rs), once.
         _ => vec![],
     }
 }
@@ -383,6 +390,19 @@ mod tests {
                 content: "denied".into()
             }]
         );
+        // Hermes closing its approval bubble is no tool of its own.
+        assert!(updates(
+            &json!({"sessionUpdate":"tool_call_update","toolCallId":"edit-approval-1","status":"completed"}),
+            &mut thought,
+            &mut tools
+        )
+        .is_empty());
+        assert!(updates(
+            &json!({"sessionUpdate":"session_info_update","title":"You are running as a subscription CLI backend…"}),
+            &mut thought,
+            &mut tools
+        )
+        .is_empty());
         assert!(updates(
             &json!({"sessionUpdate":"future_event"}),
             &mut thought,

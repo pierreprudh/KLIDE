@@ -170,6 +170,17 @@ describe("groupToolRuns", () => {
     expect(run.workedMs).toBe(41_000);
     expect(run.thinkingMs).toBeUndefined();
   });
+
+  it("takes a delegate's span from the answer that closes its one measured turn", () => {
+    const observed: Msg = { role: "tool", content: "ok", toolName: "read_file", observedBy: "hermes" };
+    const answer: Msg = { role: "assistant", content: "Done.", meta: { ms: 30_100 } };
+    const [run] = groupToolRuns([asks("go"), call("read_file"), observed, call("search_files"), observed, answer]);
+
+    expect(run.workedMs).toBe(30_100);
+    // Klide's own turns measure themselves; the answer's span is not theirs.
+    const [own] = groupToolRuns([asks("go"), ...burst("Bash", 2), answer]);
+    expect(own.workedMs).toBeUndefined();
+  });
 });
 
 describe("toolRunLabel", () => {
