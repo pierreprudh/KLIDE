@@ -310,7 +310,7 @@ function AnsweredQuestionCard({ args, answer }: { args: unknown; answer: string 
     <div className="ask-card-container">
       <section className={`ask-card${skipped ? " ask-card-skipped" : ""}`} aria-label="Question answered">
         <div className="ask-card-identity">
-          <AskIcon size={36} />
+          <AskIcon size={28} />
           <span className="ask-card-title">Question</span>
         </div>
         <div className="ask-card-content">
