@@ -4560,14 +4560,18 @@ This user request requires workspace inspection. Before answering, you MUST call
             !tailInRun && !tailPlaceholder && !tailStreamingText && !tailThinking && !tailQueuedUser;
           if (!showWorking) return null;
           if (!streaming) return <WorkingRow label={terminalTurn === "waiting" ? "Waiting for you in the terminal" : "Working in the terminal"} />;
-          // The timer counts from the turn's own send time, so it survives the
-          // row unmounting while a tool runs and remounting after.
+          // The timer counts from the turn's own start, so it survives the
+          // row unmounting while a tool runs and remounting after. A reply a
+          // worker's report or a finished shell opened has no user message:
+          // it starts at that row, not at the prompt that dispatched it.
           let turnStartedAt: number | undefined;
           for (let i = lastExchangeIndex; i >= 0; i--) {
             const m = msgs[i];
-            if (m.role === "user") { turnStartedAt = m.ts; break; }
+            if (m.role === "user" || (m.role === "system" && (m.workerReport || m.observer))) { turnStartedAt = m.ts; break; }
           }
-          return <WorkingRow label="Working" since={turnStartedAt} />;
+          // Straight under the row that woke it, the heartbeat says why.
+          const label = last?.role === "system" && last.workerReport ? "Reading the report" : last?.role === "system" && last.observer ? "Reading the output" : "Working";
+          return <WorkingRow label={label} since={turnStartedAt} />;
         })()}
         {pendingInbox.some((e) => e.deliveryState !== "queued") && (
           <div className="ai-msg-in" style={{ display: "grid", gap: 4, margin: "8px 0 8px 32px" }}>
