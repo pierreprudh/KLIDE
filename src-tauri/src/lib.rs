@@ -194,6 +194,14 @@ async fn hermes_clear_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn hermes_env_overrides(provider: String) -> Result<Vec<hermes_settings::EnvOverride>, String> {
+    blocking::run(move || hermes_settings::overrides_for(&provider)).await
+}
+#[tauri::command]
+async fn hermes_env_align(provider: String, keep: hermes_settings::Keep) -> Result<Vec<hermes_settings::EnvOverride>, String> {
+    blocking::run(move || hermes_settings::align_env(&provider, keep)).await
+}
+#[tauri::command]
 async fn hermes_source_support(provider: String) -> Result<hermes_settings::SourceSupport, String> {
     blocking::run(move || Ok(hermes_settings::source_support(&provider))).await
 }
@@ -1116,6 +1124,8 @@ pub fn run() {
             harness_nous_login,
             hermes_save_settings,
             hermes_clear_settings,
+            hermes_env_overrides,
+            hermes_env_align,
             cli_update::cli_versions,
             cli_update::cli_version,
             cli_update::cli_check_updates,

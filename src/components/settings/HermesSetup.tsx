@@ -3,7 +3,7 @@ import { ProviderLogo } from "../ai/icons";
 import { defaultModelForProvider } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
-import { clearHermesSettings, readHermesSettings, saveHermesSettings } from "../../ipc/hermes";
+import { alignHermesEnv, clearHermesSettings, readHermesEnvOverrides, readHermesSettings, saveHermesSettings, type HermesEnvOverride } from "../../ipc/hermes";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
 import { LinkButton, Panel, Row, SettingBlock } from "./controls";
@@ -26,6 +26,7 @@ export function HermesSetup() {
   const [configured, setConfigured] = useState(false);
   const [error, setError] = useState("");
   const [keyRevision, setKeyRevision] = useState(0);
+  const [overrides, setOverrides] = useState<HermesEnvOverride[]>([]);
   useEffect(() => {
     let cancelled = false;
     readHermesSettings().then((settings) => {
@@ -43,12 +44,15 @@ export function HermesSetup() {
     let cancelled = false;
     setHasKey(false);
     setModels([]);
+    setOverrides([]);
     readProviderKeyStatus(provider).then(async (status) => {
       if (cancelled) return;
       setHasKey(status.hasKey);
       if (status.hasKey) {
-        const available = await listProviderModels(provider);
-        if (!cancelled) setModels(available);
+        const [available, conflicts] = await Promise.all([listProviderModels(provider), readHermesEnvOverrides(provider)]);
+        if (cancelled) return;
+        setModels(available);
+        setOverrides(conflicts);
       }
     }).catch(() => {});
     return () => { cancelled = true; };
@@ -62,6 +66,17 @@ export function HermesSetup() {
       setConfigured(true);
       setKeyRevision((n) => n + 1);
       notify("Hermes configured. Start a new Hermes conversation to use it.", { tone: "success" });
+    } catch (e) { setError(errMessage(e)); }
+    finally { setBusy(false); }
+  }
+  async function align(keep: "hermes" | "klide") {
+    setBusy(true);
+    setError("");
+    try {
+      const left = await alignHermesEnv(provider, keep);
+      setOverrides(left);
+      if (keep === "hermes") setKeyRevision((n) => n + 1);
+      notify(keep === "hermes" ? "Klide now uses the key Hermes was set up with." : "Hermes’s .env now carries Klide’s values. New Hermes sessions use them, in the terminal too.", { tone: "success" });
     } catch (e) { setError(errMessage(e)); }
     finally { setBusy(false); }
   }
@@ -91,6 +106,7 @@ export function HermesSetup() {
         <Row title="API key" description={hasKey ? "A key is already configured in Klide. Leave blank to reuse it." : "Saved in Klide's keychain and shared with this API provider."}
           control={<input className="klide-field" aria-label="Hermes API key" type="password" autoComplete="off" value={key} disabled={loading || busy}
             placeholder={hasKey ? "Use existing key" : "Paste API key"} onChange={(e) => setKey(e.target.value)} />} />
+        <HermesEnvOverrideRow overrides={overrides} disabled={loading || busy} onAlign={(keep) => void align(keep)} />
         <Row title={configured ? "Klide configuration saved" : "Use Hermes from Klide"}
           description={error || "Applies to new sessions. Existing Hermes sessions keep their current configuration."}
           control={<div style={{ display: "flex", gap: 8 }}>
@@ -99,5 +115,26 @@ export function HermesSetup() {
           </div>} />
       </Panel>
     </SettingBlock>
+  );
+}
+
+/** Hermes reads its own `.env` over the environment Klide passes, so a value
+ *  set there wins silently. Show the conflict and let either side adopt the
+ *  other's value — a key Hermes names for this provider can come into Klide's
+ *  keychain; Klide's values can go into the file, where the terminal Hermes
+ *  picks them up as well. */
+export function HermesEnvOverrideRow({ overrides, disabled, onAlign }: {
+  overrides: HermesEnvOverride[]; disabled?: boolean; onAlign: (keep: "hermes" | "klide") => void;
+}) {
+  if (overrides.length === 0) return null;
+  const importable = overrides.some((o) => o.importable);
+  const what = importable ? "key" : "values";
+  return (
+    <Row title={`${overrides[0].path} sets ${overrides.map((o) => o.name).join(", ")}`}
+      description={`Hermes reads its own file over what Klide passes, so a session started here would run on a different ${importable ? "key" : "endpoint"}.`}
+      control={<div style={{ display: "flex", gap: 8 }}>
+        {importable && <LinkButton disabled={disabled} onClick={() => onAlign("hermes")}>Use Hermes’s key in Klide</LinkButton>}
+        <LinkButton disabled={disabled} onClick={() => onAlign("klide")}>Give Hermes Klide’s {what}</LinkButton>
+      </div>} />
   );
 }

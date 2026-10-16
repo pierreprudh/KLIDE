@@ -135,7 +135,7 @@ Klide/
 │   │   ├── delegates.ts           delegate_catalog — the adapters' facts over the wire (src/delegates.ts is the pinned mirror)
 │   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
-│   │   ├── hermes.ts             Hermes settings + `harness_source_support` / `harness_source_models` / Nous login wire
+│   │   ├── hermes.ts             Hermes settings + `harness_source_support` / `harness_source_models` / Nous login wire + `.env` override scan/align
 │   ├── hooks/
 │   │   ├── useFlipIndicator.ts  Shared FLIP animation for rail/tab indicators
 │   │   ├── useEditorTabs.ts     Open tabs: open/edit/save/close/rename, external-change watch

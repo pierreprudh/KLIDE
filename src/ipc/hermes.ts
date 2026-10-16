@@ -10,6 +10,16 @@ export function clearHermesSettings(): Promise<void> {
   return invoke("hermes_clear_settings");
 }
 
+/** A variable Hermes's own `.env` sets differently from what Klide would pass for a source. */
+export type HermesEnvOverride = { name: string; path: string; importable: boolean };
+export function readHermesEnvOverrides(provider: string): Promise<HermesEnvOverride[]> {
+  return invoke("hermes_env_overrides", { provider });
+}
+/** `hermes` keeps Hermes's key (Klide imports it); `klide` rewrites Hermes's `.env` with Klide's values. */
+export function alignHermesEnv(provider: string, keep: "hermes" | "klide"): Promise<HermesEnvOverride[]> {
+  return invoke("hermes_env_align", { provider, keep });
+}
+
 export type HermesSourceSupport = { supported: boolean; reason: string | null };
 export function readHermesSourceSupport(provider: string): Promise<HermesSourceSupport> {
   return invoke("hermes_source_support", { provider });
