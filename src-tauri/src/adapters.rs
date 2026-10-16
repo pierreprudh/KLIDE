@@ -593,7 +593,12 @@ impl StreamingProvider for OpenAiAdapter {
                 .get("message")
                 .and_then(|v| v.as_str())
                 .unwrap_or("stream error");
-            return Err(format!("{} error: {message}", self.provider));
+            // An aggregator puts the upstream's status on the error; keep it,
+            // so a broken upstream reads apart from a refused request.
+            return Err(match error.get("code").and_then(|code| code.as_u64()) {
+                Some(code) if code >= 500 => format!("{} error: {message} (HTTP {code})", self.provider),
+                _ => format!("{} error: {message}", self.provider),
+            });
         }
         // Usage arrives on the final chunk (or a trailing choices-less chunk
         // when stream_options.include_usage is set). Parse it wherever it
@@ -2085,6 +2090,17 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("mistral"), "provider tag missing: {err}");
         assert!(err.contains("rate limited"), "got: {err}");
+        // An upstream's own status rides along when the aggregator gives one.
+        let err = adapter
+            .parse_line(
+                r#"data: {"error":{"code":502,"message":"Provider disconnected"}}"#,
+                &mut content,
+                &mut thinking,
+                &mut tools,
+                &rec.as_sink(),
+            )
+            .unwrap_err();
+        assert!(err.ends_with("Provider disconnected (HTTP 502)"), "got: {err}");
     }
 
     fn run_anthropic(lines: &[&str]) -> (String, Vec<serde_json::Value>, Vec<StreamChunk>) {

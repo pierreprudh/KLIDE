@@ -54,6 +54,7 @@ import {
   hasOpenTurn,
   isSilentRunError,
   replayForAdoption,
+  runFailedMsg,
   shouldHealFromTranscript,
   type ViewBehindReason,
 } from "./replayConversation";
@@ -495,6 +496,10 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
     // of them could fabricate a signal for whatever turn is live now.
     const viewBehind: { reason: ViewBehindReason | null } = { reason: null };
     let harnessError: Error | null = null;
+    // The Run's own terminal failure, as the harness reported it — drawn as
+    // the Run-failed row (with Try again when it is retryable), not as prose.
+    // A holder, like `viewBehind`: set from the event handler's closure.
+    const runFailure: { failed: { message: string; retryable: boolean } | null } = { failed: null };
     // A user-initiated Stop is delivered as a RunError with code "aborted".
     // Not a harness failure, and not a run worth summarizing.
     let abortedByUser = false;
@@ -631,7 +636,10 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
           break;
         }
         case "run_error": {
-          if (!isSilentRunError(event.error.code)) harnessError = new Error(event.error.message);
+          if (!isSilentRunError(event.error.code)) {
+            harnessError = new Error(event.error.message);
+            runFailure.failed = { message: event.error.message, retryable: event.error.retryable };
+          }
           else abortedByUser = true;
           deps().session.runSettled();
           break;
@@ -697,7 +705,17 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
       const next = [...located.msgs];
       const failedUser = next[userIndex];
       if (failedUser?.role === "user") next[userIndex] = { ...failedUser, queueState: undefined, queueId: undefined };
-      next[located.index] = { role: "assistant", content: `⚠ ${deps().failureText(error, turn)}` };
+      const failed = runFailure.failed;
+      if (failed && error === harnessError) {
+        // The Run started and failed: what it did before failing stays on
+        // screen, and the failure is the row under it — the same row a
+        // replayed transcript ends on.
+        const open = next[located.index];
+        if (open?.role === "assistant" && !open.content && !open.thinking && !open.toolCalls?.length) next.splice(located.index, 1);
+        next.push(runFailedMsg(failed.message, failed.retryable));
+      } else {
+        next[located.index] = { role: "assistant", content: `⚠ ${deps().failureText(error, turn)}` };
+      }
       commit(next);
       deps().hooks.onTurnFailed?.(turn, error);
       harnessError = error instanceof Error ? error : new Error(errMessage(error));

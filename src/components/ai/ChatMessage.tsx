@@ -1383,7 +1383,34 @@ export function SteeringRow({ reason }: { reason: string }) {
 // The message wraps below rather than ellipsizing — a timeout's advice ("try a
 // smaller or pre-warmed model") is the useful half, and a truncated error is
 // the one row that must never hide its tail.
-export function RunFailedRow({ message }: { message: string }) {
+/** The quiet underlined action both terminal rows wear — Retry, Try again. */
+function RowAction({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...COMPACT_MONO,
+        background: "none",
+        border: 0,
+        padding: 0,
+        color: disabled ? "var(--fg-dim)" : "var(--fg)",
+        cursor: disabled ? "default" : "pointer",
+        textDecoration: "underline",
+        textDecorationColor: "var(--border)",
+        textUnderlineOffset: 3,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** `onTryAgain` is offered for a retryable failure that still ends the
+ *  conversation: it continues from where the Run stopped — what already ran
+ *  is not run again. */
+export function RunFailedRow({ message, onTryAgain, disabled }: { message: string; onTryAgain?: () => void; disabled?: boolean }) {
   const hairline = (
     <span
       aria-hidden="true"
@@ -1407,6 +1434,7 @@ export function RunFailedRow({ message }: { message: string }) {
       </div>
       <div style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", textAlign: "center", maxWidth: "min(520px, 92%)", lineHeight: 1.5 }}>
         {message}
+        {onTryAgain && <>{" "}<RowAction label="Try again" onClick={onTryAgain} disabled={disabled} /></>}
       </div>
     </div>
   );
@@ -1442,29 +1470,7 @@ export function RunInterruptedRow({ onRetry, disabled }: { onRetry?: () => void;
       </div>
       <div style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", textAlign: "center", maxWidth: "min(520px, 92%)", lineHeight: 1.5 }}>
         Klide closed before this turn answered.
-        {onRetry && (
-          <>
-            {" "}
-            <button
-              type="button"
-              onClick={onRetry}
-              disabled={disabled}
-              style={{
-                ...COMPACT_MONO,
-                background: "none",
-                border: 0,
-                padding: 0,
-                color: disabled ? "var(--fg-dim)" : "var(--fg)",
-                cursor: disabled ? "default" : "pointer",
-                textDecoration: "underline",
-                textDecorationColor: "var(--border)",
-                textUnderlineOffset: 3,
-              }}
-            >
-              Retry
-            </button>
-          </>
-        )}
+        {onRetry && <>{" "}<RowAction label="Retry" onClick={onRetry} disabled={disabled} /></>}
       </div>
     </div>
   );

@@ -124,7 +124,7 @@ import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon, MissionWorkflowIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
-import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
+import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, RunFailedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
@@ -3672,6 +3672,28 @@ This user request requires workspace inspection. Before answering, you MUST call
     });
   }
 
+  // Try again on a retryable failure: the Run continues from its transcript
+  // with no new words — tool calls that already ran are replayed as history,
+  // not run again — the way a wake turn reads its inbox. Same Mode, same
+  // rung as a send now.
+  async function continueAfterFailure() {
+    const state = controller.getState();
+    if (streaming || state.queued > 0 || state.following) return;
+    const modelInspection = await activateModelInspectionForSend();
+    controller.send({
+      clientId: genId(),
+      text: "",
+      wake: true,
+      mode: agentModeRef.current,
+      provider,
+      model,
+      modelSupportsTools: modelInspection.supportsTools,
+      modelSupportsReflection: modelInspection.supportsReflection,
+      reflectionLevel: modelInspection.supportsReflection ? panelReflectionLevel : undefined,
+      attachments: [],
+    });
+  }
+
   function approveCommand(scope: "once" | "run" | "project" = "once", pattern?: string) {
     void controller.resolve({
       gate: "permission",
@@ -4366,10 +4388,13 @@ This user request requires workspace inspection. Before answering, you MUST call
           // Run-failure marker: a terminal event, not an assistant utterance —
           // rendered as its own centered hairline row (the local-server
           // starting line's family), full width, no gutter.
+          // Try again only on the conversation's last word: once anything
+          // follows, continuing from the failure would answer out of order.
           if (m.role === "system" && m.runError) {
+            const canTryAgain = !!m.runError.retryable && i === lastExchangeIndex;
             return (
               <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "center", margin: "16px 0 10px" }}>
-                {renderMessageBody(m)}
+                <RunFailedRow message={m.runError.message} onTryAgain={canTryAgain ? () => void continueAfterFailure() : undefined} disabled={streaming} />
               </div>
             );
           }

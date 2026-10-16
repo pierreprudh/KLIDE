@@ -54,8 +54,9 @@ use self::run_core::{
     apply_clean_context_if_requested, assistant_provider_message, compact_old_tool_results,
     compaction_system_message, compaction_threshold, decide_turn, estimate_prompt_tokens,
     parallel_read_calls, plan_tool_step, provider_messages, refresh_todo_context,
-    tool_provider_message, user_provider_message, ProviderCaps, ToolStepPlan, TurnDecision,
-    TurnStep,
+    tool_provider_message, retries_provider_calls, transient_provider_failure,
+    user_provider_message, ProviderCaps, ToolStepPlan, TurnDecision, TurnStep,
+    MAX_AUTO_RETRIES_PER_RUN, PROVIDER_RETRY_PAUSE,
 };
 use self::tools::{
     apply_write, clear_run_snapshots, execute_read_only_tool, execute_read_only_tool_with_runs_dir,
@@ -2271,6 +2272,8 @@ async fn loop_body(
     // Count this turn's user message on top of the turns already on disk so
     // the Mission Control "Messages" tally reflects the whole conversation.
     let mut message_count = prior_turns as u32 + 1;
+    // Model calls this Run retried by itself (see `transient_provider_failure`).
+    let mut auto_retries: u32 = 0;
     let mut completed = false;
     // omp budgets a run by output tokens, not a tiny turn cap; 8 turns was
     // genuinely limiting for real multi-file work. 16 gives the agent room to
@@ -2692,29 +2695,64 @@ async fn loop_body(
         }
 
         // Race the provider stream against user cancellation so abort takes
-        // effect mid-request, not only between turns.
-        let request_started_ms = now_ms();
-        let provider_result = tokio::select! {
-            _ = cancel.cancelled() => {
-                flush_stream(&stream_failure);
-                finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
-                return Ok(());
+        // effect mid-request, not only between turns. A broken upstream that
+        // failed before a single chunk reached the conversation gets one more
+        // try — nothing to undo on screen, nothing streamed twice — bounded
+        // per call and per Run, so a provider that keeps failing costs one
+        // extra request, not a loop.
+        let mut request_started_ms = now_ms();
+        let mut retried_this_call = false;
+        let provider_result = loop {
+            let result = tokio::select! {
+                _ = cancel.cancelled() => {
+                    flush_stream(&stream_failure);
+                    finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
+                    return Ok(());
+                }
+                result = provider_caller.call(ProviderTurnRequest {
+                    provider: request.provider.clone(),
+                    model: request.model.clone(),
+                    messages: messages.clone(),
+                    tools: turn_tools.clone(),
+                    workspace_root: request.workspace_root.clone(),
+                    run_id: Some(id.clone()),
+                    delegate_session: request.delegate_session.clone(),
+                    allowed_commands: allowed_commands.clone(),
+                    mcp: mcp.clone(),
+                    num_ctx: request.num_ctx,
+                    num_predict: reply_budget_override.or(request.num_predict),
+                    reflection_level: request.reflection_level.clone(),
+                    stream: stream.clone(),
+                }) => result,
+            };
+            let nothing_streamed = first_token_ms.load(std::sync::atomic::Ordering::Relaxed) == 0;
+            match &result {
+                Err(error)
+                    if nothing_streamed
+                        && !retried_this_call
+                        && auto_retries < MAX_AUTO_RETRIES_PER_RUN
+                        && retries_provider_calls(&request.provider)
+                        && transient_provider_failure(error) =>
+                {
+                    retried_this_call = true;
+                    auto_retries += 1;
+                    emit(AgentEvent::SteeringInjected {
+                        run_id: id.clone(),
+                        reason: format!("{} failed before answering — trying once more ({error})", request.provider),
+                        ts: now_ms(),
+                    })?;
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            flush_stream(&stream_failure);
+                            finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
+                            return Ok(());
+                        }
+                        _ = tokio::time::sleep(PROVIDER_RETRY_PAUSE) => {}
+                    }
+                    request_started_ms = now_ms();
+                }
+                _ => break result,
             }
-            result = provider_caller.call(ProviderTurnRequest {
-                provider: request.provider.clone(),
-                model: request.model.clone(),
-                messages: messages.clone(),
-                tools: turn_tools.clone(),
-                workspace_root: request.workspace_root.clone(),
-                run_id: Some(id.clone()),
-                delegate_session: request.delegate_session.clone(),
-                allowed_commands,
-                mcp,
-                num_ctx: request.num_ctx,
-                num_predict: reply_budget_override.or(request.num_predict),
-                reflection_level: request.reflection_level.clone(),
-                stream,
-            }) => result,
         };
         flush_stream(&stream_failure);
         // The turn is over; a prompt arriving now has nothing to answer for.
@@ -6433,6 +6471,111 @@ mod run_loop_tests {
         assert!(workers::completions(id).is_empty(), "the report is acknowledged even on full auto");
         assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|event| matches!(event, AgentEvent::SubagentResolved { .. })).count(), 1);
         workers::release(id);
+    }
+
+    fn upstream_break() -> Result<AiChatResponse, String> {
+        Err("openrouter error: Upstream error from CoreWeave: Internal server error".into())
+    }
+
+    fn run_errors(runs_dir: &Path, id: &str) -> usize {
+        read_events(runs_dir, id).unwrap().iter().filter(|e| matches!(e, AgentEvent::RunError { .. })).count()
+    }
+
+    fn retry_notices(runs_dir: &Path, id: &str) -> usize {
+        read_events(runs_dir, id).unwrap().iter()
+            .filter(|e| matches!(e, AgentEvent::SteeringInjected { reason, .. } if reason.contains("trying once more")))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn an_upstream_break_before_any_output_is_tried_once_more() {
+        let (runs_dir, root) = sandbox("retry-once");
+        let id = "retry-once";
+        let mut request = test_request(&root, &[]);
+        request.provider = "openrouter".into();
+        let caller = ScriptedProviderCaller::new(vec![upstream_break(), scripted_turn("Answered on the second try.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        assert_eq!(caller.seen_messages.lock().unwrap().len(), 2);
+        assert_eq!(retry_notices(&runs_dir, id), 1, "the retry is on the record");
+        assert_eq!(run_errors(&runs_dir, id), 0);
+    }
+
+    #[tokio::test]
+    async fn the_same_call_is_never_retried_twice() {
+        let (runs_dir, root) = sandbox("retry-twice");
+        let id = "retry-twice";
+        let mut request = test_request(&root, &[]);
+        request.provider = "openrouter".into();
+        let caller = ScriptedProviderCaller::new(vec![upstream_break(), upstream_break(), scripted_turn("never reached", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        assert_eq!(caller.seen_messages.lock().unwrap().len(), 2, "one call, one retry, then the failure row");
+        assert_eq!(run_errors(&runs_dir, id), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_request_is_not_retried() {
+        let (runs_dir, root) = sandbox("retry-refused");
+        let id = "retry-refused";
+        let mut request = test_request(&root, &[]);
+        request.provider = "openrouter".into();
+        let caller = ScriptedProviderCaller::new(vec![
+            Err("openrouter returned 401 Unauthorized: No auth credentials found".into()),
+            scripted_turn("never reached", vec![]),
+        ]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        assert_eq!(caller.seen_messages.lock().unwrap().len(), 1);
+        assert_eq!(retry_notices(&runs_dir, id), 0);
+        assert_eq!(run_errors(&runs_dir, id), 1);
+    }
+
+    /// A provider that already streamed part of an answer before breaking is
+    /// not called again: the words are on screen, and a second answer would
+    /// be paid for and drawn after them.
+    #[tokio::test]
+    async fn a_break_after_output_has_streamed_is_not_retried() {
+        #[derive(Clone)]
+        struct BreaksMidAnswer(Arc<Mutex<usize>>);
+        impl AgentProviderCaller for BreaksMidAnswer {
+            fn call<'a>(&'a self, request: ProviderTurnRequest) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+                *self.0.lock().unwrap() += 1;
+                Box::pin(async move {
+                    let _ = request.stream.send(StreamChunk { content: "Half an ans".into(), ..Default::default() });
+                    upstream_break()
+                })
+            }
+        }
+        let (runs_dir, root) = sandbox("retry-after-output");
+        let id = "retry-after-output";
+        let mut request = test_request(&root, &[]);
+        request.provider = "openrouter".into();
+        let calls = Arc::new(Mutex::new(0));
+        run_agent_loop(
+            Arc::new(FakeSupervisor::with_run(id)), runs_dir.clone(), id.to_string(), request,
+            Channel::new(|_| Ok(())), CancellationToken::new(), BreaksMidAnswer(calls.clone()),
+        ).await.expect("the loop settles");
+        assert_eq!(*calls.lock().unwrap(), 1);
+        assert_eq!(retry_notices(&runs_dir, id), 0);
+        assert_eq!(run_errors(&runs_dir, id), 1);
+    }
+
+    /// Across a Run the retries are capped: a provider that breaks on every
+    /// call costs two extra requests, then the Run ends on the failure row.
+    #[tokio::test]
+    async fn a_run_retries_at_most_twice_whatever_the_provider_does() {
+        let (runs_dir, root) = sandbox("retry-cap");
+        let id = "retry-cap";
+        let mut request = test_request(&root, &[]);
+        request.provider = "openrouter".into();
+        let look = |n: &str| scripted_turn("Looking.", vec![scripted_tool_call(n, "list_dir", serde_json::json!({"path": "."}))]);
+        let caller = ScriptedProviderCaller::new(vec![
+            upstream_break(), look("a"),
+            upstream_break(), look("b"),
+            upstream_break(), scripted_turn("never reached", vec![]),
+        ]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        assert_eq!(caller.seen_messages.lock().unwrap().len(), 5);
+        assert_eq!(retry_notices(&runs_dir, id), 2);
+        assert_eq!(run_errors(&runs_dir, id), 1);
     }
 
     /// Test 2: the same follow-up on the review rung still stops at the card.

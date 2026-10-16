@@ -731,6 +731,41 @@ fn compacted_tool_summary(name: &str, content: &str) -> String {
     format!("[compacted: {name}; original {line_count} line(s), {char_count} char(s)]\n{excerpt}")
 }
 
+// ── Provider retry ──
+
+/// How many model calls one Run may retry by itself. One retry per call, and
+/// never more than this across the Run: a provider that keeps failing ends the
+/// Run on the failure row (which offers Try again) rather than spending on a
+/// loop nobody asked for.
+pub(super) const MAX_AUTO_RETRIES_PER_RUN: u32 = 2;
+
+/// The breath before that retry — long enough for an aggregator to route
+/// elsewhere, short enough not to read as a stall.
+pub(super) const PROVIDER_RETRY_PAUSE: std::time::Duration =
+    std::time::Duration::from_millis(if cfg!(test) { 10 } else { 2_000 });
+
+/// A provider failure worth one more try: the upstream broke (500, 502, 529,
+/// or an aggregator's "upstream error" inside the stream), not the request.
+/// A 4xx, a key problem, a timeout the user has to act on (504/524) and a
+/// throttle the adapter already retried (429/503) are not. The loop only asks
+/// this when nothing of the failed attempt reached the conversation.
+pub(super) fn transient_provider_failure(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    ["returned 500", "returned 502", "returned 529", "(http 500)", "(http 502)", "(http 529)"]
+        .iter()
+        .any(|code| lower.contains(code))
+        || ["upstream error", "provider disconnected", "internal server error"]
+            .iter()
+            .any(|phrase| lower.contains(phrase))
+}
+
+/// Who may be retried at all: a provider whose tools Klide dispatches. A
+/// Delegate CLI or a user CLI runs its own tools inside the call, so calling
+/// it again could do the work twice.
+pub(super) fn retries_provider_calls(provider: &str) -> bool {
+    crate::delegate::lookup(provider).is_none() && !provider.starts_with("cli:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1072,5 +1107,26 @@ mod tests {
         assert_eq!(messages[0]["content"], "[cleaned: grep]");
         assert!(messages[0].get("name").is_none());
         assert_eq!(messages[1]["content"], "keep me");
+    }
+
+    #[test]
+    fn an_upstream_break_is_retried_and_a_request_problem_is_not() {
+        assert!(transient_provider_failure("openrouter error: Upstream error from CoreWeave: Internal server error"));
+        assert!(transient_provider_failure("openrouter returned 502 Bad Gateway: <html>"));
+        assert!(transient_provider_failure("anthropic returned 529 <unknown status code>: overloaded"));
+        assert!(transient_provider_failure("openrouter error: Provider disconnected (HTTP 500)"));
+        assert!(!transient_provider_failure("openrouter returned 401 Unauthorized: No auth credentials"));
+        assert!(!transient_provider_failure("openai returned 400 Bad Request: context_length_exceeded"));
+        assert!(!transient_provider_failure("openrouter returned 429 Too Many Requests"));
+        assert!(!transient_provider_failure("myhost: timed out waiting for the model (~100s proxy limit) (HTTP 524)"));
+        assert!(!transient_provider_failure("Unable to reach openrouter: dns error"));
+    }
+
+    #[test]
+    fn only_providers_klide_dispatches_tools_for_are_retried() {
+        assert!(retries_provider_calls("openrouter"));
+        assert!(retries_provider_calls("custom:opencodex"));
+        assert!(!retries_provider_calls("claude-code"));
+        assert!(!retries_provider_calls("cli:my-agent"));
     }
 }
