@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import type { Msg } from "./types";
 import { DelegateConsole } from "../lazySurfaces";
 import {
@@ -24,7 +24,7 @@ import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 
 import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, toolCallKey, toolRunLabel } from "./toolRuns";
 import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
-import { isWatchable } from "./subagentWatch";
+import { childTranscriptRows, isWatchable } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
 // The thinking block: a disclosure line and, under it, the reasoning as one
@@ -188,7 +188,11 @@ function summarizeArgs(args: unknown): string {
 }
 
 // A delegation stays inline: worker identity, a thin activity rail, and one
-// status disclosure. Receipts and the child transcript live behind that row.
+// status disclosure. Behind it, two things and no more: the facts of the
+// dispatch — model, branch, Run id — as a short list, and the child's own
+// rows. The receipt's sentence is written for the model ("You are not
+// waiting for it…") and is not drawn; the child's brief and its completion
+// are not drawn either, because the row above already says both.
 function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string }) {
   const o = (args ?? {}) as Record<string, unknown>;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
@@ -196,6 +200,9 @@ function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown
   // The model the worker was started on, once the card decided it — the
   // fold writes it onto the call. A CLI on its own default carries none.
   const workerModel = worker && typeof o.model === "string" && o.model.trim() && o.model !== "default" ? o.model.trim() : null;
+  // The worktree branch the child edits on, from `subagent_requested`;
+  // absent when it worked directly in the project folder.
+  const branch = typeof o.branch === "string" && o.branch.trim() ? o.branch.trim() : null;
   const task = typeof o.task === "string" ? o.task.replace(/\s+/g, " ").trim() : "";
 
   // A background dispatch settles its call at once while the child is still
@@ -214,9 +221,14 @@ function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown
   // actually died with the app would otherwise flash "starting" and vanish.
   const watching = !!childRunId && live && watch.loaded && isWatchable(watch.activity);
   const rows = useMemo(
-    () => (revealed && watch.events.length ? foldedToMsgs(foldAgentEvents(watch.events)) : []),
-    [revealed, watch.events],
+    () => (revealed && watch.events.length ? childTranscriptRows(foldedToMsgs(foldAgentEvents(watch.events)), task) : []),
+    [revealed, watch.events, task],
   );
+  const facts: Array<[string, string]> = [];
+  if (workerModel) facts.push(["Model", workerModel]);
+  if (branch) facts.push(["Branch", branch]);
+  if (childRunId) facts.push(["Run", childRunId]);
+  if (background) facts.push(["Dispatch", "background"]);
   return (
     <div data-child-run={childRunId} style={{ margin: "8px 0", scrollMarginTop: 72, minWidth: 0, padding: "10px 12px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
@@ -225,37 +237,45 @@ function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown
         {worker && <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>{subagent}</span>}
       </div>
       <div style={{ margin: "10px 0 0 7px", padding: "1px 0 2px 18px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
-      {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
-      <SubagentWatchLine
-        activity={!watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
-        open={opened} onToggle={toggle} hasRows={true}
-      />
-      <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
-      <div>
-      {revealed && <div style={{ marginTop: 8, fontSize: 11, color: "var(--fg-dim)", overflowWrap: "anywhere" }}>
-        {workerModel && <div>Model: {workerModel}</div>}
-        {childRunId && <div>Run: <code>{childRunId}</code></div>}
-        {receipt && <div style={{ marginTop: 4 }}>{renderMarkdown(receipt)}</div>}
-      </div>}
-    {revealed && (
-      <SubagentWatchBody>
-        {rows.length === 0 ? (
-          <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
-            {watch.loaded ? "Nothing on its transcript yet." : "Reading its transcript…"}
-          </span>
-        ) : (
-          rows.map((row, i) => <div key={i}>{renderMessageBody(row)}</div>)
+        {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
+        <SubagentWatchLine
+          activity={!watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
+          open={opened} onToggle={toggle} hasRows={true}
+        />
+        <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
+          <div>
+            {revealed && facts.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "max-content minmax(0, 1fr)", columnGap: 12, rowGap: 3, marginTop: 8, fontSize: 11, lineHeight: 1.5 }}>
+                {facts.map(([label, value]) => (
+                  <Fragment key={label}>
+                    <span style={{ color: "var(--fg-dim)" }}>{label}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-subtle)", overflowWrap: "anywhere" }}>{value}</span>
+                  </Fragment>
+                ))}
+              </div>
+            )}
+            {revealed && (
+              // One spine for the whole delegation — the column's — so the
+              // child's rows hang off the same line as its brief, one size
+              // down, rather than off a second rail of their own.
+              <div className="ai-msg-in" style={{ marginTop: 12 }}>
+                {rows.length === 0 ? (
+                  <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+                    {watch.loaded ? "Nothing on its transcript yet." : "Reading its transcript…"}
+                  </span>
+                ) : (
+                  rows.map((row, i) => <div key={i}>{renderMessageBody(row, false, { nested: true })}</div>)
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        {/* The child's own gate, drawn here because nothing else is attached to
+            its channel: a worker that asks before a command would otherwise wait
+            on nobody until it timed out. */}
+        {childRunId && watching && watch.activity.pendingPermission && (
+          <SubagentPermissionCard runId={childRunId} request={watch.activity.pendingPermission} />
         )}
-      </SubagentWatchBody>
-    )}
-      </div>
-      </div>
-    {/* The child's own gate, drawn here because nothing else is attached to
-        its channel: a worker that asks before a command would otherwise wait
-        on nobody until it timed out. */}
-    {childRunId && watching && watch.activity.pendingPermission && (
-      <SubagentPermissionCard runId={childRunId} request={watch.activity.pendingPermission} />
-    )}
       </div>
     </div>
   );
@@ -1472,6 +1492,9 @@ type MessageBodyOptions = {
   /** This turn already sits inside a conversation-level fold; its own rows
    *  stay flat rather than folding a second time under the sentence. */
   inRun?: boolean;
+  /** A child Run's row drawn inside its parent's disclosure: one size down,
+   *  no speed line (the parent's answer owns that space), a user turn quiet. */
+  nested?: boolean;
 };
 
 type MessageBodyProps = MessageBodyOptions & {
@@ -1479,7 +1502,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, thinkingOverride, inRun }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, thinkingOverride, inRun, nested }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
   }
@@ -1561,7 +1584,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
           <ThinkingBlock text={mergedThinking} streaming={streaming} startedAt={m.thinkingStartedAt} thinkingMs={thinkingOverride !== undefined ? undefined : m.thinkingMs} />
         )}
         {visibleContent && (
-          <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: 14, lineHeight: 1.6 }}>
+          <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: nested ? 13 : 14, lineHeight: nested ? 1.55 : 1.6 }}>
             {/* The assistant's own answer is the one surface that draws. */}
             {renderMarkdown(visibleContent, { streaming: active, visuals: true })}
           </div>
@@ -1588,7 +1611,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
             </InlineToolRun>
           );
         })()}
-        {m.meta && !active && visibleContent !== "" && !m.toolCalls?.length && (
+        {m.meta && !active && !nested && visibleContent !== "" && !m.toolCalls?.length && (
           <MessageMeta meta={m.meta} />
         )}
       </>
@@ -1599,9 +1622,12 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
   // renders those itself, with its own attachment strips (photo thumbnails, a
   // document line, and a name for a photo the snapshot cache dropped) — so
   // this branch stays about content and nothing else.
+  // Inside a child's disclosure a user turn is the parent talking to the
+  // child (a goal-check round, a nudge): one size down and quiet, so the
+  // child's own answer stays the loudest thing in the column.
   return (
     <div>
-      {m.content && <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>}
+      {m.content && <div style={nested ? { whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55, color: "var(--fg-subtle)" } : { whiteSpace: "pre-wrap" }}>{m.content}</div>}
     </div>
   );
 }
@@ -1634,6 +1660,7 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
       thinkingOverride={opts?.thinkingOverride}
       hideThinking={opts?.hideThinking}
       inRun={opts?.inRun}
+      nested={opts?.nested}
     />
   );
 }

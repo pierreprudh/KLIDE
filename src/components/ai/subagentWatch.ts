@@ -17,6 +17,7 @@
 
 import { readAgentRunEvents, reattachAgentRun, getAgentRunStatus, isActiveRunStatus } from "../../agent/client";
 import type { AgentEvent, PermissionRequest } from "../../agent/types";
+import type { Msg } from "./types";
 
 /** What the child is doing right now: the tool name, and its own summary of
  *  the argument ("src/time.ts"). Null between steps. */
@@ -204,4 +205,32 @@ export function watchSubagentRun(
     detachLive?.();
     detachLive = null;
   };
+}
+
+/** Whitespace-folded, for comparing a brief with the turn that carried it. */
+const squash = (text: string): string => text.replace(/\s+/g, " ").trim();
+
+/**
+ * The child's rows as the opened disclosure shows them.
+ *
+ * The row above already says what the child was asked (its brief) and how it
+ * ended (the status word), so the child's transcript repeats neither: the
+ * first user turn that carries the brief is dropped, and so is the
+ * completion row the fold writes for a finished Goal — the panel draws that
+ * one as a card at the top level, and down here it would come out as the
+ * answer's first paragraph in plain text, right under the answer itself.
+ * A later user turn (a goal-check round, a nudge) stays: it is news.
+ */
+export function childTranscriptRows(rows: Msg[], task: string): Msg[] {
+  const brief = squash(task);
+  let briefSeen = false;
+  return rows.filter((row) => {
+    if (row.role === "system" && row.completion) return false;
+    if (row.role === "user" && !briefSeen) {
+      briefSeen = true;
+      const text = squash(row.content);
+      if (brief && (text === brief || text.includes(brief))) return false;
+    }
+    return true;
+  });
 }

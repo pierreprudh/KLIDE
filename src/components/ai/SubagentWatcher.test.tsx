@@ -42,14 +42,22 @@ describe("SubagentPermissionCard", () => {
 });
 
 describe("SubagentWatchLine", () => {
-  it("says the child is asking, names the command, and stops the loader", () => {
-    const activity = subagentActivity([
-      { type: "run_started", runId: CHILD, mode: "goal", provider: "claude-code", model: "default", cwd: null, ts: 1 },
-      { type: "permission_requested", runId: CHILD, request, ts: 2 },
-    ]);
-    const html = renderToStaticMarkup(<SubagentWatchLine activity={activity} open={false} onToggle={() => {}} hasRows />);
+  const asking = subagentActivity([
+    { type: "run_started", runId: CHILD, mode: "goal", provider: "claude-code", model: "default", cwd: null, ts: 1 },
+    { type: "permission_requested", runId: CHILD, request, ts: 2 },
+  ]);
+
+  it("closed, says the child needs approval and stops the loader", () => {
+    const html = renderToStaticMarkup(<SubagentWatchLine activity={asking} open={false} onToggle={() => {}} hasRows />);
+    expect(html).toContain("Needs approval");
+    expect(html).not.toContain("klide-orbit-loader");
+    expect(html).not.toContain("thinking");
+  });
+
+  it("open, says the child is asking and names the command", () => {
+    const html = renderToStaticMarkup(<SubagentWatchLine activity={asking} open onToggle={() => {}} hasRows />);
     expect(html).toContain(">asking<");
     expect(html).toContain("git add hello.txt");
-    expect(html).not.toContain("thinking");
+    expect(html).not.toContain("klide-orbit-loader");
   });
 });

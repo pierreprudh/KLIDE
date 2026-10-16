@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../../agent/types";
-import { isWatchable, subagentActivity } from "./subagentWatch";
+import { childTranscriptRows, isWatchable, subagentActivity } from "./subagentWatch";
+import type { Msg } from "./types";
 
 /** Last element — `Array.prototype.at` is outside this project's lib target. */
 const last = <T,>(xs: T[]): T | undefined => xs[xs.length - 1];
@@ -275,4 +276,34 @@ it("still reads the transcript when live listener registration fails", async () 
   await vi.waitFor(() => expect(seen).toHaveLength(1));
   expect(seen[0]).toHaveLength(1);
   detach();
+});
+
+describe("childTranscriptRows", () => {
+  const task = "Create hello.txt containing exactly \"hi\". Commit it.";
+  const answer: Msg = { role: "assistant", content: "Done. `hello.txt` committed.\n\n**Branch:** x" };
+
+  it("drops the brief the row already shows, and the completion the panel draws as a card", () => {
+    const rows: Msg[] = [
+      { role: "user", content: "Create hello.txt   containing exactly \"hi\".\nCommit it." },
+      answer,
+      { role: "system", content: "Done. `hello.txt` committed.", completion: { runId: "c", completedAt: 1, outcome: "Done.", files: [], artifacts: [], commands: [], warnings: [] } },
+    ];
+    expect(childTranscriptRows(rows, task)).toEqual([answer]);
+  });
+
+  it("drops a first turn that wraps the brief, keeps a later user turn", () => {
+    const nudge: Msg = { role: "user", content: "Goal check failed — round 1 of 3. Try again." };
+    const rows: Msg[] = [
+      { role: "user", content: `You are the implementer. ${task} Report the branch.` },
+      answer,
+      nudge,
+      answer,
+    ];
+    expect(childTranscriptRows(rows, task)).toEqual([answer, nudge, answer]);
+  });
+
+  it("keeps a first turn that is not the brief", () => {
+    const other: Msg = { role: "user", content: "Something else entirely." };
+    expect(childTranscriptRows([other, answer], task)).toEqual([other, answer]);
+  });
 });
