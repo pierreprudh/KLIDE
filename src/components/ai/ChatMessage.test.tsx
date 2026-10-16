@@ -216,6 +216,22 @@ describe("a delegation row while the child works", () => {
     expect(html).toContain("View activity: Starting…");
   });
 
+  it("draws one loader while the child has no Run id yet: Starting…, not a second 'subagent working…'", () => {
+    const html = renderToStaticMarkup(
+      renderMessageBody(
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "claude-code", task: "Create hello.sh." } }],
+        },
+        false,
+        { results: new Map([["c0", { msg: { role: "tool", content: "Running spawn_subagent...", toolName: "spawn_subagent" }, active: true }]]) },
+      ),
+    );
+    expect(html).toContain("Starting…");
+    expect(html).not.toContain("subagent working…");
+  });
+
   it("keeps a background dispatch receipt behind the activity disclosure", () => {
     const receipt: AttachedResult = { msg: { role: "tool", content: "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", toolName: "spawn_subagent" }, active: false };
     const html = delegation(receipt);

@@ -615,9 +615,11 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
     ) : (
       <ToolCallDisclosure name={name} args={args} />
     );
-  // A watchable child owns its live status line; the tool placeholder would
-  // repeat the same running animation underneath it. Keep actual reports.
-  if (!result || (name === "spawn_subagent" && childRunId && /^(Running |Dispatched )/.test(result.msg.content))) return call;
+  // The delegation row owns its live status line — "Starting…" before the
+  // child has a Run id, the child's own activity after — so the tool
+  // placeholder would repeat the same running animation underneath it.
+  // Keep actual reports.
+  if (!result || (name === "spawn_subagent" && /^(Running |Dispatched )/.test(result.msg.content))) return call;
   return (
     <>
       {call}

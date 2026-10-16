@@ -17,6 +17,7 @@ import type {
   ProviderId,
 } from "./types";
 import type { Msg } from "../components/ai/types";
+import { groupToolRuns } from "../components/ai/toolRuns";
 
 // `foldAgentEvents` is the one place the AgentEvent wire format is turned into a
 // conversation, and both renderers sit on it: the AI panel through
@@ -745,6 +746,37 @@ describe("foldAgentEvents", () => {
     const rows = fold.rows();
     expect(rows.map((r) => r.kind)).toEqual(["steering", "assistant"]);
     expect(rows[1]).toMatchObject({ kind: "assistant", text: "pong" });
+  });
+
+  it("does not split tool work or draw internal turn-budget notices", () => {
+    const rows = foldAgentEvents([
+      assistantMessage("Checking", { toolCalls: [{ toolCallId: "c1", name: "get_git_status", input: {} }] }),
+      steered("Finalization reserve — 3 of 4 tool turns left"),
+      steered("Last of 4 tool turns — answering without tools"),
+      assistantMessage("Done"),
+    ]);
+    expect(rows.some((row) => row.kind === "steering")).toBe(false);
+    const messages = foldedToMsgs(rows);
+    expect(JSON.stringify(messages)).not.toContain("Finalization reserve");
+    expect(JSON.stringify(messages)).not.toContain("answering without tools");
+  });
+
+  it("keeps the calls either side of a turn-budget notice in one Worked-for fold", () => {
+    const messages = foldedToMsgs(foldAgentEvents([
+      userMessage("check the repo"),
+      assistantMessage("", { toolCalls: [{ toolCallId: "c1", name: "get_git_status", input: {} }] }),
+      toolStarted("c1", "get_git_status"),
+      toolFinished("c1", "clean"),
+      steered("Finalization reserve — 3 of 4 tool turns left"),
+      assistantMessage("", { toolCalls: [{ toolCallId: "c2", name: "read_file", input: { path: "README.md" } }] }),
+      toolStarted("c2", "read_file", { path: "README.md" }),
+      toolFinished("c2", "# test"),
+      steered("Last of 4 tool turns — answering without tools"),
+      assistantMessage("Done"),
+    ]));
+    const runs = groupToolRuns(messages);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].calls).toBe(2);
   });
 
   it("preserves compaction and steering as independent transcript annotations", () => {
