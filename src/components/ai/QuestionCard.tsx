@@ -70,12 +70,14 @@ function ChoiceMark({ option, index, choices }: { option: string; index: number;
 
 const DIGIT_CODES = ["Digit1", "Digit2", "Digit3", "Digit4"];
 
-/** The rows of a dispatch's model step: a Delegate leads with its own
- *  default and two more from its list; an API provider has no default, so
- *  its first three. The picker behind them offers the rest. */
+/** Dispatch shortcuts: a Delegate's default and two models, or an API
+ *  provider's first three. OpenCode's multi-provider catalog is browsed
+ *  directly rather than recommending arbitrary alphabetical entries. */
 export function dispatchModelRows(worker: ProviderId, models: string[], current?: string): string[] {
   const named = models.filter((m) => m && m !== "default");
-  const rows = isDelegateProvider(worker) ? ["default", ...named.slice(0, 2)] : named.slice(0, 3);
+  // OpenCode aggregates multiple providers. Alphabetical entries are not
+  // recommendations; offer its default and let the full catalog be browsed.
+  const rows = worker === "opencode" ? ["default"] : isDelegateProvider(worker) ? ["default", ...named.slice(0, 2)] : named.slice(0, 3);
   // The model the call named leads when it is not already among the rows, so
   // confirming Kit's choice is the first click, not a hunt through the picker.
   if (current && !rows.includes(current)) rows.unshift(current);
@@ -134,7 +136,7 @@ function DispatchPicker({ choices, onChoose, island }: { choices: QuestionChoice
       </button>
       <ChoiceRows
         key={worker}
-        choices={{ options: rows, moreModelsFrom: worker }}
+        choices={{ options: rows, moreModelsFrom: worker, kind: "dispatch" }}
         current={current}
         onChoose={(model) => onChoose(dispatchAnswer(worker, model))}
         island={island}
@@ -213,7 +215,7 @@ function ChoiceRows({ choices, onChoose, island, current }: { choices: QuestionC
         <div className="klide-choice-picker" style={{ display: "flex", alignItems: "center", gap: 10, padding: rowPad, minWidth: 0 }}>
           <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, borderRadius: "50%", border: "1px dashed var(--border-strong)" }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <ModelPicker provider={provider} model="" availableModels={models} onChange={onChoose} direction="up" fluid bareHover placeholder="Another model…" />
+            <ModelPicker provider={provider} model="" availableModels={models} onChange={onChoose} direction="up" fluid bareHover catalogOnly={choices.kind === "dispatch"} placeholder={choices.kind === "dispatch" ? "Browse all models…" : "Another model…"} />
           </div>
         </div>
       )}

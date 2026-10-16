@@ -735,6 +735,12 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     }
 
     if (event.type === "steering_injected") {
+      // Budget bookkeeping stays in the event log. It is not a new speaker
+      // or a response boundary, and must not split one stretch of tool work.
+      if (/^Finalization reserve — \d+ of \d+ tool turns left$/.test(event.reason)
+        || /^Last of \d+ tool turns — answering without tools$/.test(event.reason)) {
+        return { changed: [] };
+      }
       // A marker that lands before the turn has said anything — an agent
       // message delivered at the turn boundary is the usual case — goes
       // *above* the still-empty open row, which then receives the turn's

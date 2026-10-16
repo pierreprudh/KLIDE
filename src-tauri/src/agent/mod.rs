@@ -638,7 +638,10 @@ impl RunSupervisor for TauriSupervisor {
     }
 
     fn watch_worker(&self, run_id: &str, child_id: &str, request: &StartRunRequest) {
-        observers::watch(self.app.clone(), run_id.into(), observers::Followup::Worker(child_id.into()), request.clone());
+        let followup = observers::Followup::Worker(child_id.into());
+        let mut request = request.clone();
+        followup.adopt_live_policy(self, run_id, &mut request);
+        observers::watch(self.app.clone(), run_id.into(), followup, request);
     }
 
     fn note_terminal(&self, run_id: &str, provider: &str, model: &str, failed: bool) {
@@ -2559,18 +2562,15 @@ async fn loop_body(
         // them, exactly once — unless the turn is on full auto: a completion is
         // command output, and it never rides a turn that runs commands unasked.
         // It stays pending for the observer's own Plan follow-up.
-        // A background worker's report is agent prose and follows the same
-        // rule: first boundary, never a full-auto turn.
+        // Worker reports resume delegated work under the conversation's
+        // selected policy, including full auto. They remain fenced as data.
         let (completions, worker_reports) = if turn == 0 {
             let full_auto = with_run_handle(sup, &id, |h| {
                 h.subject.full_auto(h.trust.commands_policy())
             })
             .unwrap_or(true);
-            if full_auto {
-                (Vec::new(), Vec::new())
-            } else {
-                (background::completions(&id), workers::completions(&id))
-            }
+            let shells = if full_auto { Vec::new() } else { background::completions(&id) };
+            (shells, workers::completions(&id))
         } else {
             (Vec::new(), Vec::new())
         };
@@ -6364,7 +6364,7 @@ mod run_loop_tests {
 
     /// A background worker's report rides the same door as an observer
     /// completion: delivered once, fenced, at the first boundary of a turn
-    /// that is not on full auto; recorded as a background `SubagentResolved`
+    /// under the selected policy; recorded as a background `SubagentResolved`
     /// that opens a response of its own.
     #[tokio::test]
     async fn a_worker_report_becomes_a_separate_turn_without_a_fake_user_message() {
@@ -6406,6 +6406,94 @@ mod run_loop_tests {
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller).await;
         assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|e| matches!(e, AgentEvent::SubagentResolved { .. })).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_full_auto_worker_followup_delivers_the_report_and_runs_commands() {
+        let (runs_dir, root) = sandbox("worker-full-auto");
+        let id = "worker-full-auto";
+        let child = "sub_worker-full-auto_c1";
+        let mut request = test_request(&root, &[]);
+        request.auto_approve_commands = Some(true);
+        request.initial_text.clear();
+        workers::register(id, child, "OpenCode", "implementer", None, None);
+        workers::settle(id, child, true, "Implementation is committed.".into(), None);
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Checking the result.", vec![scripted_tool_call("verify", "run_command", serde_json::json!({"command": "printf worker-followup-command-ok"}))]),
+            scripted_turn("Verified.", vec![]),
+        ]);
+        tokio::time::timeout(std::time::Duration::from_secs(10),
+            drive_loop(Arc::new(FakeSupervisor::for_request(id, &request)), &runs_dir, id, request, caller.clone())
+        ).await.expect("full-auto followup must not wait for manual command approval");
+        let seen = caller.seen_messages.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].iter().any(|message| message.to_string().contains("Implementation is committed.")));
+        assert!(seen[1].iter().any(|message| message["role"] == "tool" && message.to_string().contains("worker-followup-command-ok")));
+        drop(seen);
+        assert!(workers::completions(id).is_empty(), "the report is acknowledged even on full auto");
+        assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|event| matches!(event, AgentEvent::SubagentResolved { .. })).count(), 1);
+        workers::release(id);
+    }
+
+    /// Test 2: the same follow-up on the review rung still stops at the card.
+    #[tokio::test]
+    async fn a_review_worker_followup_delivers_the_report_and_still_asks_before_a_command() {
+        let (runs_dir, root) = sandbox("worker-review");
+        let id = "worker-review";
+        let child = "sub_worker-review_c1";
+        let mut request = test_request(&root, &[]);
+        request.auto_approve_commands = Some(false);
+        request.initial_text.clear();
+        workers::register(id, child, "Claude Code", "implementer", None, None);
+        workers::settle(id, child, true, "hello2.sh is committed.".into(), None);
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Checking the result.", vec![scripted_tool_call("verify", "run_command", serde_json::json!({"command": "printf worker-review-command-ran"}))]),
+            scripted_turn("You declined the check.", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::for_request(id, &request));
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(
+                drive_loop(sup.clone(), &runs_dir, id, request, caller.clone()),
+                answer_permission(&sup, id, r#"{"behavior":"deny"}"#),
+            )
+        }).await.expect("the follow-up asks, and settles once answered");
+        let seen = caller.seen_messages.lock().unwrap();
+        assert!(seen[0].iter().any(|message| message.to_string().contains("hello2.sh is committed.")));
+        let tool = seen[1].iter().find(|message| message["role"] == "tool").expect("the check's result").to_string();
+        assert!(tool.contains("command not run") && !tool.contains("worker-review-command-ran"), "{tool}");
+        drop(seen);
+        let events = read_events(&runs_dir, id).unwrap();
+        assert_eq!(events.iter().filter(|event| matches!(event, AgentEvent::PermissionRequested { .. })).count(), 1);
+        assert_eq!(events.iter().filter(|event| matches!(event, AgentEvent::SubagentResolved { .. })).count(), 1);
+        workers::release(id);
+    }
+
+    /// Test 4: one full-auto boundary with both pending. The worker's report
+    /// rides it; the shell's completion is left to its own Plan follow-up.
+    #[tokio::test]
+    async fn a_full_auto_boundary_takes_the_worker_report_and_leaves_the_shell() {
+        let (runs_dir, root) = sandbox("worker-and-shell");
+        let id = "worker-and-shell";
+        let child = "sub_worker-and-shell_c1";
+        let shell = background::spawn_observer(id, &root, "printf shell-done").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while background::completions(id).is_empty() { tokio::time::sleep(std::time::Duration::from_millis(10)).await; }
+        }).await.unwrap();
+        workers::register(id, child, "OpenCode", "implementer", None, None);
+        workers::settle(id, child, true, "Worker finished.".into(), None);
+        let mut request = test_request(&root, &[]);
+        request.auto_approve_commands = Some(true);
+        request.initial_text.clear();
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Read the report.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::for_request(id, &request)), &runs_dir, id, request, caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap().clone();
+        let first = serde_json::to_string(&seen[0]).unwrap();
+        assert!(first.contains("Worker finished."), "the worker's report rides the full-auto turn");
+        assert!(!first.contains("shell-done"), "the shell's output never does");
+        assert!(workers::completions(id).is_empty());
+        assert!(background::notification_pending(id, &shell.id), "the shell's own Plan follow-up still owes it");
+        let _ = background::stop_observer(id, &shell.id);
+        workers::release(id);
     }
 
     #[tokio::test]

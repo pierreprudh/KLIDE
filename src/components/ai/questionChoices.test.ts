@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { choiceLabel, dispatchAnswer, dispatchModelRows } from "./QuestionCard";
 
 describe("dispatchModelRows", () => {
+  it("does not present the first alphabetical OpenCode models as recommendations", () => {
+    const models = ["ollama/gemma4:12b", "ollama/qwen3.5:9b", "opencode/ll-alpha-free"];
+    expect(dispatchModelRows("opencode", models)).toEqual(["default"]);
+    expect(dispatchModelRows("opencode", models, "opencode/ll-alpha-free")).toEqual(["opencode/ll-alpha-free", "default"]);
+  });
   it("leads a Delegate with its own default and two of its models", () => {
     expect(dispatchModelRows("codex", ["gpt-5.4", "gpt-5.5-codex", "o5"])).toEqual(["default", "gpt-5.4", "gpt-5.5-codex"]);
     expect(dispatchModelRows("claude-code", [])).toEqual(["default"]);
