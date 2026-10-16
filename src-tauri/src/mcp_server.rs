@@ -126,6 +126,10 @@ impl Bridge for HttpBridge {
 /// publishes its result at settle.
 pub fn tool_list() -> Value {
     let mut tools = vec![crate::missions::orchestration::tool()];
+    for tool in crate::agent::tools::list_tools(&crate::agent::types::AgentMode::Plan)
+        .into_iter().filter(|t| matches!(t["function"]["name"].as_str(), Some("memory_search" | "memory_read"))) {
+        tools.push(json!({ "name": tool["function"]["name"], "description": tool["function"]["description"], "inputSchema": tool["function"]["parameters"] }));
+    }
     let skill = crate::agent::tools::list_tools(&crate::agent::types::AgentMode::Plan)
         .into_iter().find(|tool| tool["function"]["name"] == "read_skill")
         .expect("read_skill is registered");
@@ -181,6 +185,8 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, String> {
     let timeout = args.get("timeoutSeconds").and_then(Value::as_u64);
     match name {
+        "memory_search" => Ok(BridgeRequest::MemorySearch { input: args.clone() }),
+        "memory_read" => Ok(BridgeRequest::MemoryRead { input: args.clone() }),
         "read_skill" => Ok(BridgeRequest::ReadSkill {
             command: str_arg(args, "command").ok_or("read_skill requires command.")?,
         }),
@@ -400,6 +406,19 @@ pub fn serve_main() -> ! {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn memory_catalog_matches_native_tools_and_has_no_publication_tool() {
+        use super::*;
+        let tools = tool_list();
+        for name in ["memory_search", "memory_read"] {
+            let native = crate::agent::tools::list_tools(&crate::agent::types::AgentMode::Plan)
+                .into_iter().find(|t| t["function"]["name"] == name).unwrap();
+            let mcp = tools.as_array().unwrap().iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(mcp["inputSchema"], native["function"]["parameters"]);
+        }
+        assert!(bridge_request_for("memory_write", &json!({})).is_err());
+        assert!(matches!(bridge_request_for("memory_read", &json!({"memoryId":"abc"})).unwrap(), crate::coordination_bridge::BridgeRequest::MemoryRead { .. }));
+    }
     use super::*;
     use std::sync::Mutex;
 
@@ -519,7 +538,7 @@ mod tests {
         // looks the prompt tool up on tools/list like any other.
         assert_eq!(
             names,
-            ["mission_orchestrate", "read_skill", "permission", "agent_list", "agent_send", "agent_wait", "agent_cancel", "agent_read_result", "agent_publish_result"]
+            ["mission_orchestrate", "memory_search", "memory_read", "read_skill", "permission", "agent_list", "agent_send", "agent_wait", "agent_cancel", "agent_read_result", "agent_publish_result"]
         );
     }
 
@@ -783,7 +802,7 @@ mod chain {
         // What a CLI asks before it will call anything.
         let listed =
             handle_message(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &bridge).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 9);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 11);
 
         // agent_list sees the Harness peer under its thread title, and itself.
         let reply = handle_message(

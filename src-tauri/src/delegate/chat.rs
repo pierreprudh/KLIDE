@@ -219,12 +219,21 @@ pub async fn run_subscription_chat(
     if let (Some(k), Some(seed)) = (key.as_deref(), delegate_session.as_deref()) {
         if routed_source.is_none() { seed_session(k, seed); }
     }
+    let base_spec = ChatSpec {
+        model,
+        effort: effort.as_deref(),
+        resume: None,
+        mcp: mcp.as_ref(),
+        allowed_commands: &allowed_commands,
+    };
+    let uses_acp = adapter.uses_acp(&base_spec);
+    let resumable = adapter.resumes_sessions() && (adapter.id() != "hermes" || uses_acp);
     // Resume only when this adapter actually honours the id — claiming to and
     // then ignoring it would silently drop every earlier turn, since a resuming
     // turn deliberately sends just the newest message.
     let resume = key
         .as_deref()
-        .filter(|_| adapter.resumes_sessions())
+        .filter(|_| resumable)
         .and_then(remembered_session)
         // A resumed session already holds the history, so re-sending it would
         // say everything twice. Send what is new — and if there is no new user
@@ -259,13 +268,26 @@ pub async fn run_subscription_chat(
     // reports an answer with no visible work behind it, and a delegate's work
     // is most of what the user wants to see.
     let spec = ChatSpec {
-        model,
-        effort: effort.as_deref(),
         resume: resume.as_deref(),
-        mcp: mcp.as_ref(),
-        allowed_commands: &allowed_commands,
+        ..base_spec
     };
-    let content = match adapter.chat_stream_invocation(&cwd, &spec) {
+    if adapter.id() == "hermes" && !uses_acp {
+        // A legacy effort turn receives the full transcript. Its changes must
+        // also reach the next ACP session rather than resume stale history.
+        if let Some(key) = key.as_deref() { forget_session(key); }
+    }
+    let content = if uses_acp {
+        let emitted = AtomicBool::new(false);
+        // No cold retry after an ACP prompt: tools may already have changed
+        // files even if the transport failed before an event arrived.
+        match super::hermes_acp::run(adapter, &spec, &cwd, prompt, key.as_deref(), &emitted, on_chunk).await {
+            Ok(answer) => answer,
+            Err(error) => {
+                if let Some(key) = key.as_deref() { forget_session(key); }
+                return Err(error);
+            }
+        }
+    } else { match adapter.chat_stream_invocation(&cwd, &spec) {
         Some(command) => {
             let emitted = AtomicBool::new(false);
             match run_stream_turn(
@@ -326,7 +348,7 @@ pub async fn run_subscription_chat(
         )
             .await?
         }
-    };
+    }};
     // The session has now seen the current instructions — whether folded into
     // a cold start, carried on this resumed turn, or unchanged since last time.
     if let Some(key) = key.as_deref() {
@@ -995,4 +1017,37 @@ mod tests {
         assert!(emitted.load(Ordering::Relaxed));
         assert_eq!(emitter.finish(), Err("Global regions required".into()));
     }
+}
+
+#[cfg(test)]
+#[tokio::test]
+#[ignore = "Installed Hermes ACP with a local mock endpoint; run scripts/hermes-acp-smoke.py"]
+async fn installed_hermes_acp_streams_tools_and_resumes() {
+    let root = std::env::var("KLIDE_HERMES_SMOKE_ROOT").expect("Use scripts/hermes-acp-smoke.py");
+    let chunks = std::sync::Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let sink = chunks.clone();
+    let channel = Channel::new(move |body| {
+        if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+            sink.lock().unwrap().push(serde_json::from_str(&json).unwrap());
+        }
+        Ok(())
+    });
+    let model = r#"hermes-source:{"provider":"openai","model":"mock-acp"}"#;
+    let id = "installed-hermes-acp-smoke";
+    let first = run_subscription_chat(&super::HERMES, "Hermes", model.into(), None,
+        vec![serde_json::json!({"role":"user","content":"Read note.txt and report its contents."})],
+        Some(root.clone()), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+    assert!(first.content.contains("acp-smoke-ok"), "{}", first.content);
+    let remembered = remembered_session(&session_key(id, "hermes")).expect("ACP session recorded");
+    {
+        let chunks = chunks.lock().unwrap();
+        assert!(chunks.iter().any(|c| c["observed"].get("input").is_some()),
+            "No tool call observed: {chunks:?}");
+    }
+    let second = run_subscription_chat(&super::HERMES, "Hermes", model.into(), None,
+        vec![serde_json::json!({"role":"user","content":"Continue the same conversation."})],
+        Some(root), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+    assert!(second.content.contains("acp-resume-ok"), "{}", second.content);
+    assert_eq!(remembered_session(&session_key(id, "hermes")).as_deref(), Some(remembered.as_str()));
+    forget_session(&session_key(id, "hermes"));
 }

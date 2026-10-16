@@ -137,6 +137,8 @@ pub type SessionMap = Arc<Mutex<HashMap<String, BridgeSession>>>;
 pub enum BridgeRequest {
     List,
     ReadSkill { command: String },
+    MemorySearch { input: serde_json::Value },
+    MemoryRead { input: serde_json::Value },
     Cancel {
         run_id: String,
         #[serde(default)]
@@ -338,7 +340,16 @@ fn execute_inner(
 ) -> Result<serde_json::Value, String> {
     let root = session.workspace_root.as_str();
     let me = session.run_id.as_str();
+    let memory_tool = if matches!(&request, BridgeRequest::MemoryRead { .. }) { "memory_read" } else { "memory_search" };
     let operation = match request {
+        BridgeRequest::MemorySearch { input } | BridgeRequest::MemoryRead { input } => {
+            // Identity and workspace come from the authenticated session. Reuse
+            // the native registry's validation, inactive policy and provenance.
+            let result = crate::agent::tools::execute_read_only_tool(root,
+                &crate::agent::tools::NormalizedToolCall { id: "delegate-memory".into(), name: memory_tool.into(), input }, me);
+            if !result.ok { return Err(result.content); }
+            return Ok(serde_json::json!({ "text": result.content, "metadata": result.metadata }));
+        }
         BridgeRequest::ReadSkill { command } => {
             return crate::agent::skill_resources::read(me, &command)
                 .map(|text| serde_json::json!({ "text": text }));
@@ -1063,6 +1074,29 @@ mod tests {
         .unwrap();
         let session = bridge.session("convo-1:claude-code").unwrap();
         (store, bridge, session)
+    }
+
+    #[test]
+    fn delegate_memory_uses_native_recall_and_refuses_path_traversal() {
+        let (dir, root) = sandbox("memory-recall");
+        let (store, _, session) = bound(&root);
+        let input = serde_json::from_value(serde_json::json!({
+            "title":"Parser convention", "notes":"Parser returns typed errors", "kind":"convention"
+        })).unwrap();
+        let entry = crate::memory::write_memory(root.clone(), input).unwrap();
+        let search = execute_inner(&store, &BridgeHooks::silent(), &session,
+            BridgeRequest::MemorySearch { input: serde_json::json!({"query":"Parser"}) }).unwrap();
+        assert_eq!(search["metadata"]["hits"][0]["entry"]["id"], entry.id);
+        assert!(search["metadata"]["hits"][0]["entry"].get("path").is_none());
+        let read = execute_inner(&store, &BridgeHooks::silent(), &session,
+            BridgeRequest::MemoryRead { input: serde_json::json!({"memoryId":entry.id}) }).unwrap();
+        assert!(read["text"].as_str().unwrap().contains("typed errors"));
+        assert!(execute_inner(&store, &BridgeHooks::silent(), &session,
+            BridgeRequest::MemoryRead { input: serde_json::json!({"memoryId":"../../outside"}) }).is_err());
+        // The operation decides the tool, never the shape of untrusted input.
+        assert!(execute_inner(&store, &BridgeHooks::silent(), &session,
+            BridgeRequest::MemoryRead { input: serde_json::json!({"query":"Parser"}) }).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

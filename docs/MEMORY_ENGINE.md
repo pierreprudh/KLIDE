@@ -100,6 +100,13 @@ user request. Token counts are estimates, not tokenizer-enforced limits.
 
 ### PR 3 — Embedded MCP server
 
+Shipped read slice: `memory_search` and `memory_read` are exposed on the existing
+`klide mcp coordination` server, through the authenticated Workspace-bound bridge.
+They reuse native schemas, execution, inactive filtering and provenance. Hermes
+ACP Focus turns receive session-specific wiring alongside existing supported
+Delegates. Resource subscriptions and a separate `klide mcp memory` entry point
+remain planned; no MCP publication operation is exposed.
+
 - add `klide mcp memory` over stdio;
 - expose the same `memory_search` and `memory_read` domain operations;
 - register the server per Delegate adapter without global configuration drift;

@@ -101,7 +101,7 @@ A model that cannot call tools collapses to a tool-less chat. `Tab` toggles the 
 | **Editor and shell** | Monaco editor with eight themes, file explorer, tabs, search, command palette, Git review, commit graph, and persistent PTY terminals |
 | **Workspace surfaces** | Welcome, Focus, and the Workbench with anchored, free-floating, fixed-preset, and freeform-grid layouts |
 | **Models** | Ollama, MLX, llama.cpp, Llama app, LM Studio, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, OpenAI-compatible endpoints, about forty more behind the opencodex gateway, and `auto`, which picks a rung from the task shape and each keyed provider's ladder, resolved once in Rust at run start with the reasoning recorded on the run |
-| **Delegate CLIs** | Claude Code, Codex, and OpenCode (1 and 2) in persistent PTYs or as streaming Focus turns, with imported history, structured tool events, per-session MCP wiring, and account switching; Oh My Pi with imported history, streaming Focus turns but no MCP wiring yet; Hermes, Amp, Cursor, Factory, and custom CLIs in terminal sessions, Mission dispatch, and plain-text Focus turns; each CLI's own `/` commands in the composer, reasoning effort, `/config` drawn as a settings card, version and updater per CLI, and per-login usage in the account menu |
+| **Delegate CLIs** | Claude Code, Codex, and OpenCode (1 and 2) in persistent PTYs or as streaming Focus turns, with imported history, structured tool events, per-session MCP wiring, and account switching; Oh My Pi with imported history, streaming Focus turns but no MCP wiring yet; Hermes with ACP streaming Focus turns, observed tool activity, permission prompts, session continuity, and session-specific MCP (explicit reasoning effort retains the CLI path); Amp, Cursor, Factory, and custom CLIs in terminal sessions, Mission dispatch, and plain-text Focus turns; each CLI's own `/` commands in the composer, reasoning effort, `/config` drawn as a settings card, version and updater per CLI, and per-login usage in the account menu |
 | **Sight** | A model without image support borrows another model's eyes: a dropped photo is described by a vision model, local-first, with the description and its attribution kept in the conversation |
 | **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, image and document attachments, skills, dynamic tools, search over previous conversations, native recall over reviewed Project Memory with provenance, lessons proposed for review after meaningful work, and `html` / `svg` visuals drawn in the answer |
 | **From other apps** | `klide://` links open a pre-filled conversation, a file at a line, a project, or resume a CLI session; Ask Kit in the macOS Services menu sends selected text to a new conversation; a `/klide` skill lets Claude Code, Codex, OpenCode, or Oh My Pi hand its own session to Klide, and Kit can open one of theirs |
@@ -204,10 +204,12 @@ Switching the setup does not start or stop a server or change existing conversat
 Hermes (`hermes`), Amp (`amp`), Cursor (`cursor-agent`), and Factory (`droid`)
 also appear in Settings → Subscription and the agent pickers; an installed CLI
 sorts first and a missing one is dimmed. Install and configure each CLI with its
-own setup flow. Klide runs these four in interactive terminal sessions, one-shot
-Mission dispatch, and plain-text Focus turns; they have no imported CLI history,
-structured tool events, per-session MCP wiring, or account switching yet, and
-Amp manages model selection itself. Hermes, like Claude Code, Codex, and
+own setup flow. All four support interactive terminal sessions and one-shot
+Mission dispatch. Hermes Focus turns use ACP for streamed answers, observed tools,
+permission prompts, session continuity, and session-specific MCP. Explicit
+reasoning-effort selections retain the plain-text CLI path; imported CLI history
+and account switching remain unsupported. Amp, Cursor, and Factory retain
+plain-text Focus turns; Amp manages model selection itself. Hermes, like Claude Code, Codex, and
 OpenCode, can run on any intelligence source Klide knows — see the feature table
 — and Settings → Subscription → Hermes API setup holds its configured default.
 DeepSeek is a native API provider using `DEEPSEEK_API_KEY`. Official setup links
@@ -304,7 +306,7 @@ Klide separates the interface from the durable execution layer:
 The Rust harness checks capabilities when it advertises tools and again before execution. Writes pause for diff review. Commands and network access pause for permission.
 
 Read the [Harness contract](./docs/HARNESS_CONTRACT.md) for the trust model and [Harness schema](./docs/KLIDE_HARNESS_SCHEMA.md) for the tool interface.
-The [Memory Engine](./docs/MEMORY_ENGINE.md) and [Project Memory schema](./docs/KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its future embedded-MCP boundary.
+The [Memory Engine](./docs/MEMORY_ENGINE.md) and [Project Memory schema](./docs/KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its authenticated MCP search/read boundary for supported Delegates.
 The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordination schemas](./docs/KLIDE_COORDINATION_SCHEMA.md) define stable Run addressing, durable envelopes, replay, and the shared adapter boundary for native agents and Delegates.
 
 ## Project status

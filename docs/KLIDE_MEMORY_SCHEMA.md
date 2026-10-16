@@ -152,8 +152,18 @@ paths never create the directory; only `memory_write` does.
 
 ## MCP mapping
 
-The embedded MCP adapter planned for its dedicated slice must reuse these functions
-and schemas:
+The embedded `klide mcp coordination` server exposes `memory_search` and
+`memory_read` using the native Tool schemas and dispatch functions. The bridge
+binds the Workspace to the authenticated Delegate session. The MCP client cannot
+choose a filesystem root or publish memory. Recall preserves provenance and the
+native inactive-entry policy, and removes absolute entry paths.
+
+Hermes Focus turns receive this server through ACP's session-specific
+`mcpServers`. Claude Code, Codex and OpenCode receive it through their existing
+per-session wiring. Hermes terminal sessions and explicit-reasoning CLI turns
+do not yet consume this ACP wiring.
+
+The broader resource mapping remains planned:
 
 | Klide domain | MCP primitive |
 |---|---|

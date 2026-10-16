@@ -13,6 +13,7 @@
 // provided method does the assembly once.
 
 mod additional;
+mod hermes_acp;
 pub use additional::{AMP, CURSOR, FACTORY, HERMES};
 mod chat;
 mod chat_server;
@@ -134,6 +135,8 @@ pub struct McpWiring {
 }
 
 pub trait Delegate: Sync {
+    /// A bidirectional ACP turn, rather than a one-way stdout stream.
+    fn uses_acp(&self, _spec: &ChatSpec) -> bool { false }
     /// Klide's provider id for this delegate, e.g. "claude-code". This is the
     /// `source` field on every Run the adapter parses.
     fn id(&self) -> &'static str;

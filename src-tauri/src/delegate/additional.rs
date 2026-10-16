@@ -1,5 +1,5 @@
-//! CLI launch adapters. Imported session history and per-session MCP wiring
-//! remain unsupported until their storage and configuration formats are pinned.
+//! CLI launch adapters. Hermes Focus turns use ACP with session-scoped MCP;
+//! terminal history import remains unsupported for these adapters.
 use super::{shell_quote, AgentRun, Delegate, Env, RunCandidate, RunMessage, RunParser};
 
 pub struct CliDelegate {
@@ -36,6 +36,23 @@ impl RunParser for NoHistory {
 }
 
 impl Delegate for CliDelegate {
+    fn uses_acp(&self, spec: &super::ChatSpec) -> bool {
+        // Hermes ACP currently has no reasoning-effort setter. Preserve the
+        // existing CLI path for explicit effort rather than silently drop it.
+        self.id == "hermes" && spec.effort.is_none()
+            && !spec.model.starts_with(crate::harness_source::PREFIX)
+    }
+    fn resumes_sessions(&self) -> bool { self.id == "hermes" }
+    fn mcp_wiring(&self, spec: &super::McpServerSpec) -> Option<super::McpWiring> {
+        if self.id != "hermes" { return None; }
+        Some(super::McpWiring {
+            env: vec![(super::hermes_acp::MCP_ENV.into(), serde_json::json!([{
+                "name": "klide", "command": spec.command, "args": spec.args,
+                "env": spec.env_pairs().into_iter().map(|(name, value)| serde_json::json!({"name":name,"value":value})).collect::<Vec<_>>()
+            }]).to_string())],
+            ..Default::default()
+        })
+    }
     fn id(&self) -> &'static str {
         self.id
     }
@@ -224,6 +241,22 @@ impl Delegate for CliDelegate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hermes_acp_keeps_effort_turns_on_the_compatible_transport() {
+        let spec = super::super::ChatSpec { model: "", effort: None, resume: None, mcp: None, allowed_commands: &[] };
+        assert!(HERMES.uses_acp(&spec));
+        assert!(!AMP.uses_acp(&spec));
+        assert!(!HERMES.uses_acp(&super::super::ChatSpec { effort: Some("high"), ..spec }));
+        let wiring = HERMES.mcp_wiring(&super::super::McpServerSpec {
+            command:"/app/klide".into(), args:vec!["mcp".into(), "coordination".into()],
+            endpoint_path:"/tmp/endpoint".into(), session_id:"conversation:hermes".into(), secret_path:"/tmp/secret-file".into(),
+            config_dir:"/tmp".into(), file_stem:"hermes".into(),
+        }).unwrap();
+        let servers: serde_json::Value = serde_json::from_str(&wiring.env[0].1).unwrap();
+        assert_eq!(servers[0]["name"], "klide");
+        assert_eq!(servers[0]["env"][2]["value"], "/tmp/secret-file");
+        assert!(wiring.args.is_empty() && wiring.files.is_empty());
+    }
     #[test]
     fn launches_use_cli_defaults_and_quote_prompts() {
         for d in [&AMP, &CURSOR, &FACTORY, &HERMES] {
