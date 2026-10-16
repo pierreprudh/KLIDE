@@ -70,6 +70,41 @@ export function visibleProse(m: Extract<Msg, { role: "assistant" }>): string {
   return content.trim();
 }
 
+/** Everything a turn thought, however it arrived — the structured field, an
+ *  inline <think> leak, or the plan-JSON fallback. */
+function thoughtText(m: Extract<Msg, { role: "assistant" }>): string {
+  if (m.thinking) return m.thinking;
+  const { thinking: inline, content } = splitThinking(m.content);
+  return inline || stripPlanJson(content).thinking || "";
+}
+
+/** Filler a thought opens with before it says anything. */
+const THOUGHT_FILLER = /^(ok(ay)?|hmm+|wait|so|alright|right|let me think|thinking)[\s.,!…:-]*$/i;
+
+/** The sentence a reasoning model would have written before its call, lifted
+ *  from what it thought instead: the first paragraph that says something,
+ *  two sentences at most, markdown furniture off, cut at a word past 240
+ *  characters. The first paragraph rather than the last because it is where
+ *  the model reads the last result and decides ("The README is Klide's own
+ *  — let me look under artifacts/"); the last is usually "Let me run it." */
+export function thoughtGist(thinking: string): string {
+  const paragraphs = thinking
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/^\s*(#{1,6}\s+|[-*•]\s+|\d+[.)]\s+)/gm, "").replace(/\*\*|__/g, "").replace(/\s+/g, " ").trim())
+    .filter((p) => p && !THOUGHT_FILLER.test(p));
+  const first = paragraphs[0];
+  if (!first) return "";
+  // A sentence ends at punctuation followed by space or the end — a dot
+  // inside a name (`slugify.js`, `README.md`) is not an end.
+  const sentences = first.match(/.+?[.!?]+["')\]]*(?=\s|$)|.+$/g) ?? [first];
+  let gist = sentences.slice(0, 2).join("").trim();
+  if (gist.length > 240) {
+    const cut = gist.slice(0, 239);
+    gist = cut.slice(0, Math.max(cut.lastIndexOf(" "), 160)).trimEnd() + "…";
+  }
+  return gist;
+}
+
 function hasThinking(m: Msg): boolean {
   if (m.role !== "assistant") return false;
   if (m.thinking) return true;
@@ -257,13 +292,19 @@ export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs"
 // what the model is doing — the sentence it wrote before a call, the next
 // sentence after — and the calls between are machinery: finished, they are
 // one quiet line ("Read files, searched files"); the one running is one
-// line too ("Running curl …"). Thinking folds away with the rows. When the
+// line too ("Running curl …"). Thinking folds away with the rows, except
+// that a turn which said nothing lends the gist of its thought to the slot
+// its sentence would have had — a reasoning model narrates there. When the
 // answer lands the whole run folds to "Worked for" and a click gives every
 // row back (`groupToolRuns` / `ToolRunRow`); this digest is only for the
 // time before that.
 
 export type LiveStep =
   | { kind: "prose"; index: number }
+  /** A turn that said nothing and went straight to its calls: the sentence
+   *  it would have written is in its thinking, and its gist stands where
+   *  the sentence would (`thoughtGist`). */
+  | { kind: "thought"; index: number; text: string }
   | {
       kind: "work";
       /** Distinct tool names, in first-appearance order. */
@@ -296,6 +337,14 @@ export function liveWorkSteps(msgs: Msg[], start: number, end: number, pairing: 
       if (visibleProse(m) !== "") {
         flush();
         steps.push({ kind: "prose", index: i });
+      } else if (m.toolCalls?.length) {
+        // Only once the turn has settled on its calls: a thought still
+        // streaming changes with every token, and would be read mid-word.
+        const gist = thoughtGist(thoughtText(m));
+        if (gist) {
+          flush();
+          steps.push({ kind: "thought", index: i, text: gist });
+        }
       }
       const results = pairing.byCall.get(i);
       (m.toolCalls ?? []).forEach((call, index) => {

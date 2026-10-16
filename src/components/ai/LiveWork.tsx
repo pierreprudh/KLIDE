@@ -4,7 +4,9 @@
 // model wrote before a call, the next sentence after. The calls between are
 // one quiet line each stretch — "Read files, searched files" once they are
 // done, "Running curl …" while one is — and the thinking folds away with the
-// rows. Nothing here is a second drawing of a tool row: when the answer
+// rows, except that a turn which said nothing shows the gist of its thought
+// where its sentence would be, one shade quieter: a thought, not a reply.
+// Nothing here is a second drawing of a tool row: when the answer
 // lands the run folds to "Worked for" and a click gives the real rows back.
 // The rule for what shows is `liveWorkSteps` (toolRuns.ts); this only draws.
 
@@ -30,6 +32,13 @@ export function LiveWork({ msgs, start, end, pairing }: { msgs: Msg[]; start: nu
               <div key={step.index} style={{ margin: "6px 0", fontSize: 14, lineHeight: 1.6 }}>
                 {renderMarkdown(visibleProse(m), { streaming, visuals: true })}
                 {streaming && <span className="ai-caret" />}
+              </div>
+            );
+          }
+          if (step.kind === "thought") {
+            return (
+              <div key={`thought-${step.index}`} style={{ margin: "6px 0", fontSize: 14, lineHeight: 1.6, color: "var(--fg-subtle)" }}>
+                {renderMarkdown(step.text)}
               </div>
             );
           }

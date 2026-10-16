@@ -324,3 +324,30 @@ describe("a sentence still arriving stays in the run", () => {
     expect(groupToolRuns([asks("go"), says("Just an answer.")], undefined, { streaming: 1 })).toEqual([]);
   });
 });
+
+import { thoughtGist } from "./toolRuns";
+
+describe("a turn that said nothing shows its thought's gist where the sentence would be", () => {
+  it("lifts the first paragraph that says something, two sentences at most, dots inside names kept", () => {
+    const thought = "Okay.\n\nThe README is Klide's own — it says nothing about slugify.js. Let me look for a spec under artifacts/. Maybe the fixture has one.\n\nLet me be efficient: grep and peek together.";
+    expect(thoughtGist(thought)).toBe("The README is Klide's own — it says nothing about slugify.js. Let me look for a spec under artifacts/.");
+  });
+
+  it("takes markdown furniture off, caps a long paragraph at a word, and is empty for filler alone", () => {
+    expect(thoughtGist("- **Read** the file first.")).toBe("Read the file first.");
+    const gist = thoughtGist("word ".repeat(80).trim() + ".");
+    expect(gist.length).toBeLessThanOrEqual(240);
+    expect(gist.endsWith("…")).toBe(true);
+    expect(thoughtGist("Hmm.\n\nWait")).toBe("");
+  });
+
+  it("a settled thinking-only turn is a thought step before its work; a thought still streaming is not read", () => {
+    const quiet: Msg = { role: "assistant", content: "", thinking: "Let me read the README. Then the tests.", toolCalls: [{ name: "read_file", args: {} }] };
+    expect(liveWorkSteps([quiet, result("read_file")], 0, 2)).toEqual([
+      { kind: "thought", index: 0, text: "Let me read the README. Then the tests." },
+      { kind: "work", names: ["read_file"], calls: 1 },
+    ]);
+    const streamingThought: Msg = { role: "assistant", content: "", thinking: "Still deciding" };
+    expect(liveWorkSteps([call("grep"), result("grep"), streamingThought], 0, 3).map((s) => s.kind)).toEqual(["work"]);
+  });
+});
