@@ -152,12 +152,23 @@ function namesIn(m: Msg): string[] {
   return m.role === "tool" && m.toolName ? [m.toolName] : [];
 }
 
+export type RunFoldOptions = {
+  /** The row still streaming, while the run is live. A sentence that is
+   *  still arriving has no call behind it *yet*: whether it is narration
+   *  before the next call or the answer is not known until its turn
+   *  settles. Until then it stays the last step of the work it follows —
+   *  otherwise every new sentence ended the run, folded the rows above it
+   *  to "Worked for" and drew itself under the line, only for the call that
+   *  followed to reopen the run with the sentence back at the bottom. */
+  streaming?: number;
+};
+
 /**
  * The foldable runs in a conversation, in order. A stretch that made no call
  * and holds no result — a lone thought before an answer — is not a run; the
  * thought draws its own line.
  */
-export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairToolResults(msgs)): ToolRun[] {
+export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairToolResults(msgs), opts: RunFoldOptions = {}): ToolRun[] {
   const runs: ToolRun[] = [];
   let start = -1;
   const flush = (end: number) => {
@@ -201,7 +212,7 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     // part of that sentence's turn, not the start of a new stretch of work —
     // folding it would repeat the names already drawn above the fold.
     const owner = pairing.claimed.get(i);
-    const work = owner !== undefined ? isToolWork(msgs[owner]) : isToolWork(msgs[i]);
+    const work = owner !== undefined ? isToolWork(msgs[owner]) : isToolWork(msgs[i]) || stillArriving(msgs[i], i, opts, start);
     if (work) {
       if (start < 0) start = i;
       continue;
@@ -212,6 +223,14 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
   return runs;
 }
 
+
+/** A prose row still streaming at the end of a run in progress (see
+ *  `RunFoldOptions.streaming`). A row that already carries a call is work
+ *  or a card on its own terms; a row that follows no run is simply the
+ *  answer arriving, as before. */
+function stillArriving(m: Msg, index: number, opts: RunFoldOptions, runStart: number): boolean {
+  return index === opts.streaming && runStart >= 0 && m.role === "assistant" && !m.toolCalls?.length;
+}
 
 /** What the one line says. `label` is the wall time the work took — "Worked
  *  for 19.4s", the honest span when tools ran — or the reasoning span when

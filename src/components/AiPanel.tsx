@@ -1307,7 +1307,10 @@ export function AiPanel({
   // them.
   const delegationThoughts = useMemo(() => delegationThinking(msgs), [msgs]);
   const toolPairing = useMemo(() => pairToolResults(msgs), [msgs]);
-  const toolRuns = useMemo(() => groupToolRuns(msgs, toolPairing), [msgs, toolPairing]);
+  // The row still arriving, while the run is live: the fold keeps it at the
+  // foot of the work it follows rather than reading it as the answer.
+  const arrivingRow = streaming && msgs[msgs.length - 1]?.role === "assistant" ? msgs.length - 1 : undefined;
+  const toolRuns = useMemo(() => groupToolRuns(msgs, toolPairing, { streaming: arrivingRow }), [msgs, toolPairing, arrivingRow]);
   // Which messages have handed their mark to a folded row's header. A turn
   // that opens with tool work keeps its mark on the header in *both* states —
   // a mark that appears and disappears as you click reads as the row moving,

@@ -29,6 +29,7 @@ export function LiveWork({ msgs, start, end, pairing }: { msgs: Msg[]; start: nu
             return (
               <div key={step.index} style={{ margin: "6px 0", fontSize: 14, lineHeight: 1.6 }}>
                 {renderMarkdown(visibleProse(m), { streaming, visuals: true })}
+                {streaming && <span className="ai-caret" />}
               </div>
             );
           }

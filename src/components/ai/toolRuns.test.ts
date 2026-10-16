@@ -302,3 +302,25 @@ describe("the one line a stretch of calls reads as", () => {
     expect(liveWorkLine({ name: "get_git_status", args: {} })).toBe("get_git_status…");
   });
 });
+
+describe("a sentence still arriving stays in the run", () => {
+  const work: Msg[] = [asks("go"), call("read_file"), result("read_file")];
+
+  it("extends the run through the streaming row instead of ending it there", () => {
+    const msgs = [...work, says("Let me check the fixture…")];
+    expect(groupToolRuns(msgs)).toMatchObject([{ start: 1, end: 3 }]);
+    expect(groupToolRuns(msgs, undefined, { streaming: 3 })).toMatchObject([{ start: 1, end: 4 }]);
+  });
+
+  it("a settled sentence — the stream moved on — ends the run as before", () => {
+    const msgs = [...work, says("Here is the answer.")];
+    expect(groupToolRuns(msgs, undefined, { streaming: undefined })).toMatchObject([{ start: 1, end: 3 }]);
+    expect(groupToolRuns(msgs, undefined, { streaming: 2 })).toMatchObject([{ start: 1, end: 3 }]);
+  });
+
+  it("a streaming row that already made a card ends the run, and one with no run before it is no run", () => {
+    const speaking: Msg = { role: "assistant", content: "Handing this off.", toolCalls: [{ name: "spawn_subagent", args: {} }] };
+    expect(groupToolRuns([...work, speaking], undefined, { streaming: 3 })).toMatchObject([{ start: 1, end: 3 }]);
+    expect(groupToolRuns([asks("go"), says("Just an answer.")], undefined, { streaming: 1 })).toEqual([]);
+  });
+});
