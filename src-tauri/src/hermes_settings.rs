@@ -1,7 +1,9 @@
 //! Klide's Hermes backend selection. Credentials remain in the provider key
 //! store and are resolved only in the process host, never in a spawn envelope.
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub const KEY_PROVIDER_ENV: &str = "KLIDE_HERMES_KEY_PROVIDER";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -189,7 +191,7 @@ pub fn runtime_env(provider: &str, scope: Option<&Path>) -> Result<Vec<(String, 
 pub fn check_environment_overrides(env: &[(String, String)]) -> Result<(), String> {
     match environment_overrides(env, None)?.into_iter().next() {
         Some(over) => Err(format!(
-            "{} overrides {}. Settings → Hermes can align the two, or pick Hermes's configured source in the model picker.",
+            "{} overrides {}. Settings → Hermes can align the two, or pick Hermes's own setup in the model picker.",
             over.path, over.name
         )),
         None => Ok(()),
@@ -208,9 +210,11 @@ pub struct EnvOverride {
     /// `OPENAI_API_KEY` slot standing in for another provider is not.
     pub importable: bool,
 }
+fn hermes_home() -> Option<PathBuf> {
+    crate::delegate::lookup("hermes")?.config_home(&crate::delegate::ProcessEnv)
+}
 fn env_file() -> Option<PathBuf> {
-    let adapter = crate::delegate::lookup("hermes")?;
-    Some(adapter.config_home(&crate::delegate::ProcessEnv)?.join(".env"))
+    Some(hermes_home()?.join(".env"))
 }
 fn display_path(path: &Path) -> String {
     match crate::cli::home_dir_path().and_then(|h| path.strip_prefix(h).ok().map(|r| r.to_path_buf())) {
@@ -339,6 +343,129 @@ fn quote_env(value: &str) -> String {
         value.to_string()
     }
 }
+/// What Hermes runs on when Klide passes nothing: the model and provider of
+/// its own `config.yaml`, and the credential names its `.env` sets. Names
+/// only — a value never leaves the file.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnSetup {
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    /// `*_KEY` / `*_TOKEN` names set non-empty in `.env`.
+    pub keys: Vec<String>,
+    pub env_path: Option<String>,
+    pub config_path: Option<String>,
+}
+/// `model.default` (or `model.model`) and `model.provider` out of Hermes's
+/// `config.yaml` — a two-level read, no YAML engine. `auto` is no provider.
+fn model_block(text: &str) -> (Option<String>, Option<String>) {
+    let mut model = None;
+    let mut provider = None;
+    let mut inside = false;
+    for line in text.lines() {
+        let body = line.trim_end();
+        if body.trim().is_empty() || body.trim_start().starts_with('#') {
+            continue;
+        }
+        if !body.starts_with(char::is_whitespace) {
+            inside = body.split_once(':').is_some_and(|(key, rest)| key.trim() == "model" && rest.trim().is_empty());
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let Some((key, value)) = body.trim().split_once(':') else { continue };
+        let value = yaml_scalar(value);
+        match key.trim() {
+            "default" | "model" if !value.is_empty() => model = Some(value),
+            "provider" if !value.is_empty() && value != "auto" => provider = Some(value),
+            _ => {}
+        }
+    }
+    (model, provider)
+}
+fn yaml_scalar(raw: &str) -> String {
+    let raw = raw.trim();
+    for quote in ['"', '\''] {
+        if let Some(rest) = raw.strip_prefix(quote) {
+            return rest.split(quote).next().unwrap_or_default().to_string();
+        }
+    }
+    raw.split(" #").next().unwrap_or_default().trim().to_string()
+}
+fn credential_names(env_text: &str) -> Vec<String> {
+    effective_env(env_text)
+        .into_iter()
+        .filter(|(name, value)| (name.ends_with("_KEY") || name.ends_with("_TOKEN")) && !value.trim().is_empty())
+        .map(|(name, _)| name)
+        .collect()
+}
+pub fn own_setup() -> Result<OwnSetup, String> {
+    let Some(home) = hermes_home() else {
+        return Ok(OwnSetup::default());
+    };
+    let config = home.join("config.yaml");
+    let env = home.join(".env");
+    let read = |path: &Path| match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Read {}: {e}", display_path(path))),
+    };
+    let (model, provider) = read(&config)?.map(|text| model_block(&text)).unwrap_or_default();
+    let keys = read(&env)?.map(|text| credential_names(&text)).unwrap_or_default();
+    Ok(OwnSetup {
+        model,
+        provider,
+        keys,
+        env_path: Some(display_path(&env)),
+        config_path: Some(display_path(&config)),
+    })
+}
+/// Change the model Hermes runs on by itself — through Hermes's own
+/// `config set`, so its file stays Hermes's to write.
+pub fn set_own_model(model: &str) -> Result<OwnSetup, String> {
+    let model = model.trim();
+    if model.is_empty() || model.contains(char::is_whitespace) {
+        return Err("Enter the model ID Hermes should use, like provider/model.".into());
+    }
+    let cli = crate::cli::resolve_command("hermes")?;
+    run_hermes(&cli, &["config", "set", "model.default", model], Duration::from_secs(20))?;
+    own_setup()
+}
+fn run_hermes(cli: &str, args: &[&str], timeout: Duration) -> Result<(), String> {
+    let mut child = std::process::Command::new(cli)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Start hermes: {e}"))?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("hermes {} did not finish within {}s", args.join(" "), timeout.as_secs()));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    if status.success() {
+        return Ok(());
+    }
+    let mut text = String::new();
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut text);
+    }
+    if text.trim().is_empty() {
+        if let Some(mut out) = child.stdout.take() {
+            let _ = out.read_to_string(&mut text);
+        }
+    }
+    Err(format!("hermes {} failed: {}", args.join(" "), text.trim().lines().last().unwrap_or("no output")))
+}
 pub fn cached_models() -> Option<Vec<String>> {
     read().ok().flatten().map(|s| vec![s.model])
 }
@@ -460,6 +587,18 @@ mod tests {
         assert_eq!(importable_name("openrouter"), Some("OPENROUTER_API_KEY"));
         assert_eq!(importable_name("mistral"), None, "Hermes's generic OPENAI_API_KEY slot is not Mistral's key");
         assert_eq!(importable_name("ollama"), None);
+    }
+    #[test]
+    fn own_setup_reads_the_model_block_and_credential_names_only() {
+        let config = "# comment\nmodel:\n  # the default\n  default: \"deepseek/deepseek-v4.1-flash\"  # trailing\n  provider: 'openrouter'\nterminal:\n  model: not-this\n";
+        assert_eq!(model_block(config), (Some("deepseek/deepseek-v4.1-flash".into()), Some("openrouter".into())));
+        assert_eq!(model_block("model:\n  model: x/y # inline\n  provider: auto\n"), (Some("x/y".into()), None));
+        assert_eq!(model_block("model: {default: inline}\n"), (None, None));
+        let env = "# OPENAI_API_KEY=commented\nOPENROUTER_API_KEY=sk-secret\nEMPTY_API_KEY=\nHF_TOKEN='t'\nTERMINAL_TIMEOUT=60\n";
+        let names = credential_names(env);
+        assert_eq!(names, ["OPENROUTER_API_KEY", "HF_TOKEN"]);
+        assert!(!serde_json::to_string(&OwnSetup { keys: names, ..Default::default() }).unwrap().contains("secret"));
+        assert!(set_own_model("two words").is_err());
     }
     #[test]
     fn settings_roundtrip_never_contains_a_secret() {

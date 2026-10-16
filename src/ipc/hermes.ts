@@ -20,6 +20,16 @@ export function alignHermesEnv(provider: string, keep: "hermes" | "klide"): Prom
   return invoke("hermes_env_align", { provider, keep });
 }
 
+/** What Hermes runs on by itself — its own config's model/provider and the credential names its `.env` sets (never values). */
+export type HermesOwnSetup = { model: string | null; provider: string | null; keys: string[]; envPath: string | null; configPath: string | null };
+export function readHermesOwnSetup(): Promise<HermesOwnSetup> {
+  return invoke("hermes_own_setup");
+}
+/** Changes Hermes's own default model through `hermes config set`, so the file stays Hermes's. */
+export function setHermesOwnModel(model: string): Promise<HermesOwnSetup> {
+  return invoke("hermes_set_own_model", { model });
+}
+
 export type HermesSourceSupport = { supported: boolean; reason: string | null };
 export function readHermesSourceSupport(provider: string): Promise<HermesSourceSupport> {
   return invoke("hermes_source_support", { provider });

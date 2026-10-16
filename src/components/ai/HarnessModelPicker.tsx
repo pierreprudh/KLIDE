@@ -11,7 +11,8 @@ import { useMissingDelegateClis } from "../../hooks/useMissingDelegateClis";
 import { refreshCustomCli, type CustomCli } from "../../customCli";
 import type { ProviderId } from "../../agent/types";
 import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
-import { readHermesSettings, readHarnessSourceSupport, listHarnessSourceModels, loginNousPortal, NOUS_SOURCE, type HermesSourceSupport } from "../../ipc/hermes";
+import { readHermesSettings, readHermesOwnSetup, readHarnessSourceSupport, listHarnessSourceModels, loginNousPortal, NOUS_SOURCE, type HermesOwnSetup, type HermesSourceSupport } from "../../ipc/hermes";
+import { describeOwnSetup } from "./hermesOwnSetup";
 import { ProviderLogo } from "./icons";
 import { Z } from "../../zLayers";
 import { errMessage } from "../../errors";
@@ -53,7 +54,14 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     return { left: Math.max(8, Math.min(rect.right - 200, window.innerWidth - 208)),
       top: down ? rect.bottom + 8 : undefined, bottom: down ? undefined : window.innerHeight - rect.top + 8 };
   } });
-  useEffect(() => { if (harness === "hermes") readHermesSettings().then(setSaved).catch(() => {}); }, [harness]);
+  /** Hermes's own setup — what it runs on when Klide passes nothing. */
+  const [own, setOwn] = useState<HermesOwnSetup | null>(null);
+  useEffect(() => {
+    if (harness !== "hermes") return;
+    readHermesSettings().then(setSaved).catch(() => {});
+    readHermesOwnSetup().then(setOwn).catch(() => {});
+  }, [harness]);
+  const ownNative = harness === "hermes" && !saved && own?.model ? own : null;
   useEffect(() => {
     if (menu.open) menu.menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [menu.open, menu.menuRef]);
@@ -141,7 +149,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     menu.close();
     menu.triggerRef.current?.focus();
   };
-  const current = choice ?? (model === "default" ? (harness === "hermes" ? saved : null) : harness !== "hermes" ? { provider: harness, model } : null);
+  const current = choice ?? (model === "default" ? (harness === "hermes" ? saved ?? (ownNative?.model ? { provider: "hermes", model: ownNative.model } : null) : null) : harness !== "hermes" ? { provider: harness, model } : null);
   return <div style={{ flex: fluid ? 1 : "0 1 112px", minWidth: 64, maxWidth: fluid ? undefined : 138 }}>
     <button type="button" ref={menu.triggerRef} disabled={disabled} aria-haspopup="menu" aria-expanded={menu.open}
       title={current ? `${current.provider} · ${current.model}` : model} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: fluid ? "flex-start" : "flex-end", gap: 5,
@@ -214,15 +222,21 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         style={{ position: "fixed", ...sourcePos, width: 300, maxHeight: Math.min(360, window.innerHeight - sourcePos.top - 8), display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <ModelPickerHeader icon={<ProviderLogo id={!source || source.startsWith("hermes-subscription:") ? (source ? "hermes" : harness) : source as ProviderId} size={15} />}
           title={category === OWN ? ownTitle : sources.find((p) => p.id === source)?.name ?? "Models"}
-          caption={category === OWN ? (harness === "hermes" ? (saved ? "Hermes’s configured source" : "No configured source yet") : `${harnessName}’s own models`) : loading ? "Loading models…" : `${models.length} models available`} />
+          caption={category === OWN ? (harness === "hermes" ? (saved ? "Hermes’s configured source" : ownNative ? "Hermes’s own setup" : "Not set up yet") : `${harnessName}’s own models`) : loading ? "Loading models…" : `${models.length} models available`} />
         {category === "Subscription" && <div style={{ padding: 9, fontSize: 11, color: "var(--fg-subtle)" }}>{source === NOUS_SOURCE ? "Uses your Nous Portal allowance. Hermes manages authentication." : harness === "hermes" ? "Uses this subscription through Hermes’s own authentication." : "Uses the harness’s own authentication."}</div>}
-        <div style={{ flexShrink: 0, padding: "6px 8px", borderBottom: "1px solid var(--panel-border)" }}>
+        {!(category === OWN && harness === "hermes" && !saved) && <div style={{ flexShrink: 0, padding: "6px 8px", borderBottom: "1px solid var(--panel-border)" }}>
         <input aria-label="Search or enter model" value={query} placeholder="Filter models…" style={MODEL_FILTER_STYLE}
           onFocus={(e) => { e.currentTarget.style.borderColor = "color-mix(in srgb, var(--accent) 50%, var(--border))"; e.currentTarget.style.background = "var(--bg-elevated)"; }}
           onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg)"; }} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && query.trim() && !loading && !error) select(query.trim()); }} />
-        </div>
+        </div>}
         <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 4 }}>
-        {category === OWN && harness === "hermes" && !saved && <div style={{ padding: 9, fontSize: 12, color: "var(--fg-subtle)" }}>Hermes has no configured source yet.<button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("subscription"); }}>Open Settings ↗</button></div>}
+        {ownNative && category === OWN && <button type="button" role="menuitemradio" aria-checked={model === "default"} data-own-setup className="provider-category-row"
+          style={{ ...style, display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, background: model === "default" ? "var(--menu-row-active)" : undefined }}
+          onClick={() => { onChange("default"); menu.close(); menu.triggerRef.current?.focus(); }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}><ProviderLogo id="hermes" size={16} /><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ownNative.model}</span></span>
+          <span style={{ fontSize: 10.5, color: "var(--fg-dim)", whiteSpace: "normal", lineHeight: 1.3 }}>{describeOwnSetup(ownNative)} · change it in Settings</span>
+        </button>}
+        {category === OWN && harness === "hermes" && !saved && !ownNative && <div style={{ padding: 9, fontSize: 12, color: "var(--fg-subtle)" }}>Hermes isn’t set up yet. Run `hermes setup` in a terminal, or give it a Klide source.<button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("subscription"); }}>Open Settings ↗</button></div>}
         {loading && <div style={{ padding: 9, fontSize: 12 }}>Loading models…</div>}
         {source === NOUS_SOURCE && <div style={{ padding: "4px 9px", fontSize: 11 }}>
           <button type="button" style={style} disabled={loginBusy} onClick={async () => {

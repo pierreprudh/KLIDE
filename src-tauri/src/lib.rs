@@ -194,6 +194,14 @@ async fn hermes_clear_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn hermes_own_setup() -> Result<hermes_settings::OwnSetup, String> {
+    blocking::run(hermes_settings::own_setup).await
+}
+#[tauri::command]
+async fn hermes_set_own_model(model: String) -> Result<hermes_settings::OwnSetup, String> {
+    blocking::run(move || hermes_settings::set_own_model(&model)).await
+}
+#[tauri::command]
 async fn hermes_env_overrides(provider: String) -> Result<Vec<hermes_settings::EnvOverride>, String> {
     blocking::run(move || hermes_settings::overrides_for(&provider)).await
 }
@@ -1126,6 +1134,8 @@ pub fn run() {
             hermes_clear_settings,
             hermes_env_overrides,
             hermes_env_align,
+            hermes_own_setup,
+            hermes_set_own_model,
             cli_update::cli_versions,
             cli_update::cli_version,
             cli_update::cli_check_updates,

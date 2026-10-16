@@ -135,7 +135,7 @@ Klide/
 │   │   ├── delegates.ts           delegate_catalog — the adapters' facts over the wire (src/delegates.ts is the pinned mirror)
 │   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
-│   │   ├── hermes.ts             Hermes settings + `harness_source_support` / `harness_source_models` / Nous login wire + `.env` override scan/align
+│   │   ├── hermes.ts             Hermes settings + `harness_source_support` / `harness_source_models` / Nous login wire + `.env` override scan/align + Hermes's own setup (read, set model)
 │   ├── hooks/
 │   │   ├── useFlipIndicator.ts  Shared FLIP animation for rail/tab indicators
 │   │   ├── useEditorTabs.ts     Open tabs: open/edit/save/close/rename, external-change watch
@@ -208,6 +208,7 @@ Klide/
 │   │       ├── ChatMessage.tsx    renderMessageBody
 │   │       ├── MessageActions.tsx Hover per-message actions (copy, retry, branch, edit)
 │   │       ├── ModelPicker.tsx    Portaled model selector (filter, favorites, keyboard)
+│   │       ├── hermesOwnSetup.ts  What Hermes runs on by itself — one caption from its config model + `.env` key names (never values)
 │   │       ├── HarnessModelPicker.tsx A Delegate's nested model control — category → source → model — writes the routed string; favourites shared with the base picker
 │   │       ├── replayConversation.ts On-disk transcript → resumable panel Conversation
 │   │       ├── transcriptReducer.ts  Live Msg[] view of one run's fold (region splice, stable refs)

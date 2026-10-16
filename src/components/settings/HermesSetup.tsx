@@ -3,7 +3,8 @@ import { ProviderLogo } from "../ai/icons";
 import { defaultModelForProvider } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
-import { alignHermesEnv, clearHermesSettings, readHermesEnvOverrides, readHermesSettings, saveHermesSettings, type HermesEnvOverride } from "../../ipc/hermes";
+import { alignHermesEnv, clearHermesSettings, readHermesEnvOverrides, readHermesOwnSetup, readHermesSettings, saveHermesSettings, setHermesOwnModel, type HermesEnvOverride, type HermesOwnSetup } from "../../ipc/hermes";
+import { describeOwnSetup } from "../ai/hermesOwnSetup";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
 import { LinkButton, Panel, Row, SettingBlock } from "./controls";
@@ -27,6 +28,22 @@ export function HermesSetup() {
   const [error, setError] = useState("");
   const [keyRevision, setKeyRevision] = useState(0);
   const [overrides, setOverrides] = useState<HermesEnvOverride[]>([]);
+  const [own, setOwn] = useState<HermesOwnSetup | null>(null);
+  const [ownBusy, setOwnBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    readHermesOwnSetup().then((setup) => { if (!cancelled) setOwn(setup); }).catch((e) => { if (!cancelled) setError(errMessage(e)); });
+    return () => { cancelled = true; };
+  }, []);
+  async function setOwnModel(next: string) {
+    setOwnBusy(true);
+    setError("");
+    try {
+      setOwn(await setHermesOwnModel(next));
+      notify(`Hermes now runs on ${next} by itself. New Hermes sessions use it, in the terminal too.`, { tone: "success" });
+    } catch (e) { setError(errMessage(e)); }
+    finally { setOwnBusy(false); }
+  }
   useEffect(() => {
     let cancelled = false;
     readHermesSettings().then((settings) => {
@@ -92,7 +109,13 @@ export function HermesSetup() {
     finally { setBusy(false); }
   }
   return (
-    <SettingBlock title="Hermes API setup">
+    <>
+    <SettingBlock title="Hermes’s own setup">
+      <Panel>
+        <HermesOwnSetupRow setup={own} klideConfigured={configured} busy={ownBusy} onSetModel={(next) => void setOwnModel(next)} />
+      </Panel>
+    </SettingBlock>
+    <SettingBlock title="Hermes on a Klide source">
       <Panel>
         <Row title="Model provider" description="Run Hermes with an API key. No Hermes subscription required."
           leading={<ProviderLogo id="hermes" />}
@@ -115,6 +138,30 @@ export function HermesSetup() {
           </div>} />
       </Panel>
     </SettingBlock>
+    </>
+  );
+}
+
+/** What Hermes runs on when Klide passes nothing — its own model and key,
+ *  the way `hermes setup` left them. The model can be changed here through
+ *  Hermes's own `config set`; the key stays Hermes's business. */
+export function HermesOwnSetupRow({ setup, klideConfigured, busy, onSetModel }: {
+  setup: HermesOwnSetup | null; klideConfigured: boolean; busy?: boolean; onSetModel: (model: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const model = setup?.model ?? null;
+  const value = draft || model || "";
+  const changed = value.trim() !== "" && value.trim() !== model;
+  const description = !setup ? "Reading Hermes’s configuration…"
+    : !model ? "Hermes has no model yet. Run `hermes setup` in a terminal, or give Hermes a Klide source below."
+    : `${describeOwnSetup(setup)}. ${klideConfigured ? "The Klide source below takes over; choose “Use Hermes defaults” there to run on this." : "What a Hermes conversation runs on unless its picker chooses a Klide source."}`;
+  return (
+    <Row title={model ?? "Not set up yet"} description={description} leading={<ProviderLogo id="hermes" />}
+      control={<div style={{ display: "flex", gap: 8 }}>
+        <input className="klide-field" aria-label="Hermes’s own model" value={value} placeholder="provider/model" disabled={busy || !setup}
+          onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && changed && !busy) onSetModel(value.trim()); }} />
+        <LinkButton disabled={busy || !changed} onClick={() => onSetModel(value.trim())}>{busy ? "Saving…" : "Set model"}</LinkButton>
+      </div>} />
   );
 }
 
