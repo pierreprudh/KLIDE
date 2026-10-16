@@ -114,6 +114,9 @@ export type Msg =
        *  `content` keeps a plain-text fallback (serialization, search). */
       runError?: {
         message: string;
+        /** The harness says the same request may succeed again; the row
+         *  offers Try again, which continues from where the Run stopped. */
+        retryable?: boolean;
       };
       /** Set when the turn above never settled — no result, no error — because
        *  the app was closed while it ran. Drawn as a quiet centered line with a

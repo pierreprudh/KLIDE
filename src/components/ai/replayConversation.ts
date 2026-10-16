@@ -59,11 +59,13 @@ export function hasOpenTurn(events: AgentEvent[]): boolean {
 export function runErrorLine(events: AgentEvent[]): Msg | null {
   const last = events[events.length - 1];
   if (last?.type !== "run_error" || isSilentRunError(last.error.code)) return null;
-  return {
-    role: "system",
-    content: `Run failed: ${last.error.message}`,
-    runError: { message: last.error.message },
-  };
+  return runFailedMsg(last.error.message, last.error.retryable);
+}
+
+/** The Run-failed row, live or replayed. `retryable` is the harness's word
+ *  that the same request may succeed again (a provider 5xx, a timeout). */
+export function runFailedMsg(message: string, retryable: boolean): Msg {
+  return { role: "system", content: `Run failed: ${message}`, runError: { message, retryable } };
 }
 
 type RunMeta = {

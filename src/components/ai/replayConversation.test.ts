@@ -46,11 +46,11 @@ function assistantMessage(text: string, ts: number): AgentEvent {
 
 type RunErrorCode = Extract<AgentEvent, { type: "run_error" }>["error"]["code"];
 
-function runError(code: RunErrorCode, message: string, ts: number): AgentEvent {
+function runError(code: RunErrorCode, message: string, ts: number, retryable = false): AgentEvent {
   return {
     type: "run_error",
     runId: "r1",
-    error: { code, message, retryable: false },
+    error: { code, message, retryable },
     ts,
   };
 }
@@ -95,8 +95,18 @@ describe("eventsToConversation", () => {
     expect(last).toEqual({
       role: "system",
       content: "Run failed: 502 from upstream",
-      runError: { message: "502 from upstream" },
+      runError: { message: "502 from upstream", retryable: false },
     });
+  });
+
+  it("keeps the harness's word that a failure may be tried again", () => {
+    const convo = eventsToConversation(
+      [runStarted(1), userMessage("hi", 2), runError("provider_unavailable", "Upstream error from CoreWeave: Internal server error", 3, true)],
+      "r1",
+      "t"
+    );
+    const last = convo.msgs[convo.msgs.length - 1];
+    expect(last.role === "system" && last.runError).toEqual({ message: "Upstream error from CoreWeave: Internal server error", retryable: true });
   });
 
   it("stays silent about a run the user stopped", () => {
@@ -268,7 +278,7 @@ describe("replayForAdoption", () => {
     expect(healed?.[healed.length - 1]).toEqual({
       role: "system",
       content: "Run failed: timed out waiting for the model (HTTP 524)",
-      runError: { message: "timed out waiting for the model (HTTP 524)" },
+      runError: { message: "timed out waiting for the model (HTTP 524)", retryable: false },
     });
   });
 

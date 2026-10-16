@@ -366,6 +366,22 @@ describe("createRunController — busy retry", () => {
     expect(h.hooks.onTurnSettled).toHaveBeenCalledWith(expect.anything(), "failed");
   });
 
+  it("a Run that started and failed ends on the Run-failed row, keeping what it said", async () => {
+    const h = harness();
+    h.controller.send(turn("a"));
+    await flush();
+    const run = h.backend.last();
+    run.emit(started());
+    run.emit(message("checked the status"));
+    run.emit({ type: "run_error", runId: CONVO, error: { code: "provider_unavailable", message: "Upstream error from CoreWeave", retryable: true }, ts } as unknown as AgentEvent);
+    await flush();
+    const msgs = h.msgs();
+    expect(msgs.some((m) => m.role === "assistant" && m.content === "checked the status")).toBe(true);
+    expect(msgs[msgs.length - 1]).toEqual({ role: "system", content: "Run failed: Upstream error from CoreWeave", runError: { message: "Upstream error from CoreWeave", retryable: true } });
+    expect(msgs.some((m) => m.role === "assistant" && m.content.startsWith("⚠"))).toBe(false);
+    expect(h.hooks.onTurnSettled).toHaveBeenCalledWith(expect.objectContaining({ clientId: "a" }), "failed");
+  });
+
   it("rethrows a failure that is not the busy guard as the turn's failure", async () => {
     const h = harness();
     (h.backend.client.startAgentRun as ReturnType<typeof vi.fn>).mockRejectedValueOnce("Ollama is not running");
