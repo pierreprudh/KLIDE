@@ -101,6 +101,15 @@ function stepVerb(name: string): string {
   }
 }
 
+/** How a child that is no longer working ended, read off the error the fold
+ *  or the row wrote: interrupted with the app, cancelled at its dispatch card,
+ *  or stopped by its own settlement. */
+function settledWord(error: string | undefined): string {
+  if (error?.startsWith("Interrupted:")) return "Interrupted";
+  if (error?.startsWith("Cancelled")) return "Cancelled";
+  return "Stopped";
+}
+
 export function SubagentWatchLine({
   activity,
   open,
@@ -121,14 +130,14 @@ export function SubagentWatchLine({
   const step = asking ? { name: "", detail: asking.summary } : activity.current;
   // Between steps the child is thinking; before its first event it is starting.
   const label = !open
-    ? asking ? "Needs approval" : working ? (activity.status === "starting" ? "Starting…" : "Running") : activity.status === "done" ? "Completed" : activity.error?.startsWith("Interrupted:") ? "Interrupted" : "Stopped"
+    ? asking ? "Needs approval" : working ? (activity.status === "starting" ? "Starting…" : "Running") : activity.status === "done" ? "Completed" : settledWord(activity.error)
     : asking
     ? "asking"
     : step
       ? stepVerb(step.name)
       : activity.status === "starting"
         ? "starting"
-        : activity.status === "done" ? "finished" : activity.status === "failed" ? (activity.error?.startsWith("Interrupted:") ? "interrupted" : "stopped") : "running";
+        : activity.status === "done" ? "finished" : activity.status === "failed" ? settledWord(activity.error).toLowerCase() : "running";
 
   const counts: string[] = [];
   if (activity.steps > 0) counts.push(`${activity.steps} ${activity.steps === 1 ? "step" : "steps"}`);

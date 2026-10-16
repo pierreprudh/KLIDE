@@ -24,7 +24,7 @@ import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 
 import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, toolCallKey, toolRunLabel } from "./toolRuns";
 import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
-import { childTranscriptRows, isWatchable } from "./subagentWatch";
+import { childTranscriptRows, isWatchable, neverStarted } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
 // The thinking block: a disclosure line and, under it, the reasoning as one
@@ -193,7 +193,7 @@ function summarizeArgs(args: unknown): string {
 // rows. The receipt's sentence is written for the model ("You are not
 // waiting for it…") and is not drawn; the child's brief and its completion
 // are not drawn either, because the row above already says both.
-function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string }) {
+function SubagentCallRow({ args, childRunId, settled, receipt, declined }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean }) {
   const o = (args ?? {}) as Record<string, unknown>;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
   const worker = typeof o.worker === "string" && o.worker.trim() ? (o.worker.trim() as ProviderId) : null;
@@ -207,9 +207,13 @@ function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown
 
   // A background dispatch settles its call at once while the child is still
   // working, so the call being settled says nothing about the child: keep
-  // following it until its own transcript settles.
+  // following it until its own transcript settles. Unless there is no child:
+  // a dispatch cancelled at its card never registered a Run, so the model's
+  // own `background: true` must not keep the row waiting on a start that
+  // cannot come — that is how "Starting…" and its clock ran forever.
+  const started = !!childRunId;
   const background = o.background === true || !!receipt;
-  const live = !settled || background;
+  const live = !settled || (background && started);
   // While the child works, its own Run is the only thing happening — watch it.
   // Once the report lands the parent shows that instead, and the child's rows
   // stay one click away (fetched only if that click comes).
@@ -239,8 +243,8 @@ function SubagentCallRow({ args, childRunId, settled, receipt }: { args: unknown
       <div style={{ margin: "10px 0 0 7px", padding: "1px 0 2px 18px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
         {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
         <SubagentWatchLine
-          activity={!watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
-          open={opened} onToggle={toggle} hasRows={true}
+          activity={declined ? neverStarted("Cancelled at its dispatch card.") : !watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
+          open={opened} onToggle={toggle} hasRows={started}
         />
         <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
           <div>
@@ -564,7 +568,10 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
       // "Running spawn_subagent…" placeholder is attached as a result too, so
       // "has a result" is not "settled" — that read would hide the live
       // watcher for the whole time it exists to cover.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} />
+      // "Dispatched …" and "The user declined to dispatch …" are the tool's own
+      // sentences (agent/tool_handlers.rs); the declined one is the card's
+      // Cancel button, and no child Run exists behind it.
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (

@@ -227,6 +227,29 @@ describe("a delegation row while the child works", () => {
     expect(html).not.toContain("subagent report");
   });
 
+  it("draws a dispatch cancelled at its card as cancelled, not as a child still starting", () => {
+    // Rust answers a rejected dispatch gate with this sentence and emits no
+    // `subagent_requested`, so the call has no child Run id — and the model's
+    // own `background: true` must not keep the row live for a child that
+    // never existed (it did: "Starting…" with a clock, for good).
+    const html = renderToStaticMarkup(
+      renderMessageBody(
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "opencode", task: "Add slugify.js.", background: true } }],
+        },
+        false,
+        { results: new Map([["c0", { msg: { role: "tool", content: "The user declined to dispatch OpenCode. Do the task another way, or ask them how they would like it done.", toolName: "spawn_subagent" }, active: false }]]) },
+      ),
+    );
+    expect(html).toContain("Cancelled");
+    expect(html).not.toContain("Starting…");
+    expect(html).not.toContain("Completed");
+    expect(html).not.toContain("klide-orbit-loader");
+    expect(html).not.toContain("aria-expanded");
+  });
+
   it("offers the child's activity once the report has landed", () => {
     const report: AttachedResult = { msg: { role: "tool", content: "The fold has three stages.", toolName: "spawn_subagent" }, active: false };
     expect(delegation(report)).toContain("View activity");
