@@ -1,0 +1,22 @@
+/* The question a run asked, kept in the conversation once answered.
+   Same recipe as the GitHub observer card (tokens.css `.github-observer`):
+   one bordered 14px card centred in the column, an identity column with a
+   large mark and a bold title, a content column with a round indicator and
+   two lines. Cards about one thing the run did read as one family. */
+.ask-card-container { container-type: inline-size; width: 100%; min-width: 0; }
+.ask-card { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 20px; padding: 18px 22px; margin: 10px auto; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elevated); width: 92%; max-width: 760px; min-width: 0; box-sizing: border-box; }
+.ask-card-identity { display: flex; align-items: center; gap: 14px; color: var(--fg); }
+.ask-card-title { white-space: nowrap; font-size: 15px; line-height: 1.2; font-weight: 600; letter-spacing: -.01em; color: var(--fg-strong); }
+.ask-card-content { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.ask-card-indicator { width: 18px; height: 18px; box-sizing: border-box; border: 1.5px solid var(--fg-dim); border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-size: 12px; line-height: 1; color: var(--fg-subtle); }
+.ask-card-line { display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.3; min-width: 0; }
+.ask-card-line > span { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ask-card-question { color: var(--fg-subtle); font-weight: 500; }
+.ask-card-answer { color: var(--fg-strong); }
+.ask-card-skipped .ask-card-answer { color: var(--fg-dim); }
+@container (max-width: 560px) {
+  .ask-card { width: 100%; padding: 16px; gap: 16px; }
+}
+@container (max-width: 340px) {
+  .ask-card { grid-template-columns: 1fr; }
+}

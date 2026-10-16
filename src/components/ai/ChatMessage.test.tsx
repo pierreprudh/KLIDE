@@ -270,12 +270,14 @@ describe("a question the run asked, once answered", () => {
     const html = exchange("Kebab, like the rest of the repo.");
     expect(html).toContain("Which slug style — kebab or snake?");
     expect(html).toContain("Kebab, like the rest of the repo.");
+    expect(html).toContain('class="ask-card"');
     expect(html).not.toContain("userAnswerQuestion");
   });
 
   it("says a skipped question was skipped rather than quoting the harness", () => {
     const html = exchange("[user skipped this question]");
     expect(html).toContain("Skipped");
+    expect(html).toContain("ask-card-skipped");
     expect(html).not.toContain("[user skipped this question]");
   });
 

@@ -11,6 +11,7 @@ import {
 import { readCoordinationSnapshot, type CoordinationEnvelope, type CoordinationEnvelopeSnapshot } from "../../agent/coordination";
 import { DotGridLoader, ProviderLogo, ToolIcon } from "./icons";
 import { AskIcon } from "../../icons";
+import "./askCard.css";
 import { SIGHT_TOOL } from "../../agent/foldEvents";
 import { eyesName } from "./sight";
 import { formatCost } from "../../runs";
@@ -293,55 +294,34 @@ const SKIPPED_ANSWER = "[user skipped this question]";
 /** The question a run asked and what the operator answered, kept in the
  *  conversation after the live card above the composer has gone.
  *
- *  That card is "waiting on you" — an accent-tinted hairline and a box to
- *  type in. This one is the record of the exchange, in the same shape so it
- *  reads as the thing they answered: the ask mark, the question in the
- *  strong face, a rule, the answer in the reading face under the same
- *  column. It stands in for the mono `userAnswerQuestion` row and the
- *  `└ answer` under it, which drew the one moment that was a conversation
- *  as machinery. A skipped question says so in the dim face rather than
- *  quoting the harness's bracketed note. */
+ *  Drawn the way the GitHub observer card is (`GithubObserverCard`,
+ *  `askCard.css`): the ask mark large beside a bold title, then an indicator
+ *  and two lines — the question, and the answer under it in the strong face.
+ *  It stands in for the mono `userAnswerQuestion` row and the `└ answer`
+ *  under it, which drew the one moment that was a conversation as
+ *  machinery. A skipped question leaves the indicator empty and says
+ *  "Skipped" in the dim face rather than quoting the harness's note. */
 function AnsweredQuestionCard({ args, answer }: { args: unknown; answer: string }) {
   const o = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
   const question = typeof o.question === "string" ? o.question.trim() : "";
   const said = answer.trim();
   const skipped = said === "" || said === SKIPPED_ANSWER;
   return (
-    <section
-      aria-label="Question answered"
-      style={{
-        margin: "8px 0",
-        background: "color-mix(in srgb, var(--bg-elevated) 90%, transparent)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)",
-        overflow: "hidden",
-        minWidth: 0,
-      }}
-    >
-      <div style={{ display: "flex", gap: 8, padding: "10px 14px" }}>
-        <span aria-hidden="true" style={{ flexShrink: 0, height: 18, display: "grid", placeItems: "center", color: "var(--fg-subtle)" }}>
-          <AskIcon size={14} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-          {question || "Question"}
+    <div className="ask-card-container">
+      <section className={`ask-card${skipped ? " ask-card-skipped" : ""}`} aria-label="Question answered">
+        <div className="ask-card-identity">
+          <AskIcon size={36} />
+          <span className="ask-card-title">Question</span>
         </div>
-      </div>
-      <div
-        style={{
-          // Lines up under the question text, past the mark's column — where
-          // the answer box sat on the live card.
-          padding: "8px 14px 10px 36px",
-          borderTop: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
-          fontSize: 13,
-          lineHeight: 1.5,
-          whiteSpace: "pre-wrap",
-          overflowWrap: "anywhere",
-          color: skipped ? "var(--fg-dim)" : "var(--fg)",
-        }}
-      >
-        {skipped ? "Skipped" : said}
-      </div>
-    </section>
+        <div className="ask-card-content">
+          <span className="ask-card-indicator" aria-hidden="true">{skipped ? "" : "✓"}</span>
+          <div className="ask-card-line">
+            <span className="ask-card-question">{question || "Question"}</span>
+            <span className="ask-card-answer">{skipped ? "Skipped" : said}</span>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
