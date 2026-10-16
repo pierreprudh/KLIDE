@@ -177,6 +177,7 @@ describe("groupToolRuns", () => {
     const [run] = groupToolRuns([asks("go"), call("read_file"), observed, call("search_files"), observed, answer]);
 
     expect(run.workedMs).toBe(30_100);
+    expect(toolRunLabel(run).label).toBe("Hermes worked for 30.1s");
     // Klide's own turns measure themselves; the answer's span is not theirs.
     const [own] = groupToolRuns([asks("go"), ...burst("Bash", 2), answer]);
     expect(own.workedMs).toBeUndefined();
@@ -201,6 +202,11 @@ describe("toolRunLabel", () => {
     // Tools ran, so the wall time is the honest span — the reasoning alone
     // would understate it.
     expect(toolRunLabel({ calls: 35, names: [], thinkingMs: 6300, workedMs: 41_000 }).label).toBe("Worked for 41.0s");
+  });
+
+  it("names the Delegate whose work it was", () => {
+    expect(toolRunLabel({ calls: 2, names: [], thinkingMs: 6300, observedBy: "claude-code" }).label).toBe("Claude Code thought for 6.3s");
+    expect(toolRunLabel({ calls: 2, names: [], observedBy: "hermes" }).label).toBe("2 tool calls");
   });
 
   it("falls back to the reasoning span, then to the count", () => {

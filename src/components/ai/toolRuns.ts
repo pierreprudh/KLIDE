@@ -24,6 +24,7 @@
 import type { Msg } from "./types";
 import { splitThinking, stripPlanJson } from "../markdown";
 import { formatElapsed } from "./WorkingRow";
+import { delegateLabel } from "../../delegates";
 
 /** One stretch of uninterrupted tool work. `end` is exclusive. */
 export type ToolRun = {
@@ -43,6 +44,9 @@ export type ToolRun = {
    *  run: the answer's thought is the last step of the work, not a second
    *  row over the prose. Its span is already in `thinkingMs`. */
   answer?: number;
+  /** The Delegate that ran these calls itself, when it did — the line names
+   *  it ("Hermes worked for 30.1s"), since Klide gated none of them. */
+  observedBy?: string;
 };
 
 /** Below this a turn's *own* rows are left in place under its sentence
@@ -187,12 +191,12 @@ function callsIn(m: Msg): number {
   return m.role === "assistant" ? m.toolCalls?.length ?? 0 : 0;
 }
 
-function observedIn(msgs: Msg[], start: number, end: number): boolean {
+function observedIn(msgs: Msg[], start: number, end: number): string | undefined {
   for (let i = start; i < end; i++) {
     const m = msgs[i];
-    if (m.role === "tool" && m.observedBy) return true;
+    if (m.role === "tool" && m.observedBy) return m.observedBy;
   }
-  return false;
+  return undefined;
 }
 
 function namesIn(m: Msg): string[] {
@@ -255,10 +259,11 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     // A delegate's turn is one CLI turn measured once, on the answer that
     // closes it: its tool rows carry no span of their own. That span is the
     // work — without it the line would fall back to "11 tool calls".
-    if (workedMs === undefined && next?.role === "assistant" && next.meta?.ms !== undefined && observedIn(msgs, start, end)) {
+    const observedBy = observedIn(msgs, start, end);
+    if (workedMs === undefined && next?.role === "assistant" && next.meta?.ms !== undefined && observedBy) {
       workedMs = next.meta.ms;
     }
-    runs.push({ start, end, calls, names, thinkingMs, workedMs, answer });
+    runs.push({ start, end, calls, names, thinkingMs, workedMs, answer, ...(observedBy ? { observedBy } : {}) });
     start = -1;
   };
   for (let i = 0; i < msgs.length; i++) {
@@ -292,13 +297,17 @@ function stillArriving(m: Msg, index: number, opts: RunFoldOptions, runStart: nu
  *  count and `names` (every distinct tool) are for the hover: printed on the
  *  row they made the line a sentence nobody read, but a pointer resting on
  *  it is a question. */
-export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs" | "workedMs">): { label: string; count: string; names: string } {
+export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs" | "workedMs" | "observedBy">): { label: string; count: string; names: string } {
   const count = `${run.calls} tool call${run.calls === 1 ? "" : "s"}`;
+  // A Delegate's work says whose it was: "Hermes worked for" beside Kit's
+  // plain "Worked for", so the reader sees which runs Klide gated.
+  const who = run.observedBy ? `${delegateLabel(run.observedBy)} ` : "";
+  const verb = (word: string) => (who ? `${who}${word.toLowerCase()}` : word);
   return {
     label: run.workedMs
-      ? `Worked for ${formatElapsed(run.workedMs)}`
+      ? `${verb("Worked")} for ${formatElapsed(run.workedMs)}`
       : run.thinkingMs
-        ? `Thought for ${formatElapsed(run.thinkingMs)}`
+        ? `${verb("Thought")} for ${formatElapsed(run.thinkingMs)}`
         : count,
     count,
     names: run.names.join(", "),
