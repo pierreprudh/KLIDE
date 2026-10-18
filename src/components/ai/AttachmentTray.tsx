@@ -11,7 +11,7 @@ import type { AgentAttachment as Attachment } from "../../agent/types";
 import { FileTypeIcon } from "../fileMarks";
 import { conversationMark } from "../../modelIdentity";
 import type { ProviderId } from "../../agent/types";
-import { isPhotoAttachment } from "./attachments";
+import { isPhotoAttachment, markupPreviewUri } from "./attachments";
 import { eyesName, type Eyes } from "./sight";
 
 const TILE = 52;
@@ -45,7 +45,7 @@ export function AttachmentTray({
           key={`${a.path}-${i}`}
           attachment={a}
           onRemove={() => onRemove(i)}
-          onOpen={a.dataUri && onOpenPhoto ? () => onOpenPhoto(a.dataUri as string) : undefined}
+          onOpenPhoto={onOpenPhoto}
           title={isPhotoAttachment(a) && note ? note : undefined}
         />
       ))}
@@ -62,23 +62,26 @@ export function AttachmentTray({
 function AttachmentTile({
   attachment,
   onRemove,
-  onOpen,
+  onOpenPhoto,
   title,
 }: {
   attachment: Attachment;
   onRemove: () => void;
-  onOpen?: () => void;
+  onOpenPhoto?: (uri: string) => void;
   /** Overrides the tile's tooltip — the tray's note on a photo. */
   title?: string;
 }) {
   const [hover, setHover] = useState(false);
-  const photo = isPhotoAttachment(attachment);
+  // An SVG is sent as text but staged as the drawing it is.
+  const preview = isPhotoAttachment(attachment) ? (attachment.dataUri as string) : markupPreviewUri(attachment);
+  const photo = preview !== null;
+  const onOpen = preview && onOpenPhoto ? () => onOpenPhoto(preview) : undefined;
   const name = attachment.path.split("/").pop() || attachment.path;
   return (
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={title ? `${name} — ${title}` : photo ? name : `${name} — sent as text`}
+      title={title ? `${name} — ${title}` : isPhotoAttachment(attachment) ? name : `${name} — sent as text`}
       style={{
         position: "relative",
         height: TILE,
@@ -93,13 +96,16 @@ function AttachmentTile({
     >
       {photo ? (
         <img
-          src={attachment.dataUri}
+          src={preview}
           alt={name}
           onClick={onOpen}
           style={{
             width: "100%",
             height: "100%",
-            objectFit: "cover",
+            // A drawing is shown whole; a photo fills its tile.
+            objectFit: isPhotoAttachment(attachment) ? "cover" : "contain",
+            padding: isPhotoAttachment(attachment) ? 0 : 6,
+            boxSizing: "border-box",
             display: "block",
             cursor: onOpen ? "zoom-in" : "default",
           }}

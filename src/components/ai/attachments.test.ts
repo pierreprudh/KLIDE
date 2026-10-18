@@ -7,6 +7,7 @@ import {
   MAX_TOTAL_IMAGE_BYTES,
   classifyFile,
   isPhotoAttachment,
+  markupPreviewUri,
   stageFiles,
   type StageableFile,
 } from "./attachments";
@@ -170,5 +171,21 @@ describe("stageFiles", () => {
     });
     expect(attachments).toEqual([]);
     expect(notices[0].text).toContain(`${MAX_STAGED} attachments`);
+  });
+});
+
+describe("markupPreviewUri", () => {
+  it("previews a staged SVG from its whole markup, even when the text is truncated", async () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg">${"<path d=\"m0 0\"/>".repeat(2000)}</svg>`;
+    const { attachments } = await stageFiles([fake("steve.svg", "image/svg+xml", svg)], { allowPhotos: false });
+    expect(attachments[0].content.endsWith("…(truncated)")).toBe(true);
+    expect(markupPreviewUri(attachments[0])).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+  });
+  it("leaves other documents and non-markup .svg files alone", async () => {
+    const { attachments } = await stageFiles(
+      [fake("notes.md", "text/markdown", "<svg></svg>"), fake("broken.svg", "image/svg+xml", "not a drawing")],
+      { allowPhotos: false },
+    );
+    expect(attachments.map(markupPreviewUri)).toEqual([null, null]);
   });
 });
