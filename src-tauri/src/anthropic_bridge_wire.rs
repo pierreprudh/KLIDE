@@ -134,6 +134,8 @@ fn usage(value: &Value) -> Value {
         .unwrap_or(0);
     json!({"input_tokens":value["prompt_tokens"].as_u64().unwrap_or(0).saturating_sub(cached),"output_tokens":value["completion_tokens"].as_u64().unwrap_or(0),"cache_read_input_tokens":cached,"cache_creation_input_tokens":0})
 }
+/// Non-streamed reply; only the test-only Nous bridge server reads one.
+#[cfg(test)]
 pub fn response(value: &Value, model: &str) -> Result<Value, String> {
     let choice = value["choices"]
         .as_array()

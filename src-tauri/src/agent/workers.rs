@@ -55,7 +55,8 @@ struct Report {
 /// A report ready for the parent: `(child id, ok, text, observed HEAD)`.
 pub type Completion = (String, bool, String, Option<String>);
 
-/// A dispatch as a surface or a test sees it.
+/// A dispatch as a test sees it.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerSnapshot {
@@ -198,11 +199,8 @@ pub fn notification_state(parent_id: &str, child_id: &str) -> Option<bool> {
     Some(dispatch.report.is_some())
 }
 
-pub fn notification_pending(parent_id: &str, child_id: &str) -> bool {
-    notification_state(parent_id, child_id).is_some()
-}
-
 /// The dispatches a Run made, oldest first.
+#[cfg(test)]
 pub fn list(parent_id: &str) -> Vec<WorkerSnapshot> {
     let Ok(dispatches) = registry().lock() else {
         return Vec::new();
