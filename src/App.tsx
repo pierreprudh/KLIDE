@@ -135,6 +135,7 @@ import {
 } from "./worktrees";
 import { createListenerScope } from "./tauriEvents";
 import { registerSettingsOpener } from "./settingsNavigation";
+import { registerConversationOpener, registerSessionReattacher } from "./conversationNavigation";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
 import { setIndexedProject } from "./workspaceIndex";
@@ -1056,6 +1057,35 @@ function App() {
     openOverlay("runs");
   }
 
+  /** Land a stored conversation exactly where a click in the rail's tree
+   *  would — Focus's canvas or an AI panel, raised if it is already open.
+   *  False when no stored conversation has that id. */
+  function openConversationById(conversationId: string): boolean {
+    const convo = loadConversations<Conversation>().find((c) => c.id === conversationId);
+    if (!convo) return false;
+    if (focusBase) {
+      setFocusSelectedConvoId(convo.id);
+      setFocusConvoError(null);
+      openFocusConversation(convo, "primary");
+      return true;
+    }
+    openConversationInAiPanel(convo);
+    return true;
+  }
+  // A toast's Open (an agent needs you, finished, an observer updated a
+  // thread) goes through the same door. Re-registered every render: the
+  // opener closes over `focusBase` and the panel fleet.
+  useEffect(() => {
+    registerConversationOpener(openConversationById);
+    registerSessionReattacher((conversationId, provider) =>
+      reattachLiveSession({ provider: provider as ProviderId, conversationId, workspaceRoot }),
+    );
+    return () => {
+      registerConversationOpener(null);
+      registerSessionReattacher(null);
+    };
+  });
+
   const railNav: RailNavItem[] = [
     {
       id: "new-task",
@@ -1607,15 +1637,7 @@ function App() {
         onOpenPeerConversation={(conversationId) => {
           // The peer link's card names another thread; land it exactly where a
           // click in the rail's tree would — raised if it is already open.
-          const convo = loadConversations<Conversation>().find((c) => c.id === conversationId);
-          if (!convo) return;
-          if (focusBase) {
-            setFocusSelectedConvoId(convo.id);
-            setFocusConvoError(null);
-            openFocusConversation(convo, "primary");
-            return;
-          }
-          openConversationInAiPanel(convo);
+          openConversationById(conversationId);
         }}
         onFileWritten={onAgentWrote}
         // Focus reviews in its own column, so it offers no route into the

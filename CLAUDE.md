@@ -74,6 +74,7 @@ Klide/
 │   ├── shortcuts.ts             Keyboard shortcut registry (names + displayed keycaps)
 │   ├── settingsStore.ts         Declarative persisted-settings catalog + useSetting
 │   ├── settingsNavigation.ts    Registered-opener seam — a data module can request a Settings section
+│   ├── conversationNavigation.ts Registered-opener seam — a toast can open a conversation (or reattach a live Delegate PTY)
 │   ├── persistedStore.ts        The one persisted-store contract (get/subscribe/mutate) under the run-data stores
 │   ├── toast.ts                 Global notification bus (surface: components/ToastHost.tsx)
 │   ├── errors.ts                errMessage — readable text from any thrown value
