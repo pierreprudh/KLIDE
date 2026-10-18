@@ -136,6 +136,20 @@ export function isPhotoAttachment(a: Attachment): boolean {
   return typeof a.dataUri === "string" && a.dataUri.length > 0;
 }
 
+/** The drawing behind each staged SVG, kept off the attachment itself: the
+ *  wire gets the (possibly truncated) markup a blind model can read, the tray
+ *  gets the whole picture. Keyed by the staged object, so it lives exactly as
+ *  long as the tray holds it. */
+const markupPreviews = new WeakMap<Attachment, string>();
+
+/** A picture of a document that is one — an SVG travels as markup, but the
+ *  person staging it should still see the drawing, not "2 lines". Rendered
+ *  through `<img>`, where an SVG's scripts and external loads never run. Null
+ *  for every other document. */
+export function markupPreviewUri(a: Attachment): string | null {
+  return markupPreviews.get(a) ?? null;
+}
+
 function base64Of(bytes: ArrayBuffer): string {
   const view = new Uint8Array(bytes);
   let binary = "";
@@ -211,11 +225,17 @@ export async function stageFiles(
         staged.push({ path: name, content: "", mime, dataUri });
         imageBytes += file.size;
       } else {
-        let content = await file.text();
+        const full = await file.text();
+        let content = full;
         if (content.length > MAX_DOC_CHARS) content = content.slice(0, MAX_DOC_CHARS) + "\n…(truncated)";
         // `mime` is the image lane's field by contract (see AgentAttachment) —
         // a document is identified by carrying no dataUri, so leave it unset.
-        staged.push({ path: name, content });
+        const doc = { path: name, content };
+        // Preview from the untruncated markup — a cut-off SVG draws nothing.
+        if (extensionOf(name) === "svg" && /<svg[\s>]/i.test(full)) {
+          markupPreviews.set(doc, `data:image/svg+xml;charset=utf-8,${encodeURIComponent(full)}`);
+        }
+        staged.push(doc);
       }
     } catch {
       notices.push({ text: `Couldn't read ${name}.`, tone: "warn" });
