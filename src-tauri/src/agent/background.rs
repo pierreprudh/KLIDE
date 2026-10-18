@@ -329,6 +329,7 @@ pub fn notification_state(run_id: &str, shell_id: &str) -> Option<bool> {
     Some(ready)
 }
 
+#[cfg(test)]
 pub fn notification_pending(run_id: &str, shell_id: &str) -> bool {
     notification_state(run_id, shell_id).is_some()
 }
