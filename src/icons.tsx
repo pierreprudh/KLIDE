@@ -28,6 +28,7 @@ import { DotsThree } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PushPinSimple } from "@phosphor-icons/react/dist/csr/PushPinSimple";
 import { Copy } from "@phosphor-icons/react/dist/csr/Copy";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
+import { CheckCircle } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ArrowsOut } from "@phosphor-icons/react/dist/csr/ArrowsOut";
 import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { ArrowUp } from "@phosphor-icons/react/dist/csr/ArrowUp";
@@ -47,6 +48,7 @@ import { FolderOpen } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { Gear } from "@phosphor-icons/react/dist/csr/Gear";
 import { GitBranch } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { House } from "@phosphor-icons/react/dist/csr/House";
+import { Info } from "@phosphor-icons/react/dist/csr/Info";
 import { MagnifyingGlass } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { Plus } from "@phosphor-icons/react/dist/csr/Plus";
 import { Paperclip } from "@phosphor-icons/react/dist/csr/Paperclip";
@@ -55,6 +57,8 @@ import { Rectangle } from "@phosphor-icons/react/dist/csr/Rectangle";
 import { Terminal } from "@phosphor-icons/react/dist/csr/Terminal";
 import { Trash } from "@phosphor-icons/react/dist/csr/Trash";
 import { User } from "@phosphor-icons/react/dist/csr/User";
+import { Warning } from "@phosphor-icons/react/dist/csr/Warning";
+import { WarningCircle } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import { X } from "@phosphor-icons/react/dist/csr/X";
 
 /** The one weight Klide draws at. Changing this line re-weights the app. */
@@ -321,6 +325,12 @@ export function DownloadIcon(p: GlyphProps) { return <Icon as={DownloadSimple} {
 export function CodeIcon(p: GlyphProps) { return <Icon as={Code} {...p} />; }
 export function CopyIcon(p: GlyphProps) { return <Icon as={Copy} {...p} />; }
 export function CheckIcon(p: GlyphProps) { return <Icon as={Check} {...p} />; }
+
+/* The four notification tones — one mark each, coloured by the toast. */
+export function SuccessIcon(p: GlyphProps) { return <Icon as={CheckCircle} {...p} />; }
+export function InfoIcon(p: GlyphProps) { return <Icon as={Info} {...p} />; }
+export function WarningIcon(p: GlyphProps) { return <Icon as={Warning} {...p} />; }
+export function ErrorIcon(p: GlyphProps) { return <Icon as={WarningCircle} {...p} />; }
 
 /** Four corners fold into an X; the same strokes remain visible throughout. */
 export function VisualExpandIcon({ expanded = false, size = 18, ...props }: GlyphProps & { expanded?: boolean }) {
