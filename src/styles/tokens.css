@@ -3360,7 +3360,7 @@ button:focus-visible .menu-leadout {
 
 /* ─────────────────────────────────────────────────────────────────────────
    Glass chrome — horizontal strips that float above content
-   (top bar, bottom shelf, toast). The top edge catches light via the
+   (top bar, bottom shelf). The top edge catches light via the
    inset highlight; the bottom is supported by a soft drop shadow.
    Backdrop blur lets the underlying content bleed through, but only
    subtly — these are chrome, not popups. */
@@ -3383,14 +3383,6 @@ button:focus-visible .menu-leadout {
     inset 0 1px 0 var(--panel-highlight),
     0 -1px 1px rgba(28, 28, 28, 0.018),
     0 -8px 24px rgba(28, 28, 28, 0.035);
-  backdrop-filter: blur(22px) saturate(1.18);
-  -webkit-backdrop-filter: blur(22px) saturate(1.18);
-}
-
-/* Toast — the action-result chip. Glass with a single hairline below. */
-.glass-toast {
-  background: var(--panel-glass);
-  border-bottom: 1px solid var(--panel-border);
   backdrop-filter: blur(22px) saturate(1.18);
   -webkit-backdrop-filter: blur(22px) saturate(1.18);
 }
@@ -3419,7 +3411,8 @@ button:focus-visible .menu-leadout {
   }
 }
 
-/* Toast enter — slides in from above with a fade. */
+/* Toast enter — slides in from above with a fade. (Floating cards that
+   drop in; the toast stack itself moves in ToastHost.tsx.) */
 .toast-enter {
   animation: toast-in var(--motion-med) var(--ease-soft);
 }
@@ -3432,35 +3425,6 @@ button:focus-visible .menu-leadout {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-/* Toast exit — macOS-style dismissal. The card slides out toward the right
-   screen edge, accelerating, fading on the way. The row keeps its height
-   until removal; the survivors then FLIP-glide into place (ToastHost.tsx).
-   Everything is opacity + transform — GPU compositor only, no layout anim. */
-.toast-leave {
-  pointer-events: none;
-}
-
-/* Inline pointerEvents:auto on the toast card would otherwise keep a leaving
-   toast hoverable mid-exit. */
-.toast-leave * {
-  pointer-events: none !important;
-}
-
-.toast-leave .glass-toast {
-  animation: toast-dismiss 360ms cubic-bezier(0.55, 0, 0.85, 0.45) forwards;
-  will-change: opacity, transform;
-}
-
-@keyframes toast-dismiss {
-  60% {
-    opacity: 0.85;
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(calc(100% + 20px));
   }
 }
 
