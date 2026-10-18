@@ -9,9 +9,12 @@
 //     an active back-and-forth you're already looking at the TUI; the toast
 //     earns its place only when you've likely tabbed away.
 //   - "working" chatter and repeated states never toast.
+// Both toasts that do appear carry Open, to the conversation the session
+// belongs to — the reason you'd act on them at all.
 
 import { listen } from "@tauri-apps/api/event";
-import { notify } from "./toast";
+import { notify, type ToastAction } from "./toast";
+import { canOpenConversation, openDelegateSession } from "./conversationNavigation";
 import { SOURCE_LABEL, type RunSource } from "./runs";
 
 /** A turn shorter than this ends silently — you were probably watching. */
@@ -22,6 +25,11 @@ const QUIET_TURN_MS = 30_000;
 function providerLabel(sessionId: string): string {
   const provider = sessionId.slice(sessionId.lastIndexOf(":") + 1);
   return SOURCE_LABEL[provider as RunSource] ?? provider;
+}
+
+function openAction(sessionId: string): ToastAction | undefined {
+  if (!canOpenConversation()) return undefined;
+  return { label: "Open", run: () => openDelegateSession(sessionId) };
 }
 
 type Seen = { status: string; sinceMs: number };
@@ -44,13 +52,19 @@ export function watchDelegateStatus(): () => void {
     last.set(sessionId, { status, sinceMs: Date.now() });
 
     if (status === "blocked") {
-      notify(`${providerLabel(sessionId)} needs your input.`, { tone: "warn" });
+      notify(`${providerLabel(sessionId)} needs your input.`, {
+        tone: "warn",
+        action: openAction(sessionId),
+      });
     } else if (
       status === "waiting" &&
       prev?.status === "working" &&
       Date.now() - prev.sinceMs >= QUIET_TURN_MS
     ) {
-      notify(`${providerLabel(sessionId)} finished its turn.`, { tone: "success" });
+      notify(`${providerLabel(sessionId)} finished its turn.`, {
+        tone: "success",
+        action: openAction(sessionId),
+      });
     }
   }).then((u) => {
     if (disposed) u();
