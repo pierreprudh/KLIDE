@@ -8,6 +8,8 @@ import {
 } from "react";
 import {
   listMemory,
+  listMemoryProposals,
+  reviewMemoryProposal,
   readMemory,
   relativeMemoryTime,
   writeMemory,
@@ -246,7 +248,26 @@ export function MemoryPanel({
 
   // Pending memory drafts (from finished runs) awaiting accept / edit / skip.
   // The store snapshot is shared across panels; filter to this workspace.
-  const allDrafts = useSyncExternalStore(subscribeMemoryDrafts, getMemoryDrafts);
+  const localDrafts = useSyncExternalStore(subscribeMemoryDrafts, getMemoryDrafts);
+  const [proposals, setProposals] = useState<MemoryDraft[]>([]);
+  // Pending proposals survive panel closure and process restarts. Poll only
+  // while this review surface is mounted; avoid stale results on workspace switches.
+  useEffect(() => {
+    if (!workspaceRoot) { setProposals([]); return; }
+    let disposed = false;
+    async function load() {
+      try {
+        const items = await listMemoryProposals(workspaceRoot!);
+        if (!disposed) setProposals(items.map((p) => ({ ...p, workspaceRoot: workspaceRoot!, backendProposal: true })));
+      } catch (err) {
+        if (!disposed) setError(String(err));
+      }
+    }
+    void load();
+    const timer = setInterval(() => void load(), 2000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [workspaceRoot]);
+  const allDrafts = useMemo(() => [...proposals, ...localDrafts], [proposals, localDrafts]);
   const drafts = useMemo(
     () => allDrafts.filter((d) => d.workspaceRoot === workspaceRoot && (!d.automatic || Date.now() - d.createdAtMs < MEMORY_DRAFT_TTL)),
     [allDrafts, workspaceRoot]
@@ -260,14 +281,33 @@ export function MemoryPanel({
     if (!workspaceRoot || savingDraftId) return;
     setSavingDraftId(draft.draftId);
     try {
-      const { draftId, createdAtMs, workspaceRoot: _ws, automatic: _auto, why: _why, evidence: _evidence, ...input } = draft;
-      const entry = await writeMemory(workspaceRoot, input);
-      removeMemoryDraft(draftId);
+      const { draftId, createdAtMs, workspaceRoot: _ws, automatic: _auto, why: _why, evidence: _evidence, backendProposal: _backend, ...input } = draft;
+      const entry = draft.backendProposal
+        ? await reviewMemoryProposal(workspaceRoot, draftId, { title: draft.title, notes: draft.notes, goal: draft.goal, decisions: draft.decisions })
+        : await writeMemory(workspaceRoot, input);
+      if (draft.backendProposal) setProposals((items) => items.filter((p) => p.draftId !== draftId));
+      else removeMemoryDraft(draftId);
       setSelectedDraftId(null);
       await refresh();
-      setSelectedId(entry.id);
+      if (entry) setSelectedId(entry.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingDraftId(null);
+    }
+  }
+
+  async function dismissDraft(draft: MemoryDraft) {
+    if (!workspaceRoot || savingDraftId) return;
+    setSavingDraftId(draft.draftId);
+    try {
+      if (draft.backendProposal) {
+        await reviewMemoryProposal(workspaceRoot, draft.draftId, null);
+        setProposals((items) => items.filter((p) => p.draftId !== draft.draftId));
+      } else dismissMemoryDraft(draft);
+      setSelectedDraftId(null);
+    } catch (err) {
+      setError(String(err));
     } finally {
       setSavingDraftId(null);
     }
@@ -526,8 +566,7 @@ export function MemoryPanel({
                         {savingDraftId === d.draftId ? "Keeping…" : "Keep"}
                       </button>
                       <button type="button" disabled={savingDraftId !== null} aria-label={`Dismiss memory: ${d.title}`} onClick={() => {
-                        dismissMemoryDraft(d);
-                        if (selectedDraftId === d.draftId) setSelectedDraftId(null);
+                        void dismissDraft(d);
                       }}>Dismiss</button>
                     </div>
                     </div>
@@ -715,8 +754,7 @@ export function MemoryPanel({
               saving={savingDraftId !== null}
               onAccept={(edited) => void acceptDraft(edited)}
               onSkip={() => {
-                dismissMemoryDraft(selectedDraft);
-                setSelectedDraftId(null);
+                void dismissDraft(selectedDraft);
               }}
             />
           ) : !selected ? (

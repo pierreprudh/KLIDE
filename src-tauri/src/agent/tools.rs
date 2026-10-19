@@ -147,6 +147,8 @@ pub enum ToolKind {
     // workspace file reads and conversation history so Transcripts preserve
     // which knowledge boundary a model crossed.
     ProjectMemory,
+    // Queues app-owned, evidence-checked drafts. Never publishes reviewed memory.
+    MemoryProposal,
     // Mutates only Klide's app-owned planning metadata. It is intentionally
     // available in Plan mode, but is not a workspace read.
     PlanState,
@@ -189,6 +191,7 @@ pub enum ToolCapability {
     ReadWorkspace,
     ReadConversationHistory,
     ReadProjectMemory,
+    ProposeProjectMemory,
     UpdatePlanState,
     WriteWorkspace,
     RunCommand,
@@ -206,6 +209,7 @@ impl ToolKind {
             ToolKind::ReadOnly => ToolCapability::ReadWorkspace,
             ToolKind::ConversationHistory => ToolCapability::ReadConversationHistory,
             ToolKind::ProjectMemory => ToolCapability::ReadProjectMemory,
+            ToolKind::MemoryProposal => ToolCapability::ProposeProjectMemory,
             ToolKind::PlanState => ToolCapability::UpdatePlanState,
             ToolKind::Network => ToolCapability::Network,
             ToolKind::Write => ToolCapability::WriteWorkspace,
@@ -231,6 +235,7 @@ pub fn tool_allowed_in_mode(mode: &AgentMode, kind: ToolKind) -> bool {
             ToolKind::ReadOnly
                 | ToolKind::ConversationHistory
                 | ToolKind::ProjectMemory
+                | ToolKind::MemoryProposal
                 | ToolKind::PlanState
                 | ToolKind::Coordination
                 | ToolKind::ConnectorRead
@@ -248,6 +253,7 @@ pub fn tool_capability_label(capability: ToolCapability) -> &'static str {
         ToolCapability::ReadWorkspace => "read workspace",
         ToolCapability::ReadConversationHistory => "read conversation history",
         ToolCapability::ReadProjectMemory => "read project memory",
+        ToolCapability::ProposeProjectMemory => "propose project memory",
         ToolCapability::UpdatePlanState => "update plan state",
         ToolCapability::WriteWorkspace => "write workspace",
         ToolCapability::RunCommand => "run command",
@@ -270,6 +276,7 @@ impl ToolCapability {
             ToolCapability::ReadWorkspace => "read_workspace",
             ToolCapability::ReadConversationHistory => "read_conversation_history",
             ToolCapability::ReadProjectMemory => "read_project_memory",
+            ToolCapability::ProposeProjectMemory => "propose_project_memory",
             ToolCapability::UpdatePlanState => "update_plan_state",
             ToolCapability::WriteWorkspace => "write_workspace",
             ToolCapability::RunCommand => "run_command",
@@ -556,6 +563,25 @@ fn memory_entry_metadata(entry: &crate::memory::MemoryEntry) -> serde_json::Valu
         map.remove("path");
     }
     value
+}
+
+fn run_memory_propose(
+    ws: &Workspace,
+    input: &serde_json::Value,
+    run_id: &str,
+    _runs_dir: Option<&Path>,
+) -> ToolResult {
+    let result = serde_json::from_value::<crate::memory::proposals::Request>(input.clone())
+        .map_err(|e| format!("Invalid memory proposal: {e}"))
+        .and_then(|request| crate::memory::proposals::propose(ws, run_id, request));
+    match result {
+        Ok(proposal) => ToolResult {
+            ok: true,
+            content: format!("Memory proposal {} is pending human review in Memory. It is not published or available for recall.", proposal.draft_id),
+            metadata: Some(serde_json::json!({"draftId": proposal.draft_id, "reviewState": "proposed", "sourceRefs": proposal.input.source_refs})),
+        },
+        Err(error) => err(error),
+    }
 }
 
 fn run_memory_search(
@@ -859,6 +885,23 @@ fn registry() -> Vec<ToolEntry> {
             run_read: Some(run_open_cli_session),
             run_write_preview: None,
             summary: cli_session_summary,
+        },
+        ToolEntry {
+            kind: ToolKind::MemoryProposal,
+            schema: schema("memory_propose", "Propose a reusable project lesson for human review in the Memory inbox. Cite an exact quote from a non-secret Workspace file as evidence. Explain why it helps future work. This does not publish memory; pending proposals never influence recall. Do not propose routine run summaries or repeat dismissed lessons.",
+                serde_json::json!({
+                    "title": {"type":"string", "maxLength":160},
+                    "kind": {"type":"string", "enum":["decision","convention","fact","failure","pattern"]},
+                    "notes": {"type":"string", "maxLength":4000},
+                    "why": {"type":"string", "maxLength":1000},
+                    "evidence": {"type":"object", "additionalProperties":false, "properties":{
+                        "path":{"type":"string", "description":"Workspace-relative source file."},
+                        "quote":{"type":"string", "maxLength":2000, "description":"Exact supporting text from that file; checked by Klide."}
+                    }, "required":["path","quote"]}
+                }), &["title","kind","notes","why","evidence"]),
+            run_read: Some(run_memory_propose),
+            run_write_preview: None,
+            summary: |call| format!("memory_propose {}", call.input["title"].as_str().unwrap_or("lesson")),
         },
         ToolEntry {
             kind: ToolKind::ProjectMemory,

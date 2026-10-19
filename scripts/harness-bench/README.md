@@ -68,15 +68,16 @@ again, and these edits do not become native checkpointed DiffProposals.
 
 The session MCP server includes `memory_search` and `memory_read`, using KIDE's
 native schemas and retrieval functions. The bridge binds the Workspace; results
-retain provenance and inactive-entry policy. No memory publication tool is
-exposed. Users continue to publish reviewed memory through KIDE's existing flow.
+retain provenance and inactive-entry policy. `memory_propose` queues an evidence-backed lesson in KIDE's Memory inbox; it
+requires an exact quote from a non-secret Workspace file. Proposals are never
+recallable until the operator keeps them. No publication tool is exposed.
 
 Hermes ACP currently has no reasoning-effort setter. Explicit effort selections
 and generic `harness-source:` selections retain the existing CLI transport;
 Hermes-specific `hermes-source:` selections support ACP. A transition through
 the CLI forgets the ACP session so a later ACP turn receives the full current
 conversation. Terminal/Mission sessions retain the existing CLI path. CLI session
-history import and memory/Skill proposals from Hermes remain future work.
+history import and Skill proposals from Hermes remain future work.
 
 Protocol references checked against the installed adapter and official docs:
 [ACP host integration](https://hermes-agent.nousresearch.com/docs/user-guide/features/acp),

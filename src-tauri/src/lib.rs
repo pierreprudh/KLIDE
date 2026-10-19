@@ -1262,6 +1262,8 @@ pub fn run() {
             skills::install_skill,
             skills::uninstall_skill,
             skills::list_filesystem_skills,
+            memory::proposals::memory_proposals_list,
+            memory::proposals::memory_proposal_review,
             memory_write,
             memory_list,
             memory_read,
