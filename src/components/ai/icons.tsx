@@ -116,24 +116,28 @@ export const BRAND_LOGO_PATHS: Partial<Record<BrandKey, string>> = {
 };
 
 // The one brand-colour table, keyed by brand. `mark` tints the logo itself;
-// `chart` is the chart-ramp step a brand wears in Stats and the balance
-// donuts — spaced steps (1/3/4/5/7) keep neighbours distinguishable, and a
-// brand with no step falls to the neutral ramp there. Mission Control once
-// kept a near-duplicate (`PROVIDER_ACCENT`) and Stats a second chart table
+// `chart` is the hue a brand wears in Stats and the balance donuts — its
+// logo's own colour, so a bar reads as the provider whose mark sits beside it.
+// A monochrome logo (OpenAI, Codex, Ollama, xAI, OpenCode…) has no hue to
+// lend and falls to the neutral ramp there. Mission Control once kept a
+// near-duplicate (`PROVIDER_ACCENT`) and Stats a second chart table
 // (`PROVIDER_BRAND_COLOR`); a row's accent depended on which surface drew it.
 // Claude Code and Codex are distinct *products*, not just the Anthropic /
 // OpenAI providers — they wear their own marks (see PROVIDER_LOGO_IMAGE).
 const BRAND_COLOR: Partial<Record<BrandKey, { mark?: string; chart?: string }>> = {
-  anthropic: { mark: "#D97757", chart: "var(--chart-1)" },
-  "claude-code": { mark: "#D97757", chart: "var(--chart-1)" },
+  anthropic: { mark: "#D97757", chart: "#D97757" },
+  "claude-code": { mark: "#D97757", chart: "#D97757" },
   openai: { mark: "var(--fg-strong)" },
   codex: { mark: "var(--fg-strong)" },
   opencode: { mark: "var(--fg-strong)" },
   xai: { mark: "var(--fg-strong)" },
-  mistral: { chart: "var(--chart-3)" },
-  openrouter: { mark: "#4A6CF7", chart: "var(--chart-5)" },
-  deepseek: { mark: "#4D6BFE", chart: "var(--chart-4)" },
-  omp: { mark: "#7C6BAE", chart: "var(--chart-7)" },
+  // The amber between the pixel M's yellow and red — its red end sits too
+  // close to Anthropic's clay for two neighbouring bars.
+  mistral: { chart: "#F5A524" },
+  gemini: { chart: "#3186FF" },
+  openrouter: { mark: "#4A6CF7", chart: "#6467F2" },
+  deepseek: { mark: "#4D6BFE", chart: "#4D6BFE" },
+  omp: { mark: "#7C6BAE", chart: "#7C6BAE" },
 };
 
 function brandColor(id: string): { mark?: string; chart?: string } | undefined {

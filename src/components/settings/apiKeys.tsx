@@ -606,7 +606,7 @@ export function ProviderBalanceBlock() {
     () =>
       ordered
         .filter((p) => (usedByProvider[p.id] ?? 0) > 0)
-        .map((p) => ({ key: `klide:${p.id}`, color: providerColor(p.id), label: p.title })),
+        .map((p) => ({ key: `klide:${p.id}`, color: providerColor(p.id), label: p.title, logo: p.id })),
     [ordered, usedByProvider],
   );
 
