@@ -34,12 +34,14 @@ export function MissionLibrary({ workspaceRoot, onOpenRun, coordinatorRunId }: {
     {error && <div role="alert">Couldn’t read Missions — {error}</div>}
     {bundles.map(bundle => <MissionCard key={bundle.mission.id} variant="sidebar" workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} receipt={{ missionId: bundle.mission.id, title: bundle.mission.title, route: bundle.tasks.find(task => task.dispatch)?.dispatch }} />)}
   </section>;
-  return <section style={{ padding: "8px 4px 14px" }}>
+  return <section style={{ padding: "8px 12px 14px", display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, maxHeight: "30%", flexShrink: 0, overflow: "hidden" }}>
     <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--fg-subtle)", marginBottom: 8 }}><MissionWorkflowIcon size={16} />Missions</div>
     {error && <div role="alert">Couldn’t read Missions — {error}</div>}
-    {bundles.map((bundle) => <div key={bundle.mission.id} style={{ marginBottom: 8 }}>
-      <button className="klide-button" aria-expanded={selected === bundle.mission.id} onClick={() => setSelected((current) => current === bundle.mission.id ? null : bundle.mission.id)}>{bundle.mission.title}</button>
+    <div role="region" aria-label="Saved missions" tabIndex={0} style={{ minHeight: 0, overflowY: "auto", overflowX: "hidden", overscrollBehaviorY: "contain" }}>
+    {bundles.map((bundle) => <div key={bundle.mission.id} style={{ marginBottom: 8, minWidth: 0 }}>
+      <button className="klide-button" style={{ width: "100%", minWidth: 0, whiteSpace: "normal", overflowWrap: "anywhere", textAlign: "left" }} aria-expanded={selected === bundle.mission.id} onClick={() => setSelected((current) => current === bundle.mission.id ? null : bundle.mission.id)}>{bundle.mission.title}</button>
       {selected === bundle.mission.id && <MissionCard workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} receipt={{ missionId: bundle.mission.id, title: bundle.mission.title, route: bundle.tasks.find((task) => task.dispatch)?.dispatch ?? { workerKind: "harness", provider: "ollama", model: defaultModelForProvider("ollama"), requireDiffReview: true } }} />}
     </div>)}
+    </div>
   </section>;
 }
