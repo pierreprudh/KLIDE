@@ -1,7 +1,9 @@
 import "./memoryPanel.css";
+import { notify } from "../toast";
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -250,17 +252,29 @@ export function MemoryPanel({
   // The store snapshot is shared across panels; filter to this workspace.
   const localDrafts = useSyncExternalStore(subscribeMemoryDrafts, getMemoryDrafts);
   const [proposals, setProposals] = useState<MemoryDraft[]>([]);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  // Bumped by every Keep / Dismiss: a poll that started before one lands
+  // carries the old inbox and must not put the reviewed proposal back.
+  const reviewGeneration = useRef(0);
   // Pending proposals survive panel closure and process restarts. Poll only
   // while this review surface is mounted; avoid stale results on workspace switches.
   useEffect(() => {
     if (!workspaceRoot) { setProposals([]); return; }
     let disposed = false;
     async function load() {
+      const generation = reviewGeneration.current;
       try {
         const items = await listMemoryProposals(workspaceRoot!);
-        if (!disposed) setProposals(items.map((p) => ({ ...p, workspaceRoot: workspaceRoot!, backendProposal: true })));
+        if (disposed || generation !== reviewGeneration.current) return;
+        setProposalError(null);
+        // Same inbox → same array, so an idle poll re-renders nothing.
+        setProposals((current) =>
+          current.length === items.length && current.every((p, i) => p.draftId === items[i].draftId)
+            ? current
+            : items.map((p) => ({ ...p, workspaceRoot: workspaceRoot!, backendProposal: true })),
+        );
       } catch (err) {
-        if (!disposed) setError(String(err));
+        if (!disposed) setProposalError(String(err));
       }
     }
     void load();
@@ -274,6 +288,9 @@ export function MemoryPanel({
   );
   const selectedDraft =
     drafts.find((d) => d.draftId === selectedDraftId) ?? null;
+  // A failed inbox poll clears itself on the next good one; an action's
+  // error stays until the next action.
+  const shownError = error ?? proposalError;
 
   // Accept a draft: write it to durable memory, drop the draft, refresh, and
   // select the new entry. Skip just drops the draft.
@@ -282,12 +299,15 @@ export function MemoryPanel({
     setSavingDraftId(draft.draftId);
     try {
       const { draftId, createdAtMs, workspaceRoot: _ws, automatic: _auto, why: _why, evidence: _evidence, backendProposal: _backend, ...input } = draft;
+      if (draft.backendProposal) reviewGeneration.current += 1;
       const entry = draft.backendProposal
         ? await reviewMemoryProposal(workspaceRoot, draftId, { title: draft.title, notes: draft.notes, goal: draft.goal, decisions: draft.decisions })
         : await writeMemory(workspaceRoot, input);
       if (draft.backendProposal) setProposals((items) => items.filter((p) => p.draftId !== draftId));
       else removeMemoryDraft(draftId);
-      setSelectedDraftId(null);
+      // Only the draft that was open closes; Keep on another row leaves the
+      // editor (and its unsaved edits) alone.
+      setSelectedDraftId((open) => (open === draftId ? null : open));
       await refresh();
       if (entry) setSelectedId(entry.id);
     } catch (err) {
@@ -302,10 +322,17 @@ export function MemoryPanel({
     setSavingDraftId(draft.draftId);
     try {
       if (draft.backendProposal) {
-        await reviewMemoryProposal(workspaceRoot, draft.draftId, null);
+        reviewGeneration.current += 1;
+        // An interrupted Keep had already saved it: say so rather than
+        // pretend the lesson is gone.
+        const saved = await reviewMemoryProposal(workspaceRoot, draft.draftId, null);
         setProposals((items) => items.filter((p) => p.draftId !== draft.draftId));
+        if (saved) {
+          notify(`"${saved.title}" was already saved to Project Memory.`, { tone: "warn" });
+          await refresh();
+        }
       } else dismissMemoryDraft(draft);
-      setSelectedDraftId(null);
+      setSelectedDraftId((open) => (open === draft.draftId ? null : open));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -594,7 +621,7 @@ export function MemoryPanel({
                 Open a folder to start a project memory.
               </div>
             )}
-            {workspaceRoot && error && (
+            {workspaceRoot && shownError && (
               <div
                 style={{
                   padding: "10px 8px",
@@ -602,10 +629,10 @@ export function MemoryPanel({
                   fontSize: 12,
                 }}
               >
-                {error}
+                {shownError}
               </div>
             )}
-            {workspaceRoot && !error && filtered.length === 0 && (
+            {workspaceRoot && !shownError && filtered.length === 0 && (
               <div
                 style={{
                   padding: "14px 8px",
