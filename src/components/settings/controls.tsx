@@ -81,6 +81,7 @@ export function Panel({ children }: { children: ReactNode }) {
 
 export function Row({
   title,
+  titleContent,
   description,
   control,
   leading,
@@ -88,6 +89,9 @@ export function Row({
   controlLayout = "compact",
 }: {
   title: string;
+  // Drawn in place of the title text (e.g. a wordmark); `title` still names the
+  // row for search and assistive tech.
+  titleContent?: ReactNode;
   description: string;
   control: ReactNode;
   leading?: ReactNode;
@@ -111,7 +115,7 @@ export function Row({
         )}
         <div style={{ minWidth: 0 }}>
           <div className="klide-settings-row-heading">
-            <div className="klide-row-title">{title}</div>
+            <div className="klide-row-title">{titleContent ?? title}</div>
             {help && (
               <button type="button" className="klide-settings-help-button"
                 aria-label={`Learn more about ${title}`} title={`More about ${title}`}
