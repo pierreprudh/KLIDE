@@ -102,6 +102,7 @@ Every Tool has one capability:
 | `ReadWorkspace` | `ReadOnly` | May run in `plan` and `goal`. Must resolve paths through the Workspace module when touching files. |
 | `ReadConversationHistory` | `ConversationHistory` | May run in `plan` and `goal`. Reads app-owned prior Harness Transcripts for the current Workspace, not Workspace files. |
 | `ReadProjectMemory` | `ProjectMemory` | May run in `plan` and `goal`. Reads reviewed entries under `.klide/memory/`; normal recall excludes stale and superseded entries. |
+| `ProposeProjectMemory` | `MemoryProposal` | Plan/Goal only. Verifies file evidence and queues a bounded lesson for human review; cannot publish knowledge or alter recalled memory. |
 | `WriteWorkspace` | `Write` | Goal-only. Produces a Diff proposal and waits for Diff review before writing. |
 | `RunCommand` | `Command` | Goal-only. Produces a permission request and runs only after approval. |
 | `PauseForUser` | `Pause` | Goal-only. Pauses the Run and resumes on an outside answer — typed user input (`userAnswerQuestion`), a nested subagent Run (`spawn_subagent`), or an advisor model (`consult_advisor`). A `spawn_subagent` call that names a `worker` (a Delegate id) is a **dispatch**: it first produces a permission request of its own, and on approval the child runs as that Delegate in an isolated worktree. |

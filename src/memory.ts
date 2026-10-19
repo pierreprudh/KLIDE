@@ -115,3 +115,27 @@ export async function readMemory(
 /** Kept under its own name for the Memory surface's call sites; the rule is the
  *  shared one. */
 export { relativeTime as relativeMemoryTime } from "./time";
+
+export type MemoryProposal = MemoryInput & {
+  draftId: string;
+  createdAtMs: number;
+  workspaceRoot: string;
+  why: string;
+  evidence: string;
+  evidenceHash: string;
+};
+
+export function listMemoryProposals(workspaceRoot: string): Promise<MemoryProposal[]> {
+  return invoke("memory_proposals_list", { workspaceRoot });
+}
+
+/** Only the operator's review UI calls this; agents have no publication tool. */
+export async function reviewMemoryProposal(
+  workspaceRoot: string,
+  draftId: string,
+  edits: Pick<MemoryInput, "title" | "notes" | "goal" | "decisions"> | null,
+): Promise<MemoryEntry | null> {
+  const entry = await invoke<MemoryEntry | null>("memory_proposal_review", { workspaceRoot, draftId, edits });
+  if (entry) for (const fn of memoryChangeListeners) fn();
+  return entry;
+}

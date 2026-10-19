@@ -139,6 +139,7 @@ pub enum BridgeRequest {
     ReadSkill { command: String },
     MemorySearch { input: serde_json::Value },
     MemoryRead { input: serde_json::Value },
+    MemoryPropose { input: serde_json::Value },
     Cancel {
         run_id: String,
         #[serde(default)]
@@ -340,9 +341,13 @@ fn execute_inner(
 ) -> Result<serde_json::Value, String> {
     let root = session.workspace_root.as_str();
     let me = session.run_id.as_str();
-    let memory_tool = if matches!(&request, BridgeRequest::MemoryRead { .. }) { "memory_read" } else { "memory_search" };
+    let memory_tool = match &request {
+        BridgeRequest::MemoryRead { .. } => "memory_read",
+        BridgeRequest::MemoryPropose { .. } => "memory_propose",
+        _ => "memory_search",
+    };
     let operation = match request {
-        BridgeRequest::MemorySearch { input } | BridgeRequest::MemoryRead { input } => {
+        BridgeRequest::MemorySearch { input } | BridgeRequest::MemoryRead { input } | BridgeRequest::MemoryPropose { input } => {
             // Identity and workspace come from the authenticated session. Reuse
             // the native registry's validation, inactive policy and provenance.
             let result = crate::agent::tools::execute_read_only_tool(root,

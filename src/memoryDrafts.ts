@@ -21,6 +21,8 @@ export type MemoryDraft = MemoryInput & {
   /** Local draft id — distinct from the durable memory entry id. */
   draftId: string;
   automatic?: boolean;
+  /** Rust-owned proposal: review it through the backend, never localStorage. */
+  backendProposal?: boolean;
   why?: string;
   evidence?: string;
   createdAtMs: number;
