@@ -2696,40 +2696,6 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
-/* Orbit loader — four dots rotating around a centre, each at a different
-   opacity so the rotation reads as motion. Used for the "speaking" /
-   generating state in the AI panel. */
-.ai-loader-orbit {
-  width: 18px;
-  height: 18px;
-  position: relative;
-  display: inline-block;
-  color: var(--accent);
-  animation: ai-loader-orbit-r 1.4s linear infinite;
-}
-
-.ai-loader-orbit span {
-  position: absolute;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  left: 50%;
-  top: 50%;
-  transform-origin: 0 0;
-}
-
-.ai-loader-orbit span:nth-child(1) { transform: translate(-50%, -50%) translate(0, -7px); opacity: 1; }
-.ai-loader-orbit span:nth-child(2) { transform: translate(-50%, -50%) translate(7px, 0); opacity: 0.55; }
-.ai-loader-orbit span:nth-child(3) { transform: translate(-50%, -50%) translate(0, 7px); opacity: 0.28; }
-.ai-loader-orbit span:nth-child(4) { transform: translate(-50%, -50%) translate(-7px, 0); opacity: 0.12; }
-
-@keyframes ai-loader-orbit-r {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .workbench-main {
   padding: 2px 0;
   transition:
@@ -3165,9 +3131,28 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
+/* A changed total re-enters digit by digit — a short rise, no overshoot.
+   --i staggers the digits left to right. */
+.klide-digit-in {
+  display: inline-block;
+  animation: klide-digit-in var(--motion-slower) var(--ease-out) calc(var(--i, 0) * 40ms) both;
+}
+
+@keyframes klide-digit-in {
+  from {
+    transform: translateY(35%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .klide-skeleton::after,
-  .klide-rise {
+  .klide-rise,
+  .klide-digit-in {
     animation: none;
   }
 }

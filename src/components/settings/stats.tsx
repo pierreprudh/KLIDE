@@ -1,8 +1,8 @@
 // Usage stats — the Stats section: histogram, donut, provider grouping,
 // cost/token metrics over agent runs. Extracted from SettingsPanel.tsx.
 
-import { useCallback, useMemo, useState, type CSSProperties } from "react";
-import { ProviderLogo, providerChartColor } from "../ai/icons";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { DotGridLoader, ProviderLogo, providerChartColor } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import {
   ActivityHeatmap,
@@ -44,13 +44,22 @@ export function groupProviderId(g: ProviderGroup): string {
 
 // One stable colour per group: brand hue when known, else the next neutral
 // step. Computed over the whole (sorted) list so neutral assignment is
-// deterministic and collision-free within a render.
+// deterministic and collision-free within a render. Two groups of one brand
+// (Claude Code and Klide · Anthropic) would stack as one bar, so the second
+// wears its hue lighter.
 export function assignGroupColors(groups: ProviderGroup[]): Map<string, string> {
   const out = new Map<string, string>();
+  const brandUses = new Map<string, number>();
   let neutral = 0;
   for (const g of groups) {
     const brand = providerChartColor(groupProviderId(g));
-    out.set(g.key, brand ?? NEUTRAL_STEPS[neutral++ % NEUTRAL_STEPS.length]);
+    if (!brand) {
+      out.set(g.key, NEUTRAL_STEPS[neutral++ % NEUTRAL_STEPS.length]);
+      continue;
+    }
+    const n = brandUses.get(brand) ?? 0;
+    brandUses.set(brand, n + 1);
+    out.set(g.key, n === 0 ? brand : `color-mix(in srgb, ${brand} ${Math.max(30, 100 - n * 45)}%, var(--bg-elevated))`);
   }
   return out;
 }
@@ -83,18 +92,18 @@ export function formatUsd(n: number): string {
   return "$0";
 }
 
-export function prettyProvider(id: string): string {
-  return id.charAt(0).toUpperCase() + id.slice(1);
-}
-
-// Round a max up to a "nice" round number (1/2/2.5/5 × 10ⁿ) so the histogram's
-// top gridline lands on a readable value instead of the raw data maximum.
+// Round a max up to a "nice" round number (1/2/2.5/5 × 10ⁿ); half of it is
+// the chart's gridline step.
 export function niceCeil(x: number): number {
   if (x <= 0) return 1;
   const mag = Math.pow(10, Math.floor(Math.log10(x)));
   const f = x / mag;
   const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
   return nice * mag;
+}
+
+export function prettyProvider(id: string): string {
+  return id.charAt(0).toUpperCase() + id.slice(1);
 }
 
 /**
@@ -187,9 +196,99 @@ export function MetricToggle({
   );
 }
 
-// Weekly histogram of the last 26 weeks. In tokens mode each bar stacks
-// input (faded) under output (full accent); in conversations mode it's a
-// plain count. Clicking a bar pins its exact numbers below the chart.
+// The stacked usage chart: a window of days (or weeks) as columns, each a
+// stack of rounded per-group segments with a hairline gap between them. Run
+// the pointer along the plot and one column is ringed while a tooltip glides
+// beside it; the rest fade back. Day / Week regrows the bars.
+type HistogramScale = "Day" | "Week";
+
+const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
+const SCALE_SPAN: Record<HistogramScale, number> = { Day: 30, Week: 26 };
+const STACK_H = 150; // the axis top, px
+const PLOT_H = STACK_H + 14; // room for the ring above, the baseline below
+const BAR_FOOT = 8; // bars stand this far above the plot's bottom edge
+const SEG_GAP = 2; // hairline between stacked segments
+const GUTTER = 52; // value labels to the right of the bars
+const TIP_W = 196;
+const TIP_ROWS = 6;
+const EMPTY_SEG = { conversations: 0, tokens: 0, cost: 0 };
+
+const shortDate = (ms: number) =>
+  new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+function bucketLabel(startMs: number, scale: HistogramScale): string {
+  if (scale === "Day") return shortDate(startMs);
+  const end = startMs + 6 * DAY_MS;
+  return new Date(startMs).getMonth() === new Date(end).getMonth()
+    ? `${shortDate(startMs)} – ${new Date(end).getDate()}`
+    : `${shortDate(startMs)} – ${shortDate(end)}`;
+}
+
+function ScaleSwitch({
+  value,
+  onChange,
+}: {
+  value: HistogramScale;
+  onChange: (s: HistogramScale) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Chart scale"
+      style={{
+        position: "relative",
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        padding: 2,
+        borderRadius: 9,
+        background: "color-mix(in srgb, var(--fg-strong) 6%, transparent)",
+        flexShrink: 0,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          position: "absolute",
+          top: 2,
+          bottom: 2,
+          left: 2,
+          width: "calc(50% - 2px)",
+          borderRadius: 7,
+          background: "var(--bg-elevated)",
+          boxShadow: "0 0 0 1px var(--border)",
+          transform: value === "Week" ? "translateX(100%)" : "none",
+          transition: "transform 220ms var(--ease-out)",
+        }}
+      />
+      {(["Day", "Week"] as const).map((s) => (
+        <button
+          key={s}
+          type="button"
+          role="tab"
+          aria-selected={value === s}
+          onClick={() => onChange(s)}
+          style={{
+            position: "relative",
+            height: 24,
+            padding: "0 10px",
+            border: "none",
+            borderRadius: 7,
+            background: "transparent",
+            font: "inherit",
+            fontSize: 11.5,
+            cursor: "pointer",
+            color: value === s ? "var(--fg-strong)" : "var(--fg-subtle)",
+            transition: "color var(--motion-fast) var(--ease-out)",
+          }}
+        >
+          {s}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function UsageHistogram({
   runs,
   metric,
@@ -199,371 +298,467 @@ export function UsageHistogram({
   runs: Run[];
   metric: StatsMetric;
   // Stacked segments, sorted largest-first, each with its colour. Keys must
-  // match what `keyOf` returns so segments line up with the legend.
-  groupOrder: { key: string; color: string; label: string }[];
+  // match what `keyOf` returns so segments line up with the tooltip rows.
+  // `logo` is a Provider id or brand key; the legend draws its mark.
+  groupOrder: { key: string; color: string; label: string; logo?: string }[];
   // How a run maps to a stack key — by provider (default) or by model when a
   // single provider is in focus.
   keyOf?: (r: Run) => string;
 }) {
-  const WEEKS = 26;
-  const WEEK_MS = 7 * 86_400_000;
-  const [selected, setSelected] = useState<number | null>(null);
-  const [hovered, setHovered] = useState<number | null>(null);
+  const [scale, setScale] = useState<HistogramScale>("Day");
+  const [active, setActive] = useState<number | null>(null);
+  const [grown, setGrown] = useState(false);
+  const [plotW, setPlotW] = useState(0);
+  // A legend row under the pointer picks one group out of every column.
+  const [focusKey, setFocusKey] = useState<string | null>(null);
+  const plotRef = useRef<HTMLDivElement>(null);
+  const span = SCALE_SPAN[scale];
+
+  // Bars rise from zero on first paint, then animate height on every change.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setGrown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  // Columns are laid out in px, so the plot's width is measured, not assumed.
+  useEffect(() => {
+    const el = plotRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setPlotW(e.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const buckets = useMemo(() => {
-    const startMonday = mondayOfWeek(startOfDay(Date.now())) - (WEEKS - 1) * WEEK_MS;
-    const buckets = Array.from({ length: WEEKS }, (_, i) => ({
-      startMs: startMonday + i * WEEK_MS,
-      conversations: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cost: 0,
-      // Per-provider-group contribution, for the stacked segments.
+    const step = scale === "Day" ? DAY_MS : WEEK_MS;
+    const floor = scale === "Day" ? startOfDay : mondayOfWeek;
+    const first = floor(Date.now()) - (span - 1) * step;
+    const buckets = Array.from({ length: span }, (_, i) => ({
+      // Rebuilt from the calendar, not `first + i * step`, so a DST change
+      // inside the window doesn't shift a bucket off midnight.
+      startMs: floor(first + i * step + step / 2),
       groups: {} as Record<string, { conversations: number; tokens: number; cost: number }>,
     }));
     for (const r of runs) {
-      const idx = Math.floor((mondayOfWeek(r.createdMs) - startMonday) / WEEK_MS);
-      if (idx < 0 || idx >= WEEKS) continue;
-      const bk = buckets[idx];
-      bk.conversations += 1;
-      bk.inputTokens += r.inputTokens ?? 0;
-      bk.outputTokens += r.outputTokens ?? 0;
-      bk.cost += r.costUsd ?? 0;
+      // Round, not floor: a DST day is 23 or 25 hours long.
+      const idx = Math.round((floor(r.createdMs) - first) / step);
+      if (idx < 0 || idx >= span) continue;
       const gk = keyOf(r);
-      const gb = bk.groups[gk] ?? (bk.groups[gk] = { conversations: 0, tokens: 0, cost: 0 });
+      const gb = buckets[idx].groups[gk] ?? (buckets[idx].groups[gk] = { ...EMPTY_SEG });
       gb.conversations += 1;
       gb.tokens += runTokens(r);
       gb.cost += runCost(r);
     }
     return buckets;
-  }, [runs, keyOf]);
+  }, [runs, keyOf, scale, span]);
 
   const segValue = (gb: { conversations: number; tokens: number; cost: number }) =>
     metric === "tokens" ? gb.tokens : metric === "cost" ? gb.cost : gb.conversations;
-
-  const valueOf = (b: (typeof buckets)[number]) =>
-    metric === "tokens" ? b.inputTokens + b.outputTokens : metric === "cost" ? b.cost : b.conversations;
-  const max = Math.max(1, ...buckets.map(valueOf));
-  const sel = selected != null ? buckets[selected] : null;
-
-  // Round the axis top to a clean number and lay 4 evenly-spaced gridlines
-  // (0 · ¼ · ½ · ¾ · top). Bars scale against this, not the raw max, so the
-  // top of the tallest bar sits just under a labelled line.
-  const axisTop = niceCeil(max);
-  const fmtAxis = (v: number) =>
-    metric === "cost" ? formatUsd(v) : metric === "tokens" ? formatCompact(v) : Math.round(v).toLocaleString("en-US");
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => ({ f, value: axisTop * f }));
-
-  // One label at each month change, positioned by week index.
-  const monthLabels = useMemo(() => {
-    const labels: { i: number; name: string }[] = [];
-    let last = -1;
-    buckets.forEach((b, i) => {
-      const month = new Date(b.startMs).getMonth();
-      if (month !== last) {
-        labels.push({ i, name: new Date(b.startMs).toLocaleDateString("en-US", { month: "short" }) });
-        last = month;
-      }
-    });
-    return labels;
-  }, [buckets]);
-
-  const weekLabel = (startMs: number) =>
-    `Week of ${new Date(startMs).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-
-  const chartHeight = 120;
-  const AXIS_W = 50;
-
-  // The bar the readout describes: hover wins over a pinned click.
-  const active = hovered ?? selected;
-  const ab = active != null ? buckets[active] : null;
-
-  // Per-week tooltip content: provider rows (largest-first) + total.
   const fmtVal = (v: number) =>
-    metric === "cost" ? formatUsd(v) : metric === "tokens" ? formatCompact(v) : Math.round(v).toLocaleString("en-US");
+    metric === "cost" ? formatUsd(v) : Math.round(v).toLocaleString("en-US");
+  const fmtAxis = (v: number) =>
+    metric === "cost"
+      ? formatUsd(v)
+      : metric === "tokens"
+        ? formatCompact(v).replace(/\.0(?=[kMB])/, "")
+        : v.toLocaleString("en-US", { maximumFractionDigits: 1 });
+
+  // Each column's segments bottom-up: the largest group anchors the base.
+  const columns = buckets.map((b) =>
+    [...groupOrder]
+      .reverse()
+      .map((g) => ({ key: g.key, color: g.color, v: segValue(b.groups[g.key] ?? EMPTY_SEG) }))
+      .filter((s) => s.v > 0),
+  );
+  const totals = columns.map((segs) => segs.reduce((s, x) => s + x.v, 0));
+  const total = totals.reduce((s, x) => s + x, 0);
+  const maxTotal = Math.max(...totals);
+  const maxSegs = Math.max(1, ...columns.map((c) => c.length));
+  // The tallest column reaches the top of the plot; gridlines sit on round
+  // values beneath it (62 → a line at 50; 20 → lines at 10 and 20).
+  const axisTop = maxTotal;
+  const gridStep = niceCeil(maxTotal) / 2;
+  const gridLines =
+    maxTotal > 0
+      ? Array.from({ length: Math.floor(maxTotal / gridStep + 1e-9) }, (_, k) => (k + 1) * gridStep)
+      : [];
+  const unitPx = maxTotal > 0 ? (STACK_H - SEG_GAP * (maxSegs - 1)) / axisTop : 0;
+
+  // The legend: each group's share of the window, largest first.
+  const legend = groupOrder
+    .map((g) => ({ ...g, v: columns.reduce((s, c) => s + (c.find((x) => x.key === g.key)?.v ?? 0), 0) }))
+    .filter((g) => g.v > 0)
+    .sort((a, b) => b.v - a.v);
+
+  const layout = columns.map((segs) => {
+    let y = 0;
+    const out = segs.map((s) => {
+      const h = Math.max(2, s.v * unitPx);
+      const seg = { ...s, bottom: y, h };
+      y += h + SEG_GAP;
+      return seg;
+    });
+    return { segs: out, top: segs.length ? y - SEG_GAP : 0 };
+  });
+
+  const barsW = Math.max(0, plotW - GUTTER);
+  const gap = barsW > 0 ? Math.max(1, Math.min(6, (barsW - 3 * span) / (span - 1))) : 4;
+  const barW = barsW > 0 ? (barsW - gap * (span - 1)) / span : 0;
+  const radius = Math.min(2.5, barW / 2);
+  const colLeft = (i: number) => i * (barW + gap);
+
+  // The ring and tooltip glide between columns, but appear in place: the
+  // first column the pointer lands on shouldn't slide in from column 0.
+  const prevActive = useRef<number | null>(null);
+  const glide = prevActive.current !== null && active !== null;
+  useEffect(() => {
+    prevActive.current = active;
+  }, [active]);
+
+  const pick = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const w = r.width - GUTTER;
+    if (w <= 0) return;
+    const i = Math.floor(((e.clientX - r.left) / w) * span);
+    setActive(Math.max(0, Math.min(span - 1, i)));
+  };
+
+  const scrubbing = active !== null && active < span;
+  // Leaving the plot fades the ring and tooltip out where they stood, so they
+  // keep drawing the last column until the fade is done.
+  const lastShown = useRef(0);
+  if (scrubbing) lastShown.current = active;
+  const shown = Math.min(lastShown.current, span - 1);
+  const ab = buckets[shown];
+  const ringTop = layout[shown].top;
+  const right = colLeft(shown) + barW + 8;
+  const tipX =
+    right + TIP_W <= barsW || colLeft(shown) - 8 - TIP_W < 0
+      ? Math.min(right, Math.max(0, barsW - TIP_W))
+      : colLeft(shown) - 8 - TIP_W;
+  const glideMs = glide ? "260ms" : "0ms";
+
+  const title = metric === "cost" ? "Spend" : metric === "tokens" ? "Tokens" : "Conversations";
+  const unit = metric === "cost" ? "" : metric === "tokens" ? "tokens" : "conversations";
+  const figure = fmtVal(total);
 
   return (
-    <div>
-      {/* Axis gutter + plot area */}
-      <div style={{ display: "flex" }}>
-        <div style={{ width: AXIS_W, height: chartHeight, position: "relative", flexShrink: 0 }}>
-          {ticks.map((t) => (
-            <span
-              key={t.f}
-              style={{
-                position: "absolute",
-                bottom: `${t.f * 100}%`,
-                right: 8,
-                transform: "translateY(50%)",
-                color: "var(--fg-subtle)",
-                fontSize: 10,
-                fontFamily: "var(--font-mono)",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {fmtAxis(t.value)}
-            </span>
-          ))}
-        </div>
-
-        <div style={{ position: "relative", flex: 1, height: chartHeight }}>
-          {/* Gridlines */}
-          {ticks.map((t) => (
-            <div
-              key={t.f}
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: `${t.f * 100}%`,
-                borderTop: "1px solid var(--border)",
-                opacity: t.f === 0 ? 1 : 0.45,
-              }}
-            />
-          ))}
-
-          {/* Bars */}
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: "var(--fg-strong)", fontSize: 13.5, lineHeight: "18px" }}>{title}</div>
           <div
-            onMouseLeave={() => setHovered(null)}
             style={{
-              position: "relative",
-              display: "flex",
-              alignItems: "flex-end",
-              gap: 3,
-              height: "100%",
+              color: "var(--fg-subtle)",
+              fontSize: 12,
+              lineHeight: "16px",
+              fontVariantNumeric: "tabular-nums",
             }}
           >
-            {buckets.map((b, i) => {
-              const total = valueOf(b);
-              const isActive = i === active;
-              // Stack provider segments bottom-up: render largest-last so the
-              // biggest provider anchors the base (groupOrder is largest-first).
-              const segs = [...groupOrder]
-                .reverse()
-                .map((g) => ({ color: g.color, v: segValue(b.groups[g.key] ?? { conversations: 0, tokens: 0, cost: 0 }) }))
-                .filter((s) => s.v > 0);
-              return (
-                <div
-                  key={b.startMs}
-                  onMouseEnter={() => setHovered(i)}
-                  onClick={() => setSelected((cur) => (cur === i ? null : i))}
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    height: "100%",
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "flex-end",
-                    cursor: "pointer",
-                    borderRadius: 3,
-                    background: isActive ? "var(--bg-hover)" : "transparent",
-                  }}
-                >
-                  {total > 0
-                    ? segs.map((s, si) => (
-                        <div
-                          key={si}
-                          style={{
-                            height: `${(s.v / axisTop) * 100}%`,
-                            minHeight: 1,
-                            background: s.color,
-                            // Round only the topmost (first-rendered) segment.
-                            borderRadius: si === 0 ? "2px 2px 0 0" : 0,
-                          }}
-                        />
-                      ))
-                    : null}
-                </div>
-              );
-            })}
+            Last {span} {scale === "Day" ? "days" : "weeks"}
           </div>
+        </div>
+        <ScaleSwitch value={scale} onChange={setScale} />
+      </div>
 
-          {/* Hover tooltip — anchored over the active bar, inside the plot so
-              it can't clip against the panel's overflow. */}
-          {ab &&
-            active != null &&
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: -4 }}>
+        {/* Keyed on the figure so a new total re-enters digit by digit. */}
+        <span
+          aria-label={figure}
+          style={{
+            color: "var(--fg-strong)",
+            fontSize: 30,
+            lineHeight: "32px",
+            letterSpacing: "-0.03em",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {figure.split("").map((ch, i) => (
+            <span key={`${figure}-${i}`} aria-hidden className="klide-digit-in" style={{ ["--i" as string]: i }}>
+              {ch}
+            </span>
+          ))}
+        </span>
+        {unit && <span style={{ color: "var(--fg-subtle)", fontSize: 13 }}>{unit}</span>}
+      </div>
+
+      <div
+        ref={plotRef}
+        onPointerDown={(e) => {
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            /* capture is a nicety */
+          }
+          pick(e);
+        }}
+        onPointerMove={pick}
+        onPointerUp={(e) => {
+          try {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          } catch {
+            /* capture is a nicety */
+          }
+          if (e.pointerType !== "mouse") setActive(null);
+        }}
+        onPointerCancel={() => setActive(null)}
+        onPointerLeave={() => setActive(null)}
+        style={{ position: "relative", height: PLOT_H, touchAction: "none", cursor: "crosshair" }}
+      >
+        {[0, ...gridLines.map((v) => v / axisTop)].map((f) => (
+          <div
+            key={f}
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: f === 0 ? BAR_FOOT - 3 : BAR_FOOT + f * STACK_H,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              transform: f === 0 ? "none" : "translateY(50%)",
+              pointerEvents: "none",
+            }}
+          >
+            <span
+              style={{
+                flex: 1,
+                height: 0,
+                borderTop: f === 0 ? "1px solid var(--border)" : "1px dashed var(--border)",
+              }}
+            />
+            <span
+              style={{
+                width: GUTTER - 8,
+                color: "var(--fg-subtle)",
+                fontSize: 11,
+                lineHeight: "14px",
+                fontVariantNumeric: "tabular-nums",
+                whiteSpace: "nowrap",
+                visibility: f === 0 ? "hidden" : "visible",
+              }}
+            >
+              {fmtAxis(axisTop * f)}
+            </span>
+          </div>
+        ))}
+        {plotW > 0 &&
+          layout.map((col, i) => {
+            const on = i === active;
+            return (
+              <div
+                key={`${scale}-${i}`}
+                style={{ position: "absolute", top: 0, bottom: 0, left: colLeft(i), width: barW }}
+              >
+                {col.segs.length === 0 ? (
+                  // An empty day keeps the rhythm of the row with a stub.
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      bottom: BAR_FOOT,
+                      height: 2,
+                      borderRadius: radius,
+                      background: "color-mix(in srgb, var(--fg-dim) 30%, transparent)",
+                    }}
+                  />
+                ) : (
+                  col.segs.map((s) => (
+                    <span
+                      key={s.key}
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        bottom: BAR_FOOT + (grown ? s.bottom : 0),
+                        height: grown ? s.h : 0,
+                        borderRadius: radius,
+                        background:
+                          (scrubbing && !on) || (focusKey !== null && s.key !== focusKey)
+                            ? `color-mix(in srgb, ${s.color} 30%, var(--bg-elevated))`
+                            : s.color,
+                        transition: `height 600ms var(--ease-out) ${i * 14}ms, bottom 600ms var(--ease-out) ${i * 14}ms, background-color 160ms ease`,
+                      }}
+                    />
+                  ))
+                )}
+              </div>
+            );
+          })}
+
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            boxSizing: "border-box",
+            width: barW + 6,
+            height: ringTop + 6,
+            transform: `translate(${colLeft(shown) - 3}px, ${PLOT_H - BAR_FOOT - ringTop - 3}px)`,
+            border: "1.5px solid var(--fg-subtle)",
+            borderRadius: radius + 3,
+            pointerEvents: "none",
+            opacity: scrubbing ? 1 : 0,
+            transition: `opacity 160ms ease, transform ${glideMs} var(--ease-out), height ${glideMs} var(--ease-out)`,
+          }}
+        />
+
+        <div
+          aria-hidden={!scrubbing}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            zIndex: 5,
+            width: TIP_W,
+            boxSizing: "border-box",
+            transform: `translateX(${tipX}px)`,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            padding: "9px 11px",
+            background: "var(--bg-elevated)",
+            border: "1px solid color-mix(in srgb, var(--fg-strong) 12%, var(--bg-elevated))",
+            borderRadius: 10,
+            fontSize: 12.5,
+            lineHeight: "17px",
+            pointerEvents: "none",
+            opacity: scrubbing ? 1 : 0,
+            transition: `opacity 160ms ease, transform ${glideMs} var(--ease-out)`,
+          }}
+        >
+          {plotW > 0 &&
             (() => {
-              const rows = groupOrder
-                .map((g) => ({
-                  label: g.label,
-                  color: g.color,
-                  v: segValue(ab.groups[g.key] ?? { conversations: 0, tokens: 0, cost: 0 }),
-                }))
-                .filter((r) => r.v > 0)
-                .sort((a, b) => b.v - a.v);
-              const total = valueOf(ab);
-              const leftPct = ((active + 0.5) / WEEKS) * 100;
-              const xShift = active <= 2 ? "0%" : active >= WEEKS - 3 ? "-100%" : "-50%";
+              const rows = [...layout[shown].segs].sort((a, b) => b.v - a.v);
+              const top = rows.slice(0, TIP_ROWS);
               return (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 4,
-                    left: `${leftPct}%`,
-                    transform: `translateX(${xShift})`,
-                    pointerEvents: "none",
-                    zIndex: 5,
-                    minWidth: 132,
-                    maxWidth: 224,
-                    padding: "7px 9px",
-                    background: "var(--bg-elevated)",
-                    border: "1px solid var(--border-strong)",
-                    borderRadius: 7,
-                    boxShadow: "var(--panel-shadow)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                  }}
-                >
+                <>
                   <div
                     style={{
-                      color: "var(--fg-strong)",
-                      fontWeight: 600,
-                      marginBottom: rows.length ? 6 : 0,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 6,
+                      marginBottom: 2,
+                      color: "var(--fg-subtle)",
+                      whiteSpace: "nowrap",
                     }}
                   >
-                    {weekLabel(ab.startMs)}
+                    <span>{bucketLabel(ab.startMs, scale)}</span>
+                    <span style={{ color: "var(--fg-strong)", fontVariantNumeric: "tabular-nums" }}>
+                      {fmtVal(totals[shown])}
+                    </span>
                   </div>
-                  {rows.length === 0 ? (
-                    <div style={{ color: "var(--fg-subtle)" }}>No activity</div>
-                  ) : (
-                    <>
-                      {rows.map((r) => (
-                        <div
-                          key={r.label}
-                          style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 3 }}
-                        >
-                          <span
-                            aria-hidden
-                            style={{ width: 8, height: 8, borderRadius: 2, flexShrink: 0, background: r.color }}
-                          />
-                          <span
-                            style={{
-                              color: "var(--fg)",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              flex: 1,
-                            }}
-                          >
-                            {r.label}
-                          </span>
-                          <span style={{ color: "var(--fg-strong)", whiteSpace: "nowrap" }}>{fmtVal(r.v)}</span>
-                        </div>
-                      ))}
-                      {rows.length > 1 && (
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            gap: 10,
-                            marginTop: 6,
-                            paddingTop: 5,
-                            borderTop: "1px solid var(--border)",
-                            color: "var(--fg-subtle)",
-                          }}
-                        >
-                          <span>Total</span>
-                          <span style={{ color: "var(--fg-strong)" }}>{fmtVal(total)}</span>
-                        </div>
-                      )}
-                    </>
+                  {rows.length === 0 && <div style={{ color: "var(--fg-subtle)" }}>No activity</div>}
+                  {top.map((r) => (
+                    <div key={r.key} style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                      <i
+                        aria-hidden
+                        style={{ width: 9, height: 9, borderRadius: 3, flex: "none", background: r.color }}
+                      />
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: "var(--fg)" }}>
+                        {groupOrder.find((g) => g.key === r.key)?.label ?? r.key}
+                      </span>
+                      <span style={{ color: "var(--fg-strong)", fontVariantNumeric: "tabular-nums" }}>
+                        {fmtVal(r.v)}
+                      </span>
+                    </div>
+                  ))}
+                  {rows.length > top.length && (
+                    <div style={{ color: "var(--fg-subtle)", paddingLeft: 14 }}>
+                      +{rows.length - top.length} more
+                    </div>
                   )}
-                </div>
+                </>
               );
             })()}
         </div>
       </div>
 
-      {/* Month labels (aligned under the plot area) */}
-      <div style={{ position: "relative", height: 16, marginTop: 4, marginLeft: AXIS_W }}>
-        {monthLabels.map(({ i, name }) => (
-          <span
-            key={`${i}-${name}`}
-            style={{
-              position: "absolute",
-              left: `${(i / WEEKS) * 100}%`,
-              color: "var(--fg-subtle)",
-              fontSize: 10,
-              fontFamily: "var(--font-mono)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {name}
-          </span>
-        ))}
+      {/* Five dates under their columns: the ends, and three between. */}
+      <div style={{ position: "relative", height: 14, marginTop: -8, marginRight: GUTTER }}>
+        {plotW > 0 &&
+          [0, 0.25, 0.5, 0.75, 1].map((f) => {
+            const i = Math.round(f * (span - 1));
+            return (
+              <span
+                key={f}
+                style={{
+                  position: "absolute",
+                  left: colLeft(i) + barW / 2,
+                  transform: f === 0 ? "translateX(-6px)" : f === 1 ? "translateX(calc(-100% + 6px))" : "translateX(-50%)",
+                  color: "var(--fg-subtle)",
+                  fontSize: 11,
+                  lineHeight: "14px",
+                  fontVariantNumeric: "tabular-nums",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {shortDate(buckets[i].startMs)}
+              </span>
+            );
+          })}
       </div>
 
-      {/* Provider legend — the bars stack by provider, in breakdown colours. */}
-      {groupOrder.length > 0 && (
+      {legend.length > 0 && (
         <div
+          onMouseLeave={() => setFocusKey(null)}
           style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "4px 14px",
-            marginTop: 8,
-            marginLeft: AXIS_W,
-            fontSize: 11,
-            fontFamily: "var(--font-mono)",
-            color: "var(--fg-subtle)",
-          }}
-        >
-          {groupOrder.slice(0, 7).map((g) => (
-            <span key={g.key} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span
-                aria-hidden
-                style={{ width: 8, height: 8, borderRadius: 2, flexShrink: 0, background: g.color }}
-              />
-              {g.label}
-            </span>
-          ))}
-          {groupOrder.length > 7 && <span>+{groupOrder.length - 7} more</span>}
-        </div>
-      )}
-
-      {/* Exact numbers for the clicked week */}
-      {sel && (
-        <div
-          style={{
-            marginTop: 10,
-            paddingTop: 10,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+            gap: "2px 20px",
+            marginTop: 2,
+            paddingTop: 12,
             borderTop: "1px solid var(--border)",
-            display: "flex",
-            alignItems: "baseline",
-            gap: 14,
-            fontSize: 11.5,
-            fontFamily: "var(--font-mono)",
           }}
         >
-          <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
-            {weekLabel(sel.startMs)}
-          </span>
-          <span style={{ color: "var(--fg)" }}>
-            {sel.conversations.toLocaleString("en-US")} conversations
-          </span>
-          <span style={{ color: "var(--fg)" }}>
-            {sel.inputTokens.toLocaleString("en-US")} tokens in
-          </span>
-          <span style={{ color: "var(--fg)" }}>
-            {sel.outputTokens.toLocaleString("en-US")} tokens out
-          </span>
-          {sel.cost > 0 && (
-            <span style={{ color: "var(--fg)" }}>{formatUsd(sel.cost)}</span>
-          )}
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={() => setSelected(null)}
-            style={{
-              background: "none",
-              border: "none",
-              padding: 0,
-              cursor: "pointer",
-              color: "var(--fg-subtle)",
-              fontSize: 11,
-            }}
-          >
-            clear
-          </button>
+          {legend.map((g) => (
+            <div
+              key={g.key}
+              onMouseEnter={() => setFocusKey(g.key)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "4px 0",
+                fontSize: 12.5,
+                lineHeight: "17px",
+                cursor: "default",
+                opacity: focusKey !== null && focusKey !== g.key ? 0.5 : 1,
+                transition: "opacity var(--motion-fast) var(--ease-out)",
+              }}
+            >
+              <i aria-hidden style={{ width: 10, height: 10, borderRadius: 3, flex: "none", background: g.color }} />
+              {g.logo && <ProviderLogo id={g.logo as ProviderId} size={14} />}
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  color: "var(--fg)",
+                }}
+              >
+                {g.label}
+              </span>
+              <span style={{ color: "var(--fg-strong)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                {metric === "cost" ? formatUsd(g.v) : formatCompact(Math.round(g.v))}
+              </span>
+              <span
+                style={{
+                  width: 34,
+                  textAlign: "right",
+                  color: "var(--fg-subtle)",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {total > 0 ? Math.round((g.v / total) * 100) : 0}%
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -810,12 +1005,7 @@ export function StatsSkeleton({
                 gap: 12,
               }}
             >
-              <span className="ai-loader-orbit" aria-hidden>
-                <span />
-                <span />
-                <span />
-                <span />
-              </span>
+              <DotGridLoader size={22} label="Reading session logs" />
               <div style={{ color: "var(--fg-subtle)", fontSize: 12.5 }}>
                 Reading session logs…
               </div>
@@ -1058,7 +1248,12 @@ export function StatsSection() {
             <UsageHistogram
               runs={runs}
               metric={metric}
-              groupOrder={groups.map((g) => ({ key: g.key, color: colorOf(g), label: g.label }))}
+              groupOrder={groups.map((g) => ({
+                key: g.key,
+                color: colorOf(g),
+                label: g.label,
+                logo: g.source === "klide" ? g.provider ?? "ollama" : g.source,
+              }))}
             />
           </div>
         </Panel>
