@@ -42,6 +42,11 @@ pub(crate) struct ModelMeta {
 /// Cached `/models` metadata, keyed by provider id. OpenRouter's listing is
 /// 339 models, so we fetch it at most once per `MODEL_META_TTL` and serve the
 /// rest from memory — model switching shouldn't re-hit the network.
+/// Unit tests never fetch a provider's live `/models` listing: with a real key
+/// in `~/.klide/.env` or the Keychain, the answer depended on the machine and
+/// the network. A test that needs listing data seeds the cache.
+const LISTINGS_OFFLINE: bool = cfg!(test);
+
 static OPENAI_MODEL_META_CACHE: LazyLock<
     Mutex<HashMap<String, (Instant, HashMap<String, ModelMeta>)>>,
 > = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -331,6 +336,9 @@ async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
 
 pub(crate) async fn anthropic_model_meta() -> HashMap<String, ModelMeta> {
     if let Some((ts, meta)) = OPENAI_MODEL_META_CACHE.lock().unwrap().get("anthropic") { if ts.elapsed() < MODEL_META_TTL { return meta.clone(); } }
+    if LISTINGS_OFFLINE {
+        return HashMap::new();
+    }
     let _ = fetch_anthropic_models().await;
     OPENAI_MODEL_META_CACHE.lock().unwrap().get("anthropic").map(|(_, m)| m.clone()).unwrap_or_default()
 }
@@ -438,6 +446,9 @@ pub(crate) async fn openai_model_meta(provider: &str) -> HashMap<String, ModelMe
                 return meta.clone();
             }
         }
+    }
+    if LISTINGS_OFFLINE {
+        return HashMap::new();
     }
     let Some(entry) = providers::lookup(provider) else {
         return HashMap::new();
