@@ -4638,6 +4638,7 @@ export function MissionControl({
           display: "flex",
           flexDirection: "column",
           minHeight: 0,
+          overflowX: "hidden",
         }}
       >
         <header style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -4731,8 +4732,8 @@ export function MissionControl({
           onReattach={onReattachLiveSession}
         />
 
-        <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
-          <MissionLibrary workspaceRoot={workspaceRoot} onOpenRun={setSelectedId} />
+        <MissionLibrary workspaceRoot={workspaceRoot} onOpenRun={setSelectedId} />
+        <div style={{ overflowY: "auto", overflowX: "hidden", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
           <TaskComposer
             workspaceRoot={workspaceRoot}
             onAdded={(id) => setSelectedId(id)}
