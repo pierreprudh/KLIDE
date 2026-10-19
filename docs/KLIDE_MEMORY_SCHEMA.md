@@ -195,3 +195,11 @@ share the main checkout's store across linked worktrees. The store
 (`.klide/memory-proposals/`) is git-ignored and closed to Agent reads. A Keep
 interrupted after publishing is finished by the next review of that proposal,
 Keep or Dismiss, which reports the saved entry.
+
+A proposal from a linked worktree records where its evidence can be found
+again, since the lesson lands in the main checkout's memory: a file the main
+checkout holds byte for byte is cited as is; one only the worktree's `HEAD`
+holds gets a `commit` source ref (`git show <commit>:<path>`); anything else
+is labelled uncommitted in that worktree. Accepted and dismissed fingerprints
+are kept for good, so a dismissed lesson stays dismissed however many reviews
+follow.
