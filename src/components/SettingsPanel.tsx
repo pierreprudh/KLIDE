@@ -68,7 +68,7 @@ import {
   Toggle,
 } from "./settings/controls";
 import { WelcomeFilmCards } from "./settings/welcomeFilm";
-import { API_KEY_PROVIDERS, ApiKeyRow, ProviderBalanceBlock } from "./settings/apiKeys";
+import { API_KEY_PROVIDERS, ApiKeyIntro, ApiKeyRow, ProviderBalanceBlock } from "./settings/apiKeys";
 import { notify } from "../toast";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
 import { ConnectorsSection } from "./settings/connectors";
@@ -1990,6 +1990,7 @@ export function SettingsPanel({
           <Section id="api" active={activeSection} mounted={visitedSections.has("api")}>
               <Section id="api-keys" active={activePage} mounted={visitedPages.has("api-keys")}>
               <section className="klide-settings-section">
+                <ApiKeyIntro />
                 <Panel>
                   {API_KEY_PROVIDERS.map((provider) => (
                     <ApiKeyRow
@@ -1998,6 +1999,7 @@ export function SettingsPanel({
                       title={provider.title}
                       envVar={provider.envVar}
                       placeholder={provider.placeholder}
+                      workspaceRoot={workspaceRoot}
                       onChange={onProviderKeyChange}
                     />
                   ))}

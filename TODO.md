@@ -253,6 +253,14 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
 - [x] Memory auto-summarizer: when a Klide agent run settles with status "done", automatically write a durable Project Memory note from the conversation. Toggle in Settings → Harness (`autoMemoryOnRunDone`, default ON). Manual Summarize header action still works. Inline "Auto-saved" notice under the composer fades after 4s. Done runs only (skip cancelled / errored / delegate providers / single-message exchanges).
 - [x] `userAnswerQuestion` pause tool + `/interview` slash command: new tool in the Rust registry that pauses the harness via oneshot, surfaces an inline Q&A card in the AI panel, returns the user's typed answer to the model. Built-in skill "Codebase Interview" shipped in `DEFAULT_SKILLS` (src/skills.ts) — visible in the Skills modal, toggleable like the Code Review built-in, and the system prompt picks it up automatically. Plan mode, read-only, writes `docs/codebase-decisions.md` at the end. The skill explicitly forbids re-asking the same question (the model must track asked questions in its scratchpad). The `/interview` slash command inlines a self-contained prompt so it works even when the skill is disabled.
 
+- [x] Several API keys per provider, one main (2026-10-19): Settings › API keys
+  saves more keys beside the one in use and switches which is main
+  (`provider_keys.rs`); only the main key is ever sent.
+- [ ] Budget management window: a spend budget per provider and per saved key —
+  top-ups, spend against them, what happens at the limit (warn / stop / switch
+  to another saved key). Today a budget is one localStorage figure per
+  provider (`klide.budget.*`, Settings › Balance) and keys carry no spend.
+
 ## v0.3 Done — Agent-Control Foundation
 
 Decision on 2026-06-15: call v0.3 shipped and move the product forward. The

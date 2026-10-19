@@ -888,7 +888,9 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-settings-row-label {
   min-width: 0;
   display: flex;
-  align-items: flex-start;
+  /* The icon is centred on the row, so the text block is too — a title alone
+     sits level with its logo instead of riding its top edge. */
+  align-items: center;
   gap: 14px;
 }
 .klide-settings-row-icon {
@@ -9684,4 +9686,78 @@ button:focus-visible .menu-leadout {
   .klide-subagent-chevron {
     transition: none;
   }
+}
+
+/* API key row with a working key: just the status at the trailing edge; the
+   key actions fade in beside it on hover or keyboard focus. */
+.klide-key-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-height: 34px;
+}
+.klide-key-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.klide-settings-row:hover .klide-key-actions,
+.klide-settings-row:focus-within .klide-key-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* A provider's saved keys, under its row and aligned with its name (32px
+   icon + 14px gap). Use / Remove fade in on the hovered key. */
+.klide-settings-row-footer {
+  grid-column: 1 / -1;
+  margin-top: -14px;
+}
+.klide-key-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 46px;
+}
+.klide-key-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto 56px;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+}
+.klide-key-list-label {
+  color: var(--fg-strong);
+  font-size: 13.5px;
+}
+.klide-key-list-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-subtle);
+  font-size: 12.5px;
+}
+.klide-key-list-source[data-reference] {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.klide-key-list-state {
+  justify-self: end;
+}
+.klide-key-list-actions {
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.klide-key-list-row:hover .klide-key-list-actions,
+.klide-key-list-row:focus-within .klide-key-list-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
