@@ -68,7 +68,7 @@ import {
   Toggle,
 } from "./settings/controls";
 import { WelcomeFilmCards } from "./settings/welcomeFilm";
-import { API_KEY_PROVIDERS, ApiKeyRow, ApiKeySummary, ProviderBalanceBlock } from "./settings/apiKeys";
+import { API_KEY_PROVIDERS, ApiKeyRow, ProviderBalanceBlock } from "./settings/apiKeys";
 import { notify } from "../toast";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
 import { ConnectorsSection } from "./settings/connectors";
@@ -1989,8 +1989,7 @@ export function SettingsPanel({
 
           <Section id="api" active={activeSection} mounted={visitedSections.has("api")}>
               <Section id="api-keys" active={activePage} mounted={visitedPages.has("api-keys")}>
-              <SettingBlock title="API Keys">
-                <ApiKeySummary />
+              <section className="klide-settings-section">
                 <Panel>
                   {API_KEY_PROVIDERS.map((provider) => (
                     <ApiKeyRow
@@ -2003,7 +2002,7 @@ export function SettingsPanel({
                     />
                   ))}
                 </Panel>
-              </SettingBlock>
+              </section>
               <SettingBlock title="Documentation">
                 <Panel>
                   <Row title="DeepSeek" description="Official API setup and reference."

@@ -13,6 +13,7 @@ import { DotGridLoader, ProviderLogo, providerChartColor } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import { hostedProviderRows } from "../../agent/providerCatalog";
 import { notify } from "../../toast";
+import { ProviderWordmark } from "./providerWordmarks";
 import { fetchAgentRunsCached, peekAgentRunsCache, type Run } from "../../runs";
 import { GhostButton, LinkButton, Panel, PencilIcon, Row, StatusText } from "./controls";
 import { DonutChart, UsageHistogram, formatUsd, runCost } from "./stats";
@@ -34,44 +35,14 @@ export const API_KEY_PROVIDERS: {
 
 export type KeyStatus = ProviderKeyStatus;
 
-// One provider's key control: shows where the key comes from (keychain / env /
-// none), lets you paste a new one (saved into the keychain via Rust), and clear
-// it. The key value never lives in React state once saved — only its status.
-// At-a-glance coverage above the key rows: how many hosted providers have a key,
-// plus a gentle "start here" nudge when none are set (the new-user state).
-export function ApiKeySummary() {
-  const [configured, setConfigured] = useState<number | null>(null);
-  const total = API_KEY_PROVIDERS.length;
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      let n = 0;
-      await Promise.all(
-        API_KEY_PROVIDERS.map(async (p) => {
-          try {
-            const st = await readProviderKeyStatus(p.id);
-            if (st.hasKey) n += 1;
-          } catch { /* ignore */ }
-        }),
-      );
-      if (alive) setConfigured(n);
-    })();
-    return () => { alive = false; };
-  }, []);
-  if (configured === null) return null;
-  return (
-    <div style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--fg-subtle)", lineHeight: 1.5 }}>
-      <b style={{ fontWeight: 600, color: "var(--fg-strong)" }}>{configured} of {total}</b> providers configured.
-      {configured === 0 && " Add one key below to start chatting with hosted models — or use Ollama/MLX locally with no key."}
-    </div>
-  );
-}
-
 // Live prepaid balance, USD. `null` fields where the provider only reports
 // usage (no cap). The whole object is null for providers that don't expose a
 // balance over the API — today only OpenRouter does.
 export type ProviderCredits = { total: number | null; used: number | null; remaining: number | null };
 
+// One provider's key control: shows where the key comes from (keychain / env /
+// none), lets you paste a new one (saved into the keychain via Rust), and clear
+// it. The key value never lives in React state once saved — only its status.
 export function ApiKeyRow({
   id,
   title,
@@ -219,13 +190,27 @@ export function ApiKeyRow({
     ? `Reference an env var (e.g. \${${envVar}}); the value stays in your .env, never in the app.`
     : `Paste a key to store it in your macOS Keychain, or export ${envVar}.`;
 
+  const canClear = status.source === "keychain" || status.source === "reference";
+
   return (
     <Row
       title={title}
+      titleContent={<ProviderWordmark id={id} label={title} />}
       description={description}
+      leading={<ProviderLogo id={id as ProviderId} size={24} />}
       control={
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {statusText}
+        // Fixed columns so every provider's status, toggle, field and buttons
+        // line up down the list, whatever its state.
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "64px auto minmax(0, 1fr) auto auto",
+            alignItems: "center",
+            gap: 8,
+            width: 480,
+          }}
+        >
+          <span style={{ justifySelf: "end" }}>{statusText}</span>
           <MethodToggle
             method={method}
             onChange={(next) => {
@@ -249,7 +234,7 @@ export function ApiKeyRow({
             spellCheck={false}
             className="klide-field"
             style={{
-              width: 190,
+              width: "100%",
               height: 34,
               padding: "0 12px",
             }}
@@ -257,9 +242,10 @@ export function ApiKeyRow({
           <LinkButton onClick={() => void save()}>
             {busy ? <DotGridLoader size={14} color="currentColor" label="Saving" /> : "Save"}
           </LinkButton>
-          {(status.source === "keychain" || status.source === "reference") && (
+          {/* Held in place when there's nothing to clear, so the column stays. */}
+          <span style={{ visibility: canClear ? "visible" : "hidden" }} aria-hidden={!canClear}>
             <GhostButton onClick={() => void clear()}>Clear</GhostButton>
-          )}
+          </span>
         </div>
       }
     />
@@ -819,7 +805,9 @@ export function MethodToggle({
         aria-pressed={active}
         style={{
           height: 26,
-          padding: "0 9px",
+          // Fixed width: the bold active label mustn't nudge the row's columns.
+          width: 54,
+          padding: 0,
           border: "none",
           borderRadius: 6,
           background: active ? "var(--bg-elevated)" : "transparent",
