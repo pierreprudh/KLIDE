@@ -2281,6 +2281,11 @@ fn format_command_output(process: &super::process::ProcessHandle) -> Option<Stri
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommandPreflight {
     pub external_paths: Vec<String>,
+    /// Credential-shaped files the command names (`.env`, `~/.ssh/…`, a
+    /// `.pem`…, by `workspace::is_sensitive_path`) and Keychain reads through
+    /// `security`. The file tools already refuse these; a shell command that
+    /// names one always asks, whatever the rung or a project rule says.
+    pub credential_paths: Vec<String>,
 }
 
 /// Best-effort scan that surfaces command arguments resolving *outside* the
@@ -2310,6 +2315,7 @@ pub fn preflight_command(root: &str, cwd: &str, command: &str) -> CommandPreflig
             .collect::<Vec<_>>()
     });
     let mut external_paths = Vec::new();
+    let credential_paths = credential_mentions(ws.root(), &tokens, home.as_deref(), &base);
     for token in tokens {
         for candidate in path_candidates(&token, home.as_deref(), &base) {
             let path = normalize_command_path(&candidate);
@@ -2321,7 +2327,54 @@ pub fn preflight_command(root: &str, cwd: &str, command: &str) -> CommandPreflig
             }
         }
     }
-    CommandPreflight { external_paths }
+    CommandPreflight { external_paths, credential_paths }
+}
+
+/// The credential files a command's tokens name, and a Keychain read through
+/// `security`. Unlike `path_candidates`, a bare word counts — `cat .env` names
+/// a file without a `/`. Quotes, redirects, `$(…)` and backticks are peeled
+/// off, and a trailing glob (`.env*`) is read as the name it starts with.
+/// Best effort, like the scan above: it makes the card ask, it isn't a sandbox.
+fn credential_mentions(root: &Path, tokens: &[String], home: Option<&str>, base: &Path) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut push = |label: String| {
+        if !found.contains(&label) {
+            found.push(label);
+        }
+    };
+    for (i, token) in tokens.iter().enumerate() {
+        let word = token.rsplit('/').next().unwrap_or(token);
+        if word == "security" {
+            let reads = tokens.get(i + 1).is_some_and(|sub| {
+                sub.starts_with("find-") && sub.ends_with("-password")
+                    || matches!(sub.as_str(), "dump-keychain" | "export")
+            });
+            if reads {
+                push("macOS Keychain".to_string());
+            }
+        }
+        for raw in token.replace("$(", "(").split('=') {
+            let trimmed = raw
+                .trim_start_matches(['<', '>', '&', '"', '\'', '(', '`'])
+                .trim_end_matches([',', ';', '"', '\'', ')', '`', '|', '&'])
+                .trim_end_matches(['*', '?']);
+            if trimmed.is_empty() || trimmed.starts_with('-') {
+                continue;
+            }
+            let expanded =
+                expand_tilde(trimmed, home).unwrap_or_else(|| expand_vars(trimmed, home, base));
+            let path = if expanded.starts_with('/') {
+                PathBuf::from(&expanded)
+            } else {
+                base.join(&expanded)
+            };
+            let path = normalize_command_path(&path);
+            if crate::workspace::is_sensitive_path(root, &path) {
+                push(path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string());
+            }
+        }
+    }
+    found
 }
 
 /// Pull candidate paths out of one shell token. Splits on `=` so env
@@ -4526,6 +4579,32 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let dir = std::fs::canonicalize(&dir).unwrap();
         let root = dir.to_string_lossy().to_string();
+
+        // Credential files are named whatever shape the token takes; ordinary
+        // files and flags are not.
+        for command in [
+            "cat .env",
+            "grep KEY ./.env.local",
+            "echo $(cat .env)",
+            "head -1 \"config/.env\" | wc",
+            "cat .env*",
+            "cp ~/.ssh/id_ed25519 /tmp/x",
+            "openssl rsa -in server.key",
+        ] {
+            assert!(
+                !preflight_command(&root, &root, command).credential_paths.is_empty(),
+                "{command} names a credential file"
+            );
+        }
+        for command in ["cat src/main.rs", "cargo test --all-features", "git env-helper", "ls -la"] {
+            assert!(
+                preflight_command(&root, &root, command).credential_paths.is_empty(),
+                "{command} names no credential file"
+            );
+        }
+        let keychain = preflight_command(&root, &root, "security find-generic-password -s com.klide.app -w");
+        assert_eq!(keychain.credential_paths, ["macOS Keychain"]);
+        assert!(preflight_command(&root, &root, "security list-keychains").credential_paths.is_empty());
 
         // A relative `..` chain that climbs out of the workspace.
         let rel = preflight_command(&root, &root, "cat ../../../etc/klide-escape");

@@ -166,6 +166,13 @@ command the policy runs still records `PermissionRequested` and a
 `PermissionResolved` carrying `via: "full_auto"`, so the transcript tells the
 policy from an allowlist hit.
 
+A command that names a credential-shaped file — the paths the file Tools
+refuse (`workspace::is_sensitive_path`: `.env*`, `~/.ssh`, a `.pem`…) — or
+reads the macOS Keychain through `security` always gets a card, under full
+auto and over a matching project rule. The card says what it reads and offers
+no project scope; an exact approval for this run still counts. The scan is
+best effort (`tools::preflight_command`), a prompt rather than a sandbox.
+
 The policy is per conversation, and a conversation's live Run is part of it.
 Flipping the rung while the Run works reaches that Run through
 `agent_set_command_policy`: its later commands follow the new policy, and a
