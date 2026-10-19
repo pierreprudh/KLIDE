@@ -181,8 +181,9 @@ ranking, storage, review state, or authorization policy.
 `memory_propose({title, kind, notes, why, evidence: {path, quote}})` accepts
 file-backed lessons in native Plan/Goal and authenticated Delegate MCP. `kind`
 is decision/convention/fact/failure/pattern. Title, notes, rationale and quote
-are limited to 160/4,000/1,000/2,000 UTF-8 bytes. The quote must occur exactly in
-an Agent-readable Workspace file. Host identity stamps Run provenance; caller
+are limited to 160/4,000/1,000/2,000 characters. The quote must occur exactly in
+an Agent-readable Workspace file outside `.klide/` — Klide's own state (memory
+notes, this inbox, missions) is never evidence. Host identity stamps Run provenance; caller
 fields cannot override it. The result identifies a pending draft, not a memory
 entry. Transcript capability: `propose_project_memory`.
 
@@ -190,4 +191,7 @@ Proposals live outside the Markdown recall store. Human review may edit and
 publish a proposal through `memory_proposal_review`; no agent-facing equivalent
 exists. Published entries retain the captured quote, source file hash and Run
 reference. Pending proposals expire after 30 days, cap at 10 per Workspace and
-share the main checkout's store across linked worktrees.
+share the main checkout's store across linked worktrees. The store
+(`.klide/memory-proposals/`) is git-ignored and closed to Agent reads. A Keep
+interrupted after publishing is finished by the next review of that proposal,
+Keep or Dismiss, which reports the saved entry.

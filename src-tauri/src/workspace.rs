@@ -83,6 +83,15 @@ pub fn is_sensitive_path(root: &Path, path: &Path) -> bool {
             .any(|suffix| name.ends_with(suffix))
 }
 
+/// Klide's inbox of unreviewed Memory proposals. Pending lessons must not
+/// reach a run until a person keeps them, so a run can't read the store
+/// either — a read would be recall by the back door.
+pub fn is_review_store(root: &Path, path: &Path) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    let parts: Vec<_> = relative.components().map(|c| c.as_os_str()).collect();
+    parts.windows(2).any(|pair| pair[0] == ".klide" && pair[1] == "memory-proposals")
+}
+
 pub struct Workspace {
     /// Canonicalized at construction — `..` segments and symlinks in the
     /// root itself are resolved exactly once.
@@ -284,6 +293,12 @@ impl Workspace {
             return Err(format!(
                 "Access to {} is blocked because it may contain credentials or private keys. \
 Open it locally yourself if needed; do not send its contents to a model.",
+                self.display(path)
+            ));
+        }
+        if access == Access::Agent && is_review_store(&self.root, path) {
+            return Err(format!(
+                "{} holds Memory proposals awaiting review; a run can't read them.",
                 self.display(path)
             ));
         }

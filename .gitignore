@@ -58,6 +58,9 @@ src-tauri/gen/
 # Project Memory notes are local/private by default. Repos that want shared
 # memory can explicitly unignore this path in their own git policy.
 .klide/memory/
+# Agent-proposed lessons awaiting review: workspace quotes and unreviewed
+# notes, never repo content.
+.klide/memory-proposals/
 # Mission specs and append-only runtime events are local/private by default.
 # A repo can explicitly unignore or export authored mission Markdown later.
 .klide/missions/

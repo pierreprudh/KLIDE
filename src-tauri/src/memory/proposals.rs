@@ -49,11 +49,22 @@ struct Store {
     published: Vec<String>,
 }
 
+/// Lengths in characters, the unit the Tool's `maxLength` advertises — a
+/// byte cap refused accented text the schema allowed.
 fn bounded(value: &str, name: &str, max: usize) -> Result<(), String> {
-    if value.trim().is_empty() || value.len() > max {
-        return Err(format!("{name} must contain 1–{max} bytes."));
+    if value.trim().is_empty() || value.chars().count() > max {
+        return Err(format!("{name} must contain 1–{max} characters."));
     }
     Ok(())
+}
+
+/// The entry an interrupted Keep already wrote: it carries the proposal id
+/// as a source label. Found before either review path acts, so neither a
+/// retry nor a Dismiss leaves a published lesson behind a cleared inbox.
+fn prior_publication(ws: &Workspace, id: &str) -> Result<Option<MemoryEntry>, String> {
+    Ok(super::list_memory(ws.root().to_string_lossy().into(), Some(500))?
+        .into_iter()
+        .find(|entry| entry.source_refs.iter().any(|r| r.label.as_deref() == Some(id))))
 }
 
 fn owner(root: &str) -> Result<Workspace, String> {
@@ -117,6 +128,15 @@ pub fn propose(ws: &Workspace, run_id: &str, request: Request) -> Result<Proposa
     let path = ws.resolve_existing(&request.evidence.path)?;
     if crate::workspace::is_sensitive_path(ws.root(), &path) {
         return Err("Secret files cannot be memory proposal evidence.".into());
+    }
+    // Klide's own state (memory notes, the proposal inbox, missions, the
+    // coordination journal) is what a lesson would be judged against, never
+    // evidence for one: a quote from another pending lesson proves nothing.
+    if path
+        .strip_prefix(ws.root())
+        .is_ok_and(|rel| rel.components().next().is_some_and(|c| c.as_os_str() == ".klide"))
+    {
+        return Err("Evidence must come from the project's own files, not Klide's state under .klide/.".into());
     }
     let text = ws.read_text(&path, crate::workspace::Access::Agent)?;
     if !text.contains(&request.evidence.quote) {
@@ -263,39 +283,31 @@ pub fn review(root: &str, id: &str, edits: Option<Edits>) -> Result<Option<Memor
             .position(|p| p.draft_id == id)
             .ok_or("Memory proposal no longer pending.")?;
         let proposal = &store.pending[index];
-        let result = if let Some(edits) = edits {
+        // A Keep whose store update was interrupted already published: finish
+        // it whichever button comes next — no duplicate on a retried Keep, and
+        // a Dismiss reports the saved entry instead of hiding it.
+        let prior = prior_publication(&ws, id)?;
+        let result = if prior.is_some() {
+            prior
+        } else if let Some(edits) = edits {
             bounded(&edits.title, "title", 160)?;
             bounded(&edits.notes, "notes", 4000)?;
-            // Recover a publication whose store update was interrupted; no duplicate on retry.
-            let prior = super::list_memory(ws.root().to_string_lossy().into(), Some(500))?
-                .into_iter()
-                .find(|entry| {
-                    entry
-                        .source_refs
-                        .iter()
-                        .any(|r| r.label.as_deref() == Some(id))
-                });
-            Some(match prior {
-                Some(entry) => entry,
-                None => {
-                    let mut input = proposal.input.clone();
-                    input.title = edits.title;
-                    input.notes = edits.notes;
-                    input.goal = edits.goal;
-                    input.decisions = edits.decisions;
-                    input.source_refs.push(MemorySourceRef {
-                        source_type: MemorySourceType::Run,
-                        id: input.run_id.clone().unwrap_or_default(),
-                        label: Some(id.into()),
-                        ..Default::default()
-                    });
-                    input.notes = format!(
-                        "{}\n\nEvidence captured at proposal time:\n{}\n\nWhy retain: {}",
-                        input.notes, proposal.evidence, proposal.why
-                    );
-                    super::write_memory(ws.root().to_string_lossy().into(), input)?
-                }
-            })
+            let mut input = proposal.input.clone();
+            input.title = edits.title;
+            input.notes = edits.notes;
+            input.goal = edits.goal;
+            input.decisions = edits.decisions;
+            input.source_refs.push(MemorySourceRef {
+                source_type: MemorySourceType::Run,
+                id: input.run_id.clone().unwrap_or_default(),
+                label: Some(id.into()),
+                ..Default::default()
+            });
+            input.notes = format!(
+                "{}\n\nEvidence captured at proposal time:\n{}\n\nWhy retain: {}",
+                input.notes, proposal.evidence, proposal.why
+            );
+            Some(super::write_memory(ws.root().to_string_lossy().into(), input)?)
         } else {
             store.dismissed.insert(0, proposal.fingerprint.clone());
             store.dismissed.truncate(100);
@@ -430,6 +442,59 @@ mod tests {
         assert!(propose(&ws, "run", r).is_err());
         assert!(propose(&ws, "", request()).is_err());
         assert!(list(ws.root().to_str().unwrap()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn klide_state_is_neither_evidence_nor_readable_by_a_run() {
+        let (_dir, ws) = fixture();
+        fs::create_dir_all(ws.root().join(".klide/memory")).unwrap();
+        fs::write(
+            ws.root().join(".klide/memory/note.md"),
+            "Release artifacts use violet-otter-7319.",
+        )
+        .unwrap();
+        let mut r = request();
+        r.evidence.path = ".klide/memory/note.md".into();
+        assert!(propose(&ws, "run", r).unwrap_err().contains(".klide/"));
+        // The inbox itself, once it exists, is closed to a run.
+        propose(&ws, "run", request()).unwrap();
+        let store = state_path(&ws).unwrap();
+        assert!(ws.read_text(&store, crate::workspace::Access::Agent).is_err());
+        assert!(ws.read_text(&store, crate::workspace::Access::User).is_ok());
+    }
+
+    #[test]
+    fn limits_count_characters_not_bytes() {
+        let (_dir, ws) = fixture();
+        let mut r = request();
+        r.title = "é".repeat(150);
+        assert!(r.title.len() > 160);
+        assert!(propose(&ws, "run", r).is_ok());
+        let mut r = request();
+        r.notes = "Other lesson".into();
+        r.title = "é".repeat(161);
+        assert!(propose(&ws, "run", r).unwrap_err().contains("characters"));
+    }
+
+    #[test]
+    fn a_dismiss_after_an_interrupted_keep_reports_the_saved_entry() {
+        let (_dir, ws) = fixture();
+        let root = ws.root().to_str().unwrap();
+        let p = propose(&ws, "run", request()).unwrap();
+        // Keep wrote the entry, then the store update failed: still pending.
+        let mut input = p.input.clone();
+        input.source_refs.push(MemorySourceRef {
+            source_type: MemorySourceType::Run,
+            id: "run".into(),
+            label: Some(p.draft_id.clone()),
+            ..Default::default()
+        });
+        let saved = super::super::write_memory(root.into(), input).unwrap();
+        let reported = review(root, &p.draft_id, None).unwrap().expect("the saved entry");
+        assert_eq!(reported.id, saved.id);
+        assert!(list(root).unwrap().is_empty());
+        assert_eq!(super::super::list_memory(root.into(), None).unwrap().len(), 1);
+        assert!(propose(&ws, "later", request()).unwrap_err().contains("accepted"));
     }
 
     #[test]
