@@ -142,7 +142,7 @@ learning features:
 
 - inspect each Conversation's frozen recall, including entry versions, sources,
   match reasons, and estimated context cost;
-- review memory proposals from a native `memory_propose` Harness Tool;
+- review memory proposals from the shared native/MCP `memory_propose` Tool (file evidence shipped);
 - review bounded background learning that extracts corrections, decisions,
   failures, and successful patterns from Run evidence;
 - accept, edit, or reject proposed merges and contradictions while preserving
@@ -174,7 +174,38 @@ The panel shows the rationale, evidence quote, and source Run before Keep or
 Dismiss; fields remain editable. No automatic durable publication occurs.
 
 This uses the existing panel-driven extraction path, not a new Harness loop.
-Semantic duplicate/contradiction detection, Rust-owned proposal persistence,
-idle scheduling, native `memory_propose`, and Skill proposal review remain
-future engine work. The quote check grounds proposals but does not certify
+Semantic duplicate/contradiction detection, transcript-backed Rust proposals,
+idle scheduling, and Skill proposal review remain future engine work. File-backed
+Rust proposals are shipped as described below. The quote check grounds proposals but does not certify
 the truth of an assistant claim.
+
+## Agent-authored memory proposals (2026-10-19)
+
+Native Plan/Work Runs and authenticated Delegate MCP sessions can call
+`memory_propose`. Both doors reuse the native registry schema and Rust operation.
+The tool requires a reusable lesson (decision, convention, fact, failure, or
+pattern), a future-use rationale, and an exact quote from a non-secret Workspace
+file. Klide verifies that quote against a bounded Agent read, captures its file
+hash, and stamps the calling Run id. File evidence is the initial supported
+source; transcript-only lessons still use the existing lesson extraction inbox.
+An exact quote establishes provenance, not the truth of the proposed lesson.
+
+Pending proposals are stored separately under `.klide/memory-proposals/`, with
+atomic private writes and a cross-process lock. Linked worktrees share the main
+checkout's review inbox; evidence is read from the originating worktree. Pending
+proposals never enter `.klide/memory/` or normal recall. The inbox caps pending
+agent proposals at ten, expires them after thirty days, deduplicates repeated
+lessons and remembers the most recent hundred dismissals and publications.
+
+The Memory panel combines these proposals with legacy local drafts. Keep can
+edit the lesson before publishing a reviewed entry with its captured evidence
+and host-stamped provenance; Dismiss suppresses the lesson. Only human-facing
+IPC exposes review/publication. Neither native agents nor MCP get a publication
+Tool. Rust-owned proposal persistence and `memory_propose` are shipped; semantic
+consolidation, transcript evidence, idle scheduling and Skill proposals remain
+future work.
+
+Hermes recall was verified in the actual ACP-capable KIDE app on 2026-10-19:
+`mcp__klide__memory_search` found a reviewed synthetic convention and
+`mcp__klide__memory_read` returned its distinct label and source Run reference.
+The earlier release bundle predating ACP did not expose these tools.

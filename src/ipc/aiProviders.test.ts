@@ -36,9 +36,16 @@ describe("AI Provider IPC Adapter", () => {
 
     await readProviderKeyStatus("anthropic");
     await modelSupportsReflection("anthropic", "claude-sonnet-4-6");
+    await readProviderKeyStatus("openai", "/work/klide");
 
+    // No folder → null, so Rust falls back to the window's announced one.
     expect(invokeMock).toHaveBeenNthCalledWith(1, "ai_provider_key_status", {
       provider: "anthropic",
+      workspace: null,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "ai_provider_key_status", {
+      provider: "openai",
+      workspace: "/work/klide",
     });
     expect(invokeMock).toHaveBeenNthCalledWith(2, "ai_model_supports_reflection", {
       provider: "anthropic",

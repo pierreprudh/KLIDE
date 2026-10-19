@@ -1,3 +1,4 @@
+pub mod proposals;
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -192,7 +193,7 @@ pub struct MemoryEntry {
 
 /// Input shape for `memory_write`. Rust fills the derived identity/time fields
 /// and stamps `reviewState: reviewed` at the durable acceptance boundary.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryInput {
     pub title: String,
@@ -793,8 +794,8 @@ pub fn write_memory(workspace_root: String, input: MemoryInput) -> Result<Memory
         date_iso,
         title: input.title,
         kind: input.kind,
-        // Drafts live in the frontend draft store. Crossing this command is the
-        // durable acceptance boundary, so a written entry is always reviewed.
+        // Drafts live in the review inbox (legacy frontend drafts and Rust
+        // proposals). This command is the acceptance boundary.
         review_state: MemoryReviewState::Reviewed,
         tags: input.tags,
         source_refs: input.source_refs,

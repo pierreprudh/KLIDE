@@ -1106,6 +1106,7 @@ const CAPABILITY_GROUPS: { capability: string; label: string }[] = [
   { capability: "read_workspace", label: "Read-only" },
   { capability: "read_conversation_history", label: "Conversation history" },
   { capability: "read_project_memory", label: "Project memory" },
+  { capability: "propose_project_memory", label: "Memory proposals" },
   { capability: "update_plan_state", label: "Plan state" },
   { capability: "write_workspace", label: "Write · diff review" },
   { capability: "run_command", label: "Command · approval" },

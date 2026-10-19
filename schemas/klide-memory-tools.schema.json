@@ -2,12 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://klide.dev/schemas/klide-memory-tools.schema.json",
   "title": "Klide Memory Tool call",
-  "description": "Provider-neutral call contract shared by the native Harness and the future embedded MCP adapter.",
+  "description": "Provider-neutral call contract shared by the native Harness and authenticated embedded MCP adapter.",
   "oneOf": [
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "arguments"],
+      "required": [
+        "name",
+        "arguments"
+      ],
       "properties": {
         "name": {
           "const": "memory_search"
@@ -20,13 +23,32 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "arguments"],
+      "required": [
+        "name",
+        "arguments"
+      ],
       "properties": {
         "name": {
           "const": "memory_read"
         },
         "arguments": {
           "$ref": "#/$defs/memoryReadInput"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "arguments"
+      ],
+      "properties": {
+        "name": {
+          "const": "memory_propose"
+        },
+        "arguments": {
+          "$ref": "#/$defs/memoryProposeInput"
         }
       }
     }
@@ -47,7 +69,9 @@
     "memorySearchInput": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["query"],
+      "required": [
+        "query"
+      ],
       "properties": {
         "query": {
           "type": "string",
@@ -75,7 +99,9 @@
     "memoryReadInput": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["memoryId"],
+      "required": [
+        "memoryId"
+      ],
       "properties": {
         "memoryId": {
           "type": "string",
@@ -87,7 +113,12 @@
     "memorySearchHit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["entry", "score", "matchedFields", "excerpt"],
+      "required": [
+        "entry",
+        "score",
+        "matchedFields",
+        "excerpt"
+      ],
       "properties": {
         "entry": {
           "$ref": "klide-memory-entry.schema.json"
@@ -116,6 +147,64 @@
         "excerpt": {
           "type": "string",
           "maxLength": 240
+        }
+      }
+    },
+    "memoryProposeInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "kind",
+        "notes",
+        "why",
+        "evidence"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "decision",
+            "convention",
+            "fact",
+            "failure",
+            "pattern"
+          ]
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "quote"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          }
         }
       }
     }

@@ -47,7 +47,7 @@ Tools are filtered by **kind** per mode (`tools.rs:list_tools`):
 | Mode | Tools exposed |
 |---|---|
 | **Chat** | none — converse from visible context only |
-| **Plan** | Workspace reads (9) + Conversation history (1) + Project Memory (2) + Plan state (1), plus the advisor exception — inspect local context and keep the plan, never edit, execute shell-backed dynamic tools, or use network |
+| **Plan** | Workspace reads (9) + Conversation history (1) + Project Memory (3) + Plan state (1), plus the advisor exception — inspect local context and keep the plan, never edit, execute shell-backed dynamic tools, or use network |
 | **Goal** | all built-in Tools (22) + dynamic command tools — inspect + approval-gated network reads + diff-reviewed edits + approval-gated commands + pause |
 
 *Dynamic tools* (`load_dynamic_tools`) are shell-backed command tools loaded at
@@ -89,15 +89,16 @@ warnings for unverified implementation work.
 | `list_cli_sessions` | The Delegate CLI sessions (Claude Code, Codex, OpenCode, Oh My Pi) on this machine, newest first, with title, session id and folder — Workspace-scoped unless `anywhere`. Read through the Delegate adapters, the same rows Mission Control shows. | K |
 | `open_cli_session` | Continue one Delegate session in a new Klide conversation. The Tool only verifies the session exists and reports; the result's `metadata.openSession` is what the live panel acts on (a replayed Transcript never reopens it). The panel takes the Mission Control "Resume" door: a new panel pinned to that Delegate, `--resume`d in the session's own folder. | K |
 
-### Project Memory (Plan + Goal) — 2
+### Project Memory (Plan + Goal) — 3
 
 | Tool | Purpose | Lineage |
 |---|---|---|
 | `memory_search` | Deterministically search reviewed, Workspace-scoped Project Memory by terms and optional kinds. Returns scores, matched fields, excerpts, and provenance metadata; stale/superseded entries stay out unless explicitly requested. | K |
 | `memory_read` | Read the authoritative Markdown and structured provenance for one stable memory id. Id and Workspace-root checks prevent traversal outside `.klide/memory/`. | K |
+| `memory_propose` | Verify an exact quote from a non-secret Workspace file and queue a reusable lesson for human review. Pending proposals are never recalled. Shared with authenticated Delegate MCP. | K |
 
-Both carry capability `ReadProjectMemory` (`read_project_memory` in the
-Transcript). See [`KLIDE_MEMORY_SCHEMA.md`](./KLIDE_MEMORY_SCHEMA.md).
+Search and read carry capability `ReadProjectMemory` (`read_project_memory` in the
+Transcript). Proposals carry `ProposeProjectMemory` (`propose_project_memory`); only operator review publishes them. See [`KLIDE_MEMORY_SCHEMA.md`](./KLIDE_MEMORY_SCHEMA.md).
 
 ### Network (Goal only) — 2
 
