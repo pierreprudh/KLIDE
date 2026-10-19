@@ -40,6 +40,9 @@ pub struct Proposal {
     fingerprint: String,
 }
 
+/// `dismissed` and `published` keep every fingerprint: a capped list let a
+/// lesson dismissed long ago be proposed again once it rolled off. Each entry
+/// is one human review (64 hex chars), so the file grows with clicks, not runs.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Store {
@@ -65,6 +68,49 @@ fn prior_publication(ws: &Workspace, id: &str) -> Result<Option<MemoryEntry>, St
     Ok(super::list_memory(ws.root().to_string_lossy().into(), Some(500))?
         .into_iter()
         .find(|entry| entry.source_refs.iter().any(|r| r.label.as_deref() == Some(id))))
+}
+
+/// Notes compared as one lowercase line of single-spaced words.
+fn normalize(notes: &str) -> String {
+    notes.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Where a published lesson can find its evidence again. A worker cites its
+/// own worktree, but the lesson lands in the main checkout's memory, where
+/// that path may not exist or may hold other bytes.
+struct Provenance {
+    label: String,
+    /// The worktree commit that holds the file exactly as quoted, so the
+    /// evidence stays reachable (`git show <commit>:<path>`) after the
+    /// worktree is gone.
+    commit: Option<String>,
+}
+
+fn provenance(ws: &Workspace, owner: &Workspace, rel: &str, text: &str, hash: &str) -> Provenance {
+    let snapshot = format!("Evidence snapshot sha256:{hash}");
+    let same_in_main = ws.root() == owner.root()
+        || fs::read_to_string(owner.root().join(rel)).is_ok_and(|main| main == text);
+    if same_in_main {
+        return Provenance { label: snapshot, commit: None };
+    }
+    let root = ws.root().to_string_lossy();
+    let committed = crate::git::git_output(&root, &["show", &format!("HEAD:{rel}")])
+        .is_ok_and(|at_head| at_head == text);
+    let head = committed
+        .then(|| crate::git::git_output(&root, &["rev-parse", "HEAD"]).ok())
+        .flatten()
+        .map(|sha| sha.trim().to_string())
+        .filter(|sha| !sha.is_empty());
+    match head {
+        Some(sha) => Provenance {
+            label: format!("{snapshot} — worktree commit {}, not in the main checkout", &sha[..sha.len().min(12)]),
+            commit: Some(sha),
+        },
+        None => Provenance {
+            label: format!("{snapshot} — uncommitted in worktree {root}, not in the main checkout"),
+            commit: None,
+        },
+    }
 }
 
 fn owner(root: &str) -> Result<Workspace, String> {
@@ -148,20 +194,19 @@ pub fn propose(ws: &Workspace, run_id: &str, request: Request) -> Result<Proposa
         .to_string_lossy()
         .to_string();
     let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+    let notes = normalize(&request.notes);
     let fingerprint = format!(
         "{:x}",
-        Sha256::digest(format!(
-            "{}:{}",
-            request.kind.as_str(),
-            request
-                .notes
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase()
-        ))
+        Sha256::digest(format!("{}:{notes}", request.kind.as_str()))
     );
     let owner = owner(ws.root().to_str().ok_or("Invalid Workspace path")?)?;
+    let provenance = provenance(ws, &owner, &rel, &text, &hash);
+    // Read before taking the lock: parsing the memory store is the slow part,
+    // and parallel workers shouldn't queue behind it. A lesson written by
+    // hand meanwhile is caught on the next proposal.
+    let already_known = super::list_memory(owner.root().to_string_lossy().into(), Some(500))?
+        .iter()
+        .any(|entry| entry.kind == request.kind && normalize(&entry.notes) == notes);
     update(&owner, |store| {
         if store.published.contains(&fingerprint) {
             return Err("This lesson was already accepted into Project Memory.".into());
@@ -172,22 +217,7 @@ pub fn propose(ws: &Workspace, run_id: &str, request: Request) -> Result<Proposa
         if let Some(existing) = store.pending.iter().find(|p| p.fingerprint == fingerprint) {
             return Ok(existing.clone());
         }
-        let reviewed = super::list_memory(owner.root().to_string_lossy().into(), Some(500))?;
-        if reviewed.iter().any(|entry| {
-            entry.kind == request.kind
-                && entry
-                    .notes
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .to_lowercase()
-                    == request
-                        .notes
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .to_lowercase()
-        }) {
+        if already_known {
             return Err("This lesson is already in Project Memory.".into());
         }
         if store.pending.len() >= MAX_PENDING {
@@ -221,7 +251,7 @@ pub fn propose(ws: &Workspace, run_id: &str, request: Request) -> Result<Proposa
                 model: None,
                 mode: None,
                 status: None,
-                source_refs: vec![
+                source_refs: [
                     MemorySourceRef {
                         source_type: MemorySourceType::Run,
                         id: run_id.into(),
@@ -232,10 +262,19 @@ pub fn propose(ws: &Workspace, run_id: &str, request: Request) -> Result<Proposa
                         id: rel.clone(),
                         path: Some(rel.clone()),
                         line_start: Some(line),
-                        label: Some(format!("Evidence snapshot sha256:{hash}")),
+                        label: Some(provenance.label.clone()),
                         ..Default::default()
                     },
-                ],
+                ]
+                .into_iter()
+                .chain(provenance.commit.clone().map(|sha| MemorySourceRef {
+                    source_type: MemorySourceType::Commit,
+                    id: sha,
+                    path: Some(rel.clone()),
+                    line_start: Some(line),
+                    ..Default::default()
+                }))
+                .collect(),
             },
             draft_id: id,
             created_at_ms: super::now_ms(),
@@ -276,6 +315,9 @@ pub struct Edits {
 /// Human-only IPC acceptance: no publication operation is exported as a Tool.
 pub fn review(root: &str, id: &str, edits: Option<Edits>) -> Result<Option<MemoryEntry>, String> {
     let ws = owner(root)?;
+    // Read outside the lock (see `propose`). Two reviews of one proposal
+    // can't both publish: the second finds it no longer pending.
+    let prior = prior_publication(&ws, id)?;
     update(&ws, |store| {
         let index = store
             .pending
@@ -286,7 +328,6 @@ pub fn review(root: &str, id: &str, edits: Option<Edits>) -> Result<Option<Memor
         // A Keep whose store update was interrupted already published: finish
         // it whichever button comes next — no duplicate on a retried Keep, and
         // a Dismiss reports the saved entry instead of hiding it.
-        let prior = prior_publication(&ws, id)?;
         let result = if prior.is_some() {
             prior
         } else if let Some(edits) = edits {
@@ -310,12 +351,10 @@ pub fn review(root: &str, id: &str, edits: Option<Edits>) -> Result<Option<Memor
             Some(super::write_memory(ws.root().to_string_lossy().into(), input)?)
         } else {
             store.dismissed.insert(0, proposal.fingerprint.clone());
-            store.dismissed.truncate(100);
             None
         };
         if result.is_some() {
             store.published.insert(0, proposal.fingerprint.clone());
-            store.published.truncate(100);
         }
         store.pending.remove(index);
         Ok(result)
@@ -606,6 +645,74 @@ mod tests {
             p.draft_id
         );
         assert!(!branch.join(".klide/memory-proposals").exists());
+        // Not a real git worktree, so nothing anchors the branch-only file:
+        // the provenance says so instead of pointing into the main checkout.
+        let file = &p.input.source_refs[1];
+        assert!(file.label.as_deref().unwrap().contains("uncommitted in worktree"));
+        assert!(!p.input.source_refs.iter().any(|r| r.source_type == MemorySourceType::Commit));
+
+        // A file the main checkout holds byte for byte needs no caveat.
+        fs::write(branch.join("SHARED.md"), "Release artifacts use violet-otter-7319.\n").unwrap();
+        fs::write(main.root().join("SHARED.md"), "Release artifacts use violet-otter-7319.\n").unwrap();
+        let mut r = request();
+        r.notes = "Shared lesson".into();
+        r.evidence.path = "SHARED.md".into();
+        let shared = propose(&ws, "worker-run", r).unwrap();
+        assert!(shared.input.source_refs[1].label.as_deref().unwrap().starts_with("Evidence snapshot"));
+        assert!(!shared.input.source_refs[1].label.as_deref().unwrap().contains("worktree"));
+    }
+
+    #[test]
+    fn committed_worktree_evidence_is_anchored_to_its_commit() {
+        let (_dir, main) = fixture();
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(main.root(), &["init", "-q"]);
+        git(main.root(), &["add", "CONVENTIONS.md"]);
+        git(main.root(), &["commit", "-qm", "base"]);
+        let branch = main.root().join("wt");
+        git(main.root(), &["worktree", "add", "-q", "-b", "w", branch.to_str().unwrap()]);
+        fs::write(branch.join("CONVENTIONS.md"), "Worker-only release rule.\n").unwrap();
+        git(&branch, &["commit", "-qam", "worker"]);
+        let head = git(&branch, &["rev-parse", "HEAD"]);
+
+        let ws = Workspace::new(branch.to_str().unwrap()).unwrap();
+        let mut r = request();
+        r.evidence.quote = "Worker-only release rule.".into();
+        let p = propose(&ws, "worker-run", r).unwrap();
+        let commit = p
+            .input
+            .source_refs
+            .iter()
+            .find(|r| r.source_type == MemorySourceType::Commit)
+            .expect("commit anchor");
+        assert_eq!(commit.id, head);
+        assert_eq!(commit.path.as_deref(), Some("CONVENTIONS.md"));
+        assert!(p.input.source_refs[1].label.as_deref().unwrap().contains("worktree commit"));
+    }
+
+    #[test]
+    fn a_dismissal_outlives_any_number_of_later_reviews() {
+        let (_dir, ws) = fixture();
+        let root = ws.root().to_str().unwrap();
+        let first = propose(&ws, "run", request()).unwrap();
+        review(root, &first.draft_id, None).unwrap();
+        for i in 0..105 {
+            let mut r = request();
+            r.notes = format!("Filler lesson {i}");
+            let p = propose(&ws, "run", r).unwrap();
+            review(root, &p.draft_id, None).unwrap();
+        }
+        assert!(propose(&ws, "run", request()).unwrap_err().contains("dismissed"));
     }
 
     #[cfg(unix)]
