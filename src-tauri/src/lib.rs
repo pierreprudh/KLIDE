@@ -41,6 +41,7 @@ mod spreadsheet;
 mod run_documents;
 mod pricing;
 mod providers;
+mod provider_keys;
 mod pty;
 mod pty_client;
 mod pty_frame;
@@ -121,10 +122,13 @@ async fn app_user_info() -> AppUserInfo {
 // Report whether a usable key exists and where it comes from — never returns
 // the key itself, so the value stays inside the Rust side.
 #[tauri::command]
-async fn ai_provider_key_status(provider: String) -> ProviderKeyStatus {
+async fn ai_provider_key_status(provider: String, workspace: Option<String>) -> ProviderKeyStatus {
     // Reads the keychain-marker file; three surfaces probe all 16 providers at
     // once, so the reads stay off the main thread (blocking.rs).
-    blocking::run(move || providers::key_status(&provider))
+    blocking::run(move || {
+        let scope = workspace.filter(|w| !w.trim().is_empty()).map(std::path::PathBuf::from);
+        providers::key_status_in(&provider, scope.as_deref())
+    })
         .await
         .unwrap_or(ProviderKeyStatus {
             has_key: false,
@@ -178,6 +182,43 @@ async fn ai_clear_provider_key_reference(provider: String) -> Result<(), String>
         providers::set_provider_reference(&provider, None)
     })
     .await
+}
+
+// A provider's saved keys (provider_keys.rs): several per provider, one main.
+// The list carries ids, labels and `${VAR}` references, never a secret.
+#[tauri::command]
+async fn provider_keys_list(provider: String) -> provider_keys::ProviderKeys {
+    blocking::run_infallible(move || provider_keys::list(&provider)).await
+}
+
+#[tauri::command]
+async fn provider_keys_add(
+    provider: String,
+    label: Option<String>,
+    key: Option<String>,
+    reference: Option<String>,
+    make_main: bool,
+    replaces: Option<String>,
+) -> Result<provider_keys::ProviderKeys, String> {
+    blocking::run(move || {
+        let new_key = match (key, reference) {
+            (_, Some(r)) => provider_keys::NewKey::Reference(r),
+            (Some(k), None) => provider_keys::NewKey::Secret(k),
+            (None, None) => return Err("Nothing to save".to_string()),
+        };
+        provider_keys::add(&provider, label, new_key, make_main, replaces)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn provider_keys_set_main(provider: String, id: String) -> Result<provider_keys::ProviderKeys, String> {
+    blocking::run(move || provider_keys::set_main(&provider, &id)).await
+}
+
+#[tauri::command]
+async fn provider_keys_remove(provider: String, id: String) -> Result<provider_keys::ProviderKeys, String> {
+    blocking::run(move || provider_keys::remove(&provider, &id)).await
 }
 
 #[tauri::command]
@@ -1158,6 +1199,10 @@ pub fn run() {
             ai_clear_provider_key,
             ai_set_provider_key_reference,
             ai_clear_provider_key_reference,
+            provider_keys_list,
+            provider_keys_add,
+            provider_keys_set_main,
+            provider_keys_remove,
             ai_model_pricing,
             custom_provider_list,
             custom_provider_upsert,

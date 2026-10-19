@@ -86,6 +86,7 @@ export function Row({
   control,
   leading,
   help,
+  footer,
   controlLayout = "compact",
 }: {
   title: string;
@@ -96,6 +97,8 @@ export function Row({
   control: ReactNode;
   leading?: ReactNode;
   help?: ReactNode;
+  // Full-width content under the label and control (e.g. a provider's keys).
+  footer?: ReactNode;
   controlLayout?: "compact" | "wide";
 }) {
   const [helpOpen, setHelpOpen] = useState(false);
@@ -125,13 +128,14 @@ export function Row({
               </button>
             )}
           </div>
-          <div className="klide-row-description">{description}</div>
+          {description && <div className="klide-row-description">{description}</div>}
           {help && (
             <div id={helpId} hidden={!helpOpen} className="klide-row-description klide-settings-help-content">{help}</div>
           )}
         </div>
       </div>
       <div className="klide-settings-row-control">{control}</div>
+      {footer && <div className="klide-settings-row-footer">{footer}</div>}
     </div>
   );
 }

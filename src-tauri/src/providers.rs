@@ -1046,6 +1046,14 @@ pub fn provider_key_in(
 /// Public version of the key status — used by `ai_provider_key_status`
 /// to report where the key came from without revealing the value.
 pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
+    key_status_in(id, None)
+}
+
+/// `key_status` with a reference resolved from `scope`'s `.env` first — the
+/// folder the asking surface has open, which the window may not have
+/// announced to Rust yet (`set_active_workspace` lands after a child's
+/// first read).
+pub fn key_status_in(id: &str, scope: Option<&std::path::Path>) -> Result<ProviderKeyStatus, String> {
     let Some(entry) = lookup(id) else {
         // Custom (self-hosted) provider — not in the static registry. These
         // never use the keychain: their token comes from a `${VAR}` reference
@@ -1055,7 +1063,7 @@ pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
             // `has_key` reflects whether the reference actually resolves, so
             // the UI can warn about a `${VAR}` with no matching `.env` entry.
             return Ok(ProviderKeyStatus {
-                has_key: resolve_reference(&reference, None).is_some(),
+                has_key: resolve_reference(&reference, scope).is_some(),
                 source: "reference".to_string(),
             });
         }
@@ -1080,7 +1088,7 @@ pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
     // status read keychain-prompt-free when the user opted for `.env`.
     if let Some(reference) = builtin_token_reference(id) {
         return Ok(ProviderKeyStatus {
-            has_key: resolve_reference(&reference, None).is_some(),
+            has_key: resolve_reference(&reference, scope).is_some(),
             source: "reference".to_string(),
         });
     }
@@ -1455,6 +1463,51 @@ pub fn clear_keychain_key(provider: &str) -> Result<(), String> {
     mark_keychain(provider, false);
     invalidate_token_cache(provider);
     result
+}
+
+// ── The main slot, as `provider_keys` sees it ───────────────────────────
+// A provider's saved keys (`provider_keys.rs`) each keep their secret under
+// their own Keychain account; making one main copies it into the slot above,
+// so key resolution never learns there is more than one.
+
+/// Whether `r` is a `${VAR}` / `$VAR` reference rather than a literal key.
+pub fn is_env_reference(r: &str) -> bool {
+    reference_var_name(r).is_some()
+}
+
+/// The `${VAR}` reference in the main slot, if that's how the key is wired.
+pub fn main_slot_reference(id: &str) -> Option<String> {
+    builtin_token_reference(id)
+}
+
+/// Whether a pasted key sits in the main slot — the marker, not a Keychain
+/// read, so asking never prompts.
+pub fn main_slot_has_keychain_key(id: &str) -> bool {
+    has_keychain_marker(id)
+}
+
+/// The pasted key in the main slot. A real Keychain read (may prompt).
+pub fn read_main_slot_key(id: &str) -> Option<String> {
+    keyring_lookup(id)
+}
+
+/// Write / read / delete a secret under its own Keychain account (a saved
+/// key's `{provider}#{id}`), outside the main slot and its markers.
+pub fn set_keychain_secret(account: &str, secret: &str) -> Result<(), String> {
+    keyring_entry(account)?
+        .set_password(secret.trim())
+        .map_err(|e| e.to_string())
+}
+
+pub fn read_keychain_secret(account: &str) -> Option<String> {
+    keyring_lookup(account)
+}
+
+pub fn delete_keychain_secret(account: &str) -> Result<(), String> {
+    match keyring_entry(account)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // ── Provider wire vocabulary + dispatch ────────────────────────────────

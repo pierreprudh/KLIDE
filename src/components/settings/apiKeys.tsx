@@ -5,14 +5,21 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  addProviderKey,
+  listProviderKeys,
   listProviderModels,
   readProviderKeyStatus,
+  removeProviderKey,
+  setMainProviderKey,
+  type ProviderKeys,
   type ProviderKeyStatus,
+  type SavedKey,
 } from "../../ipc/aiProviders";
 import { DotGridLoader, ProviderLogo, providerChartColor } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import { hostedProviderRows } from "../../agent/providerCatalog";
 import { notify } from "../../toast";
+import { errMessage } from "../../errors";
 import { ProviderWordmark } from "./providerWordmarks";
 import { fetchAgentRunsCached, peekAgentRunsCache, type Run } from "../../runs";
 import { GhostButton, LinkButton, Panel, PencilIcon, Row, StatusText } from "./controls";
@@ -40,24 +47,41 @@ export type KeyStatus = ProviderKeyStatus;
 // balance over the API — today only OpenRouter does.
 export type ProviderCredits = { total: number | null; used: number | null; remaining: number | null };
 
-// One provider's key control: shows where the key comes from (keychain / env /
-// none), lets you paste a new one (saved into the keychain via Rust), and clear
-// it. The key value never lives in React state once saved — only its status.
+// The one explanation of the two ways in, said above the rows instead of
+// under each of them.
+export function ApiKeyIntro() {
+  return (
+    <p className="klide-row-description" style={{ margin: "0 0 12px" }}>
+      Paste a key to keep it in your macOS Keychain, or pick Env ref to point at a
+      variable in your .env — then no key is stored in the app.
+    </p>
+  );
+}
+
+// One provider's key control. A provider can hold several saved keys
+// (provider_keys.rs) but only its main one is used; the row shows that key's
+// status, and on hover offers Add key / Edit / Clear. A key's value never
+// lives in React state once saved — only its label and status.
 export function ApiKeyRow({
   id,
   title,
   envVar,
   placeholder,
+  workspaceRoot = null,
   onChange,
 }: {
   id: string;
   title: string;
   envVar: string;
   placeholder: string;
+  // The open folder: a `${VAR}` reference resolves from its `.env` first.
+  workspaceRoot?: string | null;
   onChange?: (provider: string) => void;
 }) {
   const [status, setStatus] = useState<KeyStatus>({ hasKey: false, source: "none" });
+  const [saved, setSaved] = useState<ProviderKeys>({ keys: [], main: null });
   const [value, setValue] = useState("");
+  const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Post-save validation: "Saved" only means persisted, not that the key works.
@@ -67,18 +91,23 @@ export function ApiKeyRow({
   // Two ways to supply the key: "paste" → macOS Keychain (classic), or "ref"
   // → a `${VAR}` reference resolved from .env (same as self-hosted endpoints).
   const [method, setMethod] = useState<"paste" | "ref">("paste");
+  // A provider with a working key shows only its status. "edit" changes the
+  // main key in place; "add" saves another key beside it.
+  const [form, setForm] = useState<"edit" | "add" | null>(null);
+  const [showKeys, setShowKeys] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const next = await readProviderKeyStatus(id);
+      const [next, keys] = await Promise.all([readProviderKeyStatus(id, workspaceRoot), listProviderKeys(id)]);
       setStatus(next);
+      setSaved(keys);
       // Reflect the saved method so reopening Settings shows how it's wired.
       if (next.source === "reference") setMethod("ref");
       else if (next.source === "keychain") setMethod("paste");
     } catch {
       setStatus({ hasKey: false, source: "none" });
     }
-  }, [id]);
+  }, [id, workspaceRoot]);
 
   useEffect(() => {
     void refresh();
@@ -87,6 +116,27 @@ export function ApiKeyRow({
   // In "Env ref" the field's placeholder is the conventional reference, so an
   // empty Save takes it rather than doing nothing.
   const suggestedRef = `\${${envVar}}`;
+  const mainKey = saved.keys.find((k) => k.id === saved.main) ?? null;
+
+  // The main key changed: check it against the live provider before claiming
+  // it works.
+  async function verifyMain() {
+    setVerify("checking");
+    try {
+      const models = await listProviderModels(id);
+      if (models.length > 0) {
+        setVerify("ok");
+        notify(`${title} key verified`, { tone: "success" });
+      } else {
+        setVerify("fail");
+        notify(`${title} key saved, but the provider returned no models — double-check it.`, { tone: "warn" });
+      }
+    } catch (e) {
+      setVerify("fail");
+      setError(`Saved, but couldn't verify: ${errMessage(e)}`);
+      notify(`${title} key saved, but verification failed — it may be invalid.`, { tone: "warn" });
+    }
+  }
 
   async function save() {
     const submitted = value.trim() || (method === "ref" ? suggestedRef : "");
@@ -101,58 +151,72 @@ export function ApiKeyRow({
     setBusy(true);
     setError(null);
     try {
-      if (method === "ref") {
-        await invoke("ai_set_provider_key_reference", { provider: id, reference: submitted });
-      } else {
-        await invoke("ai_set_provider_key", { provider: id, key: submitted });
-      }
+      const before = saved.main;
+      const next = await addProviderKey(id, {
+        label: form === "add" ? label : undefined,
+        ...(method === "ref" ? { reference: submitted } : { key: submitted }),
+        // Edit swaps the main key; Add keeps the current one in use (the
+        // first key a provider gets is main either way).
+        makeMain: form !== "add",
+        replaces: form === "edit" ? before ?? undefined : undefined,
+      });
       setValue("");
+      setLabel("");
+      if (form === "add" && next.keys.length > 1) setShowKeys(true);
+      setForm(null);
       await refresh();
-      onChange?.(id);
-      // Validate against the live provider before claiming success.
-      setVerify("checking");
-      try {
-        const models = await listProviderModels(id);
-        if (models.length > 0) {
-          setVerify("ok");
-          notify(`${title} key verified`, { tone: "success" });
-        } else {
-          setVerify("fail");
-          notify(`${title} key saved, but the provider returned no models — double-check it.`, { tone: "warn" });
-        }
-      } catch (e) {
-        setVerify("fail");
-        setError(`Saved, but couldn't verify: ${e instanceof Error ? e.message : String(e)}`);
-        notify(`${title} key saved, but verification failed — it may be invalid.`, { tone: "warn" });
+      if (next.main !== before || form !== "add") {
+        onChange?.(id);
+        await verifyMain();
       }
     } catch (e) {
-      setError(String(e));
-      notify(`Couldn't save ${title} key: ${e instanceof Error ? e.message : String(e)}`, { tone: "error" });
+      setError(errMessage(e));
+      notify(`Couldn't save ${title} key: ${errMessage(e)}`, { tone: "error" });
     } finally {
       setBusy(false);
     }
   }
 
-  async function clear() {
+  // Run one key action, then re-read the row. "used" means a key went into the
+  // main slot (check it); "emptied" means the slot was cleared.
+  async function act(work: () => Promise<unknown>, effect: "used" | "emptied" | null) {
     if (busy) return;
-    if (!window.confirm(`Remove the ${title} key? You'll need to re-enter it to use ${title} again.`)) return;
     setBusy(true);
     setError(null);
     try {
-      // Clear whichever method is currently providing the key.
-      const cmd =
-        status.source === "reference"
-          ? "ai_clear_provider_key_reference"
-          : "ai_clear_provider_key";
-      await invoke(cmd, { provider: id });
+      await work();
       setVerify("idle");
+      setForm(null);
       await refresh();
-      onChange?.(id);
+      if (effect) onChange?.(id);
+      if (effect === "used") await verifyMain();
     } catch (e) {
-      setError(String(e));
+      setError(errMessage(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  function clear() {
+    const others = saved.keys.length - (mainKey ? 1 : 0);
+    const message = others > 0
+      ? `Remove ${mainKey?.label ?? "the main key"}? ${title} stops working until you pick another saved key.`
+      : `Remove the ${title} key? You'll need to re-enter it to use ${title} again.`;
+    if (!window.confirm(message)) return;
+    void act(async () => {
+      if (mainKey) return removeProviderKey(id, mainKey.id);
+      // A key from before saved keys existed: clear whichever method holds it.
+      await invoke(status.source === "reference" ? "ai_clear_provider_key_reference" : "ai_clear_provider_key", { provider: id });
+    }, "emptied");
+  }
+
+  function useKey(key: SavedKey) {
+    void act(() => setMainProviderKey(id, key.id), "used");
+  }
+
+  function removeKey(key: SavedKey) {
+    if (!window.confirm(`Remove ${key.label} from ${title}?`)) return;
+    void act(() => removeProviderKey(id, key.id), key.id === saved.main ? "emptied" : null);
   }
 
   const statusText =
@@ -176,21 +240,49 @@ export function ApiKeyRow({
       <StatusText tone="idle">Not set</StatusText>
     );
 
+  // Only a state that asks for something gets a line; how Paste and Env ref
+  // work is said once above the list (ApiKeyIntro), not on every row. With
+  // several keys saved, the line names the one in use.
+  const others = saved.keys.length - (mainKey ? 1 : 0);
   const description = error
     ? error
-    : status.source === "keychain"
-    ? "Stored securely in your macOS Keychain."
-    : status.source === "reference"
-    ? status.hasKey
-      ? "Resolved from a ${VAR} reference in your .env — no key stored in the app."
-      : "Reference set, but it doesn't resolve. Add the variable to your project .env or ~/.klide/.env."
+    : status.source === "reference" && !status.hasKey
+    ? workspaceRoot
+      ? `${mainKey?.reference ?? "The variable"} isn't in this project's .env or ~/.klide/.env.`
+      : `No project is open, and ~/.klide/.env doesn't have ${mainKey?.reference ?? "the variable"}.`
     : status.source === "env"
-    ? `Using ${envVar} from the environment. Save here to move it into the Keychain (survives a packaged build).`
-    : method === "ref"
-    ? `Reference an env var (e.g. \${${envVar}}); the value stays in your .env, never in the app.`
-    : `Paste a key to store it in your macOS Keychain, or export ${envVar}.`;
+    ? `Using ${envVar} from the environment. Edit to move it into the Keychain (survives a packaged build).`
+    : saved.keys.length > 1
+    ? mainKey
+      ? `Using ${mainKey.label} · ${others} more saved`
+      : `${saved.keys.length} keys saved, none in use`
+    : "";
 
   const canClear = status.source === "keychain" || status.source === "reference";
+  // A configured key collapses to its status — an unresolved reference too,
+  // its line says what's missing. Only an error keeps the form open.
+  const collapsed = status.source !== "none" && form === null && !error;
+  const listOpen = saved.keys.length > 1 && (showKeys || !status.hasKey);
+
+  function openForm(next: "edit" | "add") {
+    // Edit reopens the key as it's wired: a reference can be shown, a Keychain
+    // value never is, so that one starts an empty paste. Add starts empty.
+    const asRef = next === "edit" && status.source === "reference";
+    setMethod(asRef ? "ref" : "paste");
+    setValue(asRef ? mainKey?.reference ?? suggestedRef : "");
+    setLabel("");
+    setVerify("idle");
+    setError(null);
+    setForm(next);
+  }
+
+  function cancelForm() {
+    setForm(null);
+    setValue("");
+    setLabel("");
+    setError(null);
+    setMethod(status.source === "reference" ? "ref" : "paste");
+  }
 
   return (
     <Row
@@ -198,19 +290,57 @@ export function ApiKeyRow({
       titleContent={<ProviderWordmark id={id} label={title} />}
       description={description}
       leading={<ProviderLogo id={id as ProviderId} size={24} />}
+      footer={
+        listOpen ? (
+          <SavedKeyList keys={saved.keys} main={saved.main} busy={busy} onUse={useKey} onRemove={removeKey} />
+        ) : undefined
+      }
       control={
+        collapsed ? (
+          <div className="klide-key-collapsed">
+            <div className="klide-key-actions">
+              {saved.keys.length > 1 && (
+                <GhostButton onClick={() => setShowKeys((open) => !open)}>
+                  {showKeys ? "Hide keys" : "Keys"}
+                </GhostButton>
+              )}
+              <GhostButton onClick={() => openForm("add")}>Add key</GhostButton>
+              <GhostButton onClick={() => openForm("edit")}>Edit</GhostButton>
+              {canClear && <GhostButton onClick={clear}>Clear</GhostButton>}
+            </div>
+            {statusText}
+          </div>
+        ) : (
         // Fixed columns so every provider's status, toggle, field and buttons
-        // line up down the list, whatever its state.
+        // line up down the list, whatever its state. Adding a key trades the
+        // status column for the new key's name.
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "64px auto minmax(0, 1fr) auto auto",
+            gridTemplateColumns: `${form === "add" ? "96px" : "64px"} auto minmax(0, 1fr) auto auto`,
             alignItems: "center",
             gap: 8,
             width: 480,
           }}
         >
-          <span style={{ justifySelf: "end" }}>{statusText}</span>
+          {form === "add" ? (
+            <input
+              value={label}
+              placeholder="Name"
+              onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") cancelForm();
+              }}
+              aria-label={`${title} key name`}
+              autoComplete="off"
+              spellCheck={false}
+              autoFocus
+              className="klide-field"
+              style={{ width: "100%", height: 34, padding: "0 10px" }}
+            />
+          ) : (
+            <span style={{ justifySelf: "end" }}>{statusText}</span>
+          )}
           <MethodToggle
             method={method}
             onChange={(next) => {
@@ -228,10 +358,12 @@ export function ApiKeyRow({
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void save();
+              else if (e.key === "Escape" && form) cancelForm();
             }}
             aria-label={method === "ref" ? `${title} env reference` : `${title} API key`}
             autoComplete="off"
             spellCheck={false}
+            autoFocus={form === "edit"}
             className="klide-field"
             style={{
               width: "100%",
@@ -242,13 +374,59 @@ export function ApiKeyRow({
           <LinkButton onClick={() => void save()}>
             {busy ? <DotGridLoader size={14} color="currentColor" label="Saving" /> : "Save"}
           </LinkButton>
-          {/* Held in place when there's nothing to clear, so the column stays. */}
-          <span style={{ visibility: canClear ? "visible" : "hidden" }} aria-hidden={!canClear}>
-            <GhostButton onClick={() => void clear()}>Clear</GhostButton>
-          </span>
+          {form && status.hasKey ? (
+            <GhostButton onClick={cancelForm}>Cancel</GhostButton>
+          ) : (
+            // Held in place when there's nothing to clear, so the column stays.
+            <span style={{ visibility: canClear ? "visible" : "hidden" }} aria-hidden={!canClear}>
+              <GhostButton onClick={clear}>Clear</GhostButton>
+            </span>
+          )}
         </div>
+        )
       }
     />
+  );
+}
+
+// A provider's saved keys under its row: the one in use says so; any other
+// can be made main or removed (hover). A pasted key shows only its name.
+function SavedKeyList({
+  keys,
+  main,
+  busy,
+  onUse,
+  onRemove,
+}: {
+  keys: SavedKey[];
+  main: string | null;
+  busy: boolean;
+  onUse: (key: SavedKey) => void;
+  onRemove: (key: SavedKey) => void;
+}) {
+  return (
+    <ul className="klide-key-list" aria-label="Saved keys">
+      {keys.map((key) => {
+        const inUse = key.id === main;
+        return (
+          <li key={key.id} className="klide-key-list-row">
+            <span className="klide-key-list-label">{key.label}</span>
+            <span className="klide-key-list-source" data-reference={key.reference ? "" : undefined}>
+              {key.reference ?? "Keychain"}
+            </span>
+            <span className="klide-key-list-actions">
+              {!inUse && (
+                <GhostButton onClick={() => !busy && onUse(key)}>Use</GhostButton>
+              )}
+              <GhostButton onClick={() => !busy && onRemove(key)}>Remove</GhostButton>
+            </span>
+            <span className="klide-key-list-state">
+              {inUse ? <StatusText tone="ok">In use</StatusText> : null}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

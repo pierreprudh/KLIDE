@@ -72,8 +72,43 @@ export function listProviderModels(provider: string): Promise<string[]> {
   return invoke<string[]>("ai_provider_models", { provider });
 }
 
-export function readProviderKeyStatus(provider: string): Promise<ProviderKeyStatus> {
-  return invoke<ProviderKeyStatus>("ai_provider_key_status", { provider });
+/** `workspace` resolves a `${VAR}` reference from that folder's `.env` first —
+ *  pass the open folder when the caller has it, so the answer doesn't depend
+ *  on whether the window has announced it to Rust yet. */
+export function readProviderKeyStatus(provider: string, workspace?: string | null): Promise<ProviderKeyStatus> {
+  return invoke<ProviderKeyStatus>("ai_provider_key_status", { provider, workspace: workspace ?? null });
+}
+
+/** One of a provider's saved keys (`provider_keys.rs`). A pasted key's value
+ *  never crosses the wire — only its label; a reference shows its `${VAR}`. */
+export type SavedKey = { id: string; label: string; reference?: string };
+/** Every saved key and the main one — the only key that gets used. */
+export type ProviderKeys = { keys: SavedKey[]; main: string | null };
+
+export function listProviderKeys(provider: string): Promise<ProviderKeys> {
+  return invoke<ProviderKeys>("provider_keys_list", { provider });
+}
+
+export function addProviderKey(
+  provider: string,
+  input: { label?: string; key?: string; reference?: string; makeMain: boolean; replaces?: string },
+): Promise<ProviderKeys> {
+  return invoke<ProviderKeys>("provider_keys_add", {
+    provider,
+    label: input.label ?? null,
+    key: input.key ?? null,
+    reference: input.reference ?? null,
+    makeMain: input.makeMain,
+    replaces: input.replaces ?? null,
+  });
+}
+
+export function setMainProviderKey(provider: string, id: string): Promise<ProviderKeys> {
+  return invoke<ProviderKeys>("provider_keys_set_main", { provider, id });
+}
+
+export function removeProviderKey(provider: string, id: string): Promise<ProviderKeys> {
+  return invoke<ProviderKeys>("provider_keys_remove", { provider, id });
 }
 
 export function listProviderModelMetadata(
