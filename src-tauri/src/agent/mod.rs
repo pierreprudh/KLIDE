@@ -7591,6 +7591,52 @@ mod permission_gate_tests {
         );
     }
 
+    /// Full auto silences commands, but not one that reads a credential file:
+    /// the card goes up, says why, and offers no project rule.
+    #[tokio::test]
+    async fn full_auto_still_asks_before_a_command_reads_credentials() {
+        let root = temp_workspace("full-auto-credential");
+        std::fs::write(Path::new(&root).join(".env"), "OPENAI_API_KEY=sk-test\n").unwrap();
+        let cancel = CancellationToken::new();
+        let mut request = test_request(&root, &[]);
+        request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("full-auto-credential-run", &request);
+        let runs_dir = std::env::temp_dir().join(format!(
+            "klide-full-auto-credential-runs-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "full-auto-credential-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        // Nobody answers the card, so the gate is still waiting when we look.
+        let waited = tokio::time::timeout(
+            Duration::from_millis(500),
+            process_command_tool(&ctx, &command_call("call-1", "cat .env"), &mut emit),
+        )
+        .await;
+        assert!(waited.is_err(), "a credential read must wait for the person");
+        assert_eq!((prompts_shown(&events), full_auto_answers(&events)), (1, 0));
+        let request = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::PermissionRequested { request, .. } => Some(request.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(request.reason.contains("reads credentials: .env"), "{}", request.reason);
+        assert!(request.options.iter().all(|o| o.option_id != "allow_project"));
+    }
+
     /// The rung flipped while the Run works: no flag on the request, the live
     /// policy alone lets the next command through.
     #[tokio::test]

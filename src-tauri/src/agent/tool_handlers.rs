@@ -1624,7 +1624,13 @@ where
         &command,
         &key.foreground_key(),
     );
-    let project_ok = foreground
+    // A command that names a credential file never runs on a rule or the rung
+    // alone: the file tools refuse those paths, and a shell must not be the
+    // way around them. An exact approval for this run still counts — the
+    // person saw this very command.
+    let credential = !preflight.credential_paths.is_empty();
+    let project_ok = !credential
+        && foreground
         && matched_rule
             .as_ref()
             .map(|rule| rule.exact || preflight.external_paths.is_empty())
@@ -1632,6 +1638,11 @@ where
 
     let external_paths = preflight.external_paths.clone();
     let mut permission_reason = reason;
+    if credential {
+        permission_reason.push_str(" It reads credentials: ");
+        permission_reason.push_str(&preflight.credential_paths.join(", "));
+        permission_reason.push_str(". Full auto and project rules don't cover this; it always asks.");
+    }
     if !external_paths.is_empty() {
         permission_reason.push_str(" It references paths outside the workspace: ");
         permission_reason.push_str(&external_paths.join(", "));
@@ -1652,7 +1663,9 @@ where
             " It runs in the background with no time limit and is stopped when this run ends."
         });
     }
-    let options = if foreground {
+    // No project rule for a credential read: it would be stored and then
+    // never honoured.
+    let options = if foreground && !credential {
         standard_gate_options("Approve for this run", "Approve for this project")
     } else {
         standard_gate_options("Approve for this run", "")
@@ -1689,6 +1702,7 @@ where
     };
 
     match permission::precheck(ctx, permission::Capability::Command, &approval_key, project_ok) {
+        permission::Precheck::Execute(permission::Trusted::FullAuto) if credential => {}
         permission::Precheck::Execute(trusted) => {
             if trusted == permission::Trusted::FullAuto {
                 permission::record_full_auto(ctx, call, perm, emit)?;

@@ -53,7 +53,8 @@ export function ApiKeyIntro() {
   return (
     <p className="klide-row-description" style={{ margin: "0 0 12px" }}>
       Paste a key to keep it in your macOS Keychain, or pick Env ref to point at a
-      variable in your .env — then no key is stored in the app.
+      variable in ~/.klide/.env — outside every project, so no agent working in
+      one can read it, and no key is stored in the app.
     </p>
   );
 }
