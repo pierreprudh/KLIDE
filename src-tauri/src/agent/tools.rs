@@ -991,9 +991,9 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
-            schema: schema("clean_context", "Discard tool results that led nowhere (a Glob with 300 paths, a read of the wrong file, a search that came up empty). Each removed result is replaced by '[cleaned: tool_name]' so the agent knows it threw something away. Only the current turn is affected, keeping the prompt cache intact.",
+            schema: schema("clean_context", "Discard tool results that led nowhere (a Glob with 300 paths, a read of the wrong file, a search that came up empty). Each removed result is replaced by '[cleaned: tool_name]' so the agent knows it threw something away. Only results produced earlier in this same tool-call batch, after the latest assistant response, can be cleaned. Already-sent results stay unchanged to preserve the prompt cache; automatic compaction handles older results.",
                 serde_json::json!({
-                    "ids": { "type": "array", "description": "List of tool_call_ids to clean from the current turn." }
+                    "ids": { "type": "array", "description": "Tool call IDs from earlier in this same unsent tool-call batch." }
                 }),
                 &["ids"]),
             run_read: Some(|_ws, input, _run_id, _runs_dir| {
@@ -1001,7 +1001,7 @@ fn registry() -> Vec<ToolEntry> {
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                     .unwrap_or_default();
-                ok(format!("Context cleaned: {} tool result(s) marked for removal", ids.len()))
+                ok(format!("Cleanup requested for {} result(s); only unsent results in this batch are eligible", ids.len()))
             }),
             run_write_preview: None,
             summary: default_summary,
@@ -3799,7 +3799,9 @@ pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolRe
 }
 
 pub fn clean_context_ids(tool_call_ids: &[String], messages: &mut Vec<serde_json::Value>) {
-    for msg in messages.iter_mut() {
+    let unsent_start = messages.iter().rposition(|m| m["role"] == "assistant")
+        .map_or(messages.len(), |i| i + 1);
+    for msg in messages.iter_mut().skip(unsent_start) {
         if msg.get("role").and_then(|v| v.as_str()) != Some("tool") {
             continue;
         }

@@ -96,7 +96,7 @@ function toolFinished(toolCallId: string, content: string, ok = true): AgentEven
   };
 }
 
-function compacted(summary: string): AgentEvent {
+function compacted(summary: string): Extract<AgentEvent, {type: "context_compacted"}> {
   return { type: "context_compacted", runId: RUN, summary, ts: at() };
 }
 
@@ -689,6 +689,26 @@ describe("foldAgentEvents", () => {
   });
 
   describe("context_compacted", () => {
+    it("carries retained context accounting through replay and incremental folding", () => {
+      const events = [userMessage("old"), assistantMessage("recent"), {
+        ...compacted("notes"), kept: 1, contextTokens: 700,
+      }];
+      const replay = foldAgentEvents(events);
+      const fold = createFold();
+      for (const event of events) fold.apply(event);
+      expect(fold.rows()).toEqual(replay);
+      const marker = foldedRowToMsgs(replay[2])[0];
+      expect(marker.role === "system" && marker.compaction).toMatchObject({contextTokens: 700});
+    });
+
+    it("counts retained raw events on older markers without a token snapshot", () => {
+      const rows = foldAgentEvents([userMessage("discard".repeat(1000)), assistantMessage("keep".repeat(200)), {
+        ...compacted("notes"), kept: 1,
+      }]);
+      const marker = foldedRowToMsgs(rows[2])[0];
+      expect(marker.role === "system" && marker.compaction && (marker.compaction as {contextTokens?: number}).contextTokens).toBeGreaterThan(200);
+    });
+
     // Regression: this variant existed in Rust (emitted, persisted to the
     // Transcript, honoured on replay) but had no TypeScript counterpart, so the
     // fold silently dropped it and a reloaded conversation looked like an

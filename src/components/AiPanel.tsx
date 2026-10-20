@@ -2152,7 +2152,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     setCompacting(true);
     setCompactError(null);
     try {
-      const { summary } = await invoke<{ summary: string; kept: number }>("agent_compact_conversation", {
+      const { summary, contextTokens } = await invoke<{ summary: string; kept: number; contextTokens: number }>("agent_compact_conversation", {
         runId: currentId,
         provider: oneShotProvider,
         model: oneShotModel,
@@ -2168,7 +2168,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       const summaryMsg: Msg = {
         role: "system",
         content: `Compacted earlier messages:\n${summary}`,
-        compaction: { count: current.length, summary, source: "manual", messages: compactedMessages, toolCalls: compactedToolCalls },
+        compaction: { count: current.length, summary, contextTokens, source: "manual", messages: compactedMessages, toolCalls: compactedToolCalls },
       };
       const next: Msg[] = [...current, summaryMsg];
       setMsgs(next);

@@ -55,6 +55,7 @@ use self::run_core::{
     apply_clean_context_if_requested, assistant_provider_message, compact_old_tool_results,
     compaction_system_message, compaction_threshold, context_event, decide_turn,
     estimate_prompt_tokens, includes_todo_context, injected_provider_message, last_recorded_todo,
+    prompt_fit_error, tool_schema_tokens,
     parallel_read_calls, plan_tool_step, provider_messages, refresh_todo_context, todo_update,
     tool_provider_message, retries_provider_calls, transient_provider_failure,
     user_provider_message, wire_tool_call, ProviderCaps, ToolStepPlan, TurnDecision, TurnStep,
@@ -1174,15 +1175,25 @@ fn reconstruct_prior_messages(
     // Tool results waiting to be folded into the next assistant turn.
     // They don't carry across a user message — a tool result from a
     // finished turn is meaningless once the user has moved on.
-    let mut pending_tool_results: Vec<String> = Vec::new();
+    let clean_requests: std::collections::HashMap<&str, Vec<String>> = prior_events.iter().filter_map(|e| match e {
+        AgentEvent::AssistantMessage { content, .. } => Some(content.iter().filter_map(|b| match b {
+            AgentContentBlock::ToolCall { tool_call_id, name, input } if name == "clean_context" => {
+                let ids = input["ids"].as_array().map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                Some((tool_call_id.as_str(), ids))
+            }
+            _ => None,
+        })),
+        _ => None,
+    }).flatten().collect();
+    let mut pending_tool_results: Vec<(String, String)> = Vec::new();
 
-    let flush_tool_results = |pending: &mut Vec<String>, text: &mut String, prefix: &str| {
+    let flush_tool_results = |pending: &mut Vec<(String, String)>, text: &mut String, prefix: &str| {
         if pending.is_empty() {
             return;
         }
         let folded = pending
             .iter()
-            .map(|r| format!("\n{prefix}{r}\n{prefix}:end"))
+            .map(|(_, r)| format!("\n{prefix}{r}\n{prefix}:end"))
             .collect::<String>();
         pending.clear();
         if !text.is_empty() {
@@ -1228,12 +1239,19 @@ fn reconstruct_prior_messages(
                 // Replay mirrors the live loop: a result whose value file is
                 // on disk folds in as the same stub, not the full text.
                 let name = call_names.get(tool_call_id.as_str()).copied().unwrap_or("tool");
-                pending_tool_results.push(retained::stub_for_replay(
-                    values,
-                    name,
-                    tool_call_id,
-                    &result.content,
-                ));
+                if result.ok {
+                    if let Some(ids) = clean_requests.get(tool_call_id.as_str()) {
+                        for (id, text) in &mut pending_tool_results {
+                            if ids.contains(id) {
+                                let tool = call_names.get(id.as_str()).copied().unwrap_or("tool");
+                                *text = format!("[cleaned: {tool}]");
+                            }
+                        }
+                    }
+                }
+                pending_tool_results.push((tool_call_id.clone(), retained::stub_for_replay(
+                    values, name, tool_call_id, &result.content,
+                )));
             }
             AgentEvent::ContextInjected { role, content, .. } => {
                 out.push(injected_provider_message(role, content));
@@ -1292,6 +1310,7 @@ fn reconstruct_structured_messages(
     // tool_call_id -> tool name, so a later `ToolCallFinished` can label
     // its `role: "tool"` message the way `tool_provider_message` does.
     let mut call_names: HashMap<String, String> = HashMap::new();
+    let mut call_inputs: HashMap<String, serde_json::Value> = HashMap::new();
 
     for event in prior_events {
         match event {
@@ -1319,6 +1338,7 @@ fn reconstruct_structured_messages(
                                 continue;
                             }
                             call_names.insert(tool_call_id.clone(), name.clone());
+                            call_inputs.insert(tool_call_id.clone(), input.clone());
                             // OpenAI wire wants `arguments` as a JSON-encoded
                             // string, matching the live loop's raw tool_calls.
                             raw_tool_calls.push(wire_tool_call(tool_call_id, name, input));
@@ -1347,6 +1367,13 @@ fn reconstruct_structured_messages(
                     "name": name,
                     "tool_call_id": tool_call_id,
                 }));
+                if name == "clean_context" && result.ok {
+                    if let Some(input) = call_inputs.get(tool_call_id) {
+                        apply_clean_context_if_requested(&NormalizedToolCall {
+                            id: tool_call_id.clone(), name, input: input.clone(),
+                        }, &mut out);
+                    }
+                }
             }
             AgentEvent::ContextInjected { role, content, .. } => {
                 out.push(injected_provider_message(role, content));
@@ -2354,8 +2381,11 @@ async fn loop_body(
             .map(|caps| caps.window_for_planning())
             .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW),
     };
-    let compact_threshold =
-        compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
+    let reply_reserve = request.num_predict.unwrap_or(4096);
+    let compact_threshold = compaction_threshold(context_window, reply_reserve).min(
+        context_window.saturating_sub(reply_reserve)
+            .saturating_sub(tool_schema_tokens(tools.as_ref())),
+    );
 
     // Mid-run loop monitor: watches recent tool-call signatures and, when the
     // model gets stuck repeating the same call, injects a one-time steering
@@ -2452,25 +2482,28 @@ async fn loop_body(
                 // A failed or empty summary still frees the window: the
                 // stand-in is built from the turns themselves.
                 let notes = response.map(|r| r.content).unwrap_or_default();
-                let marker = AgentEvent::ContextCompacted {
+                let mut marker = AgentEvent::ContextCompacted {
                     run_id: id.clone(),
                     summary: compaction::summary_text(&notes, &events, cut),
                     kept: Some(cut.kept),
+                    context_tokens: None,
                     ts: now_ms(),
                 };
-                emit(marker.clone())?;
-                // Once a turn at most, with one turn's grace: a newest turn too
-                // big for the window on its own is the provider's error to
-                // report, not a summary call on every turn.
-                summarized_at = Some(turn);
-                let mut events = events;
-                events.push(marker);
                 let values = retention_enabled.then(|| (runs_dir.as_path(), id.as_str()));
                 let structured = ProviderCaps::for_provider(&request.provider).structured_replay;
+                let mut checkpoint = events.clone();
+                checkpoint.push(marker.clone());
+                let replayed = reconstruct_prior_messages(&checkpoint, structured, values);
+                if let AgentEvent::ContextCompacted { context_tokens, .. } = &mut marker {
+                    *context_tokens = Some(estimate_prompt_tokens(&replayed));
+                }
+                emit(marker.clone())?;
+                // Once a turn at most, with one turn's grace: a newest turn too
+                // big for the window on its own is rejected by the final fit
+                // guard, not sent through a summary call on every turn.
+                summarized_at = Some(turn);
                 let system = messages[0].clone();
-                messages = std::iter::once(system)
-                    .chain(reconstruct_prior_messages(&events, structured, values))
-                    .collect();
+                messages = std::iter::once(system).chain(replayed).collect();
             }
         }
 
@@ -2771,6 +2804,25 @@ async fn loop_body(
                 "[Agent messages] Nothing is waiting for you after all. Reply in one short sentence.",
                 &[],
             ));
+        }
+
+        // Check after all last-minute context additions and compaction. A
+        // too-large retained turn or summary must not reach the provider.
+        if crate::delegate::lookup(&request.provider).is_none()
+            && !crate::providers::is_subscription_provider(&request.provider)
+        {
+            if let Some(message) = prompt_fit_error(&messages, turn_tools.as_ref(), context_window, reply_budget_override.or(request.num_predict).unwrap_or(4096)) {
+                emit(AgentEvent::RunError {
+                    run_id: id.clone(),
+                    error: AgentError {
+                        code: error_code::CONTEXT_WINDOW_EXCEEDED.to_string(),
+                        message, detail: None, retryable: false,
+                    }, ts: now_ms(),
+                })?;
+                settle_run(&mut lease, &runs_dir, &summary, message_count, AgentRunStatus::Error)?;
+                completed = true;
+                break;
+            }
         }
 
         // A delegate's allowlist reads the fingerprint-scoped approval store —
@@ -3613,6 +3665,7 @@ pub fn agent_release_conversation(run_id: String) {
 pub struct CompactionOutcome {
     pub summary: String,
     pub kept: usize,
+    pub context_tokens: usize,
 }
 
 /// Compact a conversation now — the `/compact` command and the Compact
@@ -3679,18 +3732,20 @@ pub async fn agent_compact_conversation(
     .map(|response| response.content)
     .unwrap_or_default();
     let summary = compaction::summary_text(&notes, &events, cut);
-    append_event(
-        &runs_dir,
-        &run_id,
-        events.len() as u64,
-        &AgentEvent::ContextCompacted {
-            run_id: run_id.clone(),
-            summary: summary.clone(),
-            kept: Some(cut.kept),
-            ts: now_ms(),
-        },
-    )?;
-    Ok(CompactionOutcome { summary, kept: cut.kept })
+    let mut marker = AgentEvent::ContextCompacted {
+        run_id: run_id.clone(), summary: summary.clone(), kept: Some(cut.kept),
+        context_tokens: None, ts: now_ms(),
+    };
+    let mut checkpoint = events.clone();
+    checkpoint.push(marker.clone());
+    let context_tokens = estimate_prompt_tokens(&reconstruct_prior_messages(
+        &checkpoint, structured, Some((runs_dir.as_path(), run_id.as_str())),
+    ));
+    if let AgentEvent::ContextCompacted { context_tokens: tokens, .. } = &mut marker {
+        *tokens = Some(context_tokens);
+    }
+    append_event(&runs_dir, &run_id, events.len() as u64, &marker)?;
+    Ok(CompactionOutcome { summary, kept: cut.kept, context_tokens })
 }
 
 /// The Provider/model each of these Conversations actually started on.
@@ -4257,6 +4312,7 @@ mod replay_tests {
             run_id: "r".into(),
             summary: "we set up auth and fixed the parser".into(),
             kept: None,
+            context_tokens: None,
             ts: 9,
         };
         let out = reconstruct(
@@ -4598,6 +4654,7 @@ mod replay_tests {
                     run_id: "r".into(),
                     summary: "did the thing".into(),
                     kept: None,
+                    context_tokens: None,
                     ts: 9,
                 },
                 user_msg("new"),
@@ -6346,7 +6403,7 @@ mod run_loop_tests {
             let body: String = (0..420).map(|n| format!("file {i} line {n} padding text\n")).collect();
             std::fs::write(Path::new(&root).join(format!("f{i}.txt")), body).unwrap();
         }
-        // Three reads overflow the 16k window; the fourth turn starts compacted.
+        // Three reads crowd a 21k window including schemas and reply reserve.
         let mut script: Vec<_> = (0..3)
             .map(|i| scripted_turn("Reading.", vec![scripted_tool_call(&format!("call_{i}"), "read_file", serde_json::json!({ "path": format!("f{i}.txt") }))]))
             .collect();
@@ -6355,7 +6412,7 @@ mod run_loop_tests {
         let first = ScriptedProviderCaller::new(script);
         let mut request = test_request(&root, &[]);
         request.initial_text = "Read the four files.".into();
-        request.num_ctx = Some(16_384);
+        request.num_ctx = Some(21_000);
         let sup = Arc::new(FakeSupervisor::with_run("thread"));
         drive_loop(sup.clone(), &runs_dir, "thread", request.clone(), first.clone()).await;
 
@@ -6378,6 +6435,11 @@ mod run_loop_tests {
         assert!(after[1]["content"].as_str().unwrap().starts_with("[Earlier conversation compacted"));
         assert_eq!(after[2]["role"], "assistant", "the kept tail opens on a turn, never a stranded result");
         assert!(after.len() < ask.len());
+        let checkpoint_tokens = events.iter().find_map(|event| match event {
+            AgentEvent::ContextCompacted { context_tokens, .. } => *context_tokens,
+            _ => None,
+        }).expect("a checkpoint carries its retained history estimate");
+        assert_eq!(checkpoint_tokens, estimate_prompt_tokens(&after[1..]));
 
         let second = ScriptedProviderCaller::new(vec![scripted_turn("Done.", vec![])]);
         let mut follow_up = request.clone();
@@ -6386,6 +6448,54 @@ mod run_loop_tests {
         drive_loop(sup.clone(), &runs_dir, "thread", follow_up, second.clone()).await;
         let next = second.seen_messages.lock().unwrap().first().unwrap().clone();
         assert_eq!(&next[..after.len()], &after[..], "replay rebuilds the compacted prompt byte for byte");
+    }
+
+    #[tokio::test]
+    async fn oversized_compaction_never_dispatches_the_rebuilt_prompt() {
+        let (runs_dir, root) = sandbox("oversized-summary");
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn(&"reasoning ".repeat(10_000), vec![scripted_tool_call("read", "read_file", serde_json::json!({"path": "a.txt"}))]),
+            scripted_turn(&"summary ".repeat(10_000), vec![]),
+            scripted_turn("Should not be sent.", vec![]),
+        ]);
+        std::fs::write(Path::new(&root).join("a.txt"), "small").unwrap();
+        let mut request = test_request(&root, &[]);
+        request.num_ctx = Some(16_384);
+        request.initial_text = "request ".repeat(300);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request, caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap();
+        assert!(!seen.iter().skip(1).any(|messages| messages.last().is_some_and(|m| m["role"] != "user" || !m["content"].as_str().unwrap_or_default().starts_with("[Klide: compacting"))), "an oversized rebuilt request reached the provider");
+        let events = read_events(&runs_dir, "thread").unwrap();
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ContextCompacted { .. })), "the guard must run after compaction, not merely before the first request");
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::RunError { error, .. } if error.code == error_code::CONTEXT_WINDOW_EXCEEDED && !error.retryable)));
+        assert_eq!(read_summary(&runs_dir, "thread").unwrap().status, "error");
+    }
+
+    #[tokio::test]
+    async fn clean_context_preserves_sent_prefix_and_replays_unsent_cleanup() {
+        let (runs_dir, root) = sandbox("cache-safe-clean");
+        for name in ["a.txt", "b.txt"] {
+            std::fs::write(Path::new(&root).join(name), format!("contents of {name}")).unwrap();
+        }
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Read a.", vec![scripted_tool_call("a", "read_file", serde_json::json!({"path": "a.txt"}))]),
+            scripted_turn("Read b and clean.", vec![
+                scripted_tool_call("b", "read_file", serde_json::json!({"path": "b.txt"})),
+                scripted_tool_call("clean", "clean_context", serde_json::json!({"ids": ["a", "b"]})),
+            ]),
+            scripted_turn("Done.", vec![]),
+        ]);
+        let request = test_request(&root, &[]);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request.clone(), caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap().clone();
+        assert_eq!(&seen[2][..seen[1].len()], &seen[1], "clean_context rewrote an already-sent prefix");
+        assert!(seen[2].iter().any(|m| m["tool_call_id"] == "b" && m["content"] == "[cleaned: read_file]"));
+        let next = ScriptedProviderCaller::new(vec![scripted_turn("Welcome back.", vec![])]);
+        let mut follow_up = request;
+        follow_up.initial_text = "Continue.".into();
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", follow_up, next.clone()).await;
+        let resumed = next.seen_messages.lock().unwrap();
+        assert_eq!(&resumed[0][..seen[2].len()], &seen[2], "replay changed the cleaned prompt");
     }
 
     /// A `/goal` run's "done" is checked. The first claim fails the check

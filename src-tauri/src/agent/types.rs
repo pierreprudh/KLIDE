@@ -515,6 +515,7 @@ pub mod error_code {
     pub const GOAL_CHECK_FAILED: &str = "goal_check_failed";
     pub const MAX_TURNS: &str = "max_turns";
     pub const PROVIDER_UNAVAILABLE: &str = "provider_unavailable";
+    pub const CONTEXT_WINDOW_EXCEEDED: &str = "context_window_exceeded";
     pub const STEERING_GAVE_UP: &str = "steering_gave_up";
     /// The loop left without settling — a failed Transcript write, a panic —
     /// and its host wrote this one terminal line in its place.
@@ -526,11 +527,12 @@ pub mod error_code {
     /// The set the drift test compares against the frontend mirror. Nothing in
     /// the running app iterates it — it exists so the contract has one home.
     #[allow(dead_code)]
-    pub const ALL: [&str; 7] = [
+    pub const ALL: [&str; 8] = [
         ABORTED,
         MAX_TURNS,
         GOAL_CHECK_FAILED,
         PROVIDER_UNAVAILABLE,
+        CONTEXT_WINDOW_EXCEEDED,
         STEERING_GAVE_UP,
         RUN_HOST_FAILED,
         RUN_HOST_DISCONNECTED,
@@ -812,6 +814,10 @@ pub enum AgentEvent {
         /// keep nothing before them.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kept: Option<usize>,
+        /// Estimated summary + retained provider history, excluding base
+        /// system instructions and tool schemas. Used by the context gauge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_tokens: Option<usize>,
         ts: i64,
     },
     /// A message the loop put in front of the model that nobody typed — a

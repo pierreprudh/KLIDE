@@ -221,6 +221,15 @@ describe("conversationCost", () => {
 });
 
 describe("conversationTokenEstimate", () => {
+  it("counts Rust's compacted history estimate including its retained tail", () => {
+    const marker = compactionMarker();
+    if (marker.role !== "system" || !marker.compaction) throw new Error("marker");
+    Object.assign(marker.compaction, { contextTokens: 987 });
+    expect(conversationTokenEstimate([user("discarded".repeat(1000)), marker])).toBe(987);
+    expect(conversationTokenEstimate([marker, user("new work")])).toBeGreaterThan(987);
+    expect(computeContextBudget(input({ msgs: [marker] })).used).toBe(987);
+  });
+
   it("is the number the budget uses, so a caller may memoize it on msgs and pass it in", () => {
     const msgs = [user("a".repeat(400)), compactionMarker(), assistant("b".repeat(800))];
     const estimate = conversationTokenEstimate(msgs);
