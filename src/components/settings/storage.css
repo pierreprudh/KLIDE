@@ -20,11 +20,16 @@
 .storage-search input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: 3px; }
 .storage-list-toolbar > span, .storage-list-footer > span { color: var(--fg-subtle); font-size: 11.5px; white-space: nowrap; }
 .storage-run-list { list-style: none; padding: 0; margin: 0; }
-.storage-run { display: grid; grid-template-columns: minmax(0, 1fr) 64px 30px; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 52%, transparent); }
+.storage-run { display: grid; grid-template-columns: minmax(0, 1fr) 64px 30px; align-items: center; gap: 16px; padding: 10px 0; opacity: .72; transition: opacity var(--motion-fast) var(--ease-out); border-bottom: 1px solid color-mix(in srgb, var(--border) 52%, transparent); }
+.storage-run:hover, .storage-run:focus-within { opacity: 1; }
+.storage-run.storage-cache-run { grid-template-columns: minmax(0, 1fr) 64px 46px; }
+.storage-forget { padding: 0; height: 30px; border: none; border-radius: 5px; background: transparent; color: var(--fg-subtle); font: inherit; font-size: 11px; cursor: pointer; }
+.storage-forget:hover { color: var(--fg-strong); background: var(--bg-hover); }
+.storage-forget:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .storage-run-copy { min-width: 0; }
-.storage-run-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; line-height: 1.5; font-weight: 400; color: var(--fg-strong); }
-.storage-run-detail { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 4px; color: var(--fg-subtle); font-size: 11.5px; line-height: 1.5; }
-.storage-run-size { color: var(--fg-subtle); text-align: right; white-space: nowrap; font-size: 11.5px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.storage-run-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; line-height: 1.4; font-weight: 400; color: var(--fg-strong); }
+.storage-run-detail { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 3px; color: var(--fg-subtle); font-size: 10.5px; line-height: 1.4; }
+.storage-run-size { color: var(--fg-subtle); text-align: right; white-space: nowrap; font-size: 10.5px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .storage-delete { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: none; border-radius: 5px; color: var(--fg-subtle); background: transparent; cursor: pointer; transition: color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
 .storage-delete:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); }
 .storage-delete:focus-visible { color: var(--danger); outline: 2px solid var(--focus-ring); outline-offset: 2px; }
@@ -39,4 +44,4 @@
   .storage-search { flex: 1; }
   .storage-search input { width: 100%; }
 }
-@media (prefers-reduced-motion: reduce) { .storage-delete { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .storage-run, .storage-delete { transition: none; } }

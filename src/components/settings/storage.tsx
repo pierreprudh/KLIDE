@@ -44,7 +44,7 @@ import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { relativeTime } from "../ai/utils";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
-import { CodeText, GhostButton, LinkButton, Panel, Row, SettingBlock } from "./controls";
+import { GhostButton, LinkButton, Panel, Row, SettingBlock } from "./controls";
 
 /** What a webview gives the whole origin. Not readable at runtime — WebKit
  *  reports no quota — so the meter measures against the figure the platform
@@ -369,32 +369,31 @@ export function StorageSection() {
 
       {sizes.length > 0 && (
         <SettingBlock title="What is taking the room">
-          <Panel>
-            {shown.map((row) => (
-              <Row
-                key={row.id}
-                title={row.title}
-                description={`${relativeTime(row.updatedAt)} · ${row.messages} message${
-                  row.messages === 1 ? "" : "s"
-                }${row.imageBytes > 0 ? ` · ${formatBytes(row.imageBytes)} of photos` : ""}`}
-                control={
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <CodeText>{formatBytes(row.bytes)}</CodeText>
-                    <LinkButton onClick={() => forget(row)}>Forget</LinkButton>
+          <div className="storage-conversations">
+            <ul className="storage-run-list" aria-label="Cached conversations">
+              {shown.map(row => (
+                <li key={row.id} className="storage-run storage-cache-run" data-setting={row.title} tabIndex={-1}>
+                  <div className="storage-run-copy">
+                    <div className="storage-run-title" title={row.title}>{row.title}</div>
+                    <div className="storage-run-detail">
+                      <span>{relativeTime(row.updatedAt)}</span>
+                      <span>{row.messages} message{row.messages === 1 ? "" : "s"}
+                        {row.imageBytes > 0 ? ` · ${formatBytes(row.imageBytes)} of photos` : ""}</span>
+                    </div>
                   </div>
-                }
-              />
-            ))}
+                  <span className="storage-run-size">{formatBytes(row.bytes)}</span>
+                  <button type="button" className="storage-forget" aria-label={`Forget ${row.title}`}
+                    title="Remove from the local history list" onClick={() => forget(row)}>Forget</button>
+                </li>
+              ))}
+            </ul>
             {sizes.length > shown.length && (
-              <Row
-                title="More conversations"
-                description={`${sizes.length - shown.length} smaller thread${
-                  sizes.length - shown.length === 1 ? "" : "s"
-                } not listed.`}
-                control={<GhostButton onClick={() => setExpanded(true)}>Show all</GhostButton>}
-              />
+              <div className="storage-list-footer">
+                <span>Showing {shown.length} of {sizes.length}</span>
+                <GhostButton onClick={() => setExpanded(true)}>Show all</GhostButton>
+              </div>
             )}
-          </Panel>
+          </div>
         </SettingBlock>
       )}
 

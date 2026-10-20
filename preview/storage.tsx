@@ -34,6 +34,13 @@ Object.assign(window, { __TAURI_INTERNALS__: { invoke: async (command: string, a
     default: return [];
   }
 } } });
+if (params.has("cache")) {
+  const { saveConversations } = await import("../src/components/ai/storedConversations");
+  saveConversations(titles.map((title, i) => ({
+    id: `cache-preview-${i}`, title, updatedAt: Date.now() - i * 3_600_000,
+    msgs: [{ role: "user", content: title }, { role: "assistant", content: "Sample cached message. ".repeat(200 - i * 20) }],
+  })));
+}
 const { StorageSection } = await import("../src/components/settings/storage");
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <main className="klide-settings-content" style={{ maxWidth: params.get("width") === "narrow" ? 420 : 980, margin: "0 auto", boxSizing: "border-box" }}>
