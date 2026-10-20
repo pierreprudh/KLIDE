@@ -1,5 +1,5 @@
 // Settings → Appearance → Welcome: which landscape the nature film shows.
-// Seven cards — a fresh deal, the authored order, or one of the five scenes —
+// Cards — a fresh deal, the authored order, or one of the landscapes —
 // each with a still of what it means, drawn by the same engine that draws the
 // Welcome card. A still is one frame: no animation loop, no pointer listener.
 
@@ -24,10 +24,10 @@ function SceneStill({ scene, style }: { scene: PixelNatureSceneId; style?: React
   return <canvas ref={ref} aria-hidden style={{ display: "block", imageRendering: "pixelated", ...style }} />;
 }
 
-/** Five narrow stills side by side, in the order given. */
+/** Narrow stills side by side, one per scene, in the order given. */
 function Strip({ scenes }: { scenes: readonly PixelNatureSceneId[] }) {
   return (
-    <span style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", width: "100%", height: "100%" }}>
+    <span style={{ display: "grid", gridTemplateColumns: `repeat(${scenes.length}, 1fr)`, width: "100%", height: "100%" }}>
       {scenes.map((id, i) => (
         <SceneStill key={`${id}-${i}`} scene={id} style={{ width: "100%", height: "100%" }} />
       ))}
