@@ -584,7 +584,7 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
           // this the conversation silently loses its early context and the
           // marker only appears after a reload (via foldEvents).
           const prior = transcript.read();
-          commit([...prior, compactionMsg(prior.length, event.summary)]);
+          commit([...prior, compactionMsg(prior.length, event.summary, event.contextTokens)]);
           break;
         }
         case "diff_proposed":

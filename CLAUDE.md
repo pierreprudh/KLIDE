@@ -657,6 +657,13 @@ notes the model writes from the cached prompt, and rebuild the prompt through
 replay. The `ContextCompacted` marker lands after the turns it keeps and says
 how many (`kept`); `compaction::effective_events` is the one reading of it.
 The panel only renders markers and offers `/compact` (same Rust path).
+The trigger reserves the actual schema estimate as well as reply space. A final
+fit check after per-turn context delivery rejects a still-oversized native
+request with `context_window_exceeded`; this remains a heuristic, not exact
+provider tokenization. `clean_context` only rewrites results in the current
+unsent tool batch, and replay repeats that cleanup at the same boundary.
+New markers persist `contextTokens` for summary plus retained provider history,
+so the gauge includes kept turns and value stubs on both live and replay paths.
 
 ### Provider registry (one row, published to the renderer)
 

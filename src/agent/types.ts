@@ -205,6 +205,7 @@ export type AgentError = {
     | "max_turns"
     | "goal_check_failed"
     | "provider_unavailable"
+    | "context_window_exceeded"
     | "steering_gave_up"
     | "run_host_failed"
     | "run_host_disconnected";
@@ -328,7 +329,7 @@ export type AgentEvent =
    *  that mysteriously forgot its early turns. */
   /** `kept`: how many events right before the marker stay in the model's
    *  conversation, after the summary. Absent on older markers (none). */
-  | { type: "context_compacted"; runId: string; summary: string; kept?: number; ts: number }
+  | { type: "context_compacted"; runId: string; summary: string; kept?: number; contextTokens?: number; ts: number }
   /** What the Harness put in front of the model that nobody typed, recorded
    *  so replay rebuilds the cached prompt. Rust reads it; no surface draws it. */
   | { type: "context_injected"; runId: string; role: string; content: string; ts: number }

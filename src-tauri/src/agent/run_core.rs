@@ -684,6 +684,25 @@ pub(super) fn compaction_threshold(context_window: usize, reply_reserve: usize) 
         .max(1)
 }
 
+/// Actual schema footprint, shared by the compaction trigger and fit guard.
+pub(super) fn tool_schema_tokens(tools: Option<&Vec<serde_json::Value>>) -> usize {
+    tools.map_or(0, |t| serde_json::to_string(t).unwrap_or_default().len().div_ceil(4))
+}
+
+/// Check the complete request estimate, including tool schemas and reply space.
+/// This heuristic cannot guarantee a fit against every provider tokenizer.
+pub(super) fn prompt_fit_error(
+    messages: &[serde_json::Value], tools: Option<&Vec<serde_json::Value>>,
+    context_window: usize, reply_reserve: usize,
+) -> Option<String> {
+    let prompt = estimate_prompt_tokens(messages);
+    let schemas = tool_schema_tokens(tools);
+    let needed = prompt.saturating_add(schemas).saturating_add(reply_reserve);
+    (needed > context_window).then(|| format!(
+        "The request still exceeds the context window after context management: approximately {prompt} prompt tokens + {schemas} tool-schema tokens + {reply_reserve} reply tokens need {needed}, but the window is {context_window}. Shorten the latest input or attachments, disable unused tools, or choose a larger context window."
+    ))
+}
+
 /// Auto-compaction, expressed purely. Replaces the body of *older* verbose
 /// `role: "tool"` messages with something short so a long conversation doesn't
 /// blow the model's context window while still preserving the shape of what
@@ -976,7 +995,7 @@ mod tests {
         assert_eq!(last_recorded_todo(&prior).as_deref(), Some("[TODO list]\n- [x] a"));
         assert!(todo_update(last_recorded_todo(&prior).as_deref(), Some("- [x] a")).is_none());
         let mut compacted = prior.clone();
-        compacted.push(AgentEvent::ContextCompacted { run_id: "r".into(), summary: "s".into(), kept: None, ts: 0 });
+        compacted.push(AgentEvent::ContextCompacted { run_id: "r".into(), summary: "s".into(), kept: None, context_tokens: None, ts: 0 });
         assert_eq!(last_recorded_todo(&compacted), None, "a compaction folds the snapshot away");
     }
 
@@ -1130,6 +1149,16 @@ mod tests {
     }
 
     #[test]
+    fn prompt_fit_includes_schemas_and_reply_and_accepts_exact_fit() {
+        let messages = vec![serde_json::json!({"role": "user", "content": "hello"})];
+        let tools = vec![serde_json::json!({"name": "tool", "description": "x".repeat(400)})];
+        let needed = estimate_prompt_tokens(&messages) + serde_json::to_string(&tools).unwrap().len().div_ceil(4) + 100;
+        assert!(prompt_fit_error(&messages, Some(&tools), needed, 100).is_none());
+        assert!(prompt_fit_error(&messages, Some(&tools), needed - 1, 100).is_some());
+        assert!(prompt_fit_error(&messages, None, 0, 100).is_some());
+    }
+
+    #[test]
     fn clean_context_request_extracts_ids_and_apply_cleans_messages() {
         let clean = NormalizedToolCall {
             id: "clean".to_string(),
@@ -1142,13 +1171,16 @@ mod tests {
         );
 
         let mut messages = vec![
+            serde_json::json!({ "role": "tool", "tool_call_id": "a", "name": "grep", "content": "already sent" }),
+            serde_json::json!({ "role": "assistant", "content": "current batch" }),
             serde_json::json!({ "role": "tool", "tool_call_id": "a", "name": "grep", "content": "noisy result" }),
             serde_json::json!({ "role": "tool", "tool_call_id": "b", "name": "read_file", "content": "keep me" }),
         ];
         apply_clean_context_if_requested(&clean, &mut messages);
-        assert_eq!(messages[0]["content"], "[cleaned: grep]");
-        assert!(messages[0].get("name").is_none());
-        assert_eq!(messages[1]["content"], "keep me");
+        assert_eq!(messages[0]["content"], "already sent");
+        assert_eq!(messages[2]["content"], "[cleaned: grep]");
+        assert!(messages[2].get("name").is_none());
+        assert_eq!(messages[3]["content"], "keep me");
     }
 
     #[test]

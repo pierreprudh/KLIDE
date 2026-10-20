@@ -81,11 +81,9 @@ export const COMPACT_PROMPT_RATIO = 0.8;
 /**
  * Index of the newest compaction marker, or -1.
  *
- * Messages above it stay on screen for reference but no longer reach the model —
- * the transcript marker collapses them on replay. Counting them would over-state
- * the window, and since the over-statement never goes away, the automatic
- * compaction would fire again on the very next render: a loop that summarises
- * the same conversation forever.
+ * Earlier rows remain visible. Some recent turns are retained by Rust even
+ * though they precede this marker on screen; its contextTokens snapshot counts
+ * those turns together with the summary. Other earlier rows are excluded.
  */
 export function lastCompactionIndex(msgs: Msg[]): number {
   for (let i = msgs.length - 1; i >= 0; i--) {
@@ -95,14 +93,19 @@ export function lastCompactionIndex(msgs: Msg[]): number {
   return -1;
 }
 
-/** Estimated tokens of everything the model still sees: the messages from the
- *  newest compaction marker onward. The expensive half of the budget — one
+/** Estimated tokens of everything the model still sees: the newest checkpoint
+ *  (summary plus retained history), then subsequent messages. One
  *  `JSON.stringify` per tool call — and a function of `msgs` alone, so a
  *  caller can memoize it on the message list and pass it in. */
 export function conversationTokenEstimate(msgs: Msg[]): number {
   const markerIdx = lastCompactionIndex(msgs);
-  const counted = markerIdx >= 0 ? msgs.slice(markerIdx) : msgs;
-  return counted.reduce((sum, m) => sum + messageTokenEstimate(m), 0);
+  if (markerIdx < 0) return msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0);
+  const marker = msgs[markerIdx];
+  const compaction = marker.role === "system" ? marker.compaction : undefined;
+  // The visible marker follows its retained turns. Rust's snapshot includes
+  // those turns and their retained-value stubs, without counting history twice.
+  const checkpoint = compaction?.contextTokens ?? estimateTokens(`[Earlier conversation compacted to save context]\n${compaction?.summary ?? ""}`);
+  return checkpoint + msgs.slice(markerIdx + 1).reduce((sum, m) => sum + messageTokenEstimate(m), 0);
 }
 
 export function computeContextBudget(input: ContextBudgetInput): ContextBudget {

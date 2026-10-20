@@ -96,6 +96,8 @@ export type Msg =
       compaction?: {
         count: number;
         summary: string;
+        /** Rust's estimate of summary plus retained recent history. */
+        contextTokens?: number;
         source?: "manual" | "agent";
         /** Breakdown shown in the marker: conversation messages + tool calls
          *  folded. Optional for back-compat with markers written before this. */

@@ -123,6 +123,7 @@ export type FoldedRow =
   | {
       kind: "compaction";
       summary: string;
+      contextTokens?: number;
       /** Conversation rows that preceded the marker — i.e. what the model
        *  stopped seeing verbatim from this point on. Derived here rather than
        *  carried on the wire, which has no count. */
@@ -186,6 +187,7 @@ export type FoldHandle = {
 
 export function createFold(opts: FoldOptions = {}): FoldHandle {
   const rows: FoldedRow[] = [];
+  const eventTokenTotals = [0];
   const pricing = opts.pricing ?? null;
   let turnStartTs: number | undefined;
   /** A `user_message` opened a turn that nothing has answered or settled yet —
@@ -329,6 +331,16 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
   };
 
   const apply = (event: AgentEvent, live?: FoldLiveTiming): FoldStep => {
+    // Legacy markers count raw events, not rendered message rows.
+    const before = eventTokenTotals.length - 1;
+    let tokens = 0;
+    if (event.type === "user_message") tokens = estimateTokens(event.text) + (event.attachments ?? []).reduce((sum, a) => sum + estimateTokens(a.content), 0);
+    else if (event.type === "assistant_message") tokens = event.content.reduce((sum, block) => sum + (block.type === "text" ? estimateTokens(block.text) : block.type === "tool_call" ? estimateTokens(block.name + JSON.stringify(block.input)) : 0), 0);
+    else if (event.type === "tool_call_finished") tokens = estimateTokens(event.result.content);
+    else if (event.type === "context_injected") tokens = estimateTokens(event.content);
+    else if (event.type === "observer_completed") tokens = estimateTokens(event.text);
+    else if (event.type === "context_compacted") tokens = estimateTokens(event.summary);
+    eventTokenTotals.push(eventTokenTotals[before] + tokens);
     if (event.type === "run_result" || event.type === "run_error" || event.type === "assistant_message") turnOpen = false;
     // A turn that never settled before the next one began was killed with the
     // app. Its rows stay as they were; one marker in their place says why the
@@ -716,6 +728,12 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       rows.push({
         kind: "compaction",
         summary: event.summary,
+        ...((event.contextTokens !== undefined || (event.kept ?? 0) > 0) ? {
+          contextTokens: event.contextTokens ?? (
+            estimateTokens(`[Earlier conversation compacted to save context]\n${event.summary}`) +
+            eventTokenTotals[before] - eventTokenTotals[Math.max(0, before - (event.kept ?? 0))]
+          ),
+        } : {}),
         count: rows.length,
       });
       return { changed: [rows.length - 1] };
@@ -898,7 +916,7 @@ export type FoldedMsgView = {
 /** The one compaction-marker Msg. Shared by the replay mapper below and the
  *  live `context_compacted` handler in AiPanel — the marker must read the
  *  same in both; only `count` differs by what each side could see. */
-export function compactionMsg(count: number, summary: string): Msg {
+export function compactionMsg(count: number, summary: string, contextTokens?: number): Msg {
   return {
     role: "system",
     // Plain-text fallback for serialization and search.
@@ -906,7 +924,7 @@ export function compactionMsg(count: number, summary: string): Msg {
     // "agent" layout (the slim tool-style row): the wire event carries no
     // manual/automatic distinction, and the unobtrusive row is the safe
     // default for a harness-emitted marker.
-    compaction: { count, summary, source: "agent" },
+    compaction: { count, summary, source: "agent", ...(contextTokens !== undefined ? { contextTokens } : {}) },
   };
 }
 
@@ -928,7 +946,7 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
     ];
   }
   if (row.kind === "compaction") {
-    return [compactionMsg(row.count, row.summary)];
+    return [compactionMsg(row.count, row.summary, row.contextTokens)];
   }
   if (row.kind === "observer") {
     return [{ role: "system", content: "Background observer finished", observer: { shellId: row.shellId }, ts: row.ts }];

@@ -253,7 +253,7 @@ mod tests {
         AgentEvent::ContextInjected { run_id: "r".into(), role: "system".into(), content: content.into(), ts: 0 }
     }
     fn marker(kept: Option<usize>) -> AgentEvent {
-        AgentEvent::ContextCompacted { run_id: "r".into(), summary: "notes".into(), kept, ts: 0 }
+        AgentEvent::ContextCompacted { run_id: "r".into(), summary: "notes".into(), kept, context_tokens: None, ts: 0 }
     }
 
     #[test]
