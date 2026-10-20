@@ -120,46 +120,6 @@ export function extractFilePaths(msgs: Msg[]): string[] {
   return Array.from(seen).slice(0, 24);
 }
 
-export const COMPACT_PROMPT = `You are compacting the earlier part of an ongoing coding conversation. Your summary will REPLACE those earlier turns as the assistant's memory, while a few of the most recent turns continue verbatim after it. Preserve everything needed to keep working: the user's goal, decisions made, files/functions touched, facts the assistant established, and any unfinished work. Be concise (a tight paragraph or a few bullets). Do not invent anything, and do not address the user — write it as notes-to-self.
-
-Earlier conversation:
-`;
-
-export const COMPACT_PARTIAL_PROMPT = `Summarize this PART of an earlier coding conversation into terse notes-to-self: the goal, decisions, files/functions touched, facts established, and unfinished work. No preamble, no addressing the reader. These notes will be merged with notes from the other parts.
-
-Conversation part:
-`;
-
-// Cut text into chunks no larger than maxChars, so each summarize call fits the
-// model's window even when the conversation is many times the window.
-export function splitIntoChunks(text: string, maxChars: number): string[] {
-  if (text.length <= maxChars) return text ? [text] : [];
-  const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += maxChars) chunks.push(text.slice(i, i + maxChars));
-  return chunks;
-}
-
-// Deterministic summary used when the model returns nothing — so compaction
-// still frees the window instead of hard-failing. Built straight from the
-// messages: the user's actual requests (verbatim, so it's accurate) and the
-// files the tool calls actually changed. No prose scraping.
-export function fallbackSummary(older: Msg[]): string {
-  const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
-  const requests = older
-    .filter((m) => m.role === "user")
-    .map((m) => m.content?.trim())
-    .filter((s): s is string => !!s);
-  const files = extractFilePaths(older);
-  const parts: string[] = [];
-  if (requests.length) parts.push(`Goal: ${clip(requests[0], 200)}`);
-  if (requests.length > 1) {
-    parts.push(`Also asked: ${requests.slice(1, 6).map((r) => clip(r, 80)).join("; ")}`);
-  }
-  if (files.length) parts.push(`Files changed: ${files.join(", ")}`);
-  parts.push(`(${older.length} earlier message${older.length === 1 ? "" : "s"} folded; summary built locally — the model returned no text.)`);
-  return parts.join("\n");
-}
-
 export const CLASSIFY_PROMPT = `You are reading a coding session transcript. Decide if it contains a REUSABLE PATTERN the assistant should follow next time: a workflow, a code-review checklist, a deploy ritual, a coding-style rule, a way of using a tool, or a debugging playbook. NOT just a one-off fix.
 
 Reply in exactly this shape, with no other text:

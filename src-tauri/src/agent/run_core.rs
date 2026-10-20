@@ -276,7 +276,7 @@ fn is_todo_snapshot(content: &str) -> bool {
 /// last one recorded, unless a compaction folded it away since.
 pub(super) fn last_recorded_todo(prior: &[AgentEvent]) -> Option<String> {
     let mut last = None;
-    for event in prior {
+    for event in super::compaction::effective_events(prior) {
         match event {
             AgentEvent::ContextInjected { content, .. } if is_todo_snapshot(content) => {
                 last = Some(content.clone());
@@ -976,7 +976,7 @@ mod tests {
         assert_eq!(last_recorded_todo(&prior).as_deref(), Some("[TODO list]\n- [x] a"));
         assert!(todo_update(last_recorded_todo(&prior).as_deref(), Some("- [x] a")).is_none());
         let mut compacted = prior.clone();
-        compacted.push(AgentEvent::ContextCompacted { run_id: "r".into(), summary: "s".into(), ts: 0 });
+        compacted.push(AgentEvent::ContextCompacted { run_id: "r".into(), summary: "s".into(), kept: None, ts: 0 });
         assert_eq!(last_recorded_todo(&compacted), None, "a compaction folds the snapshot away");
     }
 

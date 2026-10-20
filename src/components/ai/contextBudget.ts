@@ -71,30 +71,12 @@ export type ContextBudget = {
   draftTokens: number;
 };
 
-/** How many trailing messages a compaction keeps verbatim. Two exchanges is
- *  enough to keep the immediate thread intact. */
+/** A conversation this short has nothing worth folding: the gate for the
+ *  Compact action. What a compaction keeps is Rust's call (`compaction.rs`). */
 export const COMPACT_KEEP_RECENT = 4;
 
 /** Offer compaction at ~80% of the window. */
 export const COMPACT_PROMPT_RATIO = 0.8;
-
-/**
- * Automatic compaction is a send-time operation, never a browsing side effect.
- * A restored transcript may already be over its window, but opening it must be
- * passive; the next submitted message is the activation boundary.
- */
-export function shouldAutoCompact({
-  trigger,
-  canCompact,
-  ratioAfterSend,
-}: {
-  trigger: "view" | "send";
-  canCompact: boolean;
-  /** Unclamped fullness including the message that is being submitted. */
-  ratioAfterSend: number;
-}): boolean {
-  return trigger === "send" && canCompact && ratioAfterSend >= 1;
-}
 
 /**
  * Index of the newest compaction marker, or -1.

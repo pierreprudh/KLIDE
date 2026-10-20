@@ -1244,7 +1244,7 @@ pub fn run() {
             agent::agent_set_command_policy,
             agent::agent_resolve_diff,
             agent::agent_resolve_question,
-            agent::agent_compact_context,
+            agent::agent_compact_conversation,
             agent::agent_abort_run,
             agent::agent_run_status,
             agent::agent_list_observers,

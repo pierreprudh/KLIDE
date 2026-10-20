@@ -165,7 +165,7 @@ import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import { EXPLAIN_PREFIX, GOAL_PREFIX, MISSION_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, goalDirectiveOf, missionDirectiveOf, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
-import { summarizeAndHandoff, generateMemoryLessons, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
+import { summarizeAndHandoff, generateMemoryLessons, detectAndGenerateSkill } from "./ai/summarize";
 import { listMemory } from "../memory";
 import { memoryFingerprint } from "../memoryLearning";
 import { addMemoryDraft, getMemoryDrafts, MAX_PENDING_MEMORY, MEMORY_DRAFT_TTL } from "../memoryDrafts";
@@ -209,8 +209,6 @@ import {
   contextTone as contextToneFor,
   conversationCost,
   lastCompactionIndex,
-  shouldAutoCompact,
-  COMPACT_KEEP_RECENT,
   COMPACT_PROMPT_RATIO,
   conversationTokenEstimate,
 } from "./ai/contextBudget";
@@ -1112,14 +1110,12 @@ export function AiPanel({
   // subscription / unknown models. Fetched per model; drives per-message and
   // per-conversation cost from each turn's token usage.
   const [pricing, setPricing] = useState<{ inputPerMillion: number; outputPerMillion: number } | null>(null);
-  // Auto-compact: when the context gauge crosses the threshold we offer to
-  // summarize older turns into a transcript marker (see agent_compact_context),
-  // freeing the window while keeping recent turns verbatim.
+  // Manual compaction (/compact, the Compact button): Rust folds the older
+  // turns into a summary marker (agent_compact_conversation) and keeps the
+  // newest verbatim. A Run that outgrows its window does the same by itself;
+  // that marker arrives as a live `context_compacted` event.
   const [compacting, setCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
-  // Layout of the in-flight compaction: "manual" (/compact) → full-width row,
-  // "agent" (inline/automatic) → slim tool-style row.
-  const [compactSource, setCompactSource] = useState<"manual" | "agent">("manual");
   const [contextMode] = useState<ProjectContextMode>(
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
@@ -2148,44 +2144,30 @@ This user request requires workspace inspection. Before answering, you MUST call
   const oneShotProvider = isAutoProvider(provider) ? (conversationSession.originProvider ?? provider) : provider;
   const oneShotModel = isAutoProvider(provider) ? (conversationSession.originModel ?? model) : model;
 
-  async function compactConversation(
-    source: "manual" | "agent" = "manual",
-    contextWindow = effectiveContextLimit,
-  ): Promise<boolean> {
+  async function compactConversation(): Promise<boolean> {
     if (!canCompact) return false;
-    setCompactSource(source);
     setCompacting(true);
     setCompactError(null);
     try {
-      // The ref, not the rendered `msgs`: `send` awaits before calling this,
-      // and the transcript may have moved on since the closure was made.
+      const { summary } = await invoke<{ summary: string; kept: number }>("agent_compact_conversation", {
+        runId: currentId,
+        provider: oneShotProvider,
+        model: oneShotModel,
+      });
+      // The marker lands at the end of the transcript, after the turns it
+      // keeps — the panel shows it where a reload will.
       const current = msgsRef.current;
-      const older = current.slice(0, current.length - COMPACT_KEEP_RECENT);
-      const recent = current.slice(current.length - COMPACT_KEEP_RECENT);
-      if (older.length === 0) return false;
-      const summary = await summarizeForCompaction(oneShotProvider, oneShotModel, older, contextWindow);
-      if (!summary) throw new Error("Could not build a summary to compact with.");
-      // Write the marker into the transcript the harness replays from — this
-      // is what actually shrinks the next turn's context.
-      await invoke("agent_compact_context", { runId: currentId, summary });
-      // Mirror it in the panel so the view + gauge reflect the new state.
-      // Break the folded slice into the two things the marker reports:
-      // conversation messages (user + assistant turns) and tool calls.
-      const compactedMessages = older.filter((m) => m.role === "user" || m.role === "assistant").length;
-      const compactedToolCalls = older.reduce(
+      const compactedMessages = current.filter((m) => m.role === "user" || m.role === "assistant").length;
+      const compactedToolCalls = current.reduce(
         (n, m) => n + (m.role === "assistant" ? m.toolCalls?.length ?? 0 : 0),
         0,
       );
       const summaryMsg: Msg = {
         role: "system",
-        content: `Compacted ${older.length} earlier message${older.length === 1 ? "" : "s"}:\n${summary}`,
-        compaction: { count: older.length, summary, source, messages: compactedMessages, toolCalls: compactedToolCalls },
+        content: `Compacted earlier messages:\n${summary}`,
+        compaction: { count: current.length, summary, source: "manual", messages: compactedMessages, toolCalls: compactedToolCalls },
       };
-      // Keep the whole conversation in the panel for reference; the marker is
-      // just a divider. The model's context is freed via the transcript marker
-      // (replay collapses everything before it), and the token gauge counts
-      // only from the marker onward — so nothing visible is lost.
-      const next: Msg[] = [...older, summaryMsg, ...recent];
+      const next: Msg[] = [...current, summaryMsg];
       setMsgs(next);
       msgsRef.current = next;
       // Drop the stale measured usage so the gauge falls back to the (now
@@ -3502,17 +3484,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     const modelInspection = await activateModelInspectionForSend();
     const supportsToolsForTurn = modelInspection.supportsTools;
     const supportsReflectionForTurn = modelInspection.supportsReflection;
-    // Opening a large saved transcript is passive. If it no longer fits, fold
-    // its older turns only now — after an actual message was submitted, and
-    // before that message is appended or dispatched. On failure keep the draft
-    // intact so retry cannot accidentally send an overflowing context.
-    const contextLimitForTurn = providerHasContextWindowSetting(provider)
-      ? contextCeiling(modelInspection.contextLimit ?? 0, ctxOverride)
-      : modelInspection.contextLimit ?? 0;
-    const ratioAfterSend = contextLimitForTurn > 0 ? budget.used / contextLimitForTurn : 0;
-    if (shouldAutoCompact({ trigger: "send", canCompact, ratioAfterSend })) {
-      if (!(await compactConversation("agent", contextLimitForTurn))) return;
-    }
+    // A conversation that no longer fits is not this panel's to fold: the
+    // Run trims and, if it must, summarizes its own older turns before its
+    // first request (agent/compaction.rs), the same for every surface.
     // `@<subagent> <task>` re-flavors this turn with a named subagent's role +
     // mode. The directive's mode wins over the picker; the rest of the turn
     // (the task text) runs through the normal harness path, badged in the chat.
@@ -4618,8 +4592,8 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
         )}
         {(compacting || compactError) && (
-          <div className="ai-msg-in" style={{ margin: compactSource === "manual" ? "6px 0" : "6px 0 8px 32px" }}>
-            <CompactionRow status="running" error={compactError} source={compactSource} />
+          <div className="ai-msg-in" style={{ margin: "6px 0" }}>
+            <CompactionRow status="running" error={compactError} source="manual" />
           </div>
         )}
         {pendingDiff && (
