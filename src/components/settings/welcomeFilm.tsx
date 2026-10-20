@@ -64,7 +64,7 @@ export function WelcomeFilmCards({ value, onChange }: { value: PixelNatureOrder;
     <div style={{ padding: "14px 18px 16px" }}>
       <div className="klide-row-title">Nature film</div>
       <div className="klide-row-description" style={{ marginBottom: 12 }}>
-        The landscape beside the recent list. Shuffle deals the five scenes afresh each launch; In order plays them as
+        The landscape beside the recent list. Shuffle deals the scenes afresh each launch; In order plays them as
         written; pick one to keep it.
       </div>
       <div

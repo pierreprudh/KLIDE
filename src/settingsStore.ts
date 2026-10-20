@@ -296,7 +296,7 @@ export const SETTINGS = {
     search: {
       label: "Welcome film",
       section: "appearance",
-      keywords: "welcome film nature pixel landscape scene dawn forest lake meadow shuffle random animation",
+      keywords: "welcome film nature pixel landscape scene dawn forest lake meadow autumn temple pagoda fuji moonsea torii karst asia shuffle random animation",
     },
   } as SettingDef<PixelNatureOrder>,
   restoreLastProject: {
