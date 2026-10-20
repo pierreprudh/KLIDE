@@ -805,6 +805,13 @@ pub enum AgentEvent {
     ContextCompacted {
         run_id: String,
         summary: String,
+        /// How many events right before this marker stay in the conversation
+        /// verbatim, after the summary (`compaction::effective_events`). The
+        /// transcript is append-only, so the marker can only land after the
+        /// turns it keeps. Absent on markers written before it existed: those
+        /// keep nothing before them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept: Option<usize>,
         ts: i64,
     },
     /// A message the loop put in front of the model that nobody typed — a

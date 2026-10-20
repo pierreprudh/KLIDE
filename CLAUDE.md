@@ -338,7 +338,8 @@ Klide/
     │       ├── spreadsheet_tools.rs Native workbook Tools — recalculated and exported before review
     │       ├── artifacts.rs       What a command left behind — the dirty set bracketed around a run_command
     │       ├── process.rs         One lifecycle for every command a Run starts — process group, bounded capture, exit from wait() with a 1 s drain, cancel-aware wait (background.rs is its registry)
-    │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
+    │       ├── compaction.rs      Summary compaction — the cut, the notes, what a marker keeps (`effective_events`)
+│       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
     │       ├── tool_handlers.rs   Per-capability call ceremony — permission gates, pauses, checkpoints
     │       ├── connector_tools.rs `connector_tools` / `connector_call` — the enabled connectors as two Tools, gated by the target tool's read-only hint
     │       ├── delivery.rs        Everything the operator didn't type (peer mail, observer completions) — one nonce-fenced renderer
@@ -403,7 +404,7 @@ AiPanel (view) → startAgentRun() → Rust run_agent_loop()
 - Plan / Work modes all go through the harness (Work is the `goal` tier, the default; `chat` is the tool-less collapse; `/goal <objective>` is one Work turn with a finish line)
 - Write tools pause for diff review via `tokio::sync::oneshot` channels
 - Diff approval triggers `agent_resolve_diff` → harness continues
-- Default tool-turn cap 50 (configurable), cancellation via `CancellationToken`, auto-compaction on a recency + token-budget trigger
+- Default tool-turn cap 50 (configurable), cancellation via `CancellationToken`, auto-compaction on a recency + token-budget trigger (trim, then summarize — `compaction.rs`)
 
 ### Mission Control → AI panel handoff
 
@@ -649,6 +650,13 @@ on one lifetime — hour for a person's conversation, five minutes headless).
 `each_request_opens_with_the_previous_one_byte_for_byte` and
 `a_continuation_opens_with_the_prompt_the_last_turn_sent` guard it; usage's
 `cacheReadTokens` is the live signal.
+
+Compaction is Rust's, for every Run (`agent/compaction.rs`): trim old tool
+results first, then — still over — fold the turns before a turn boundary into
+notes the model writes from the cached prompt, and rebuild the prompt through
+replay. The `ContextCompacted` marker lands after the turns it keeps and says
+how many (`kept`); `compaction::effective_events` is the one reading of it.
+The panel only renders markers and offers `/compact` (same Rust path).
 
 ### Provider registry (one row, published to the renderer)
 

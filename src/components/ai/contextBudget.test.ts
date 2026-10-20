@@ -5,7 +5,6 @@ import {
   contextTone,
   conversationCost,
   lastCompactionIndex,
-  shouldAutoCompact,
   COMPACT_KEEP_RECENT,
   COMPACT_PROMPT_RATIO,
   type ContextBudgetInput,
@@ -206,34 +205,6 @@ describe("canCompactConversation", () => {
 
   it("offers compaction before the window is full", () => {
     expect(COMPACT_PROMPT_RATIO).toBeLessThan(1);
-  });
-});
-
-describe("automatic compaction trigger", () => {
-  it("never compacts an overfull transcript merely because it was opened", () => {
-    expect(shouldAutoCompact({ trigger: "view", canCompact: true, ratioAfterSend: 1.4 })).toBe(false);
-  });
-
-  it("compacts an overfull transcript when a new message is sent", () => {
-    expect(shouldAutoCompact({ trigger: "send", canCompact: true, ratioAfterSend: 1 })).toBe(true);
-  });
-
-  it("does not compact a send that still fits", () => {
-    expect(shouldAutoCompact({ trigger: "send", canCompact: true, ratioAfterSend: 0.99 })).toBe(false);
-  });
-
-  it("includes the submitted draft when deciding whether the next turn fits", () => {
-    const next = computeContextBudget(input({
-      msgs: [user("a".repeat(2_500)), assistant("b".repeat(500))],
-      draft: "c".repeat(1_000),
-      contextLimit: 1_000,
-    }));
-    expect(next.rawRatio).toBeLessThan(1);
-    expect(shouldAutoCompact({
-      trigger: "send",
-      canCompact: true,
-      ratioAfterSend: next.used / 1_000,
-    })).toBe(true);
   });
 });
 

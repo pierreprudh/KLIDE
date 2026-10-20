@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Msg } from "./types";
 import {
-  fallbackSummary,
   parseClassify,
   parseSummaryResponse,
-  splitIntoChunks,
 } from "./summarizePrompts";
 
 describe("parseSummaryResponse", () => {
@@ -78,45 +75,3 @@ describe("parseClassify", () => {
   });
 });
 
-describe("splitIntoChunks", () => {
-  it("returns the text whole when it fits", () => {
-    expect(splitIntoChunks("hello", 10)).toEqual(["hello"]);
-  });
-
-  it("returns no chunks for empty text", () => {
-    expect(splitIntoChunks("", 10)).toEqual([]);
-  });
-
-  it("splits oversized input into max-size chunks that reassemble losslessly", () => {
-    const text = "x".repeat(25);
-    const chunks = splitIntoChunks(text, 10);
-    expect(chunks.map((c) => c.length)).toEqual([10, 10, 5]);
-    expect(chunks.join("")).toBe(text);
-  });
-});
-
-describe("fallbackSummary", () => {
-  const msgs: Msg[] = [
-    { role: "user", content: "Fix the flaky tab test" },
-    {
-      role: "assistant",
-      content: "On it.",
-      toolCalls: [
-        { id: "1", name: "write_file", args: { path: "src/TabBar.tsx", content: "…" } } as any,
-      ],
-    },
-    { role: "user", content: "Also update the changelog" },
-  ];
-
-  it("builds a deterministic summary from requests and touched files", () => {
-    const text = fallbackSummary(msgs);
-    expect(text).toContain("Goal: Fix the flaky tab test");
-    expect(text).toContain("Also asked: Also update the changelog");
-    expect(text).toContain("Files changed: src/TabBar.tsx");
-    expect(text).toContain("3 earlier messages folded");
-  });
-
-  it("never returns empty, even for an empty slice", () => {
-    expect(fallbackSummary([]).length).toBeGreaterThan(0);
-  });
-});

@@ -11,6 +11,7 @@ pub(crate) mod command_env;
 mod observers;
 pub(crate) mod workers;
 mod command_allowlist;
+mod compaction;
 mod connector_tools;
 mod conversation_search;
 mod memory_recall;
@@ -1147,8 +1148,9 @@ fn reconstruct_prior_messages(
     structured: bool,
     values: Option<(&Path, &str)>,
 ) -> Vec<serde_json::Value> {
+    let prior_events = compaction::effective_events(prior_events);
     if structured {
-        return reconstruct_structured_messages(prior_events, values);
+        return reconstruct_structured_messages(&prior_events, values);
     }
     // tool_call_id -> tool name from the assistant turns, so a folded
     // result's stub names the tool that produced it — the same text the
@@ -1271,7 +1273,7 @@ fn reconstruct_prior_messages(
 /// poison the whole request. We pre-scan for finished ids and drop the
 /// orphans — matching the text-fold path, which also drops them.
 fn reconstruct_structured_messages(
-    prior_events: &[AgentEvent],
+    prior_events: &[&AgentEvent],
     values: Option<(&Path, &str)>,
 ) -> Vec<serde_json::Value> {
     use std::collections::{HashMap, HashSet};
@@ -2394,6 +2396,7 @@ async fn loop_body(
         .checked_sub(RESERVE_TURNS)
         .filter(|t| *t >= 1 && Some(*t) != forced_answer_turn);
 
+    let mut summarized_at: Option<usize> = None;
     for turn in 0..max_turns {
         // Auto-compaction: trim verbose tool results from older turns once the
         // prompt approaches the context window. The recency window inside
@@ -2405,6 +2408,70 @@ async fn loop_body(
                     .flatten()
             };
             compact_old_tool_results(&mut messages, &mut retain);
+        }
+        // Still crowding the window once old results are trimmed: fold the
+        // older turns into a summary the model writes for itself. Any Run gets
+        // this — a Mission attempt or a worker as much as a conversation in a
+        // panel. The summary call sends the conversation exactly as the model
+        // last read it plus one instruction, so it reads the cached prefix,
+        // and the conversation after it is rebuilt by replay, so the next
+        // request is the bytes the next turn's replay will produce. A Delegate
+        // CLI manages its own context.
+        if estimate_prompt_tokens(&messages) > compact_threshold
+            && summarized_at.is_none_or(|at| turn > at + 1)
+            && crate::delegate::lookup(&request.provider).is_none()
+            && !crate::providers::is_subscription_provider(&request.provider)
+        {
+            let events = read_events(&runs_dir, &id).unwrap_or_default();
+            if let Some(cut) = compaction::plan_cut(&events, compact_threshold / 4) {
+                let quiet = Channel::new(|_| Ok(()));
+                let call = provider_caller.call(ProviderTurnRequest {
+                    provider: request.provider.clone(),
+                    model: request.model.clone(),
+                    messages: compaction::summary_request(&messages),
+                    tools: tools.clone(),
+                    workspace_root: request.workspace_root.clone(),
+                    run_id: Some(id.clone()),
+                    delegate_session: None,
+                    allowed_commands: Vec::new(),
+                    mcp: None,
+                    num_ctx: request.num_ctx,
+                    num_predict: request.num_predict,
+                    reflection_level: request.reflection_level.clone(),
+                    cache_hour: request.parent_id.is_none() && request.mission_id.is_none(),
+                    stream: quiet,
+                });
+                let response = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
+                        return Ok(());
+                    }
+                    response = call => response,
+                };
+                // A failed or empty summary still frees the window: the
+                // stand-in is built from the turns themselves.
+                let notes = response.map(|r| r.content).unwrap_or_default();
+                let marker = AgentEvent::ContextCompacted {
+                    run_id: id.clone(),
+                    summary: compaction::summary_text(&notes, &events, cut),
+                    kept: Some(cut.kept),
+                    ts: now_ms(),
+                };
+                emit(marker.clone())?;
+                // Once a turn at most, with one turn's grace: a newest turn too
+                // big for the window on its own is the provider's error to
+                // report, not a summary call on every turn.
+                summarized_at = Some(turn);
+                let mut events = events;
+                events.push(marker);
+                let values = retention_enabled.then(|| (runs_dir.as_path(), id.as_str()));
+                let structured = ProviderCaps::for_provider(&request.provider).structured_replay;
+                let system = messages[0].clone();
+                messages = std::iter::once(system)
+                    .chain(reconstruct_prior_messages(&events, structured, values))
+                    .collect();
+            }
         }
 
         // Both steps ride the existing steering seam: a system message the model
@@ -3539,42 +3606,91 @@ pub fn agent_release_conversation(run_id: String) {
     workers::release(&run_id);
 }
 
-/// Write a compaction marker into a run's transcript. The frontend generates
-/// `summary` (one model call over the older turns) and calls this; on the next
-/// turn, `reconstruct_prior_messages` collapses everything before the marker
-/// into that summary while replaying recent turns verbatim — freeing context
-/// without losing the thread.
+/// What a manual compaction did: the notes now standing in for the folded
+/// turns, and how many transcript events before the marker stay verbatim.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionOutcome {
+    pub summary: String,
+    pub kept: usize,
+}
+
+/// Compact a conversation now — the `/compact` command and the Compact
+/// button. The same cut and the same summary as a Run makes for itself when
+/// it outgrows its window (`compaction.rs`): the older turns fold into notes
+/// the conversation's own model writes, the newest stay verbatim, and the
+/// marker records which. Between runs there is no live prompt to reuse, so the
+/// summary reads the replayed conversation; an empty or failed answer falls
+/// back to notes built from the turns, so the window is freed either way.
 #[tauri::command]
-pub async fn agent_compact_context(
+pub async fn agent_compact_conversation(
     app: tauri::AppHandle,
     run_id: String,
-    summary: String,
-) -> Result<(), String> {
-    let summary = summary.trim();
-    if summary.is_empty() {
-        return Err("Refusing to compact with an empty summary".to_string());
-    }
+    provider: String,
+    model: String,
+) -> Result<CompactionOutcome, String> {
     validate_run_id(&run_id)?;
     if run_is_active(&app, &run_id) {
         return Err("Wait for this conversation to finish before compacting it.".into());
     }
     let runs_dir = app_runs_dir(&app)?;
-    let prior = read_events(&runs_dir, &run_id).unwrap_or_default();
-    if prior.is_empty() {
+    let events = {
+        let (dir, id) = (runs_dir.clone(), run_id.clone());
+        crate::blocking::run(move || Ok(read_events(&dir, &id).unwrap_or_default())).await?
+    };
+    if events.is_empty() {
         return Err("No conversation to compact yet".to_string());
     }
-    let seq = prior.len() as u64;
+    let window = crate::model_capabilities::capabilities(&provider, &model, false)
+        .await
+        .map(|caps| caps.window_for_planning())
+        .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW);
+    let cut = compaction::plan_cut(&events, compaction_threshold(window, 4096) / 4)
+        .ok_or_else(|| "Nothing to compact yet — every turn is still recent.".to_string())?;
+    let cwd = events.iter().find_map(|e| match e {
+        AgentEvent::RunStarted { cwd, .. } => cwd.clone(),
+        _ => None,
+    });
+    let structured = ProviderCaps::for_provider(&provider).structured_replay;
+    let messages = compaction::summary_request(&reconstruct_prior_messages(
+        &events,
+        structured,
+        Some((runs_dir.as_path(), run_id.as_str())),
+    ));
+    let notes = crate::providers::dispatch(
+        crate::providers::ProviderTurn {
+            provider,
+            model,
+            messages,
+            tools: None,
+            workspace_root: cwd,
+            run_id: Some(run_id.clone()),
+            delegate_session: None,
+            allowed_commands: Vec::new(),
+            mcp: None,
+            num_ctx: None,
+            num_predict: None,
+            reflection_level: None,
+            cache_hour: false,
+        },
+        &Channel::new(|_| Ok(())),
+    )
+    .await
+    .map(|response| response.content)
+    .unwrap_or_default();
+    let summary = compaction::summary_text(&notes, &events, cut);
     append_event(
         &runs_dir,
         &run_id,
-        seq,
+        events.len() as u64,
         &AgentEvent::ContextCompacted {
             run_id: run_id.clone(),
-            summary: summary.to_string(),
+            summary: summary.clone(),
+            kept: Some(cut.kept),
             ts: now_ms(),
         },
     )?;
-    Ok(())
+    Ok(CompactionOutcome { summary, kept: cut.kept })
 }
 
 /// The Provider/model each of these Conversations actually started on.
@@ -4140,6 +4256,7 @@ mod replay_tests {
         let compacted = AgentEvent::ContextCompacted {
             run_id: "r".into(),
             summary: "we set up auth and fixed the parser".into(),
+            kept: None,
             ts: 9,
         };
         let out = reconstruct(
@@ -4480,6 +4597,7 @@ mod replay_tests {
                 AgentEvent::ContextCompacted {
                     run_id: "r".into(),
                     summary: "did the thing".into(),
+                    kept: None,
                     ts: 9,
                 },
                 user_msg("new"),
@@ -6216,6 +6334,58 @@ mod run_loop_tests {
         // Only the base prompt opens the request.
         assert_eq!(later.iter().filter(|m| m["role"] == "system").count(), 3, "base + two snapshots");
         assert!(!later[0]["content"].as_str().unwrap().contains("[TODO list]"));
+    }
+
+    /// A Run that outgrows its window folds its older turns into a summary
+    /// on its own — no panel involved — keeps the newest turn verbatim, and
+    /// the follow-up turn opens with exactly the prompt the compacted turn sent.
+    #[tokio::test]
+    async fn a_run_summarizes_its_own_older_turns_and_replays_the_same_prompt() {
+        let (runs_dir, root) = sandbox("summary-compaction");
+        for i in 0..4 {
+            let body: String = (0..420).map(|n| format!("file {i} line {n} padding text\n")).collect();
+            std::fs::write(Path::new(&root).join(format!("f{i}.txt")), body).unwrap();
+        }
+        // Three reads overflow the 16k window; the fourth turn starts compacted.
+        let mut script: Vec<_> = (0..3)
+            .map(|i| scripted_turn("Reading.", vec![scripted_tool_call(&format!("call_{i}"), "read_file", serde_json::json!({ "path": format!("f{i}.txt") }))]))
+            .collect();
+        script.push(scripted_turn("NOTES: read f0-f2, each is padding.", vec![]));
+        script.push(scripted_turn("All three read.", vec![]));
+        let first = ScriptedProviderCaller::new(script);
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "Read the four files.".into();
+        request.num_ctx = Some(16_384);
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        drive_loop(sup.clone(), &runs_dir, "thread", request.clone(), first.clone()).await;
+
+        let events = read_events(&runs_dir, "thread").unwrap();
+        let (notes, kept) = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ContextCompacted { summary, kept, .. } => Some((summary.clone(), *kept)),
+                _ => None,
+            })
+            .expect("the run compacted itself");
+        assert!(notes.starts_with("NOTES:"), "{notes}");
+        assert!(notes.ends_with("verbatim:\nRead the four files."), "the request survives: {notes}");
+        assert!(kept.unwrap() >= 2, "the newest turn stays verbatim: {kept:?}");
+
+        let seen = first.seen_messages.lock().unwrap().clone();
+        let ask = seen.iter().find(|m| m.last().unwrap()["content"].as_str().is_some_and(|c| c.starts_with("[Klide: compacting"))).unwrap();
+        assert!(ask.len() > 8, "the summary call carries the conversation as sent");
+        let after = seen.last().unwrap().clone();
+        assert!(after[1]["content"].as_str().unwrap().starts_with("[Earlier conversation compacted"));
+        assert_eq!(after[2]["role"], "assistant", "the kept tail opens on a turn, never a stranded result");
+        assert!(after.len() < ask.len());
+
+        let second = ScriptedProviderCaller::new(vec![scripted_turn("Done.", vec![])]);
+        let mut follow_up = request.clone();
+        follow_up.initial_text = "Thanks.".into();
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        drive_loop(sup.clone(), &runs_dir, "thread", follow_up, second.clone()).await;
+        let next = second.seen_messages.lock().unwrap().first().unwrap().clone();
+        assert_eq!(&next[..after.len()], &after[..], "replay rebuilds the compacted prompt byte for byte");
     }
 
     /// A `/goal` run's "done" is checked. The first claim fails the check

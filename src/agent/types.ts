@@ -326,7 +326,9 @@ export type AgentEvent =
    *  replayed Conversation must render the marker where it happened —
    *  otherwise the reloaded transcript looks like an unbroken conversation
    *  that mysteriously forgot its early turns. */
-  | { type: "context_compacted"; runId: string; summary: string; ts: number }
+  /** `kept`: how many events right before the marker stay in the model's
+   *  conversation, after the summary. Absent on older markers (none). */
+  | { type: "context_compacted"; runId: string; summary: string; kept?: number; ts: number }
   /** What the Harness put in front of the model that nobody typed, recorded
    *  so replay rebuilds the cached prompt. Rust reads it; no surface draws it. */
   | { type: "context_injected"; runId: string; role: string; content: string; ts: number }
