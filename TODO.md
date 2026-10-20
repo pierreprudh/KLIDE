@@ -314,6 +314,33 @@ Also fixed (same `prompt()` root cause): GitReview "Open PR" now uses an inline 
 
 Caveats baked in: old chatgpt-mode snapshots may hold stale refresh tokens → "may require re-login" (acceptable). Klide manages *other apps'* credentials, so it strictly snapshots/restores what you created.
 
+## Context management — prompt caching + Rust compaction (PRs #214, #215, #218)
+
+Shipped 2026-10-20: prefix-stable prompts, Anthropic/OpenAI/OpenRouter cache
+hints, cache-aware cost, one-batch trimming with retained values, summary
+compaction owned by the Rust loop (`agent/compaction.rs`, `kept` markers),
+fit guard, adaptive thinking on current Claude models (dogfooded ✓).
+
+- [ ] Dogfood compaction in the app — not yet tested (a 1M-window Claude
+  conversation is too expensive to fill). Test cheaply on a local model with a
+  small window (Ollama/MLX at 16k–32k, free) or Haiku 4.5 (200k):
+  - [ ] a long agent run compacts itself mid-run and keeps going; marker shows,
+    gauge doesn't collapse to ~0
+  - [ ] the follow-up after a compaction answers with the thread intact (kept
+    turns + the verbatim latest request)
+  - [ ] `/compact` and the Compact button on a big conversation, then send
+  - [ ] a headless Run (worker or Mission attempt) compacts with no panel open
+  - [ ] the fit guard: an oversized single turn ends with `context_window_exceeded`
+- [ ] Dogfood the cache: reply after 10+ min on Anthropic and check "N% cached".
+- [ ] Record peer-mail delivery in the transcript (it still breaks the cached
+  prefix on the next turn).
+- [ ] Ollama replays continuations as text folds, so its KV prefix breaks at the
+  first prior tool call.
+- [ ] Upgrade ironcalc to 0.9 (zip ≥ 9) and drop the three ignores in
+  `.cargo/audit.toml`.
+- [ ] Refresh base list prices in `pricing.rs` (e.g. gpt-5 input is $1.25, the
+  table says $2.50); cached-rate ratios are current.
+
 ## Small Follow-Ups
 
 - [x] Refresh the AI panel connection after saving or clearing a provider key.

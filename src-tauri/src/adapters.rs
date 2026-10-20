@@ -424,6 +424,63 @@ pub(crate) fn reflection_level_to_openai_effort(level: Option<&str>) -> Option<S
     }
 }
 
+/// How a turn asks Claude to think. Two generations of the API: models from
+/// Opus/Sonnet 4.6 on take adaptive thinking steered by an effort level — a
+/// fixed `budget_tokens` is refused outright from Opus 4.7 and Sonnet 5 on
+/// (measured: Sonnet 5.5 answers 400 "thinking.type.enabled is not
+/// supported") — and the older models take only a token budget.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum AnthropicThinking {
+    /// No `thinking` field: the model's own default.
+    Default,
+    Budget(usize),
+    /// `effort` rides in `output_config`; `summarized` asks for readable
+    /// thinking where the model's default is to omit it, so the panel's
+    /// thinking stream is not a silent pause.
+    Adaptive { effort: Option<String>, summarized: bool },
+}
+
+/// `(major, minor)` of a Claude model id: `claude-opus-5-5` → (5, 5),
+/// `claude-sonnet-4-20250514` → (4, 0) (a date is not a minor version).
+fn claude_version(model: &str) -> Option<(u32, u32)> {
+    let m = model.trim().to_ascii_lowercase();
+    let rest = ["claude-opus-", "claude-sonnet-", "claude-haiku-", "claude-fable-", "claude-mythos-"]
+        .iter()
+        .find_map(|family| m.strip_prefix(family))?;
+    let mut parts = rest.split('-');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor = parts
+        .next()
+        .filter(|p| p.len() <= 2)
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(0);
+    Some((major, minor))
+}
+
+/// The thinking request for a model at the reflection level the user picked.
+pub(crate) fn anthropic_thinking(model: &str, level: Option<&str>) -> AnthropicThinking {
+    let level = level.map(str::trim).filter(|s| !s.is_empty());
+    let adaptive = match claude_version(model) {
+        Some(version) => version >= (4, 6),
+        // An id we can't read (an alias, a future family) is current, not legacy.
+        None => !model.trim().to_ascii_lowercase().starts_with("claude-3"),
+    };
+    if !adaptive {
+        return reflection_level_to_anthropic_budget(level).map_or(AnthropicThinking::Default, AnthropicThinking::Budget);
+    }
+    let effort = match level {
+        None | Some("auto" | "off") => return AnthropicThinking::Default,
+        Some("minimal") => "low",
+        Some(other @ ("low" | "medium" | "high" | "xhigh" | "max")) => other,
+        Some(_) => return AnthropicThinking::Default,
+    };
+    AnthropicThinking::Adaptive {
+        effort: Some(effort.to_string()),
+        // 4.6 summarizes by default; from 4.7 on the default is omitted.
+        summarized: claude_version(model).is_none_or(|v| v >= (4, 7)),
+    }
+}
+
 fn reflection_level_to_anthropic_budget(level: Option<&str>) -> Option<usize> {
     match level.map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
@@ -1259,7 +1316,7 @@ struct AnthropicAdapter {
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: String,
-    thinking_budget: Option<usize>,
+    thinking: AnthropicThinking,
     usage: AiUsage,
     /// Why the model stopped, from the closing `message_delta`. `max_tokens`
     /// is the one that matters: a tool call cut off mid-JSON must not be
@@ -1328,14 +1385,27 @@ impl StreamingProvider for AnthropicAdapter {
             "stream": true,
             "messages": msgs,
         });
-        if let Some(budget) = self.thinking_budget {
-            // Thinking spends from the same budget and must leave room for the
-            // answer: the budget is clamped under the ceiling, never added to it.
-            let budget = budget.min(self.max_output_tokens.saturating_sub(1024)).max(1024);
-            body["thinking"] = serde_json::json!({
-                "type": "enabled",
-                "budget_tokens": budget,
-            });
+        match &self.thinking {
+            AnthropicThinking::Default => {}
+            AnthropicThinking::Budget(budget) => {
+                // Thinking spends from the same budget and must leave room for the
+                // answer: the budget is clamped under the ceiling, never added to it.
+                let budget = (*budget).min(self.max_output_tokens.saturating_sub(1024)).max(1024);
+                body["thinking"] = serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                });
+            }
+            AnthropicThinking::Adaptive { effort, summarized } => {
+                body["thinking"] = if *summarized {
+                    serde_json::json!({ "type": "adaptive", "display": "summarized" })
+                } else {
+                    serde_json::json!({ "type": "adaptive" })
+                };
+                if let Some(effort) = effort {
+                    body["output_config"] = serde_json::json!({ "effort": effort });
+                }
+            }
         }
         if let Some(system) = system_blocks {
             body["system"] = system;
@@ -1601,13 +1671,13 @@ pub(crate) async fn anthropic_chat(
     cache_hour: bool,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    let thinking_budget = reflection_level_to_anthropic_budget(reflection_level.as_deref());
+    let thinking = anthropic_thinking(&model, reflection_level.as_deref());
     let adapter = |max_output_tokens: usize, full_cache_shape: bool| AnthropicAdapter {
         model: model.clone(),
         messages: messages.clone(),
         tools: tools.clone(),
         key: key.clone(),
-        thinking_budget,
+        thinking: thinking.clone(),
         usage: AiUsage::default(),
         stop_reason: None,
         max_output_tokens,
@@ -2407,7 +2477,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "sk-ant-test".to_string(),
-            thinking_budget: None,
+            thinking: AnthropicThinking::Default,
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
@@ -2457,11 +2527,11 @@ mod tests {
     #[test]
     fn anthropic_request_body_includes_thinking_budget_when_configured() {
         let adapter = AnthropicAdapter {
-            model: "claude-sonnet-4-6".to_string(),
+            model: "claude-haiku-4-5".to_string(),
             messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
             tools: None,
             key: "sk-ant-test".to_string(),
-            thinking_budget: Some(4096),
+            thinking: AnthropicThinking::Budget(4096),
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
@@ -2481,6 +2551,49 @@ mod tests {
         assert_eq!(value["thinking"]["type"], "enabled");
         assert_eq!(value["thinking"]["budget_tokens"], 4096);
         assert_eq!(value["max_tokens"], ANTHROPIC_MAX_OUTPUT_TOKENS, "thinking spends from the budget, it is not added to it");
+    }
+
+    #[test]
+    fn current_claude_models_think_adaptively_and_old_ones_on_a_budget() {
+        let adaptive = |effort: &str| AnthropicThinking::Adaptive { effort: Some(effort.into()), summarized: true };
+        assert_eq!(anthropic_thinking("claude-sonnet-5-5", Some("high")), adaptive("high"));
+        assert_eq!(anthropic_thinking("claude-opus-5-5", Some("minimal")), adaptive("low"));
+        assert_eq!(anthropic_thinking("claude-fable-5-1", Some("max")), adaptive("max"));
+        assert_eq!(anthropic_thinking("claude-opus-4-7", Some("xhigh")), adaptive("xhigh"));
+        assert_eq!(
+            anthropic_thinking("claude-sonnet-4-6", Some("medium")),
+            AnthropicThinking::Adaptive { effort: Some("medium".into()), summarized: false },
+            "4.6 summarizes by default and predates `display`"
+        );
+        assert_eq!(anthropic_thinking("claude-haiku-4-5", Some("medium")), AnthropicThinking::Budget(4096));
+        assert_eq!(anthropic_thinking("claude-sonnet-4-20250514", Some("low")), AnthropicThinking::Budget(2048), "a date is not a minor version");
+        assert_eq!(anthropic_thinking("claude-3-7-sonnet-latest", Some("high")), AnthropicThinking::Budget(8192));
+        assert_eq!(anthropic_thinking("claude-opus-5-5", None), AnthropicThinking::Default);
+        assert_eq!(anthropic_thinking("claude-opus-5-5", Some("off")), AnthropicThinking::Default, "thinking can't be disabled there; the model's default stands");
+    }
+
+    #[test]
+    fn adaptive_thinking_sends_effort_in_output_config() {
+        let adapter = AnthropicAdapter {
+            model: "claude-sonnet-5-5".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            key: "k".to_string(),
+            thinking: anthropic_thinking("claude-sonnet-5-5", Some("high")),
+            usage: AiUsage::default(),
+            stop_reason: None,
+            max_output_tokens: 1024,
+            full_cache_shape: true,
+            hour_conversation: true,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
+        };
+        let request = adapter.build_request(&reqwest::Client::new()).unwrap().build().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(request.body().and_then(|b| b.as_bytes()).unwrap()).unwrap();
+        assert_eq!(body["thinking"], serde_json::json!({ "type": "adaptive", "display": "summarized" }));
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert!(body["thinking"].get("budget_tokens").is_none());
     }
 
     #[test]
@@ -2585,7 +2698,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
-            thinking_budget: None,
+            thinking: AnthropicThinking::Default,
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
@@ -2620,7 +2733,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
-            thinking_budget: None,
+            thinking: AnthropicThinking::Default,
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
@@ -2645,7 +2758,7 @@ mod tests {
             messages,
             tools,
             key: "sk-ant-test".to_string(),
-            thinking_budget: None,
+            thinking: AnthropicThinking::Default,
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
@@ -2783,7 +2896,7 @@ mod tests {
             messages,
             tools,
             key: "k".to_string(),
-            thinking_budget: None,
+            thinking: AnthropicThinking::Default,
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: 1024,
@@ -2835,7 +2948,7 @@ mod tests {
                 messages: loop_requests()[2].clone(),
                 tools: Some(vec![tool_schema("read_file")]),
                 key: "k".to_string(),
-                thinking_budget: None,
+                thinking: AnthropicThinking::Default,
                 usage: AiUsage::default(),
                 stop_reason: None,
                 max_output_tokens: 1024,
@@ -2867,7 +2980,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
-            thinking_budget: None,
+            thinking: AnthropicThinking::Default,
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: 1024,
@@ -2980,6 +3093,25 @@ mod tests {
         for later in &usages[1..] {
             let read = later.cache_read_tokens.unwrap_or(0);
             assert!(read * 10 >= later.prompt_tokens.unwrap() * 8, "a later request reads most of its prompt from the cache: {later:?}");
+        }
+    }
+
+
+    /// Live: a reflection level reaches each Claude generation in the shape it
+    /// accepts. Opt-in and billed (two tiny requests):
+    /// `ANTHROPIC_API_KEY=… cargo test --lib live_anthropic_reflection_levels -- --ignored`.
+    #[tokio::test]
+    #[ignore = "calls the Anthropic API with a real key"]
+    async fn live_anthropic_reflection_levels() {
+        let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
+        let channel = Channel::new(|_| Ok(()));
+        for (model, level) in [("claude-sonnet-5-5", "high"), ("claude-haiku-4-5", "low")] {
+            let messages = vec![serde_json::json!({ "role": "user", "content": "What is 17 * 23? Answer with the number." })];
+            let response = anthropic_chat(key.clone(), model.into(), messages, Some(vec![tool_schema("read_file")]), Some(level.into()), true, &channel)
+                .await
+                .unwrap_or_else(|e| panic!("{model} at {level}: {e}"));
+            eprintln!("{model} {level}: {:?} (thinking {} chars)", response.content, response.thinking.as_deref().map_or(0, str::len));
+            assert!(response.content.contains("391"), "{model}: {:?}", response.content);
         }
     }
 

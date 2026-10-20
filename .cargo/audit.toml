@@ -1,0 +1,14 @@
+# cargo audit (CI runs it from the repository root).
+#
+# zip 0.6.6 is pinned by ironcalc 0.8.3 (and Klide matches it to share the
+# archive types). These three advisories are about `ZipArchive::extract` /
+# `ZipStreamReader::extract` writing an archive to disk — SUID bits, symlink
+# targets, permissions through symlinks. Neither Klide nor ironcalc extracts:
+# both only read .xlsx parts in memory (`ZipArchive::new` + `by_name`).
+# Remove these when ironcalc moves to zip >= 9 (ironcalc 0.9 is out — check).
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]
