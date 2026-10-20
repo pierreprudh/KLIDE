@@ -283,6 +283,94 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
 }
 
 
+/** Turns that follow an answered question, whose thought draws no line of its
+ *  own. The answered card and the reply to it are one exchange — question,
+ *  answer, verdict — and a "Thought process" row between them split it, so
+ *  the one fold a turn shows stays the one at its top. The reasoning is still
+ *  in the transcript; only its row goes. A turn that makes calls is already
+ *  inside a fold and needs nothing from this. */
+export function turnsAfterQuestions(msgs: Msg[], pairing: ToolResultPairing = pairToolResults(msgs)): Set<number> {
+  const after = new Set<number>();
+  for (let i = 1; i < msgs.length; i++) {
+    if (msgs[i].role !== "assistant") continue;
+    const prev = msgs[i - 1];
+    if (prev.role !== "tool") continue;
+    const owner = pairing.claimed.get(i - 1);
+    const asked = prev.toolName === USER_QUESTION_TOOL
+      || (owner !== undefined && msgs[owner].role === "assistant" && !!msgs[owner].toolCalls?.some((c) => c.name === USER_QUESTION_TOOL));
+    if (asked) after.add(i);
+  }
+  return after;
+}
+
+export type QuestionVerdict = "right" | "wrong";
+
+/** A reply that grades the answer it follows opens with a mark — ✅ or ❌ —
+ *  and the mark belongs on the answered card, beside the answer it judges. */
+const VERDICT_MARK = /^\s*(✅|✔️|✔|❌|✖️|✗|✘)\s*/u;
+
+export function verdictOf(content: string): QuestionVerdict | undefined {
+  const mark = VERDICT_MARK.exec(content)?.[1];
+  if (!mark) return undefined;
+  return mark === "✅" || mark.startsWith("✔") ? "right" : "wrong";
+}
+
+/** The reply's text with its verdict mark taken off — the card wears it. */
+export function dropVerdictMark(content: string): string {
+  return content.replace(VERDICT_MARK, "");
+}
+
+/** A question's args as an object — live events pass the input object,
+ *  transcript replay passes it JSON-stringified. */
+export function questionArgs(args: unknown): Record<string, unknown> {
+  let v = args;
+  if (typeof v === "string") {
+    try { v = JSON.parse(v); } catch { return {}; }
+  }
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+/** The question's args with its answer key taken out, for anything drawn
+ *  while the question is still open — the call's row, its JSON disclosure. */
+export function withoutAnswerKey(args: unknown): unknown {
+  const o = questionArgs(args);
+  if (!("correct" in o)) return args;
+  const { correct: _key, ...rest } = o;
+  return rest;
+}
+
+const PICK_LETTER = /^\s*\(?([A-Da-d1-4])(?:[.):]\s*|\s*$)/;
+
+/** The pick graded against the answer key the question carried (`correct`):
+ *  by letter when both name one (`B`, `B.`, `B. The Workspace…`), otherwise
+ *  by the answer's text, case and spacing aside. Undefined when the question
+ *  had no key or nothing was picked. */
+export function gradeAnswer(said: string, correct: unknown): QuestionVerdict | undefined {
+  if (typeof correct !== "string" || !correct.trim() || !said.trim()) return undefined;
+  const a = PICK_LETTER.exec(said)?.[1]?.toUpperCase();
+  const b = PICK_LETTER.exec(correct)?.[1]?.toUpperCase();
+  if (a && b) return a === b ? "right" : "wrong";
+  const text = (s: string) => s.replace(PICK_LETTER, "").replace(/\s+/g, " ").trim().toLowerCase();
+  return text(said) === text(correct) ? "right" : "wrong";
+}
+
+/** Which question each graded reply judged: question turn index → verdict,
+ *  and the reply turns whose leading mark moves onto that card. */
+export function questionVerdicts(msgs: Msg[], pairing: ToolResultPairing = pairToolResults(msgs)): { byQuestion: Map<number, QuestionVerdict>; replies: Set<number> } {
+  const byQuestion = new Map<number, QuestionVerdict>();
+  const replies = new Set<number>();
+  for (const i of turnsAfterQuestions(msgs, pairing)) {
+    const owner = pairing.claimed.get(i - 1);
+    const reply = msgs[i];
+    if (owner === undefined || reply.role !== "assistant") continue;
+    const verdict = verdictOf(visibleProse(reply));
+    if (!verdict) continue;
+    byQuestion.set(owner, verdict);
+    replies.add(i);
+  }
+  return { byQuestion, replies };
+}
+
 /** A prose row still streaming at the end of a run in progress (see
  *  `RunFoldOptions.streaming`). A row that already carries a call is work
  *  or a card on its own terms; a row that follows no run is simply the

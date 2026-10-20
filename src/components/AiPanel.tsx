@@ -129,7 +129,7 @@ import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
-import { groupToolRuns, pairToolResults, toolRunLabel } from "./ai/toolRuns";
+import { groupToolRuns, pairToolResults, questionVerdicts, toolRunLabel, turnsAfterQuestions } from "./ai/toolRuns";
 import { LiveWork } from "./ai/LiveWork";
 import type { AttachedResult } from "./ai/ChatMessage";
 import { MessageActions } from "./ai/MessageActions";
@@ -1335,8 +1335,11 @@ export function AiPanel({
       for (let i = run.start; i < run.end; i++) inRun.add(i);
       if (run.answer !== undefined) answers.add(run.answer);
     }
-    return { inRun, answers };
-  }, [toolRuns]);
+    // A reply to an answered question keeps its thought out of view too: one
+    // fold at the top of the turn, none between the question and the verdict.
+    for (const i of turnsAfterQuestions(msgs, toolPairing)) answers.add(i);
+    return { inRun, answers, verdicts: questionVerdicts(msgs, toolPairing) };
+  }, [toolRuns, msgs, toolPairing]);
   const [openToolRuns, setOpenToolRuns] = useState<Set<number>>(() => new Set());
   function toggleToolRun(start: number) {
     setOpenToolRuns((prev) => {
@@ -3113,7 +3116,6 @@ This user request requires workspace inspection. Before answering, you MUST call
   // not a constant. `width` (the prop) is the panel's assigned width and means
   // nothing in Focus, where the panel fills its host.
   const canvasRef = useRef<HTMLDivElement>(null);
-  const islandColumnRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
   useEffect(() => {
     const el = canvasRef.current;
@@ -3161,7 +3163,6 @@ This user request requires workspace inspection. Before answering, you MUST call
   const column = columnGeometry({
     planSlot,
     resultUp: latestCompletion !== undefined,
-    questionUp: pendingQuestion !== null,
     visualUp: latestVisuals !== null,
     observerUp: githubPresence.runId === currentId && githubPresence.present,
     missionUp: missionPresent,
@@ -3169,19 +3170,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     canvasWidth,
   });
 
-  // A question is the one card in the column that holds the run, and it
-  // arrives *under* a plan and an opened result that may already fill the
-  // side. So the column scrolls it into view when it appears — the cards
-  // above keep their place rather than being pushed off to make room.
-  useEffect(() => {
-    if (!pendingQuestion) return;
-    const column = islandColumnRef.current;
-    if (!column) return;
-    const frame = requestAnimationFrame(() => {
-      column.scrollTo({ top: column.scrollHeight, behavior: "smooth" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [pendingQuestion]);
   const focusInset = variant === "focus" ? column.inset : 0;
   const focusGutterLeft = `calc(max(20px, (100% - ${760 + focusInset}px) / 2))`;
   const focusGutterRight = `calc(max(20px, (100% - ${760 + focusInset}px) / 2) + ${focusInset}px)`;
@@ -4469,7 +4457,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i) })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i), questionVerdict: foldedTurns.verdicts.byQuestion.get(i), dropVerdict: foldedTurns.verdicts.replies.has(i) })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
@@ -4707,7 +4695,6 @@ This user request requires workspace inspection. Before answering, you MUST call
           does not exist. */}
       {variant === "focus" && (
         <div
-          ref={islandColumnRef}
           className="klide-island-column"
           style={{
             position: "absolute",
@@ -4820,18 +4807,6 @@ This user request requires workspace inspection. Before answering, you MUST call
               onUnfold={() => setSidePanelHidden(false)}
             />
           )}
-          {pendingQuestion && (
-            <QuestionCard
-              variant="island"
-              question={pendingQuestion.question}
-              choices={pendingQuestion.choices}
-              answer={questionAnswer}
-              onAnswerChange={setQuestionAnswer}
-              onSubmit={() => void submitQuestion()}
-              onChoose={(picked) => void submitQuestion(picked)}
-              onSkip={skipQuestion}
-            />
-          )}
         </div>
       )}
 
@@ -4882,11 +4857,10 @@ This user request requires workspace inspection. Before answering, you MUST call
             hotkeys
           />
         )}
-        {/* Everywhere but Focus the question waits above the composer: those
-            layouts have no canvas margin to put a window in. On the Focus
-            canvas it is an island instead — see the column beside the
-            conversation. */}
-        {pendingQuestion && variant !== "focus" && (
+        {/* The question waits above the composer on every surface, in the
+            reading column — Focus included: the one card that holds the run
+            belongs where the reader already is, not in the side column. */}
+        {pendingQuestion && (
           <QuestionCard
             question={pendingQuestion.question}
             choices={pendingQuestion.choices}

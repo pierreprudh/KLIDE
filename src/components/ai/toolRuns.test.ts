@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { groupToolRuns, pairToolResults, toolRunLabel, PLAN_MISSION_TOOL, USER_QUESTION_TOOL } from "./toolRuns";
+import { groupToolRuns, pairToolResults, toolRunLabel, turnsAfterQuestions, questionVerdicts, dropVerdictMark, gradeAnswer, withoutAnswerKey, PLAN_MISSION_TOOL, USER_QUESTION_TOOL } from "./toolRuns";
 
 const call = (name: string): Msg => ({
   role: "assistant",
@@ -376,5 +376,52 @@ describe("a turn that said nothing shows its thought's gist where the sentence w
     ]);
     const streamingThought: Msg = { role: "assistant", content: "", thinking: "Still deciding" };
     expect(liveWorkSteps([call("grep"), result("grep"), streamingThought], 0, 3).map((s) => s.kind)).toEqual(["work"]);
+  });
+});
+
+describe("turnsAfterQuestions", () => {
+  // Question, answer, verdict read as one exchange: the reply's thought draws
+  // no row between the answered card and the verdict.
+  it("marks the reply to an answered question, and nothing else", () => {
+    const msgs: Msg[] = [
+      { role: "user", content: "/quiz" },
+      { role: "assistant", content: "Q1.", toolCalls: [{ id: "q1", name: "userAnswerQuestion", args: { question: "Which?" } }] },
+      { role: "tool", content: "B", toolCallId: "q1", toolName: "userAnswerQuestion" },
+      { role: "assistant", content: "✅ B.", thinking: "They picked B." },
+      { role: "assistant", content: "Reading.", toolCalls: [{ id: "r1", name: "read_file", args: {} }] },
+      { role: "tool", content: "…", toolCallId: "r1", toolName: "read_file" },
+      { role: "assistant", content: "Done.", thinking: "ok" },
+    ];
+    expect([...turnsAfterQuestions(msgs)]).toEqual([3]);
+  });
+});
+
+describe("questionVerdicts", () => {
+  // The reply's ✅ / ❌ moves onto the answered card it judges.
+  it("files each graded reply's mark under the question it judged", () => {
+    const ask = (id: string): Msg => ({ role: "assistant", content: "", toolCalls: [{ id, name: "userAnswerQuestion", args: { question: "?" } }] });
+    const answer = (id: string): Msg => ({ role: "tool", content: "B", toolCallId: id, toolName: "userAnswerQuestion" });
+    const msgs: Msg[] = [ask("q1"), answer("q1"), { role: "assistant", content: "✅ B. Right." }, ask("q2"), answer("q2"), { role: "assistant", content: "❌ Correct is B." }, ask("q3"), answer("q3"), { role: "assistant", content: "Noted." }];
+    const { byQuestion, replies } = questionVerdicts(msgs);
+    expect([...byQuestion]).toEqual([[0, "right"], [3, "wrong"]]);
+    expect([...replies]).toEqual([2, 5]);
+    expect(dropVerdictMark("❌ Correct is B.")).toBe("Correct is B.");
+  });
+});
+
+describe("gradeAnswer", () => {
+  it("grades by letter when both sides name one, by text otherwise", () => {
+    expect(gradeAnswer("B. The Workspace refuses it.", "B")).toBe("right");
+    expect(gradeAnswer("C", "B. The Workspace refuses it.")).toBe("wrong");
+    expect(gradeAnswer("Recall skips drafts", "recall  skips drafts")).toBe("right");
+    expect(gradeAnswer("Restart", "Recall skips drafts")).toBe("wrong");
+    expect(gradeAnswer("B", undefined)).toBeUndefined();
+  });
+
+  // The key rides the call; nothing drawn while the question is open shows it.
+  it("takes the answer key out of an open question's args, live or replayed", () => {
+    expect(withoutAnswerKey({ question: "?", correct: "B" })).toEqual({ question: "?" });
+    expect(withoutAnswerKey(JSON.stringify({ question: "?", correct: "B" }))).toEqual({ question: "?" });
+    expect(withoutAnswerKey({ question: "?" })).toEqual({ question: "?" });
   });
 });

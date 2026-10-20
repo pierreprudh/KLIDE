@@ -290,6 +290,41 @@ describe("a question the run asked, once answered", () => {
     expect(html).not.toContain("userAnswerQuestion");
   });
 
+  it("reads a bare letter answer as the line it picked", () => {
+    const html = renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "q0", name: "userAnswerQuestion", args: { question: "Q2 · Why?\nA. Restart.\nB. Recall skips drafts.", choices: ["A", "B"] } }] },
+        false,
+        { results: new Map([["q0", { msg: { role: "tool", content: "B", toolName: "userAnswerQuestion" }, active: false }]]) },
+      ),
+    );
+    expect(html).toContain(">Q2 · Why?</span>");
+    expect(html).toContain(">B. Recall skips drafts.</span>");
+  });
+
+  it("marks the pick against the answer key at once, before any reply", () => {
+    const answered = (answer: string) => renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "q0", name: "userAnswerQuestion", args: { question: "Why?", choices: ["Restart", "Recall skips drafts"], correct: "Recall skips drafts" } }] },
+        false,
+        { results: new Map([["q0", { msg: { role: "tool", content: answer, toolName: "userAnswerQuestion" }, active: false }]]) },
+      ),
+    );
+    expect(answered("Restart")).toContain("ask-card-wrong");
+    expect(answered("Recall skips drafts")).toContain("ask-card-answered");
+  });
+
+  it("never shows the answer key while the question is open", () => {
+    const html = renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "q0", name: "userAnswerQuestion", args: { correct: "SECRET-KEY", question: "Why?" } }] },
+        true,
+        { results: new Map([["q0", { msg: { role: "tool", content: "", toolName: "userAnswerQuestion" }, active: true }]]) },
+      ),
+    );
+    expect(html).not.toContain("SECRET-KEY");
+  });
+
   it("says a skipped question was skipped rather than quoting the harness", () => {
     const html = exchange("[user skipped this question]");
     expect(html).toContain("Skipped");

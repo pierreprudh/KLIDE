@@ -23,8 +23,9 @@ import { conversationMark } from "../../modelIdentity";
 import { AgentMark } from "../fileMarks";
 import { formatElapsed, useElapsed } from "./WorkingRow";
 import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
+import { liftLetteredChoices } from "./QuestionCard";
 
-import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, USER_QUESTION_TOOL, toolCallKey, toolRunLabel } from "./toolRuns";
+import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, USER_QUESTION_TOOL, dropVerdictMark, gradeAnswer, questionArgs, toolCallKey, toolRunLabel, withoutAnswerKey, type QuestionVerdict } from "./toolRuns";
 import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
 import { childTranscriptRows, isWatchable, neverStarted } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
@@ -301,20 +302,32 @@ const SKIPPED_ANSWER = "[user skipped this question]";
  *  under it, which drew the one moment that was a conversation as
  *  machinery. A skipped question leaves the indicator empty and says
  *  "Skipped" in the dim face rather than quoting the harness's note. */
-function AnsweredQuestionCard({ args, answer }: { args: unknown; answer: string }) {
-  const o = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
-  const question = typeof o.question === "string" ? o.question.trim() : "";
+function AnsweredQuestionCard({ args, answer, verdict: replied }: { args: unknown; answer: string; verdict?: QuestionVerdict }) {
+  const o = questionArgs(args);
+  const asked = typeof o.question === "string" ? o.question.trim() : "";
+  const choices = Array.isArray(o.choices) ? o.choices.filter((c): c is string => typeof c === "string") : [];
+  // Answers the model wrote into the question and offered as bare letters
+  // leave the question here as they do on the live card, and a bare letter
+  // answer reads as the line it picked.
+  const lifted = liftLetteredChoices(asked, choices);
+  const question = lifted?.question ?? asked;
   const said = answer.trim();
   const skipped = said === "" || said === SKIPPED_ANSWER;
+  const letter = said.replace(/[.)]$/, "").toUpperCase();
+  const picked = lifted?.options.find((line) => line === said || line.startsWith(`${letter}. `));
+  const shown = picked ?? said;
+  // A question that carried its answer key is marked the moment it is
+  // answered; otherwise the reply's ✅ / ❌ marks it once it arrives.
+  const verdict = skipped ? undefined : gradeAnswer(said, o.correct) ?? replied;
   return (
-    <section className={`ask-card ${skipped ? "ask-card-skipped" : "ask-card-answered"}`} aria-label="Question answered">
+    <section className={`ask-card ${skipped ? "ask-card-skipped" : verdict === "wrong" ? "ask-card-wrong" : "ask-card-answered"}`} aria-label={verdict ? `Question answered ${verdict === "right" ? "correctly" : "incorrectly"}` : "Question answered"}>
       <span className="ask-card-mark" aria-hidden="true"><AskIcon size={24} /></span>
       <div className="ask-card-head">
         <span className="ask-card-title">Question</span>
         {question && <span className="ask-card-question">{question}</span>}
       </div>
-      <span className="ask-card-indicator" aria-hidden="true">{skipped ? "" : "✓"}</span>
-      <span className="ask-card-answer">{skipped ? "Skipped" : said}</span>
+      <span className="ask-card-indicator" aria-hidden="true">{skipped ? "" : verdict === "wrong" ? "✕" : "✓"}</span>
+      <span className="ask-card-answer">{skipped ? "Skipped" : shown}</span>
     </section>
   );
 }
@@ -588,7 +601,7 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
   );
 }
 
-function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot, onOpenRun }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null; onOpenRun?: (runId: string) => void }) {
+function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot, onOpenRun, verdict }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null; onOpenRun?: (runId: string) => void; verdict?: QuestionVerdict }) {
   // A planned Mission is drawn, not printed: the card reads the draft the
   // receipt names and carries the operator's approval. Until the receipt
   // lands, or if the call failed, the row is an ordinary tool call.
@@ -599,7 +612,9 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
   // A question, once answered, is the exchange itself: the card replaces the
   // mono row and its result. While the run still waits, the live card above
   // the composer carries the question and the plain row is enough here.
-  if (name === USER_QUESTION_TOOL && result && !result.active) return <AnsweredQuestionCard args={args} answer={result.msg.content} />;
+  if (name === USER_QUESTION_TOOL && result && !result.active) return <AnsweredQuestionCard args={args} answer={result.msg.content} verdict={verdict} />;
+  // Still open: the row and its disclosure never show the answer key.
+  if (name === USER_QUESTION_TOOL) args = withoutAnswerKey(args);
   const call =
     name === "spawn_subagent" ? (
       // The child is still going until a *real* report lands. The pending
@@ -1551,6 +1566,11 @@ type MessageBodyOptions = {
   /** A child Run's row drawn inside its parent's disclosure: one size down,
    *  no speed line (the parent's answer owns that space), a user turn quiet. */
   nested?: boolean;
+  /** How the reply after this turn's question graded the answer — the
+   *  answered card wears it (`questionVerdicts`). */
+  questionVerdict?: QuestionVerdict;
+  /** This turn is that reply: its leading ✅ / ❌ is on the card already. */
+  dropVerdict?: boolean;
 };
 
 type MessageBodyProps = MessageBodyOptions & {
@@ -1558,7 +1578,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, thinkingOverride, inRun, nested }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, thinkingOverride, inRun, nested, questionVerdict, dropVerdict }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
   }
@@ -1624,7 +1644,8 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
     }
     const { content: cleanedContent } = splitThinking(m.content);
     const { content } = stripPlanJson(cleanedContent);
-    const visibleContent = stripToolNarration(content, !!m.toolCalls?.length);
+    const narrated = stripToolNarration(content, !!m.toolCalls?.length);
+    const visibleContent = dropVerdict ? dropVerdictMark(narrated) : narrated;
     // Everything the model thought out loud, however it arrived — structured
     // block, inline <think> leak, or plan-JSON fallback (see extractThinking).
     const mergedThinking = thinkingOverride ?? extractThinking(m);
@@ -1653,7 +1674,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
             calls.map((tc, index) => ({ tc, key: toolCallKey(tc, index) })),
             ({ tc }) => (COORDINATION_TOOL_NAMES.has(tc.name) ? `${tc.name}\n${JSON.stringify(tc.args ?? null)}` : null),
           ).map(({ item: { tc, key }, count }) => (
-            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} />
+            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} verdict={questionVerdict} />
           ));
           // A call that draws a card is the point of the turn, never folded.
           if (inRun || !visibleContent || calls.length < MIN_STACKED_CALLS || calls.some((tc) => SPEAKING_TOOLS.has(tc.name))) return rows;
@@ -1717,6 +1738,8 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
       hideThinking={opts?.hideThinking}
       inRun={opts?.inRun}
       nested={opts?.nested}
+      questionVerdict={opts?.questionVerdict}
+      dropVerdict={opts?.dropVerdict}
     />
   );
 }
