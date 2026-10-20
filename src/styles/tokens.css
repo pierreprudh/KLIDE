@@ -2503,37 +2503,15 @@ textarea.klide-diff-comment-input:focus-visible {
   animation: ai-msg-in var(--motion-slower) var(--ease-soft);
 }
 
-/* The same card on the Focus canvas, stacked under the plan island. It rises
-   out of the corner the way the plan does (todoStrip.css), on that sequence's
-   ease — the two windows share a column, so they must share a gesture. No
-   delay: the plan waits for the column to slide, a question arrives mid-run
-   with the column already open. */
 /* The Focus canvas' side column. Every card in it keeps its own height: a
    card that clips its own corners (overflow: hidden) has an automatic minimum
-   size of zero, so without this the column squashes the plan and the question
+   size of zero, so without this the column squashes the plan and the result
    to fit instead of scrolling them. The one exception sets its own flex — an
    opened result, which takes the room the others are not using. */
 .klide-island-column > * { flex: 0 0 auto; }
 
-.klide-ask-island {
-  transform-origin: right top;
-  animation: klide-ask-island-in 380ms cubic-bezier(0.32, 0.72, 0, 1) both;
-}
-
-@keyframes klide-ask-island-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .ai-qa-card,
-  .klide-ask-island {
+  .ai-qa-card {
     animation: none;
   }
 }

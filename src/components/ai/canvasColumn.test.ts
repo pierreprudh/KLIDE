@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { columnGeometry, showsVisuals, COLUMN_MAX, COLUMN_MIN } from "./canvasColumn";
 
-const roomy = { planSlot: "none", resultUp: false, questionUp: false, hidden: false, canvasWidth: 1210 } as const;
+const roomy = { planSlot: "none", resultUp: false, hidden: false, canvasWidth: 1210 } as const;
 
 describe("canvas column geometry", () => {
   it("gives the canvas back when there is nothing in the corner", () => {
@@ -81,15 +81,6 @@ describe("canvas column geometry", () => {
   });
   it("asks for nothing when a closed column has nothing to mark", () => {
     expect(columnGeometry({ ...roomy, hidden: true }).inset).toBe(0);
-  });
-
-  // A parked question holds the run: it cannot be closed away, and it brings
-  // the plan it came from back with it.
-  it("overrides a closed column while a question waits", () => {
-    const g = columnGeometry({ ...roomy, planSlot: "card", questionUp: true, hidden: true });
-    expect(g.cardsUp).toBe(true);
-    expect(g.showClose).toBe(true);
-    expect(g.planFolded).toBe(false);
   });
 
   // The column narrows with the canvas, but its entries never become a
