@@ -452,6 +452,7 @@ async fn ai_chat(
             num_ctx,
             num_predict,
             reflection_level,
+            cache_hour: false,
         },
         &on_chunk,
     )

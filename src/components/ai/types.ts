@@ -68,7 +68,7 @@ export type Msg =
        *  `modelMs` is the harness-measured provider time; `ms` is wall clock
        *  since the previous turn boundary and therefore also counts tool runs
        *  and diff-review waiting. */
-      meta?: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number };
+      meta?: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; cachedPct?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number };
       /** When this turn landed, epoch ms — the `assistant_message` event's own
        *  `ts`, so live and replayed transcripts agree. */
       ts?: number;

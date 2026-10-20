@@ -26,8 +26,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": true,
     "caps": {
       "structuredReplay": false,
-      "minimalChatContext": true,
-      "appendTodoUpdates": false
+      "minimalChatContext": true
     },
     "contextWindow": null
   },
@@ -54,8 +53,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": true,
-      "appendTodoUpdates": true
+      "minimalChatContext": true
     },
     "contextWindow": 128000
   },
@@ -76,8 +74,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": true,
-      "appendTodoUpdates": true
+      "minimalChatContext": true
     },
     "contextWindow": 16384
   },
@@ -98,8 +95,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -120,8 +116,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -142,8 +137,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -164,8 +158,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -186,8 +179,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -208,8 +200,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -230,8 +221,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -252,8 +242,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -274,8 +263,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": 200000
   },
@@ -296,8 +284,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": 272000
   },
@@ -318,8 +305,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -340,8 +326,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -362,8 +347,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -384,8 +368,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -406,8 +389,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   },
@@ -428,8 +410,7 @@ export const PROVIDER_ROWS = [
     "hasNumCtx": false,
     "caps": {
       "structuredReplay": true,
-      "minimalChatContext": false,
-      "appendTodoUpdates": false
+      "minimalChatContext": false
     },
     "contextWindow": null
   }

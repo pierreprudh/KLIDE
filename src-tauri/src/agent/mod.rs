@@ -52,10 +52,11 @@ pub mod types;
 use self::run_core::KEEP_RECENT_TOOL_RESULTS;
 use self::run_core::{
     apply_clean_context_if_requested, assistant_provider_message, compact_old_tool_results,
-    compaction_system_message, compaction_threshold, decide_turn, estimate_prompt_tokens,
-    parallel_read_calls, plan_tool_step, provider_messages, refresh_todo_context,
+    compaction_system_message, compaction_threshold, context_event, decide_turn,
+    estimate_prompt_tokens, includes_todo_context, injected_provider_message, last_recorded_todo,
+    parallel_read_calls, plan_tool_step, provider_messages, refresh_todo_context, todo_update,
     tool_provider_message, retries_provider_calls, transient_provider_failure,
-    user_provider_message, ProviderCaps, ToolStepPlan, TurnDecision, TurnStep,
+    user_provider_message, wire_tool_call, ProviderCaps, ToolStepPlan, TurnDecision, TurnStep,
     MAX_AUTO_RETRIES_PER_RUN, PROVIDER_RETRY_PAUSE,
 };
 use self::tools::{
@@ -210,6 +211,8 @@ struct ProviderTurnRequest {
     num_ctx: Option<usize>,
     num_predict: Option<usize>,
     reflection_level: Option<String>,
+    /// See [`crate::providers::ProviderTurn::cache_hour`].
+    cache_hour: bool,
     stream: Channel<StreamChunk>,
 }
 
@@ -243,6 +246,7 @@ impl AgentProviderCaller for RealProviderCaller {
                     num_ctx: request.num_ctx,
                     num_predict: request.num_predict,
                     reflection_level: request.reflection_level,
+                    cache_hour: request.cache_hour,
                 },
                 &request.stream,
             )
@@ -1082,6 +1086,20 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
         })
 }
 
+/// Add a message nobody typed to the live prompt and record it, in that
+/// order of truth: the transcript is what the next turn's prompt is rebuilt
+/// from, so whatever the provider reads must be in it.
+fn inject_context(
+    messages: &mut Vec<serde_json::Value>,
+    emit: &mut impl FnMut(AgentEvent) -> Result<(), String>,
+    run_id: &str,
+    message: serde_json::Value,
+) -> Result<(), String> {
+    emit(context_event(run_id, &message))?;
+    messages.push(message);
+    Ok(())
+}
+
 /// Replay a prior run's transcript back into provider-shaped messages so
 /// the new run starts with the same context the user already saw on
 /// screen.
@@ -1215,6 +1233,9 @@ fn reconstruct_prior_messages(
                     &result.content,
                 ));
             }
+            AgentEvent::ContextInjected { role, content, .. } => {
+                out.push(injected_provider_message(role, content));
+            }
             AgentEvent::ContextCompacted { summary, .. } => {
                 // Collapse everything before the marker into one system
                 // message. Turns recorded after it replay verbatim, so the
@@ -1298,14 +1319,7 @@ fn reconstruct_structured_messages(
                             call_names.insert(tool_call_id.clone(), name.clone());
                             // OpenAI wire wants `arguments` as a JSON-encoded
                             // string, matching the live loop's raw tool_calls.
-                            raw_tool_calls.push(serde_json::json!({
-                                "id": tool_call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": name,
-                                    "arguments": input.to_string(),
-                                },
-                            }));
+                            raw_tool_calls.push(wire_tool_call(tool_call_id, name, input));
                         }
                         _ => {}
                     }
@@ -1331,6 +1345,9 @@ fn reconstruct_structured_messages(
                     "name": name,
                     "tool_call_id": tool_call_id,
                 }));
+            }
+            AgentEvent::ContextInjected { role, content, .. } => {
+                out.push(injected_provider_message(role, content));
             }
             AgentEvent::ContextCompacted { summary, .. } => {
                 out.clear();
@@ -1360,7 +1377,14 @@ pub(super) fn agent_usage_from(usage: Option<AiUsage>, provider: &str, model: &s
         .cost_usd
         .or_else(|| match (u.prompt_tokens, u.completion_tokens) {
             (Some(p), Some(c)) => {
-                crate::model_capabilities::cost_for_run(provider, model, p as i64, c as i64)
+                let tokens = |n: Option<u64>| n.unwrap_or(0) as i64;
+                let prompt = crate::pricing::PromptTokens {
+                    prompt: p as i64,
+                    read: tokens(u.cache_read_tokens),
+                    write: tokens(u.cache_write_tokens),
+                    write_long: tokens(u.cache_write_long_tokens),
+                };
+                crate::model_capabilities::cost_for_turn(provider, model, prompt, c as i64)
             }
             _ => None,
         });
@@ -1371,6 +1395,8 @@ pub(super) fn agent_usage_from(usage: Option<AiUsage>, provider: &str, model: &s
         prompt_eval_duration_ms: u.prompt_eval_duration_ms,
         cost_usd,
         context_window: u.context_window,
+        cache_read_tokens: u.cache_read_tokens,
+        cache_write_tokens: u.cache_write_tokens,
     })
 }
 
@@ -2201,6 +2227,31 @@ async fn loop_body(
             ts: now_ms(),
         })?;
     }
+    // What the loop sets in front of the operator's message this turn: the
+    // instructions of a skill the message asks for, and the TODO list when it
+    // changed since the model last read it. Both sit in the conversation, not
+    // in the system prompt — the system prompt opens every request and must
+    // stay byte-identical for the prompt cache to serve it — and both are
+    // recorded before the message itself, so replay puts them back in order.
+    let mut opening_context: Vec<serde_json::Value> = Vec::new();
+    if !wake {
+        if let Some(instructions) = skill_resources::explicit_instructions(&id, &request.initial_text) {
+            opening_context.push(serde_json::json!({
+                "role": "system",
+                "content": format!("Apply the skill explicitly requested by the user:\n{instructions}"),
+            }));
+        }
+    }
+    if includes_todo_context(&request) {
+        let cwd = request.workspace_root.as_deref().unwrap_or_default();
+        let previous = if resuming { last_recorded_todo(&prior_events) } else { None };
+        if let Some(snapshot) = todo_update(previous.as_deref(), todo::list_todos_text(cwd, &id).as_deref()) {
+            opening_context.push(snapshot);
+        }
+    }
+    for message in &opening_context {
+        emit(context_event(&id, message))?;
+    }
     if !wake {
         emit(AgentEvent::UserMessage {
             run_id: id.clone(),
@@ -2212,15 +2263,11 @@ async fn loop_body(
     }
 
     let mut system = base_system_prompt(&request);
-    if let Some(instructions) = skill_resources::explicit_instructions(&id, &request.initial_text) {
-        system.push_str("\n\nApply the skill explicitly requested by the user:\n");
-        system.push_str(&instructions);
-    }
     if let Some(memory) = &memory {
         system.push_str("\n\n");
         system.push_str(&memory.prompt);
     }
-    let mut messages = provider_messages(&request, system, &id);
+    let mut messages = provider_messages(&request, system);
     if wake {
         // provider_messages ended with the (empty) user turn; the inbox
         // injected at the boundary below is this turn's user-role input.
@@ -2269,6 +2316,10 @@ async fn loop_body(
             messages.push(new_user);
         }
     }
+    // The opening context goes right before the operator's message — the
+    // order the transcript recorded it in.
+    let operator_at = if wake { messages.len() } else { messages.len() - 1 };
+    messages.splice(operator_at..operator_at, opening_context);
     // Count this turn's user message on top of the turns already on disk so
     // the Mission Control "Messages" tally reflects the whole conversation.
     let mut message_count = prior_turns as u32 + 1;
@@ -2348,14 +2399,19 @@ async fn loop_body(
         // prompt approaches the context window. The recency window inside
         // `compact_old_tool_results` keeps the active working set verbatim.
         if estimate_prompt_tokens(&messages) > compact_threshold {
-            compact_old_tool_results(&mut messages);
+            let mut retain = |call_id: &str, name: &str, content: &str| {
+                retention_enabled
+                    .then(|| retained::retain_compacted(&runs_dir, &id, call_id, name, content))
+                    .flatten()
+            };
+            compact_old_tool_results(&mut messages, &mut retain);
         }
 
         // Both steps ride the existing steering seam: a system message the model
         // sees, plus a `SteeringInjected` marker so the transcript says why the
         // run changed shape near its cap rather than appearing to just stop.
         if Some(turn) == finalization_turn {
-            messages.push(steering::steering_system_message(steering::FINALIZATION_RESERVE_NUDGE));
+            inject_context(&mut messages, &mut emit, &id, steering::steering_system_message(steering::FINALIZATION_RESERVE_NUDGE))?;
             emit(AgentEvent::SteeringInjected {
                 run_id: id.clone(),
                 reason: format!(
@@ -2366,7 +2422,7 @@ async fn loop_body(
             })?;
         }
         let turn_tools = if Some(turn) == forced_answer_turn {
-            messages.push(steering::steering_system_message(steering::LAST_TURN_NUDGE));
+            inject_context(&mut messages, &mut emit, &id, steering::steering_system_message(steering::LAST_TURN_NUDGE))?;
             emit(AgentEvent::SteeringInjected {
                 run_id: id.clone(),
                 reason: format!("Last of {max_turns} tool turns — answering without tools"),
@@ -2498,19 +2554,14 @@ async fn loop_body(
             Ok(())
         });
 
-        // Refresh the TODO list context before every turn so the model always
-        // sees the latest task state (tools may have modified it). MLX appends
-        // changed snapshots to preserve its processed prefix; local Chat stays
-        // free of project TODO context, as it is in provider_messages.
-        let caps = ProviderCaps::for_provider(&request.provider);
-        if !(caps.minimal_chat_context && matches!(request.mode, AgentMode::Chat)) {
-            if let Some(cwd) = &request.workspace_root {
-                let todo_text = todo::list_todos_text(cwd, &id);
-                refresh_todo_context(
-                    &mut messages,
-                    todo_text.as_deref(),
-                    caps.append_todo_updates,
-                );
+        // Refresh the TODO list before every turn so the model always sees the
+        // latest task state (tools may have modified it). A changed list is a
+        // new snapshot after the newest turn; the old one stays where it was,
+        // so the prompt the provider cached is still the prompt we send.
+        if includes_todo_context(&request) {
+            let cwd = request.workspace_root.as_deref().unwrap_or_default();
+            if let Some(snapshot) = refresh_todo_context(&messages, todo::list_todos_text(cwd, &id).as_deref()) {
+                inject_context(&mut messages, &mut emit, &id, snapshot)?;
             }
         }
 
@@ -2722,6 +2773,9 @@ async fn loop_body(
                     num_ctx: request.num_ctx,
                     num_predict: reply_budget_override.or(request.num_predict),
                     reflection_level: request.reflection_level.clone(),
+                    // A person's conversation, not a Mission attempt or a
+                    // worker: someone reads, reviews and replies between turns.
+                    cache_hour: request.parent_id.is_none() && request.mission_id.is_none(),
                     stream: stream.clone(),
                 }) => result,
             };
@@ -2865,9 +2919,12 @@ async fn loop_body(
                     })
                     .unwrap_or(4096);
                 reply_budget_override = Some((previous / 2).max(512));
-                messages.push(steering::steering_system_message(
-                    steering::REASONING_RUNAWAY_NUDGE,
-                ));
+                inject_context(
+                    &mut messages,
+                    &mut emit,
+                    &id,
+                    steering::steering_system_message(steering::REASONING_RUNAWAY_NUDGE),
+                )?;
                 emit(AgentEvent::SteeringInjected {
                     run_id: id.clone(),
                     reason: format!(
@@ -2921,7 +2978,7 @@ async fn loop_body(
                                 reason: marker,
                                 ts: now_ms(),
                             })?;
-                            messages.push(user_provider_message(&message, &[]));
+                            inject_context(&mut messages, &mut emit, &id, user_provider_message(&message, &[]))?;
                             message_count += 1;
                             continue;
                         }
@@ -3256,7 +3313,7 @@ async fn loop_body(
                             return Ok(());
                         }
                         AdvisorSteer::Advice(advice) => {
-                            messages.push(steering::advisor_steering_message(&advice));
+                            inject_context(&mut messages, &mut emit, &id, steering::advisor_steering_message(&advice))?;
                             format!(
                                 "{} — consulted advisor: {}",
                                 hint.reason,
@@ -3264,7 +3321,7 @@ async fn loop_body(
                             )
                         }
                         AdvisorSteer::FallbackNudge => {
-                            messages.push(steering::steering_system_message(&hint.nudge));
+                            inject_context(&mut messages, &mut emit, &id, steering::steering_system_message(&hint.nudge))?;
                             format!("{} — no advisor available, nudged", hint.reason)
                         }
                     };
@@ -3279,7 +3336,7 @@ async fn loop_body(
                     reason: hint.reason.clone(),
                     ts: now_ms(),
                 })?;
-                messages.push(steering::steering_system_message(&hint.nudge));
+                inject_context(&mut messages, &mut emit, &id, steering::steering_system_message(&hint.nudge))?;
             }
         }
     }
@@ -4713,7 +4770,7 @@ mod turn_decision_tests {
         for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 1) {
             messages.push(tool_msg("read_file", &long));
         }
-        compact_old_tool_results(&mut messages);
+        compact_old_tool_results(&mut messages, &mut |_, _, _| None);
         // System prompt untouched even though it is long.
         assert_eq!(messages[0]["content"].as_str().unwrap().len(), 300);
         // The single oldest result collapsed with an excerpt; its name dropped.
@@ -4737,7 +4794,7 @@ mod turn_decision_tests {
         for _ in 0..KEEP_RECENT_TOOL_RESULTS {
             messages.push(tool_msg("read_file", &long));
         }
-        compact_old_tool_results(&mut messages);
+        compact_old_tool_results(&mut messages, &mut |_, _, _| None);
         let compacted = messages
             .iter()
             .filter(|m| {
@@ -4777,7 +4834,7 @@ mod turn_decision_tests {
         }
         let window = 200_000;
         if estimate_prompt_tokens(&messages) > compaction_threshold(window, 4_096) {
-            compact_old_tool_results(&mut messages);
+            compact_old_tool_results(&mut messages, &mut |_, _, _| None);
         }
         assert!(
             messages.iter().all(|m| !m["content"]
@@ -4794,7 +4851,7 @@ mod turn_decision_tests {
             serde_json::json!({ "role": "system", "content": "sys" }),
             tool_msg("grep", "short result"),
         ];
-        compact_old_tool_results(&mut messages);
+        compact_old_tool_results(&mut messages, &mut |_, _, _| None);
         assert_eq!(messages[1]["content"], "short result");
         assert_eq!(messages[1]["name"], "grep");
     }
@@ -4809,7 +4866,7 @@ mod turn_decision_tests {
         for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 1) {
             messages.push(tool_msg("read_file", &medium));
         }
-        compact_old_tool_results(&mut messages);
+        compact_old_tool_results(&mut messages, &mut |_, _, _| None);
         assert!(
             messages
                 .iter()
@@ -4820,14 +4877,14 @@ mod turn_decision_tests {
     }
 
     #[test]
-    fn compaction_stops_after_five_rewrites_per_pass() {
+    fn compaction_takes_every_eligible_result_in_one_pass() {
+        // One edit to cached history, not five a turn for as many turns.
         let long = "y".repeat(2_000);
         let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
-        // 5 + window eligible, but a single pass caps at 5 rewrites.
         for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 7) {
             messages.push(tool_msg("read_file", &long));
         }
-        compact_old_tool_results(&mut messages);
+        compact_old_tool_results(&mut messages, &mut |_, _, _| None);
         let compacted = messages
             .iter()
             .filter(|m| {
@@ -4837,8 +4894,35 @@ mod turn_decision_tests {
                     .unwrap_or(false)
             })
             .count();
-        assert_eq!(compacted, 5);
+        assert_eq!(compacted, 7);
+        // A second pass with nothing new to cut changes nothing.
+        let settled = messages.clone();
+        compact_old_tool_results(&mut messages, &mut |_, _, _| None);
+        assert_eq!(messages, settled);
     }
+
+    #[test]
+    fn a_compacted_result_stays_reachable_and_replays_as_the_same_bytes() {
+        let runs = std::env::temp_dir().join(format!("klide-compact-retain-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&runs).unwrap();
+        let body: String = (0..200).map(|i| format!("line {i} of the file\n")).collect();
+        let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
+        for i in 0..(KEEP_RECENT_TOOL_RESULTS + 1) {
+            messages.push(serde_json::json!({ "role": "tool", "name": "read_file", "tool_call_id": format!("call_{i}"), "content": body }));
+        }
+        let mut retain = |call_id: &str, name: &str, content: &str| retained::retain_compacted(&runs, "r", call_id, name, content);
+        compact_old_tool_results(&mut messages, &mut retain);
+        let stub = messages[1]["content"].as_str().unwrap().to_string();
+        assert!(stub.starts_with("[retained #call_0]"), "{stub}");
+        assert!(stub.len() < body.len());
+        assert_eq!(messages[1]["name"], "read_file", "a stub keeps the call's name, as replay does");
+        // Replay of the same result produces the same text.
+        assert_eq!(retained::stub_for_replay(Some((runs.as_path(), "r")), "read_file", "call_0", &body), stub);
+        // And peek_value can read the original back.
+        let peeked = retained::peek(Some(&runs), "r", &serde_json::json!({ "id": "call_0", "start_line": 1, "end_line": 2 })).unwrap();
+        assert!(peeked.contains("line 0 of the file"), "{peeked}");
+    }
+
 }
 
 #[cfg(test)]
@@ -4958,6 +5042,7 @@ mod provider_caller_tests {
                 num_ctx: Some(1024),
                 num_predict: Some(128),
                 reflection_level: Some("low".to_string()),
+                cache_hour: false,
                 stream: Channel::<StreamChunk>::new(|_| Ok(())),
             })
             .await
@@ -6087,6 +6172,50 @@ mod run_loop_tests {
         // And the origin is unchanged.
         let origin = crate::agent::transcripts::read_run_origin(&runs_dir, "thread").unwrap().unwrap();
         assert_eq!(origin.model, "mock-model");
+    }
+
+    /// The prompt cache's contract with the loop: a continuation's first
+    /// request opens with every message of the turn before's last request,
+    /// unchanged. The TODO snapshot used to be rewritten in place near the top
+    /// (and, on Anthropic, hoisted into `system`), so a changed list made the
+    /// provider re-read the whole conversation at full price.
+    #[tokio::test]
+    async fn a_continuation_opens_with_the_prompt_the_last_turn_sent() {
+        let (runs_dir, root) = sandbox("cache-prefix");
+        std::fs::write(Path::new(&root).join("a.txt"), "alpha").unwrap();
+        todo::add_todo(&root, "thread", "read the file".into()).unwrap();
+        let first = ScriptedProviderCaller::new(vec![
+            scripted_turn(
+                "Reading.",
+                vec![scripted_tool_call("call_a", "read_file", serde_json::json!({ "path": "a.txt" }))],
+            ),
+            scripted_turn("First answer.", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        drive_loop(sup.clone(), &runs_dir, "thread", test_request(&root, &[]), first.clone()).await;
+
+        // The list changes between the turns: the follow-up must add a new
+        // snapshot, not touch the old one.
+        todo::add_todo(&root, "thread", "write the docs".into()).unwrap();
+        let second = ScriptedProviderCaller::new(vec![scripted_turn("Second answer.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "Now the docs.".to_string();
+        drive_loop(sup.clone(), &runs_dir, "thread", request, second.clone()).await;
+
+        let earlier = first.seen_messages.lock().unwrap().last().unwrap().clone();
+        let later = second.seen_messages.lock().unwrap().first().unwrap().clone();
+        assert!(later.len() > earlier.len());
+        for (i, (was, now)) in earlier.iter().zip(&later).enumerate() {
+            assert_eq!(was, now, "message {i} changed between turns");
+        }
+        // Then the answer, the new snapshot, and the new message — in that order.
+        let tail: Vec<&str> = later[earlier.len()..].iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(tail, vec!["assistant", "system", "user"]);
+        assert!(later[earlier.len() + 1]["content"].as_str().unwrap().contains("write the docs"));
+        // Only the base prompt opens the request.
+        assert_eq!(later.iter().filter(|m| m["role"] == "system").count(), 3, "base + two snapshots");
+        assert!(!later[0]["content"].as_str().unwrap().contains("[TODO list]"));
     }
 
     /// A `/goal` run's "done" is checked. The first claim fails the check

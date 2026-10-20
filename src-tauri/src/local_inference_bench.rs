@@ -65,7 +65,7 @@ async fn compare_klide_model_live() {
             let response = if provider == "ollama" {
                 stream_provider(Controlled(OllamaAdapter { model: "pierreprudh/klide-8b:latest".into(), messages, tools: tools.clone(), num_ctx: Some(8192), num_predict: Some(256), think: Some(false), usage: AiUsage::default(), stop_reason: None }), &channel).await
             } else {
-                stream_provider(Controlled(OpenAiAdapter { provider: provider.clone(), chat_url: if provider == "mlx" { "http://127.0.0.1:8080/v1/chat/completions".into() } else { "http://127.0.0.1:8081/v1/chat/completions".into() }, include_tools: true, include_usage_in_stream: true, include_cost_accounting: false, send_attribution: false, model: if provider == "mlx" { std::env::var("KLIDE_BENCH_MODEL").expect("Set KLIDE_BENCH_MODEL for MLX") } else { "pierreprudh/klide-8b".into() }, messages, tools: tools.clone(), key: None, reasoning_effort: None, usage: AiUsage::default() }), &channel).await
+                stream_provider(Controlled(OpenAiAdapter { provider: provider.clone(), chat_url: if provider == "mlx" { "http://127.0.0.1:8080/v1/chat/completions".into() } else { "http://127.0.0.1:8081/v1/chat/completions".into() }, include_tools: true, include_usage_in_stream: true, include_cost_accounting: false, send_attribution: false, model: if provider == "mlx" { std::env::var("KLIDE_BENCH_MODEL").expect("Set KLIDE_BENCH_MODEL for MLX") } else { "pierreprudh/klide-8b".into() }, messages, tools: tools.clone(), key: None, reasoning_effort: None, usage: AiUsage::default(), cache: Default::default(), }), &channel).await
             };
             let seconds = started.elapsed().as_secs_f64();
             let ttft = *first.lock().unwrap();

@@ -52,13 +52,11 @@ describe("Provider catalog — the one TS door onto the Rust registry", () => {
     expect(providerCaps("ollama")).toEqual({
       structuredReplay: false,
       minimalChatContext: true,
-      appendTodoUpdates: false,
     });
-    expect(providerCaps("mlx")).toMatchObject({ minimalChatContext: true, appendTodoUpdates: true });
+    expect(providerCaps("mlx")).toMatchObject({ minimalChatContext: true });
     expect(providerCaps("anthropic")).toEqual({
       structuredReplay: true,
       minimalChatContext: false,
-      appendTodoUpdates: false,
     });
   });
 
@@ -79,7 +77,6 @@ describe("Provider catalog — the one TS door onto the Rust registry", () => {
       expect(providerCaps(id), id).toEqual({
         structuredReplay: true,
         minimalChatContext: false,
-        appendTodoUpdates: false,
       });
     }
   });

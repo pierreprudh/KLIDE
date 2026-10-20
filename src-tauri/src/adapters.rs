@@ -174,11 +174,21 @@ fn retry_after_from_body(body: &str) -> Option<Duration> {
 // Ollama's native `/api/chat` takes images as a message-level `images` array of
 // RAW base64 (no `data:` prefix). Rewrite any data-URI images the harness
 // attached into that shape; messages without images pass through untouched.
+// It also wants a tool call's `arguments` as an object, where the harness's
+// history carries the OpenAI wire's JSON string.
 fn normalize_ollama_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
     messages
         .iter()
         .map(|m| {
             let mut m = m.clone();
+            if let Some(calls) = m.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                for call in calls {
+                    let arguments = &mut call["function"]["arguments"];
+                    if let Some(parsed) = arguments.as_str().and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()) {
+                        *arguments = parsed;
+                    }
+                }
+            }
             if let Some(imgs) = m.get("images").and_then(|v| v.as_array()) {
                 let stripped: Vec<serde_json::Value> = imgs
                     .iter()
@@ -305,7 +315,7 @@ impl StreamingProvider for OllamaAdapter {
                 // Local models are free — no billed cost to report.
                 cost_usd: None,
                 // The window this request ran in — what `build_request` sent.
-                context_window: self.num_ctx.map(|n| n as u64),
+                context_window: self.num_ctx.map(|n| n as u64),cache_read_tokens: None, cache_write_tokens: None, cache_write_long_tokens: None,
             };
             self.stop_reason = value
                 .get("done_reason")
@@ -519,7 +529,71 @@ struct OpenAiAdapter {
     tools: Option<Vec<serde_json::Value>>,
     key: Option<String>,
     reasoning_effort: Option<String>,
+    cache: OpenAiCache,
     usage: AiUsage,
+}
+
+/// What an OpenAI-wire request does for the provider's prompt cache. Most of
+/// these caches are automatic prefix matches that need nothing but a prompt
+/// whose opening bytes don't change; two want a hint.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OpenAiCache {
+    /// OpenAI's `prompt_cache_key`: requests that share one land on the same
+    /// cache shard, so a conversation keeps hitting its own prefix. The
+    /// conversation's Run id; only sent to OpenAI itself.
+    pub(crate) key: Option<String>,
+    /// Mark explicit breakpoints (`cache_control` on content parts), for an
+    /// aggregator passing the request to a model whose cache is opt-in —
+    /// Claude or Gemini through OpenRouter.
+    pub(crate) breakpoints: bool,
+}
+
+impl OpenAiCache {
+    /// The hints a provider/model pair takes. Everything else gets the
+    /// automatic cache and no extra fields: a strict endpoint may refuse a
+    /// field it does not know, and a failed turn costs more than a cold cache.
+    pub(crate) fn for_turn(provider: &str, model: &str, run_id: Option<&str>) -> Self {
+        let model = model.to_ascii_lowercase();
+        Self {
+            key: (provider == "openai").then(|| run_id.map(str::to_string)).flatten(),
+            breakpoints: provider == "openrouter"
+                && (model.starts_with("anthropic/") || model.starts_with("google/gemini")),
+        }
+    }
+}
+
+/// OpenRouter's breakpoints, in Anthropic's shape on content parts: the end
+/// of the system prompt, and the newest text part. A message with string
+/// content becomes one text part so it can carry the marker.
+fn mark_openai_breakpoints(messages: &mut [serde_json::Value]) {
+    let mark = |message: &mut serde_json::Value| {
+        if let Some(text) = message["content"].as_str().map(str::to_string) {
+            if text.is_empty() {
+                return false;
+            }
+            message["content"] = serde_json::json!([{ "type": "text", "text": text }]);
+        }
+        let Some(part) = message["content"]
+            .as_array_mut()
+            .and_then(|parts| parts.iter_mut().rev().find(|p| p["type"] == "text"))
+        else {
+            return false;
+        };
+        part["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+        true
+    };
+    if let Some(first) = messages.first_mut().filter(|m| m["role"] == "system") {
+        mark(first);
+    }
+    // The newest user or tool turn: what the next request reads up to.
+    if let Some(last) = messages
+        .iter_mut()
+        .skip(1)
+        .rev()
+        .find(|m| m["role"] == "user" || m["role"] == "tool")
+    {
+        mark(last);
+    }
 }
 
 impl StreamingProvider for OpenAiAdapter {
@@ -538,6 +612,14 @@ impl StreamingProvider for OpenAiAdapter {
         );
         if let Some(effort) = &self.reasoning_effort {
             body["reasoning_effort"] = serde_json::Value::String(effort.clone());
+        }
+        if let Some(key) = &self.cache.key {
+            body["prompt_cache_key"] = serde_json::Value::String(key.clone());
+        }
+        if self.cache.breakpoints {
+            if let Some(messages) = body["messages"].as_array_mut() {
+                mark_openai_breakpoints(messages);
+            }
         }
         if self.include_usage_in_stream {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
@@ -606,6 +688,12 @@ impl StreamingProvider for OpenAiAdapter {
         if let Some(usage) = value.get("usage").filter(|u| u.is_object()) {
             let count = |k: &str| usage.get(k).and_then(|v| v.as_u64());
             if count("prompt_tokens").is_some() || count("completion_tokens").is_some() {
+                // The cached share is already inside `prompt_tokens` on this
+                // wire. OpenAI, xAI and OpenRouter report it in the details;
+                // DeepSeek beside the total. OpenRouter also counts what an
+                // opt-in cache wrote.
+                let details = usage.get("prompt_tokens_details");
+                let detail = |k: &str| details.and_then(|d| d.get(k)).and_then(|v| v.as_u64());
                 self.usage = AiUsage {
                     prompt_tokens: count("prompt_tokens"),
                     completion_tokens: count("completion_tokens"),
@@ -616,6 +704,9 @@ impl StreamingProvider for OpenAiAdapter {
                     cost_usd: usage.get("cost").and_then(|v| v.as_f64()),
                     // A hosted window is the model's, not the request's.
                     context_window: None,
+                    cache_read_tokens: detail("cached_tokens").or_else(|| count("prompt_cache_hit_tokens")),
+                    cache_write_tokens: detail("cache_write_tokens"),
+                    cache_write_long_tokens: None,
                 };
             }
         }
@@ -774,6 +865,7 @@ pub(crate) async fn openai_compatible_chat(
     send_attribution: bool,
     key: Option<String>,
     reasoning_effort: Option<String>,
+    cache: OpenAiCache,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
@@ -791,6 +883,7 @@ pub(crate) async fn openai_compatible_chat(
         tools,
         key,
         reasoning_effort,
+        cache,
         usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
@@ -927,10 +1020,40 @@ fn anthropic_image_block(data_uri: Option<&str>) -> Option<serde_json::Value> {
     }))
 }
 
+#[cfg(test)]
 fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_json::Value>) {
-    let mut system_parts: Vec<String> = Vec::new();
+    anthropic_request_messages(messages, false)
+}
+
+/// Models that read a `role: "system"` turn inside `messages`. On these, an
+/// instruction the loop adds mid-run (a TODO refresh, a steering nudge) sits
+/// where it was added, after the history it follows. Everywhere else it rides
+/// as text inside the user turn it follows. Either way it never moves into
+/// the top-level `system`: that field opens the prompt, and changing it would
+/// throw away the cached copy of everything after it.
+fn anthropic_reads_mid_conversation_system(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    // `claude-sonnet-5` alone is not on the list; `claude-sonnet-5-5` is.
+    ["claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-mythos-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+        .iter()
+        .any(|prefix| m.starts_with(prefix))
+}
+
+/// The neutral message list as Anthropic turns. Only the *first* message, when
+/// it is a system message, becomes the top-level `system`: that is the frozen
+/// prompt every request of every conversation in a project opens with, and
+/// keeping it byte-identical is what lets the cache serve it. Every later
+/// system message — a compaction summary, a TODO snapshot, a nudge — stays in
+/// its place in the conversation, as a `system` turn where the model reads one
+/// there and the placement is legal, as fenced text in the user turn
+/// otherwise.
+fn anthropic_request_messages(
+    messages: Vec<serde_json::Value>,
+    mid_system: bool,
+) -> (String, Vec<serde_json::Value>) {
+    let mut system = String::new();
     let mut turns: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
-    for message in &messages {
+    for (index, message) in messages.iter().enumerate() {
         let role = message
             .get("role")
             .and_then(|r| r.as_str())
@@ -938,8 +1061,13 @@ fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_js
         match role {
             "system" => {
                 let text = text_from_message(message);
-                if !text.trim().is_empty() {
-                    system_parts.push(text);
+                if text.trim().is_empty() {
+                    continue;
+                }
+                if index == 0 {
+                    system = text;
+                } else {
+                    anthropic_push(&mut turns, "system", vec![serde_json::json!({ "type": "text", "text": text })]);
                 }
             }
             "tool" => {
@@ -997,11 +1125,105 @@ fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_js
             }
         }
     }
-    let out = turns
-        .into_iter()
-        .map(|(role, blocks)| serde_json::json!({ "role": role, "content": blocks }))
+    // A `system` turn is legal right after a user turn, and only as the last
+    // turn or before an assistant one. Placement is read off the original
+    // sequence, so the same history renders the same way on every request.
+    let legal: Vec<bool> = (0..turns.len())
+        .map(|i| {
+            mid_system
+                && turns[i].0 == "system"
+                && i > 0
+                && turns[i - 1].0 == "user"
+                && turns.get(i + 1).is_none_or(|next| next.0 == "assistant")
+        })
         .collect();
-    (system_parts.join("\n\n"), out)
+    let mut placed: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+    for ((role, blocks), legal) in turns.into_iter().zip(legal) {
+        if role == "system" && !legal {
+            let text = blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let fenced = format!("<system-reminder>\n{text}\n</system-reminder>");
+            anthropic_push(&mut placed, "user", vec![serde_json::json!({ "type": "text", "text": fenced })]);
+        } else {
+            anthropic_push(&mut placed, &role, blocks);
+        }
+    }
+    let out = placed
+        .into_iter()
+        .map(|(role, blocks)| {
+            if role == "system" {
+                let text = blocks
+                    .iter()
+                    .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                serde_json::json!({ "role": "system", "content": text })
+            } else {
+                serde_json::json!({ "role": role, "content": blocks })
+            }
+        })
+        .collect();
+    (system, out)
+}
+
+/// The prompt cache's read and write points (at most four per request; this
+/// uses up to three):
+///
+/// - the end of the frozen prefix — tools, then system — on the hour TTL.
+///   Every conversation in the project in this mode opens with the same
+///   bytes, so one write serves them all;
+/// - the newest block: what the next request reads up to, and pays to write
+///   only what the last turn added;
+/// - in a conversation a person is in (`hour`), also the last turn somebody
+///   *sent* — an operator message, a delivery, a goal retry — so a tail that
+///   outgrew the API's 20-block lookback still has a read point near it.
+///
+/// One lifetime for the whole conversation, because a breakpoint on the hour
+/// TTL does not read an entry written on five minutes (measured: it rewrote
+/// the five-minute span at the hour's 2× price instead). A person's
+/// conversation is all on the hour — a diff review or a reply ten minutes
+/// later still reads it. A headless Run is all on five minutes — its next
+/// request comes seconds later, and the five-minute write is the cheaper one;
+/// a five-minute breakpoint reads the hour-long prefix fine. A `system` turn
+/// carries no marker — its content is plain text — so the tail lands on the
+/// turn before it, and the next request's tail covers it.
+fn anthropic_cache_breakpoints(
+    system: &str,
+    tools: &mut [serde_json::Value],
+    messages: &mut [serde_json::Value],
+    hour_conversation: bool,
+) -> Option<serde_json::Value> {
+    let hour = serde_json::json!({ "type": "ephemeral", "ttl": "1h" });
+    let conversation = if hour_conversation { hour.clone() } else { serde_json::json!({ "type": "ephemeral" }) };
+    let system_blocks = (!system.trim().is_empty()).then(|| {
+        serde_json::json!([{ "type": "text", "text": system, "cache_control": hour.clone() }])
+    });
+    if system_blocks.is_none() {
+        if let Some(last) = tools.last_mut() {
+            last["cache_control"] = hour.clone();
+        }
+    }
+    let markable = |m: &serde_json::Value| m["role"] != "system" && m["content"].as_array().is_some_and(|c| !c.is_empty());
+    let sent = |m: &serde_json::Value| {
+        m["role"] == "user"
+            && m["content"]
+                .as_array()
+                .and_then(|c| c.first())
+                .is_some_and(|b| b["type"] != "tool_result")
+    };
+    let tail = messages.iter().rposition(markable);
+    let boundary = hour_conversation
+        .then(|| messages.iter().rposition(|m| markable(m) && sent(m)))
+        .flatten();
+    for i in [boundary, tail].into_iter().flatten() {
+        if let Some(block) = messages[i]["content"].as_array_mut().and_then(|c| c.last_mut()) {
+            block["cache_control"] = conversation.clone();
+        }
+    }
+    system_blocks
 }
 
 fn anthropic_tools(tools: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
@@ -1047,6 +1269,18 @@ struct AnthropicAdapter {
     /// model whose own limit is lower says so in a 400, and one retry sends
     /// exactly that.
     max_output_tokens: usize,
+    /// Send mid-run system messages as `system` turns and use the hour TTL.
+    /// Off only for the one retry after a 400 that names either feature: the
+    /// plain shape every model reads, so caching can never fail a turn.
+    full_cache_shape: bool,
+    /// The conversation's breakpoints on the hour TTL; see
+    /// [`anthropic_cache_breakpoints`].
+    hour_conversation: bool,
+    /// The three parts of the prompt as `message_start` counts them: full
+    /// price, read from the cache, written to it.
+    input_uncached: u64,
+    input_cache_read: u64,
+    input_cache_write: u64,
 }
 
 /// The reply budget to ask for. The API requires a number; nothing in Klide
@@ -1081,7 +1315,13 @@ impl StreamingProvider for AnthropicAdapter {
     }
 
     fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
-        let (system, msgs) = anthropic_messages(self.messages.clone());
+        let mid_system = self.full_cache_shape && anthropic_reads_mid_conversation_system(&self.model);
+        let (system, mut msgs) = anthropic_request_messages(self.messages.clone(), mid_system);
+        let mut tools = self.tools.clone().map(anthropic_tools).unwrap_or_default();
+        let mut system_blocks = anthropic_cache_breakpoints(&system, &mut tools, &mut msgs, self.hour_conversation);
+        if !self.full_cache_shape {
+            strip_long_ttl(&mut tools, &mut msgs, system_blocks.as_mut());
+        }
         let mut body = serde_json::json!({
             "model": self.model,
             "max_tokens": self.max_output_tokens,
@@ -1097,15 +1337,12 @@ impl StreamingProvider for AnthropicAdapter {
                 "budget_tokens": budget,
             });
         }
-        if !system.trim().is_empty() {
-            body["system"] = serde_json::Value::String(system);
+        if let Some(system) = system_blocks {
+            body["system"] = system;
         }
-        if let Some(tools) = &self.tools {
-            let converted = anthropic_tools(tools.clone());
-            if !converted.is_empty() {
-                body["tools"] = serde_json::Value::Array(converted);
-                body["tool_choice"] = serde_json::json!({ "type": "auto" });
-            }
+        if !tools.is_empty() {
+            body["tools"] = serde_json::Value::Array(tools);
+            body["tool_choice"] = serde_json::json!({ "type": "auto" });
         }
         Ok(client
             .post("https://api.anthropic.com/v1/messages")
@@ -1132,17 +1369,44 @@ impl StreamingProvider for AnthropicAdapter {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             return Ok(());
         };
-        // Token accounting: message_start carries usage.input_tokens, the
+        // Token accounting: message_start carries the prompt's counts, the
         // closing message_delta carries cumulative usage.output_tokens.
+        // `input_tokens` is only the part billed at full price; the cache's
+        // reads and writes are counted beside it. The prompt is all three, so
+        // the gauge reads the same size whether or not the cache hit.
         if let Some(usage) = value
             .get("message")
             .and_then(|m| m.get("usage"))
             .or_else(|| value.get("usage"))
         {
-            if let Some(n) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
-                self.usage.prompt_tokens = Some(n);
+            let count = |k: &str| usage.get(k).and_then(|v| v.as_u64());
+            let mut prompt_seen = false;
+            if let Some(n) = count("input_tokens") {
+                self.input_uncached = n;
+                prompt_seen = true;
             }
-            if let Some(n) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+            if let Some(n) = count("cache_read_input_tokens") {
+                self.input_cache_read = n;
+                prompt_seen = true;
+            }
+            if let Some(n) = count("cache_creation_input_tokens") {
+                self.input_cache_write = n;
+                prompt_seen = true;
+            }
+            if let Some(n) = usage
+                .get("cache_creation")
+                .and_then(|c| c.get("ephemeral_1h_input_tokens"))
+                .and_then(|v| v.as_u64())
+            {
+                self.usage.cache_write_long_tokens = (n > 0).then_some(n);
+            }
+            if prompt_seen {
+                self.usage.prompt_tokens =
+                    Some(self.input_uncached + self.input_cache_read + self.input_cache_write);
+                self.usage.cache_read_tokens = Some(self.input_cache_read);
+                self.usage.cache_write_tokens = Some(self.input_cache_write);
+            }
+            if let Some(n) = count("output_tokens") {
                 self.usage.completion_tokens = Some(n);
             }
         }
@@ -1334,10 +1598,11 @@ pub(crate) async fn anthropic_chat(
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     reflection_level: Option<String>,
+    cache_hour: bool,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let thinking_budget = reflection_level_to_anthropic_budget(reflection_level.as_deref());
-    let adapter = AnthropicAdapter {
+    let adapter = |max_output_tokens: usize, full_cache_shape: bool| AnthropicAdapter {
         model: model.clone(),
         messages: messages.clone(),
         tools: tools.clone(),
@@ -1345,28 +1610,61 @@ pub(crate) async fn anthropic_chat(
         thinking_budget,
         usage: AiUsage::default(),
         stop_reason: None,
-        max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+        max_output_tokens,
+        full_cache_shape,
+        hour_conversation: cache_hour,
+        input_uncached: 0,
+        input_cache_read: 0,
+        input_cache_write: 0,
     };
-    match stream_provider(adapter, on_chunk).await {
-        // Asked for more than this model allows: it said how much. Ask again
-        // at exactly that — the one retry, and only for this reason.
-        Err(error) => match anthropic_allowed_output_tokens(&error) {
-            Some(allowed) if allowed < ANTHROPIC_MAX_OUTPUT_TOKENS => {
-                let adapter = AnthropicAdapter {
-                    model,
-                    messages,
-                    tools,
-                    key,
-                    thinking_budget,
-                    usage: AiUsage::default(),
-                    stop_reason: None,
-                    max_output_tokens: allowed,
-                };
-                stream_provider(adapter, on_chunk).await
-            }
-            _ => Err(error),
-        },
-        ok => ok,
+    let mut max_output_tokens = ANTHROPIC_MAX_OUTPUT_TOKENS;
+    let mut full_cache_shape = true;
+    // At most one retry for each reason, each answered exactly: a model with
+    // a lower output ceiling said what it is, and a model that refused the
+    // cache shape gets the plain one every model reads.
+    for _ in 0..3 {
+        match stream_provider(adapter(max_output_tokens, full_cache_shape), on_chunk).await {
+            Err(error) => match anthropic_allowed_output_tokens(&error) {
+                Some(allowed) if allowed < max_output_tokens => max_output_tokens = allowed,
+                _ if full_cache_shape && anthropic_refused_cache_shape(&error) => {
+                    full_cache_shape = false;
+                }
+                _ => return Err(error),
+            },
+            ok => return ok,
+        }
+    }
+    stream_provider(adapter(max_output_tokens, full_cache_shape), on_chunk).await
+}
+
+/// A 400 that names one of the two shapes only some models and accounts
+/// accept: a `system` turn inside `messages`, or the hour cache lifetime.
+fn anthropic_refused_cache_shape(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("role 'system'")
+        || lower.contains("role \"system\"")
+        || (lower.contains("ttl") && lower.contains("cache_control"))
+}
+
+/// The retry shape keeps every breakpoint but on the default lifetime.
+fn strip_long_ttl(
+    tools: &mut [serde_json::Value],
+    messages: &mut [serde_json::Value],
+    system: Option<&mut serde_json::Value>,
+) {
+    let strip = |block: &mut serde_json::Value| {
+        if let Some(control) = block.get_mut("cache_control").and_then(|c| c.as_object_mut()) {
+            control.remove("ttl");
+        }
+    };
+    tools.iter_mut().for_each(strip);
+    for message in messages.iter_mut() {
+        if let Some(blocks) = message["content"].as_array_mut() {
+            blocks.iter_mut().for_each(strip);
+        }
+    }
+    if let Some(blocks) = system.and_then(|s| s.as_array_mut()) {
+        blocks.iter_mut().for_each(strip);
     }
 }
 
@@ -1798,7 +2096,7 @@ mod tests {
             tools: None,
             key: Some("sk-test".to_string()),
             reasoning_effort: None,
-            usage: AiUsage::default(),
+            usage: AiUsage::default(),cache: Default::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -1879,7 +2177,7 @@ mod tests {
             tools: None,
             key: Some("sk-test".to_string()),
             reasoning_effort: Some("high".to_string()),
-            usage: AiUsage::default(),
+            usage: AiUsage::default(),cache: Default::default(),
         };
         let request = adapter
             .build_request(&reqwest::Client::new())
@@ -1907,7 +2205,7 @@ mod tests {
             tools: None,
             key: Some("sk-test".to_string()),
             reasoning_effort: None,
-            usage: AiUsage::default(),
+            usage: AiUsage::default(),cache: Default::default(),
         };
         adapter
             .build_request(&reqwest::Client::new())
@@ -2073,7 +2371,7 @@ mod tests {
             tools: None,
             key: Some("k".to_string()),
             reasoning_effort: None,
-            usage: AiUsage::default(),
+            usage: AiUsage::default(),cache: Default::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -2113,6 +2411,11 @@ mod tests {
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+            full_cache_shape: true,
+            hour_conversation: true,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -2162,6 +2465,11 @@ mod tests {
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+            full_cache_shape: true,
+            hour_conversation: true,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
         };
         let request = adapter
             .build_request(&reqwest::Client::new())
@@ -2281,6 +2589,11 @@ mod tests {
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+            full_cache_shape: true,
+            hour_conversation: true,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -2311,6 +2624,11 @@ mod tests {
             usage: AiUsage::default(),
             stop_reason: None,
             max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+            full_cache_shape: true,
+            hour_conversation: true,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
         };
         let content = String::new();
         let thinking = String::new();
@@ -2318,6 +2636,353 @@ mod tests {
         let response = adapter.finalize_response(content, thinking, tools);
         assert!(response.tool_calls.is_empty());
     }
+
+    // ── Prompt caching ──
+
+    fn anthropic_body(model: &str, messages: Vec<serde_json::Value>, tools: Option<Vec<serde_json::Value>>) -> serde_json::Value {
+        let adapter = AnthropicAdapter {
+            model: model.to_string(),
+            messages,
+            tools,
+            key: "sk-ant-test".to_string(),
+            thinking_budget: None,
+            usage: AiUsage::default(),
+            stop_reason: None,
+            max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+            full_cache_shape: true,
+            hour_conversation: true,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
+        };
+        let request = adapter.build_request(&reqwest::Client::new()).unwrap().build().unwrap();
+        serde_json::from_slice(request.body().and_then(|b| b.as_bytes()).unwrap()).unwrap()
+    }
+
+    /// The request with every `cache_control` removed: the moving markers
+    /// differ between requests by design and are not part of what must match.
+    fn without_markers(mut value: serde_json::Value) -> serde_json::Value {
+        fn strip(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    map.remove("cache_control");
+                    map.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        strip(&mut value);
+        value
+    }
+
+    fn markers(body: &serde_json::Value) -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        fn walk(v: &serde_json::Value, path: String, out: &mut Vec<(String, Option<String>)>) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    if let Some(control) = map.get("cache_control") {
+                        out.push((path.clone(), control["ttl"].as_str().map(str::to_string)));
+                    }
+                    for (k, v) in map {
+                        walk(v, format!("{path}.{k}"), out);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for (i, v) in items.iter().enumerate() {
+                        walk(v, format!("{path}[{i}]"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        walk(body, String::new(), &mut out);
+        out
+    }
+
+    fn tool_schema(name: &str) -> serde_json::Value {
+        serde_json::json!({ "type": "function", "function": { "name": name, "description": "d", "parameters": { "type": "object", "properties": {} } } })
+    }
+
+    /// One Run's requests as the loop builds them: the operator's message and a
+    /// TODO snapshot, then a tool turn, then a refreshed snapshot and a nudge.
+    fn loop_requests() -> Vec<Vec<serde_json::Value>> {
+        let sys = serde_json::json!({ "role": "system", "content": "You are Kit." });
+        let user = serde_json::json!({ "role": "user", "content": "fix the bug" });
+        let todo = serde_json::json!({ "role": "system", "content": "[TODO list]\n- [ ] fix" });
+        let call = serde_json::json!({ "role": "assistant", "content": "", "tool_calls": [{ "id": "c1", "type": "function", "function": { "name": "read_file", "arguments": "{\"path\":\"a.rs\"}" } }] });
+        let result = serde_json::json!({ "role": "tool", "content": "fn main() {}", "name": "read_file", "tool_call_id": "c1" });
+        let todo2 = serde_json::json!({ "role": "system", "content": "[TODO list]\n- [x] fix" });
+        let answer = serde_json::json!({ "role": "assistant", "content": "Done." });
+        let follow_up = serde_json::json!({ "role": "user", "content": "thanks, now the docs" });
+        let first = vec![sys, user, todo];
+        let mut second = first.clone();
+        second.extend([call, result]);
+        let mut third = second.clone();
+        third.push(todo2);
+        let mut fourth = third.clone();
+        fourth.extend([answer, follow_up]);
+        vec![first, second, third, fourth]
+    }
+
+    #[test]
+    fn each_request_opens_with_the_previous_one_byte_for_byte() {
+        // The whole point of a prompt cache: request N+1 must start with every
+        // byte of request N. A later system message hoisted into the top-level
+        // `system` breaks that at position 0 — the bug this guards.
+        for model in ["claude-opus-5-5", "claude-sonnet-4-6"] {
+            let tools = Some(vec![tool_schema("read_file"), tool_schema("write_file")]);
+            let bodies: Vec<_> = loop_requests()
+                .into_iter()
+                .map(|m| without_markers(anthropic_body(model, m, tools.clone())))
+                .collect();
+            for pair in bodies.windows(2) {
+                assert_eq!(pair[0]["system"], pair[1]["system"], "{model}: system moved");
+                assert_eq!(pair[0]["tools"], pair[1]["tools"], "{model}: tools moved");
+                let (before, after) = (pair[0]["messages"].as_array().unwrap(), pair[1]["messages"].as_array().unwrap());
+                assert!(after.len() >= before.len(), "{model}: history shrank");
+                // Every whole turn but the last is fixed; the last may only
+                // grow (the next tool results join that same user turn).
+                assert_eq!(&after[..before.len() - 1], &before[..before.len() - 1], "{model}: an earlier turn changed");
+                let (last_before, same_turn) = (&before[before.len() - 1], &after[before.len() - 1]);
+                assert_eq!(last_before["role"], same_turn["role"], "{model}");
+                match (last_before["content"].as_array(), same_turn["content"].as_array()) {
+                    (Some(old), Some(new)) => assert_eq!(&new[..old.len()], &old[..], "{model}: the open turn was rewritten"),
+                    _ => assert_eq!(last_before, same_turn, "{model}"),
+                }
+            }
+            assert_eq!(bodies[0]["system"][0]["text"], "You are Kit.", "{model}: only the first message is the system prompt");
+        }
+    }
+
+    #[test]
+    fn a_later_system_message_stays_where_it_was_added() {
+        let requests = loop_requests();
+        // A model that reads system turns gets one, after the user turn.
+        let body = anthropic_body("claude-opus-5-5", requests[0].clone(), None);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1], serde_json::json!({ "role": "system", "content": "[TODO list]\n- [ ] fix" }));
+        // An older model reads it as fenced text in the user turn it follows.
+        let body = anthropic_body("claude-sonnet-4-6", requests[0].clone(), None);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["content"][1]["text"], "<system-reminder>\n[TODO list]\n- [ ] fix\n</system-reminder>");
+        // A system turn followed by a user turn would be refused: fenced.
+        let mut odd = requests[3].clone();
+        odd.insert(odd.len() - 1, serde_json::json!({ "role": "system", "content": "note" }));
+        let body = anthropic_body("claude-opus-5-5", odd, None);
+        let last = body["messages"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["role"], "user");
+        assert!(last["content"][0]["text"].as_str().unwrap().contains("note"));
+    }
+
+    fn anthropic_body_headless(messages: Vec<serde_json::Value>, tools: Option<Vec<serde_json::Value>>) -> serde_json::Value {
+        let adapter = AnthropicAdapter {
+            model: "claude-opus-5-5".to_string(),
+            messages,
+            tools,
+            key: "k".to_string(),
+            thinking_budget: None,
+            usage: AiUsage::default(),
+            stop_reason: None,
+            max_output_tokens: 1024,
+            full_cache_shape: true,
+            hour_conversation: false,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
+        };
+        let request = adapter.build_request(&reqwest::Client::new()).unwrap().build().unwrap();
+        serde_json::from_slice(request.body().and_then(|b| b.as_bytes()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_conversation_is_cached_on_one_lifetime() {
+        let tools = Some(vec![tool_schema("read_file")]);
+        let requests = loop_requests();
+        let hour = Some("1h".to_string());
+        // A person's conversation: everything on the hour — an hour
+        // breakpoint can't read a five-minute entry, so mixing them would
+        // rewrite the tool loop at every new message.
+        let first = anthropic_body("claude-opus-5-5", requests[0].clone(), tools.clone());
+        assert_eq!(markers(&first), vec![
+            (".messages[0].content[0]".to_string(), hour.clone()),
+            (".system[0]".to_string(), hour.clone()),
+        ]);
+        let third = anthropic_body("claude-opus-5-5", requests[2].clone(), tools.clone());
+        assert_eq!(markers(&third), vec![
+            (".messages[0].content[0]".to_string(), hour.clone()),
+            (".messages[3].content[0]".to_string(), hour.clone()),
+            (".system[0]".to_string(), hour.clone()),
+        ], "the boundary and the tool-result tail");
+        // A headless Run: the shared prefix on the hour, its loop on five minutes.
+        let headless = anthropic_body_headless(requests[2].clone(), tools.clone());
+        assert_eq!(markers(&headless), vec![
+            (".messages[3].content[0]".to_string(), None),
+            (".system[0]".to_string(), hour.clone()),
+        ]);
+        // No system prompt: the tools carry the prefix marker.
+        let bare = anthropic_body("claude-opus-5-5", vec![serde_json::json!({ "role": "user", "content": "hi" })], tools);
+        assert_eq!(bare["tools"][0]["cache_control"]["ttl"], "1h");
+    }
+
+    #[test]
+    fn the_retry_shape_is_plain() {
+        let adapter_body = |full: bool| {
+            let adapter = AnthropicAdapter {
+                model: "claude-opus-5-5".to_string(),
+                messages: loop_requests()[2].clone(),
+                tools: Some(vec![tool_schema("read_file")]),
+                key: "k".to_string(),
+                thinking_budget: None,
+                usage: AiUsage::default(),
+                stop_reason: None,
+                max_output_tokens: 1024,
+                full_cache_shape: full,
+                hour_conversation: true,
+                input_uncached: 0,
+                input_cache_read: 0,
+                input_cache_write: 0,
+            };
+            let request = adapter.build_request(&reqwest::Client::new()).unwrap().build().unwrap();
+            serde_json::from_slice::<serde_json::Value>(request.body().and_then(|b| b.as_bytes()).unwrap()).unwrap()
+        };
+        let plain = adapter_body(false);
+        assert!(markers(&plain).iter().all(|(_, ttl)| ttl.is_none()), "no hour TTL");
+        assert!(plain["messages"].as_array().unwrap().iter().all(|m| m["role"] != "system"), "no system turns");
+        assert!(anthropic_refused_cache_shape("Anthropic returned 400: role 'system' is not supported on this model"));
+        assert!(anthropic_refused_cache_shape("Anthropic returned 400: cache_control.ttl: invalid value"));
+        assert!(!anthropic_refused_cache_shape("Anthropic returned 429 Too Many Requests"));
+    }
+
+    #[test]
+    fn anthropic_prompt_is_every_part_the_cache_counted() {
+        let lines = [
+            r#"data: {"type":"message_start","message":{"id":"m_1","usage":{"input_tokens":120,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":1500,"ephemeral_1h_input_tokens":500},"output_tokens":1}}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}"#,
+        ];
+        let mut adapter = AnthropicAdapter {
+            model: "claude-opus-5-5".to_string(),
+            messages: vec![],
+            tools: None,
+            key: "k".to_string(),
+            thinking_budget: None,
+            usage: AiUsage::default(),
+            stop_reason: None,
+            max_output_tokens: 1024,
+            full_cache_shape: true,
+            hour_conversation: true,
+            input_uncached: 0,
+            input_cache_read: 0,
+            input_cache_write: 0,
+        };
+        let (mut content, mut thinking, mut tools) = (String::new(), String::new(), Vec::new());
+        let rec = Recorder::default();
+        for line in lines {
+            adapter.parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink()).unwrap();
+        }
+        let usage = adapter.finalize_response(content, thinking, tools).usage.unwrap();
+        assert_eq!(usage.prompt_tokens, Some(42_120), "the gauge reads the whole prompt");
+        assert_eq!(usage.cache_read_tokens, Some(40_000));
+        assert_eq!(usage.cache_write_tokens, Some(2_000));
+        assert_eq!(usage.cache_write_long_tokens, Some(500));
+        assert_eq!(usage.completion_tokens, Some(42));
+    }
+
+    #[test]
+    fn openai_wire_reads_the_cached_share() {
+        let parse = |provider: &str, line: &str| {
+            let mut adapter = OpenAiAdapter {
+                provider: provider.to_string(),
+                chat_url: String::new(),
+                include_tools: true,
+                include_usage_in_stream: true,
+                include_cost_accounting: false,
+                send_attribution: false,
+                model: "m".to_string(),
+                messages: vec![],
+                tools: None,
+                key: None,
+                reasoning_effort: None,
+                cache: OpenAiCache::default(),
+                usage: AiUsage::default(),
+            };
+            let (mut content, mut thinking, mut tools) = (String::new(), String::new(), Vec::new());
+            let rec = Recorder::default();
+            adapter.parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink()).unwrap();
+            adapter.usage
+        };
+        let openai = parse("openai", r#"data: {"choices":[],"usage":{"prompt_tokens":9000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":8192}}}"#);
+        assert_eq!((openai.prompt_tokens, openai.cache_read_tokens), (Some(9000), Some(8192)));
+        let deepseek = parse("deepseek", r#"data: {"choices":[],"usage":{"prompt_tokens":5000,"completion_tokens":10,"prompt_cache_hit_tokens":4096,"prompt_cache_miss_tokens":904}}"#);
+        assert_eq!(deepseek.cache_read_tokens, Some(4096));
+        let openrouter = parse("openrouter", r#"data: {"choices":[],"usage":{"prompt_tokens":5000,"completion_tokens":10,"cost":0.01,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":4800}}}"#);
+        assert_eq!((openrouter.cache_read_tokens, openrouter.cache_write_tokens), (Some(0), Some(4800)));
+    }
+
+    #[test]
+    fn openai_cache_hints_go_only_where_they_are_read() {
+        let hints = OpenAiCache::for_turn("openai", "gpt-5", Some("run-1"));
+        assert_eq!(hints.key.as_deref(), Some("run-1"));
+        assert!(!hints.breakpoints);
+        assert!(OpenAiCache::for_turn("mistral", "mistral-large", Some("run-1")).key.is_none(), "a strict endpoint never sees the field");
+        assert!(OpenAiCache::for_turn("openrouter", "anthropic/claude-opus-5-5", None).breakpoints);
+        assert!(!OpenAiCache::for_turn("openrouter", "deepseek/deepseek-v4", None).breakpoints, "automatic caches need no markers");
+
+        let mut messages = vec![
+            serde_json::json!({ "role": "system", "content": "You are Kit." }),
+            serde_json::json!({ "role": "user", "content": "hi" }),
+            serde_json::json!({ "role": "assistant", "content": "", "tool_calls": [] }),
+            serde_json::json!({ "role": "tool", "content": "result", "tool_call_id": "c1" }),
+        ];
+        mark_openai_breakpoints(&mut messages);
+        assert_eq!(messages[0]["content"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(messages[3]["content"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(messages[1]["content"], "hi", "only the newest turn is marked");
+    }
+
+
+    /// Live: the request shape Anthropic accepts, and the cache it builds.
+    /// Opt-in and billed (three short requests on a small model, well under a
+    /// cent): `ANTHROPIC_API_KEY=… cargo test --lib live_anthropic_prompt_cache -- --ignored`.
+    /// `KLIDE_LIVE_ANTHROPIC_MODEL` picks another model.
+    #[tokio::test]
+    #[ignore = "calls the Anthropic API with a real key"]
+    async fn live_anthropic_prompt_cache() {
+        let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
+        let model = std::env::var("KLIDE_LIVE_ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-5-5".into());
+        // A system prompt comfortably past every model's cacheable minimum,
+        // with a nonce so a previous run's entry can't answer for this one.
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let rules: String = (0..400).map(|i| format!("Rule {i}: keep answers short and exact.\n")).collect();
+        let system = format!("You are Kit. Session {nonce}.\n{rules}");
+        let tools = Some(vec![tool_schema("read_file")]);
+        let mut requests = loop_requests();
+        for messages in &mut requests {
+            messages[0] = serde_json::json!({ "role": "system", "content": system });
+        }
+        let channel = Channel::new(|_| Ok(()));
+        let mut usages = Vec::new();
+        for messages in [&requests[0], &requests[2], &requests[3]] {
+            let response = anthropic_chat(key.clone(), model.clone(), messages.clone(), tools.clone(), None, true, &channel)
+                .await
+                .expect("Anthropic accepts the cache shape");
+            let usage = response.usage.expect("usage");
+            eprintln!(
+                "prompt {:?} read {:?} write {:?} (1h {:?})",
+                usage.prompt_tokens, usage.cache_read_tokens, usage.cache_write_tokens, usage.cache_write_long_tokens
+            );
+            usages.push(usage);
+        }
+        assert!(usages[0].cache_write_tokens.unwrap_or(0) > 0, "the first request writes the prefix");
+        assert!(usages[0].cache_write_long_tokens.unwrap_or(0) > 0, "on the hour TTL");
+        for later in &usages[1..] {
+            let read = later.cache_read_tokens.unwrap_or(0);
+            assert!(read * 10 >= later.prompt_tokens.unwrap() * 8, "a later request reads most of its prompt from the cache: {later:?}");
+        }
+    }
+
 }
 
 #[cfg(test)]

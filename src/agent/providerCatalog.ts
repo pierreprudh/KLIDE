@@ -25,7 +25,6 @@ export type ProviderWire = "ollama" | "anthropic" | "openai" | "delegate";
 export type ProviderCaps = {
   structuredReplay: boolean;
   minimalChatContext: boolean;
-  appendTodoUpdates: boolean;
 };
 
 /** One published registry row — the serde shape of Rust `ProviderRow`. */
@@ -118,7 +117,6 @@ export function providerBrand(id: string): string {
 const HOSTED_CAPS: ProviderCaps = {
   structuredReplay: true,
   minimalChatContext: false,
-  appendTodoUpdates: false,
 };
 
 /** The row's quirks; the hosted posture for an id without a row — the same

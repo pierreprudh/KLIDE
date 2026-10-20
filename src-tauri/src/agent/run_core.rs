@@ -5,12 +5,12 @@
 //! TODO context refresh, and token-budget compaction.
 
 use super::permission::{BlockReason, GateSubject};
-use super::todo;
 use super::tools::{
     clean_context_ids, parse_tool_calls, recover_text_tool_calls,
     tool_kind_label, NormalizedToolCall, ToolKind,
 };
-use super::types::{AgentAttachment, AgentContentBlock, AgentMode, StartRunRequest, ToolResult};
+use super::transcripts::now_ms;
+use super::types::{AgentAttachment, AgentContentBlock, AgentEvent, AgentMode, StartRunRequest, ToolResult};
 use crate::adapters::forwardable_image_media_type;
 use crate::providers::AiChatResponse;
 use crate::workspace;
@@ -202,6 +202,17 @@ pub(super) fn compaction_system_message(summary: &str) -> serde_json::Value {
     })
 }
 
+/// One tool call as the OpenAI-wire history carries it. The live loop and
+/// replay both build calls here, so a continuation sends the bytes the turn
+/// before sent.
+pub(super) fn wire_tool_call(id: &str, name: &str, input: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "type": "function",
+        "function": { "name": name, "arguments": input.to_string() },
+    })
+}
+
 pub(super) fn assistant_provider_message(
     content: &str,
     raw_tool_calls: &[serde_json::Value],
@@ -231,30 +242,23 @@ pub(super) fn tool_provider_message(
 pub(super) fn provider_messages(
     request: &StartRunRequest,
     system: String,
-    run_id: &str,
 ) -> Vec<serde_json::Value> {
-    let mut messages = vec![serde_json::json!({ "role": "system", "content": system })];
-    // Inject initial todo list as context for tool-capable/project turns.
-    // Local chat should stay tiny; sending project metadata to MLX/Ollama for
-    // "hello" made prompt processing feel broken.
-    let should_include_todos = !(ProviderCaps::for_provider(&request.provider)
-        .minimal_chat_context
-        && matches!(request.mode, AgentMode::Chat));
-    if should_include_todos {
-        if let Some(cwd) = &request.workspace_root {
-            if let Some(todo_text) = todo::list_todos_text(cwd, run_id) {
-                messages.push(todo_context_message(Some(&todo_text)));
-            }
-        }
-    }
-    messages.push(user_provider_message(
-        &request.initial_text,
-        &request.attachments,
-    ));
-    messages
+    vec![
+        serde_json::json!({ "role": "system", "content": system }),
+        user_provider_message(&request.initial_text, &request.attachments),
+    ]
 }
 
-fn todo_context_message(todo_text: Option<&str>) -> serde_json::Value {
+/// Whether this Run carries the project's TODO list at all. Local Chat stays
+/// tiny: sending project metadata to MLX/Ollama for "hello" made prompt
+/// processing feel broken.
+pub(super) fn includes_todo_context(request: &StartRunRequest) -> bool {
+    request.workspace_root.is_some()
+        && !(ProviderCaps::for_provider(&request.provider).minimal_chat_context
+            && matches!(request.mode, AgentMode::Chat))
+}
+
+pub(super) fn todo_context_message(todo_text: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "role": "system",
         "content": match todo_text {
@@ -264,35 +268,69 @@ fn todo_context_message(todo_text: Option<&str>) -> serde_json::Value {
     })
 }
 
-/// Refresh TODO state before a provider turn. MLX gets a new snapshot only
-/// when state changes, after all completed tool results, so an update doesn't
-/// invalidate the cached conversation prefix. Other providers keep their
-/// existing single-message policy. The caller excludes minimal local Chat.
-///
-/// These snapshots are run-local, like the old TODO injection: transcript
-/// replay rebuilds the initial state on resume. This preserves the prefix
-/// between tool turns; it does not promise cache hits across resumed runs.
-pub(super) fn refresh_todo_context(
-    messages: &mut Vec<serde_json::Value>,
-    todo_text: Option<&str>,
-    append_updates: bool,
-) {
-    let is_todo = |msg: &serde_json::Value| {
-        msg["role"] == "system"
-            && msg["content"]
-                .as_str()
-                .is_some_and(|c| c.starts_with("[TODO list]"))
-    };
-    let next = todo_context_message(todo_text);
-    if append_updates {
-        let previous = messages.iter().rev().find(|msg| is_todo(msg));
-        if previous == Some(&next) || (previous.is_none() && todo_text.is_none()) {
-            return;
+fn is_todo_snapshot(content: &str) -> bool {
+    content.starts_with("[TODO list]")
+}
+
+/// The TODO snapshot a continuation's replayed history already ends on: the
+/// last one recorded, unless a compaction folded it away since.
+pub(super) fn last_recorded_todo(prior: &[AgentEvent]) -> Option<String> {
+    let mut last = None;
+    for event in prior {
+        match event {
+            AgentEvent::ContextInjected { content, .. } if is_todo_snapshot(content) => {
+                last = Some(content.clone());
+            }
+            AgentEvent::ContextCompacted { .. } => last = None,
+            _ => {}
         }
-        messages.push(next);
-    } else if let Some(msg) = messages.iter_mut().find(|msg| is_todo(msg)) {
-        msg["content"] = next["content"].clone();
     }
+    last
+}
+
+/// The snapshot to add when the list differs from the one the model last
+/// read — `None` when it is the same, or when there is no list and the model
+/// never saw one. Snapshots are only ever *appended*: rewriting the old one in
+/// place would change the prompt ahead of everything after it, and every
+/// prompt cache — Anthropic's, OpenAI's, a local server's processed prefix —
+/// reuses history only up to the first changed byte.
+pub(super) fn todo_update(previous: Option<&str>, todo_text: Option<&str>) -> Option<serde_json::Value> {
+    if previous.is_none() && todo_text.is_none() {
+        return None;
+    }
+    let next = todo_context_message(todo_text);
+    (next["content"].as_str() != previous).then_some(next)
+}
+
+/// [`todo_update`] against the newest snapshot already in `messages`.
+pub(super) fn refresh_todo_context(
+    messages: &[serde_json::Value],
+    todo_text: Option<&str>,
+) -> Option<serde_json::Value> {
+    let previous = messages.iter().rev().find_map(|msg| {
+        (msg["role"] == "system")
+            .then(|| msg["content"].as_str())
+            .flatten()
+            .filter(|c| is_todo_snapshot(c))
+    });
+    todo_update(previous, todo_text)
+}
+
+/// A message the loop adds that nobody typed, as the transcript records it:
+/// the same role and text, so replay rebuilds the prompt the provider already
+/// cached.
+pub(super) fn context_event(run_id: &str, message: &serde_json::Value) -> AgentEvent {
+    AgentEvent::ContextInjected {
+        run_id: run_id.to_string(),
+        role: message["role"].as_str().unwrap_or("system").to_string(),
+        content: message["content"].as_str().unwrap_or_default().to_string(),
+        ts: now_ms(),
+    }
+}
+
+/// The replayed form of a [`context_event`].
+pub(super) fn injected_provider_message(role: &str, content: &str) -> serde_json::Value {
+    serde_json::json!({ "role": role, "content": content })
 }
 
 /// The pure outcome of interpreting one assistant turn's provider response —
@@ -357,7 +395,6 @@ fn is_reasoning_runaway(response: &AiChatResponse, content_text: &str) -> bool {
 /// stamping; everything else is derived from `response`.
 pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: usize) -> TurnStep {
     let mut tool_calls = parse_tool_calls(&response.tool_calls);
-    let mut raw_tool_calls = response.tool_calls.clone();
     let mut content_text = response.content.clone();
     let mut thinking_text = response.thinking.clone();
     // Recovery path: some local models (LFM2/LFM2.5, and fine-tunes like
@@ -383,14 +420,6 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
             }
         }
         if !recovered.is_empty() {
-            raw_tool_calls = recovered
-                .iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "function": { "name": c.name, "arguments": c.input }
-                    })
-                })
-                .collect();
             tool_calls = recovered;
             content_text = cleaned_content;
         }
@@ -403,11 +432,6 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
         let (extra, cleaned) = recover_text_tool_calls(&content_text);
         if !extra.is_empty() {
             content_text = cleaned;
-            for c in &extra {
-                raw_tool_calls.push(serde_json::json!({
-                    "function": { "name": c.name, "arguments": c.input }
-                }));
-            }
             tool_calls.extend(extra);
         }
     }
@@ -423,7 +447,17 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
         }
     }
     let tool_calls = tool_calls;
-    let assistant_message = assistant_provider_message(&content_text, &raw_tool_calls);
+    // The calls ride back to the model in one canonical shape — the stamped
+    // id, the parsed input re-serialized — not as the provider streamed them.
+    // Replay can only rebuild the canonical shape from the transcript, and a
+    // prompt cache matches bytes: a model's own spacing inside `arguments`, or
+    // a fallback id the live message kept unstamped, made every continuation
+    // miss from this turn on.
+    let wire_calls: Vec<serde_json::Value> = tool_calls
+        .iter()
+        .map(|call| wire_tool_call(&call.id, &call.name, &call.input))
+        .collect();
+    let assistant_message = assistant_provider_message(&content_text, &wire_calls);
 
     if tool_calls.is_empty() {
         let mut content = Vec::new();
@@ -651,14 +685,25 @@ pub(super) fn compaction_threshold(context_window: usize, reply_reserve: usize) 
 }
 
 /// Auto-compaction, expressed purely. Replaces the body of *older* verbose
-/// `role: "tool"` messages with a short summary and excerpt so a long
-/// conversation doesn't blow the model's context window while still preserving
-/// the shape of what happened. The system prompt (`skip(1)`) and the most
-/// recent [`KEEP_RECENT_TOOL_RESULTS`] results are kept verbatim. Compacts
-/// oldest-first and stops after 5 rewrites per pass; the loop calls it each
-/// turn, so it catches up gradually. No I/O: it just mutates `messages`, which
-/// makes it unit-testable without a supervisor.
-pub(super) fn compact_old_tool_results(messages: &mut [serde_json::Value]) {
+/// `role: "tool"` messages with something short so a long conversation doesn't
+/// blow the model's context window while still preserving the shape of what
+/// happened. The system prompt (`skip(1)`) and the most recent
+/// [`KEEP_RECENT_TOOL_RESULTS`] results are kept verbatim.
+///
+/// `retain` is offered each result first: it stores the full text where
+/// `peek_value` can read it and hands back the stub replay will rebuild — so
+/// the model can still reach what was cut, and the next turn's prompt is the
+/// same bytes as this one's. Where it declines (retention off, a failed
+/// write, a stub no smaller), the result becomes a header and an excerpt.
+///
+/// Every eligible result goes in one pass. Each rewrite edits history the
+/// provider has cached, and every byte after the first edit is billed again;
+/// a few rewrites per turn, spread over many turns, paid that again and again.
+/// One batch when the prompt crowds the window pays it once.
+pub(super) fn compact_old_tool_results(
+    messages: &mut [serde_json::Value],
+    retain: &mut dyn FnMut(&str, &str, &str) -> Option<String>,
+) {
     let long_tool_results: Vec<usize> = messages
         .iter()
         .enumerate()
@@ -677,18 +722,25 @@ pub(super) fn compact_old_tool_results(messages: &mut [serde_json::Value]) {
     let eligible = long_tool_results
         .len()
         .saturating_sub(KEEP_RECENT_TOOL_RESULTS);
-    for &i in long_tool_results.iter().take(eligible).take(5) {
+    for &i in long_tool_results.iter().take(eligible) {
         let msg = &mut messages[i];
         let name = msg
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("tool")
             .to_string();
+        let call_id = msg.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
         let content = msg
             .get("content")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        if !call_id.is_empty() {
+            if let Some(stub) = retain(&call_id, &name, &content) {
+                msg["content"] = serde_json::Value::String(stub);
+                continue;
+            }
+        }
         let summary = compacted_tool_summary(&name, &content);
         // Defensive: compaction must never *grow* a message. The eligibility
         // threshold already guarantees this for well-formed text, but a result
@@ -900,39 +952,32 @@ mod tests {
     }
 
     #[test]
-    fn refresh_todo_context_updates_existing_message() {
-        let mut messages = vec![
-            serde_json::json!({ "role": "system", "content": "base" }),
-            serde_json::json!({ "role": "system", "content": "[TODO list]\nold" }),
-            serde_json::json!({ "role": "user", "content": "go" }),
-        ];
-        refresh_todo_context(&mut messages, Some("- [ ] new"), false);
-        assert_eq!(messages[1]["content"], "[TODO list]\n- [ ] new");
-        refresh_todo_context(&mut messages, None, false);
-        assert_eq!(messages[1]["content"], "[TODO list]\nNo todos.");
-    }
-
-    #[test]
-    fn refresh_todo_context_is_noop_without_todo_message() {
+    fn todo_snapshots_are_appended_never_rewritten() {
         let mut messages = vec![serde_json::json!({ "role": "system", "content": "base" })];
-        refresh_todo_context(&mut messages, Some("- [ ] ignored"), false);
-        assert_eq!(messages[0]["content"], "base");
-    }
-
-    #[test]
-    fn appended_todo_context_deduplicates_and_records_clearing() {
-        let mut messages = vec![serde_json::json!({ "role": "system", "content": "base" })];
-        refresh_todo_context(&mut messages, None, true);
-        assert_eq!(messages.len(), 1, "an empty list needs no initial snapshot");
-        refresh_todo_context(&mut messages, Some("[ ] T1: test"), true);
+        assert!(refresh_todo_context(&messages, None).is_none(), "an empty list needs no initial snapshot");
+        messages.push(refresh_todo_context(&messages, Some("[ ] T1: test")).unwrap());
         let prefix = messages.clone();
-        refresh_todo_context(&mut messages, Some("[ ] T1: test"), true);
-        assert_eq!(messages, prefix, "unchanged snapshots must not accumulate");
-        refresh_todo_context(&mut messages, None, true);
-        assert_eq!(&messages[..prefix.len()], prefix.as_slice());
+        assert!(refresh_todo_context(&messages, Some("[ ] T1: test")).is_none(), "unchanged snapshots must not accumulate");
+        messages.push(refresh_todo_context(&messages, None).expect("a cleared list is news"));
+        assert_eq!(&messages[..prefix.len()], prefix.as_slice(), "the old snapshot is never touched");
         assert_eq!(messages.last().unwrap()["content"], "[TODO list]\nNo todos.");
-        refresh_todo_context(&mut messages, None, true);
-        assert_eq!(messages.len(), prefix.len() + 1);
+        assert!(refresh_todo_context(&messages, None).is_none());
+    }
+
+    #[test]
+    fn a_continuation_knows_the_snapshot_its_history_ends_on() {
+        let injected = |content: &str| AgentEvent::ContextInjected {
+            run_id: "r".into(),
+            role: "system".into(),
+            content: content.into(),
+            ts: 0,
+        };
+        let prior = vec![injected("[TODO list]\n- [ ] a"), injected("[STEERING] nudge"), injected("[TODO list]\n- [x] a")];
+        assert_eq!(last_recorded_todo(&prior).as_deref(), Some("[TODO list]\n- [x] a"));
+        assert!(todo_update(last_recorded_todo(&prior).as_deref(), Some("- [x] a")).is_none());
+        let mut compacted = prior.clone();
+        compacted.push(AgentEvent::ContextCompacted { run_id: "r".into(), summary: "s".into(), ts: 0 });
+        assert_eq!(last_recorded_todo(&compacted), None, "a compaction folds the snapshot away");
     }
 
     #[test]
@@ -944,14 +989,11 @@ mod tests {
         let mlx = ProviderCaps::for_provider("mlx");
         assert!(mlx.structured_replay);
         assert!(mlx.minimal_chat_context);
-        assert!(mlx.append_todo_updates);
-        assert!(!ollama.append_todo_updates);
 
         for id in ["anthropic", "openai", "my-self-hosted-endpoint"] {
             let caps = ProviderCaps::for_provider(id);
             assert!(caps.structured_replay, "{id}");
             assert!(!caps.minimal_chat_context, "{id}");
-            assert!(!caps.append_todo_updates, "{id}");
         }
     }
 
