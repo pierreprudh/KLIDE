@@ -1,6 +1,7 @@
 // ── Pixel nature ───────────────────────────────────────────────────────────
-// A looping big-pixel film for the Welcome screen, five landscapes —
-//   dawn, forest, lake, under the surface, meadow —
+// A looping big-pixel film for the Welcome screen, nine landscapes —
+//   dawn, forest, lake, under the surface, meadow,
+//   autumn temple, Fuji at dawn, moonsea, karst valley —
 // dealt in a fresh order every time the film is created (see `order`).
 // Each scene is a pure function of (cell, time) returning an RGB int, written
 // into a tiny cols×rows buffer, then scaled up crisp. A tile texture (hairline
@@ -815,6 +816,586 @@ class Meadow implements Scene {
   }
 }
 
+// ── 6 · Autumn temple: a five-storey pagoda in a sea of maples ─────────────
+
+type Crown = { cx: number; cy: number; r: number; pal: number[]; haze: number; s: number };
+type Tier = { wb: number; wt: number; whw: number; rb: number; rt: number; rhw: number; i: number };
+
+const MAPLES = [
+  R("#EE8048", "#D1502E", "#AE3622", "#842719", "#5C1B12"),
+  R("#F5AE52", "#E3812F", "#C55F23", "#97431B", "#6A2E14"),
+  R("#F7D262", "#ECAE3E", "#CF8A2B", "#A0631F", "#704517"),
+  R("#F5E384", "#E8C64E", "#CBA236", "#9E7826", "#6D531B"),
+];
+
+class Pagoda implements Scene {
+  ink = hx("#2A1410");
+  private sky = R("#143A78", "#1A478C", "#2157A2", "#2A68B6", "#387BC5", "#4F90D1", "#6AA4DB", "#8BB9E2", "#AECDE5");
+  private roofR = R("#93A2DC", "#7183C8", "#5869B1", "#465398", "#353F7A", "#272F5D");
+  private groundR = R("#EBCB60", "#DAB247", "#C6973A", "#AA7B30", "#7F5B26");
+  private pathR = R("#C2C6C8", "#A3A9AE", "#868D95");
+  private hillR = R("#6E8DBC", "#5A79AA", "#476594");
+  private cloudR = R("#8FB8E0", "#BCD5EC", "#E4EEF5");
+  private HAZE = hx("#7F9DC6");
+  private S = 1.42;
+  private BASE = 0.87;
+  private PAD = 6;
+  private PX = 0;
+  private cxc = 0;
+  private spireTop = 0;
+  private spireBot = 0;
+  private tiers: Tier[] = [];
+  private layers: Crown[][][] = [];
+  private hills = new Float32Array(0);
+  private ground = new Float32Array(0);
+  private ov = new Overlay();
+  private f!: Frame;
+  private sized = "";
+
+  private build(cols: number, rows: number, W: number) {
+    const { S, BASE, PAD } = this;
+    this.PX = W * 0.6;
+    this.tiers = [];
+    let y = BASE;
+    for (let i = 0; i < 5; i++) {
+      const wh = (0.068 - i * 0.005) * S;
+      const rh = (0.058 - i * 0.003) * S;
+      const wt = y - wh;
+      const rb = wt + 0.012 * S;
+      const rt = rb - rh;
+      this.tiers.push({ wb: y, wt, whw: (0.055 - i * 0.006) * S, rb, rt, rhw: (0.15 - i * 0.013) * S, i });
+      y = rt + 0.009 * S;
+    }
+    this.cxc = Math.floor(this.PX * rows);
+    const top = this.tiers[4].rt;
+    this.spireTop = Math.floor((top - 0.115) * rows);
+    this.spireBot = Math.floor(top * rows) + 1;
+    this.hills = new Float32Array(cols + PAD * 2);
+    this.ground = new Float32Array(cols);
+    for (let x = -PAD; x < cols + PAD; x++) this.hills[x + PAD] = 0.47 - 0.07 * fbm1((x / rows) * 1.3 + 3, 201);
+    for (let x = 0; x < cols; x++) this.ground[x] = 0.69 + 0.014 * (fbm1((x / rows) * 2 + 7, 202) - 0.5);
+    // Maples as dithered crowns at three depths; the far ones fade into the haze.
+    const specs: [number, number, number, number, number, number][] = [
+      [9, 0.47, 0.53, 0.05, 0.075, 0.32],
+      [7, 0.56, 0.66, 0.08, 0.12, 0.12],
+      [3.2, 0.93, 1.06, 0.15, 0.23, 0],
+    ];
+    this.layers = specs.map(([dens, y0, y1, r0, r1, haze], li) => {
+      const n = Math.floor(W * dens) + 2;
+      const trees: Crown[] = [];
+      for (let k = -1; k <= n; k++) {
+        const cx = ((k + 0.15 + hash(k, li, 210) * 0.7) / n) * W;
+        if (li === 2 && Math.abs(cx - this.PX) < 0.2 * S) continue;
+        trees.push({ cx, cy: y0 + hash(k, li, 211) * (y1 - y0), r: r0 + hash(k, li, 212) * (r1 - r0), pal: MAPLES[Math.floor(hash(k, li, 213) * 4)], haze, s: 220 + k * 3 + li });
+      }
+      if (li === 2) {
+        trees.push({ cx: W * 0.98, cy: 0.78, r: 0.2, pal: MAPLES[0], haze: 0, s: 260 });
+        trees.push({ cx: 0.06 * W, cy: 0.78, r: 0.2, pal: MAPLES[1], haze: 0, s: 261 });
+      }
+      trees.sort((a, b) => b.cy - a.cy); // nearest first
+      const lists: Crown[][] = [];
+      for (let x = -PAD; x < cols + PAD; x++) lists.push(trees.filter((t) => Math.abs(t.cx - x / rows) < t.r * 1.35));
+      return lists;
+    });
+  }
+
+  prepare(f: Frame) {
+    this.f = f;
+    const { cols, rows, T, W } = f;
+    const key = `${cols}x${rows}`;
+    if (key !== this.sized) {
+      this.build(cols, rows, W);
+      this.sized = key;
+    }
+    // Leaves drifting down through the frame, swaying as they fall.
+    this.ov.reset(cols, rows);
+    const leaf = R("#E3812F", "#D1502E", "#ECAE3E", "#F5AE52");
+    for (let i = 0; i < 34; i++) {
+      const v = 0.035 + hash(i, 0, 230) * 0.04;
+      const Y = ((hash(i, 1, 230) + T * v) % 1.15) - 0.08;
+      const X = hash(i, 2, 230) * W + Math.sin(T * (0.9 + hash(i, 3, 230)) + i) * 0.035 + T * 0.006;
+      const lx = (((X % W) + W) % W) * rows;
+      const ly = Y * rows;
+      this.ov.set(lx, ly, leaf[i % 4]);
+      if (Math.sin(T * 3 + i) > 0.3) this.ov.set(lx + 1, ly, 0x97431b);
+    }
+  }
+
+  private crown(t: Crown, X: number, Y: number, x: number, y: number): number {
+    const { T } = this.f;
+    const sw = t.haze === 0 ? Math.sin(T * 0.8 + t.s) * 0.004 : 0;
+    const dx = (X - t.cx - sw) / t.r;
+    const dy = (Y - t.cy) / (t.r * 1.1);
+    if (dx * dx + dy * dy > 1.5) return -1;
+    const d = Math.hypot(dx, dy) + (fbm2(X * 16, Y * 16, t.s) - 0.5) * 0.45;
+    if (d > 1) return -1;
+    const v = 0.3 + dy * 0.28 + dx * 0.22 + (fbm2((X - sw) * 28, Y * 28, t.s + 3) - 0.5) * 0.65 + d * 0.1;
+    const c = pick(t.pal, v, x, y);
+    return t.haze ? mix(c, this.HAZE, t.haze) : c;
+  }
+
+  private building(X: number, Y: number, x: number, y: number): number {
+    const { rows, T } = this.f;
+    const { PX, S, BASE, cxc } = this;
+    if (y >= this.spireTop && y < this.spireBot) {
+      const dy = y - this.spireTop;
+      if (x === cxc) return dy < 1 ? (Math.sin(T * 0.9) > 0.85 ? 0xfff6dc : 0xf2d58a) : 0x8c6a3a;
+      if (Math.abs(x - cxc) === 1 && dy >= 2 && dy < this.spireBot - this.spireTop - 1) return x < cxc ? 0xc29a55 : 0x6e5030;
+    }
+    const u = Math.abs(X - PX);
+    for (let k = this.tiers.length - 1; k >= 0; k--) {
+      const { wb, wt, whw, rb, rt, rhw, i } = this.tiers[k];
+      if (Y >= rt && Y <= rb) {
+        const curl = 0.012 * S * Math.pow(Math.max(0, (u - rhw * 0.7) / (rhw * 0.3)), 2);
+        const bot = rb - curl;
+        const tt = (Y - rt) / (rb - rt);
+        const hw = whw * 0.75 + (rhw - whw * 0.75) * Math.pow(tt, 0.55);
+        if (Y <= bot && u <= hw) {
+          const lit = X < PX;
+          if (Y - rt < 0.8 / rows) return 0x1e2652;
+          if (bot - Y < 1 / rows) return lit ? 0xb3bee6 : 0x7c89be;
+          let v = 0.38 + (u / hw) * (lit ? -0.2 : 0.3) + tt * 0.12;
+          if ((x + Math.floor((Y - rt) * rows)) % 2 === 0) v += 0.14;
+          return pick(this.roofR, v, x, y);
+        }
+      }
+      if (Y >= wt && Y <= wb && u <= whw) {
+        const ry = (Y - wt) / (wb - wt);
+        const col = x - cxc;
+        let c: number;
+        if (u > whw - 0.8 / rows) c = 0x5e301d;
+        else if (ry < 0.38) c = col % 2 === 0 ? 0xb4602e : 0xece5d4;
+        else if (ry < 0.5) c = 0x6e3a22;
+        else if (i === 0 && Math.abs(col) <= 1) c = 0x2f3240;
+        else if (i === 0 && Math.abs(col) === 3) c = 0x7fb3b0;
+        else if (col % 3 === 0) c = 0x6e3a22;
+        else c = 0xe2dbc8;
+        if (Y - wt < 1 / rows) c = mix(c, 0x1c1a2a, 0.45);
+        if (X > PX) c = mix(c, 0x2a2238, 0.14);
+        return c;
+      }
+    }
+    if (Y >= BASE && Y < BASE + 0.045 && u < 0.13 * S) {
+      if (u < 0.035) return y % 2 ? 0xc9c5bb : 0x8f8b84;
+      const c = Y - BASE < 1 / rows ? 0xdcd8ce : 0xa9a59c;
+      return X > PX ? mix(c, 0x3a3440, 0.18) : c;
+    }
+    return -1;
+  }
+
+  color(x: number, y: number): number {
+    const { rows, cols, T, W, px } = this.f;
+    const X = x / rows;
+    const Y = y / rows;
+    const { PX, S, BASE, PAD } = this;
+    const ov = this.ov.get(x, y);
+    if (ov >= 0) return ov;
+    for (const t of this.layers[2][x + PAD]) {
+      const c = this.crown(t, X, Y, x, y);
+      if (c >= 0) return c;
+    }
+    const b = this.building(X, Y, x, y);
+    if (b >= 0) return b;
+    if (Y >= this.ground[x]) {
+      let c: number;
+      const pc = PX - (Y - BASE - 0.04) * 1.9;
+      if (Y > BASE + 0.04 && Math.abs(X - pc) < 0.03 + (Y - BASE) * 0.25) {
+        c = pick(this.pathR, hash(x, y, 240) * 0.6 + (Y - BASE) * 2, x, y);
+      } else {
+        c = pick(this.groundR, 0.15 + (fbm2(X * 5, Y * 9, 241) - 0.5) * 0.7 + (Y - this.ground[x]) * 1.2, x, y);
+        if (hash(x, y, 242) > 0.9) c = hash(x, y, 243) > 0.5 ? 0xc24e2a : 0xe3812f;
+      }
+      const sh = Math.hypot((X - (PX + 0.2 * S)) / (0.19 * S), (Y - (BASE + 0.015)) / 0.06);
+      if (sh < 1 && X > PX) c = mix(c, 0x4a3a2c, 0.38);
+      return c;
+    }
+    // Far layers slide a little with the pointer.
+    for (const li of [1, 0]) {
+      const sh = Math.round(px * (li === 1 ? 1 : 2));
+      const xi = Math.min(cols + PAD - 1, Math.max(-PAD, x + sh));
+      const Xs = xi / rows;
+      for (const t of this.layers[li][xi + PAD]) {
+        const c = this.crown(t, Xs, Y, xi, y);
+        if (c >= 0) return c;
+      }
+    }
+    const hxI = Math.min(cols + PAD - 1, Math.max(-PAD, x + Math.round(px * 3)));
+    const ht = this.hills[hxI + PAD];
+    if (Y >= ht) return pick(this.hillR, (Y - ht) / 0.06, x, y);
+    const cl = fbm2(X * 0.8 - T * 0.012, Y * 13, 250) - Math.abs(Y - 0.16) * 4;
+    if (cl > 0.45) return pick(this.cloudR, (cl - 0.45) * 4, x, y);
+    return pick(this.sky, 0.03 + Math.pow(Y / 0.5, 1.2) * 0.85 + Math.max(0, 1 - X / (0.5 * W)) * 0.08 * (1 - Y), x, y);
+  }
+}
+
+// ── 7 · Karst valley: limestone towers, drifting mist, a river, bamboo ──────
+
+type KarstLayer = { top: Float32Array; pk: Float32Array; col: number; d: number; base: number; i: number };
+
+class Karst implements Scene {
+  ink = hx("#1A2E14");
+  private sky = R("#7EA6C4", "#95B8D0", "#AEC9D8", "#C6D8DC", "#DBE4DA", "#EAECD8", "#F4F1DA", "#FAF6E2", "#FFFCEE");
+  private bamboo = R("#D3E48A", "#B4D467", "#93BE52", "#73A341", "#548434", "#3A6427", "#26461B");
+  private water = R("#F6F5EA", "#DCE7E0", "#BCD1CA", "#92B0A8", "#5E8379");
+  private rock = R("#C9C8B4", "#A2A493", "#7E846F", "#5E6A50");
+  private cloudR = R("#C8D6DC", "#E6EBE2", "#F8F5E6", "#FFFDF4");
+  private HAZE = hx("#DCE4CF");
+  private DEEP = hx("#33652E");
+  private MIST = hx("#EEF1E6");
+  private layers: KarstLayer[] = [];
+  private near = new Float32Array(0);
+  private ov = new Overlay();
+  private f!: Frame;
+  private sized = "";
+  private glow = 0.6;
+
+  private rc(Y: number) {
+    return this.f.W * 0.45 + 0.06 * Math.sin((Y - 0.745) * 16);
+  }
+
+  private build(cols: number, rows: number, W: number) {
+    const specs: [number, number, number, number][] = [[0.54, 0.12, 0.06, 8], [0.6, 0.16, 0.075, 6], [0.665, 0.21, 0.09, 4.5], [0.745, 0.26, 0.11, 3.2]];
+    const LX = W * 0.84;
+    this.layers = specs.map(([base, ph, pw, dens], i) => {
+      const d = i / (specs.length - 1);
+      const col = mix(mix(this.HAZE, this.DEEP, Math.pow(d, 1.15)), hx("#4E8A38"), 0.35 * Math.sin(d * Math.PI));
+      const n = Math.floor(W * dens) + 2;
+      let peaks: [number, number, number][] = [];
+      for (let k = -1; k <= n; k++) peaks.push([((k + 0.2 + hash(k, i, 301) * 0.6) / n) * W, ph * (0.45 + hash(k, i, 302) * 0.7), pw * (0.7 + hash(k, i, 303) * 0.6)]);
+      if (i === 3) {
+        peaks = peaks.filter((p) => Math.abs(p[0] - LX) > 0.22 && Math.abs(p[0] - W * 0.64) > 0.16);
+        peaks.push([LX, 0.47, 0.15], [W * 0.64, 0.32, 0.11]);
+      }
+      const top = new Float32Array(cols);
+      const pk = new Float32Array(cols);
+      for (let x = 0; x < cols; x++) {
+        const X = x / rows;
+        let best = 0;
+        let bc = X;
+        for (const [cx, hh, ww] of peaks) {
+          const q = 1 - ((X - cx) / ww) ** 2;
+          if (q > 0 && hh * Math.pow(q, 0.45) > best) {
+            best = hh * Math.pow(q, 0.45);
+            bc = cx;
+          }
+        }
+        top[x] = base - best - 0.01 * (fbm1(X * 20, 310 + i) - 0.5);
+        pk[x] = bc;
+      }
+      return { top, pk, col, d, base, i };
+    });
+  }
+
+  prepare(f: Frame) {
+    this.f = f;
+    const { cols, rows, T, t, W } = f;
+    const key = `${cols}x${rows}`;
+    if (key !== this.sized) {
+      this.build(cols, rows, W);
+      this.sized = key;
+    }
+    this.glow = 0.35 + 0.25 * easeOut(t / 5);
+    this.near = new Float32Array(cols);
+    const rc9 = this.rc(0.9);
+    for (let x = 0; x < cols; x++) {
+      const X = x / rows;
+      const tt = 0.87 - 0.04 * fbm1(X * 3, 350) - 0.2 * Math.pow(Math.max(0, 1 - X / (0.24 * W)), 1.3) - 0.14 * Math.pow(Math.max(0, (X - 0.8 * W) / (0.2 * W)), 1.2);
+      this.near[x] = tt + 0.07 * Math.max(0, 1 - Math.abs(X - rc9) / 0.3) + Math.sin(T * 1.1 + X * 6) * 0.004;
+    }
+    // Two far birds gliding across the haze.
+    this.ov.reset(cols, rows);
+    const lead = (((T * 0.022 + 0.2) % 1.4) - 0.2) * W;
+    [[0, 0], [0.03, 0.025]].forEach(([dx, dy], i) => {
+      const bx = (lead + dx) * rows;
+      const by = (0.27 + dy + 0.006 * Math.sin(T * 0.7 + i)) * rows;
+      const up = Math.floor(T * 3 + i) % 2 === 0;
+      this.ov.set(bx, by, 0x8c9c8e);
+      this.ov.set(bx - 1, by - (up ? 1 : 0), 0x8c9c8e);
+      this.ov.set(bx + 1, by - (up ? 1 : 0), 0x8c9c8e);
+    });
+  }
+
+  color(x: number, y: number): number {
+    const { rows, T, W } = this.f;
+    const X = x / rows;
+    const Y = y / rows;
+    const ov = this.ov.get(x, y);
+    if (ov >= 0) return ov;
+    const rc = this.rc(Y);
+    const rw = 0.006 + (Y - 0.745) * 0.26;
+    if (Y > 0.745 && Math.abs(X - rc) < rw) {
+      const v = Math.abs(X - rc) / rw;
+      if (v < 0.6 && hash(x, y, 360 + Math.floor(T * 4)) > 0.93) return 0xfffdf2;
+      return pick(this.water, 0.15 + v * 0.65 + (Y - 0.745) * 0.4, x, y);
+    }
+    const nb = this.near[x] + (fbm2(X * 22, Y * 8, 362) - 0.5) * 0.035;
+    if (Y >= nb) {
+      const sway = Math.sin(T * 0.9 + Y * 4) * 0.012 * Math.max(0, 1 - (Y - nb) / 0.15);
+      const stalk = fbm2((X + sway) * 45, Y * 2.5, 363);
+      const v = 0.12 + (Y - nb) / 0.3 + (fbm2((X + sway) * 20, Y * 20, 361) - 0.5) * 0.7 + (stalk > 0.64 ? 0.18 : 0) + (X / W) * 0.12;
+      let c = pick(this.bamboo, v, x, y);
+      const m = (fbm2(X * 3 - T * 0.03, Y * 8, 364) - 0.5) * 3 - (Y - 0.84) * 6 - Math.abs(X - rc) * 2;
+      if (m > 0.5) c = mix(c, this.MIST, m > 0.75 ? 0.65 : 0.35);
+      return c;
+    }
+    for (let k = this.layers.length - 1; k >= 0; k--) {
+      const L = this.layers[k];
+      const t = L.top[x];
+      if (Y < t) continue;
+      const { d, col: c } = L;
+      const side = X - L.pk[x];
+      const v = 0.3 + ((Y - t) / (0.12 + 0.1 * d)) * 0.5 + (side > 0 ? 0.22 : -0.1) + (fbm2(X * 18, Y * 18, 330 + L.i) - 0.5) * 0.7 * d;
+      let col = pick([mix(c, 0xfffae1, 0.28), mix(c, 0xe6f0c8, 0.1), c, mix(c, 0x0a1408, 0.25), mix(c, 0x050a05, 0.42)], v, x, y);
+      if (L.i === 3 && side > -0.09 && side < 0 && Y - t > 0.03 && Y - t < 0.2 && fbm2(X * 9, Y * 4, 340) > 0.5) {
+        col = pick(this.rock, v - 0.15 + (fbm2(X * 20, Y * 20, 341) - 0.5) * 0.8, x, y);
+      }
+      if (Y - t < 1 / rows && side < 0) col = mix(col, 0xfff8dc, 0.35 * (1 - d * 0.5));
+      // Mist pooling at each layer's foot, drifting slowly sideways.
+      const m = Math.max(0, 1 - Math.abs(Y - (L.base + 0.02)) / 0.09) * (fbm2(X * 2.2 - T * (0.02 + d * 0.015), Y * 5, 320 + L.i) - 0.1) * 2.1;
+      if (m > 1.1) return this.MIST;
+      if (m > 0.5 + bayer(x, y) * 0.5) return mix(col, this.MIST, 0.6);
+      return col;
+    }
+    const SX = W * 0.1;
+    const dsun = Math.hypot(X - SX, (Y - 0.12) * 1.2);
+    if (dsun < 0.06) return 0xfffdf5;
+    const glow = Math.pow(Math.max(0, 1 - dsun / 1.7), 1.6) * this.glow;
+    const cl = fbm2(X * 1.1 - T * 0.015, Y * 4.5, 370) - Math.abs(Y - 0.2) * 2.4;
+    if (cl > 0.42) return pick(this.cloudR, (cl - 0.42) * 3 + glow, x, y);
+    return pick(this.sky, 0.18 + Y * 0.45 + glow, x, y);
+  }
+}
+
+// ── 8 · Moonsea: a crescent world rising over still water, a torii ─────────
+
+const TORII = ["KKK.......KKK", "KKKKKKKKKKKKK", ".BBBBBBBBBBB.", "...P..T..P...", ".NNNNNNNNNNN.", "...P.....P...", "...P.....P...", "...P.....P...", "...P.....P..."];
+
+class Moonsea implements Scene {
+  ink = hx("#04060D");
+  private sky = R("#04060D", "#070B17", "#0B1122", "#10182E", "#16213B", "#1D2B4A", "#263759", "#304468", "#3C5277");
+  private litR = R("#8C6E4A", "#C9A673", "#E8CB95", "#FBE7C0", "#FFF6E2");
+  private darkR = R("#26324F", "#1E2845", "#18213A", "#131B31");
+  private seaR = R("#1C2744", "#141D35", "#0E1528", "#0A0F1E", "#060A14");
+  private H = 0.64;
+  private R0 = 0.23;
+  private moon = { x: 0, y: 0 };
+  private stars = new Set<number>();
+  private torii = new Overlay();
+  private ov = new Overlay();
+  private hb = 0;
+  private f!: Frame;
+  private sized = "";
+
+  private build(cols: number, rows: number, W: number) {
+    this.stars.clear();
+    const n = Math.round(cols * 0.45);
+    for (let i = 0; i < n; i++) this.stars.add(Math.floor(hash(i, 1, 410) * rows * this.H * 0.95) * cols + Math.floor(hash(i, 0, 410) * cols));
+    this.torii.reset(cols, rows);
+    const tx0 = Math.floor(W * 0.27 * rows) - 6;
+    this.hb = Math.floor((this.H + 0.075) * rows);
+    TORII.forEach((row, r) => {
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] === ".") continue;
+        this.torii.set(tx0 + c, this.hb - TORII.length + r, r < 2 ? 0x2a1416 : c === 4 || c === 10 ? 0x5a2a24 : 0x3a1a1c);
+      }
+    });
+  }
+
+  prepare(f: Frame) {
+    this.f = f;
+    const { cols, rows, t, W, px } = f;
+    const key = `${cols}x${rows}`;
+    if (key !== this.sized) {
+      this.build(cols, rows, W);
+      this.sized = key;
+    }
+    // The world lifts out of the sea, then settles.
+    this.moon = { x: W * 0.58 - px * 0.01, y: this.H - 0.13 + 0.07 * (1 - easeOut(t / 6)) };
+    this.ov.reset(cols, rows);
+    if (t > 4.2 && t < 4.9) {
+      const p = (t - 4.2) / 0.7;
+      const sx = (W * 0.08 + p * W * 0.3) * rows;
+      const sy = (0.05 + p * 0.09) * rows;
+      for (let k = 0; k < 5; k++) this.ov.set(sx - k * 1.8, sy - k * 0.5, k === 0 ? 0xe8eaf2 : k < 3 ? 0x9aa4c2 : 0x3c5277);
+    }
+  }
+
+  private above(x: number, y: number): number {
+    const { rows, cols, T } = this.f;
+    const X = x / rows;
+    const Y = y / rows;
+    const ov = this.ov.get(x, y);
+    if (ov >= 0) return ov;
+    const { x: MX, y: MY } = this.moon;
+    const R0 = this.R0;
+    const OX = MX - 0.045;
+    const OY = MY + 0.03;
+    const d = Math.hypot(X - MX, Y - MY) / R0;
+    if (d < 1) {
+      const ds = Math.hypot(X - OX, Y - OY) / R0;
+      if (ds > 0.985) return pick(this.litR, 0.15 + Math.min(1, (ds - 0.985) / 0.2) * 0.55 + (d > 0.94 ? 0.3 : 0), x, y);
+      return pick(this.darkR, 0.45 + (fbm2(X * 9, Y * 9, 420) - 0.5) * 0.9 - (d > 0.95 ? 0.45 : 0), x, y);
+    }
+    const v = Math.pow(Y / this.H, 1.3) * 0.9;
+    if (d < 1.45) {
+      const len = Math.max(1e-6, Math.hypot(X - OX, Y - OY));
+      const dir = ((X - OX) - (Y - OY) * 0.25) / len;
+      const glow = Math.pow(1 - (d - 1) / 0.45, 2) * Math.max(0, dir) * (0.78 + 0.07 * Math.sin(T * 0.6));
+      if (glow > 0.12 + bayer(x, y) * 0.4) return mix(pick(this.sky, v, x, y), 0xb08a5e, glow * 0.75);
+    }
+    if (this.stars.has(y * cols + x)) {
+      const tw = Math.sin(T * (1.4 + hash(x, y, 412) * 2) + x * 1.3);
+      return hash(x, y, 411) > 0.75 && tw > -0.4 ? 0xe8eaf2 : mix(pick(this.sky, v, x, y), 0x9aa4c2, 0.35 + 0.25 * tw);
+    }
+    return pick(this.sky, v, x, y);
+  }
+
+  color(x: number, y: number): number {
+    const { rows, cols, T } = this.f;
+    const X = x / rows;
+    const Y = y / rows;
+    const tc = this.torii.get(x, y);
+    if (tc >= 0) return tc;
+    if (Y < this.H) return this.above(x, y);
+    const dep = Y - this.H;
+    if (y === Math.floor(this.H * rows)) return 0x2c3a5c;
+    const RX = this.moon.x + this.R0 * 0.86;
+    const lift = clamp01((this.moon.y + this.R0 - this.H) / this.R0 + 1);
+    if (Math.abs(X - RX) < 0.012 + dep * 0.09 && hash(x, y, 412 + Math.floor(T * 3)) > 0.4 + dep * 1.3 + (1 - lift) && y % 2 === 0) {
+      return hash(x, y, 413) > 0.5 ? 0xf2d6a2 : 0x9c7b52;
+    }
+    const wob = Math.round(Math.sin(y * 1.7 + T * 1.2) * dep * 4);
+    if (y >= this.hb && this.torii.get(Math.min(cols - 1, Math.max(0, x + wob)), 2 * this.hb - y - 1) >= 0) return 0x1a1018;
+    let c = pick(this.seaR, dep / 0.32 + (hash(Math.floor(x / 3), y, 414) - 0.5) * 0.25, x, y);
+    if (y % 2 === 0 && hash(Math.floor((x + T * 2) / 2), y, 415) > 0.8) c = mix(c, 0x3c5277, 0.35 - dep);
+    return c;
+  }
+}
+
+// ── 9 · Fuji at dawn: snow cap catching pink light, sakura, a still lake ───
+
+class Fuji implements Scene {
+  ink = hx("#1E1A2E");
+  private sky = R("#2C3766", "#3E4778", "#575A8A", "#76699A", "#97789F", "#B98A9F", "#D49FA1", "#E8B5A4", "#F4CBAA", "#FADDB8", "#FDEBCF");
+  private snowLit = R("#FFF4EA", "#FBE0D6", "#EBC4C8", "#C5BCD6", "#A3A0C4", "#8786AE");
+  private body = R("#7A7AA4", "#66689A", "#55588A", "#46497A", "#3A3D6A");
+  private cloudR = R("#5C5A8A", "#8A709C", "#C98E9E", "#F0B6A6", "#FCDDBE");
+  private bloom = R("#FFF2F5", "#FAD6E2", "#F0B3C8", "#DB8DAB", "#B56887", "#7F4762");
+  private nearHill = R("#2A3050", "#20253F", "#181C30");
+  private farHill = R("#4A4D74", "#3C3F63", "#323556");
+  private shoreR = R("#2A2230", "#1E1824", "#140F18");
+  private H = 0.68;
+  private hill1 = new Float32Array(0);
+  private hill2 = new Float32Array(0);
+  private shore = new Float32Array(0);
+  private clumps: [number, number, number][] = [];
+  private ov = new Overlay();
+  private f!: Frame;
+  private sized = "";
+  private FX = 0;
+  private SPAN = 0;
+  private bloomK = 1;
+  private glowK = 0.4;
+
+  private build(cols: number, rows: number, W: number) {
+    this.FX = W * 0.58;
+    this.SPAN = Math.min(0.95, 0.32 * W);
+    this.hill1 = new Float32Array(cols);
+    this.hill2 = new Float32Array(cols);
+    this.shore = new Float32Array(cols);
+    for (let x = 0; x < cols; x++) {
+      const X = x / rows;
+      this.hill1[x] = 0.615 - 0.035 * fbm1(X * 2 + 3, 430);
+      let t = 0.655 - 0.03 * fbm1(X * 3.2 + 8, 431);
+      if (hash(x, 0, 432) > 0.55) t -= (1 + Math.floor(hash(x, 0, 433) * 2)) / rows;
+      this.hill2[x] = t;
+      const l = Math.max(0, 1 - X / (0.24 * W));
+      const r = Math.max(0, (X - 0.86 * W) / (0.14 * W));
+      this.shore[x] = this.H + 0.32 - 0.32 * Math.min(1, (l + r) * 1.3 + (l + r > 0 ? (fbm1(X * 3, 434) - 0.5) * 0.3 : 0));
+    }
+    this.clumps = [[0.03 * W, 0.78, 0.13], [0.12 * W, 0.86, 0.15], [0.2 * W, 0.93, 0.11], [0.04 * W, 0.06, 0.12], [0.13 * W, 0.0, 0.11], [0.96 * W, 0.9, 0.11]];
+  }
+
+  prepare(f: Frame) {
+    this.f = f;
+    const { cols, rows, T, t, W } = f;
+    const key = `${cols}x${rows}`;
+    if (key !== this.sized) {
+      this.build(cols, rows, W);
+      this.sized = key;
+    }
+    this.bloomK = 0.55 + 0.45 * easeOut(t / 4);
+    this.glowK = 0.22 + 0.2 * easeOut(t / 6);
+    // Petals loosed from the blossoms, carried right on the breeze.
+    this.ov.reset(cols, rows);
+    for (let i = 0; i < 30; i++) {
+      const v = 0.03 + hash(i, 0, 440) * 0.03;
+      const Y = ((hash(i, 1, 440) + T * v) % 1.1) - 0.05;
+      const X = (hash(i, 2, 440) * 0.5 * W + T * (0.02 + hash(i, 3, 440) * 0.02) + Math.sin(T * 1.2 + i) * 0.02) % W;
+      this.ov.set(X * rows, Y * rows, Math.sin(T * 2.5 + i) > 0 ? 0xf9d3e0 : 0xefb0c6);
+    }
+  }
+
+  private ftop(X: number) {
+    return 0.2 + 0.48 * Math.pow(Math.min(1, Math.max(0, Math.abs(X - this.FX) - 0.045) / this.SPAN), 0.55);
+  }
+
+  private above(x: number, y: number): number {
+    const { rows, T, W } = this.f;
+    const X = x / rows;
+    const Y = y / rows;
+    if (Y >= this.hill2[x]) return pick(this.nearHill, (Y - this.hill2[x]) / 0.04, x, y);
+    if (Y >= this.hill1[x]) return pick(this.farHill, (Y - this.hill1[x]) / 0.05, x, y);
+    const t = this.ftop(X);
+    if (Y >= t) {
+      const lit = X > this.FX;
+      const sl = 0.33 + 0.02 * (fbm1(X * 18, 401) - 0.5) * 2 + 0.1 * Math.max(0, fbm1(X * 30, 402) - 0.5) * 3;
+      const gully = fbm1(X * 40, 403) > 0.62 ? 0.12 : 0;
+      if (Y < sl) return pick(this.snowLit, (Y - t) / 0.14 + (lit ? 0 : 0.35) + gully, x, y);
+      const c = pick(this.body, 0.2 + (lit ? 0 : 0.35) + gully + (fbm2(X * 12, Y * 12, 404) - 0.5) * 0.3, x, y);
+      return mix(c, 0xa795b2, Math.max(0, (Y - 0.42) / 0.26) * 0.45);
+    }
+    const SUNX = W * 0.88;
+    const d = Math.hypot(X - SUNX, (Y - this.H) * 1.4);
+    const glow = Math.pow(Math.max(0, 1 - d / 1.3), 1.8) * this.glowK;
+    const cl = fbm2(X * 0.9 - T * 0.012, Y * 11, 405) - Math.abs(Y - 0.27) * 6;
+    if (cl > 0.44) return pick(this.cloudR, 0.15 + Math.max(0, 1 - Math.abs(X - SUNX) / 1.4) * 0.7 + (cl - 0.44) * 2, x, y);
+    return pick(this.sky, 0.02 + Math.pow(Y / this.H, 1.1) * 0.85 + glow, x, y);
+  }
+
+  color(x: number, y: number): number {
+    const { rows, cols, T, W } = this.f;
+    const X = x / rows;
+    const Y = y / rows;
+    const ov = this.ov.get(x, y);
+    if (ov >= 0) return ov;
+    for (const [cx, cy, r0] of this.clumps) {
+      const r = r0 * this.bloomK;
+      const sw = Math.sin(T * 0.7 + cx * 3) * 0.004;
+      const dx = (X - cx - sw) / r;
+      const dy = (Y - cy) / r;
+      if (dx * dx + dy * dy > 1.6) continue;
+      const dd = Math.hypot(dx, dy) + (fbm2(X * 18, Y * 18, 450 + Math.floor(cx * 10)) - 0.5) * 0.5;
+      if (dd < 1) {
+        if (hash(x, y, 451) > 0.985) return 0xb56887;
+        return pick(this.bloom, 0.25 - dx * 0.2 + dy * 0.3 + (fbm2(X * 30, Y * 30, 452) - 0.5) * 0.7 + dd * 0.15, x, y);
+      }
+    }
+    if (Y >= this.shore[x]) return pick(this.shoreR, (Y - this.shore[x]) / 0.08 + hash(x, y, 453) * 0.3, x, y);
+    if (Y < this.H) return this.above(x, y);
+    const dep = Y - this.H;
+    const SUNX = W * 0.88;
+    if (Math.abs(X - SUNX) < 0.05 + dep * 0.6 && hash(x, y, 454 + Math.floor(T * 3)) > 0.45 + dep * 1.4 && y % 2 === 0) {
+      return hash(x, y, 455) > 0.5 ? 0xfce3c8 : 0xe8b5a4;
+    }
+    const wob = Math.round(Math.sin(y * 1.7 + T * 1.2) * dep * 12);
+    let c = this.above(Math.min(cols - 1, Math.max(0, x + wob)), Math.max(0, Math.floor((2 * this.H - Y) * rows)));
+    c = mix(c, 0x22263e, 0.25 + dep * 0.9);
+    if (y % 3 === 0 && hash(Math.floor((x + T * 1.5) / 3), y, 456) > 0.75) c = mix(c, 0xf0c8b8, 0.18);
+    return c;
+  }
+}
+
 // ── Engine ─────────────────────────────────────────────────────────────────
 
 export type PixelNatureOptions = {
@@ -830,24 +1411,28 @@ export type PixelNatureOptions = {
   speed?: number;
   /**
    * Which scenes play, and in what order. `shuffle` (the default) deals the
-   * five landscapes anew every time the film is created, so Welcome opens on a
-   * different scene each launch; `fixed` keeps the authored order (dawn,
-   * forest, lake, deep, meadow); a scene id pins that one landscape — it still
+   * landscapes anew every time the film is created, so Welcome opens on a
+   * different scene each launch; `fixed` keeps the authored order (see
+   * PIXEL_NATURE_SCENES); a scene id pins that one landscape — it still
    * moves, it just never cuts away.
    */
   order?: PixelNatureOrder;
 };
 
-export type PixelNatureSceneId = "dawn" | "forest" | "lake" | "deep" | "meadow";
+export type PixelNatureSceneId = "dawn" | "forest" | "lake" | "deep" | "meadow" | "pagoda" | "fuji" | "moonsea" | "karst";
 export type PixelNatureOrder = "shuffle" | "fixed" | PixelNatureSceneId;
 
-/** The five landscapes, in authored order, with the words Settings shows. */
+/** The landscapes, in authored order, with the words Settings shows. */
 export const PIXEL_NATURE_SCENES: ReadonlyArray<{ id: PixelNatureSceneId; label: string }> = [
   { id: "dawn", label: "Dawn" },
   { id: "forest", label: "Forest" },
   { id: "lake", label: "Lake" },
   { id: "deep", label: "Under the surface" },
   { id: "meadow", label: "Meadow" },
+  { id: "pagoda", label: "Autumn temple" },
+  { id: "fuji", label: "Fuji at dawn" },
+  { id: "moonsea", label: "Moonsea" },
+  { id: "karst", label: "Karst valley" },
 ];
 
 export function isPixelNatureOrder(v: unknown): v is PixelNatureOrder {
@@ -870,7 +1455,17 @@ const FRAME_MS = 1000 / 30;
 export function createPixelNature(canvas: HTMLCanvasElement, opts: PixelNatureOptions = {}) {
   const ctx = canvas.getContext("2d", { alpha: false })!;
   const meadow = new Meadow();
-  const byId: Record<PixelNatureSceneId, Scene> = { dawn: new Dawn(), forest: new Forest(), lake: new Lake(), deep: new Deep(), meadow };
+  const byId: Record<PixelNatureSceneId, Scene> = {
+    dawn: new Dawn(),
+    forest: new Forest(),
+    lake: new Lake(),
+    deep: new Deep(),
+    meadow,
+    pagoda: new Pagoda(),
+    fuji: new Fuji(),
+    moonsea: new Moonsea(),
+    karst: new Karst(),
+  };
   const authored = PIXEL_NATURE_SCENES.map((s) => byId[s.id]);
   const order = opts.order ?? "shuffle";
   const scenes: Scene[] = order === "fixed" ? authored : order === "shuffle" ? shuffled(authored) : [byId[order]];
