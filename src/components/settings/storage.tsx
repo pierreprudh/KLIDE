@@ -18,6 +18,8 @@
 // transcripts across. Rust owns validating and moving — this file only asks.
 
 import { useCallback, useEffect, useState } from "react";
+import { DeleteIcon, SearchIcon } from "../../icons";
+import "./storage.css";
 import {
   cachedConversationSizes,
   clearStoredConversations,
@@ -97,7 +99,8 @@ export function StorageSection() {
   const [diskRuns, setDiskRuns] = useState<StoredRun[]>([]);
   const [diskError, setDiskError] = useState<string | null>(null);
   const [diskLoading, setDiskLoading] = useState(true);
-  const [diskLimit, setDiskLimit] = useState(20);
+  const [diskLimit, setDiskLimit] = useState(6);
+  const [diskQuery, setDiskQuery] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
   const refreshRuns = useCallback(async () => {
     setDiskLoading(true);
@@ -219,6 +222,14 @@ export function StorageSection() {
     }
   }
 
+  const diskBytes = diskRuns.reduce((sum, run) => sum + run.bytes, 0);
+  const transcriptBytes = diskRuns.reduce((sum, run) => sum + run.transcriptBytes, 0);
+  const supportingBytes = diskRuns.reduce((sum, run) => sum + run.supportingBytes, 0);
+  const breakdownBytes = transcriptBytes + supportingBytes;
+  const query = diskQuery.trim().toLocaleLowerCase();
+  const filteredRuns = query
+    ? diskRuns.filter(run => (run.title || "Untitled conversation").toLocaleLowerCase().includes(query))
+    : diskRuns;
   const photoBytes = sizes.reduce((sum, s) => sum + s.imageBytes, 0);
   const withPhotos = sizes.filter((s) => s.imageBytes > 0).length;
   const shown = expanded ? sizes : sizes.slice(0, 6);
@@ -233,24 +244,69 @@ export function StorageSection() {
 
   return (
     <>
-      <SettingBlock title="Saved conversations">
-        <Panel>
-          <Row title="Conversation storage"
-            description="Saved messages, streaming activity, checkpoints and retained tool output. Background conversations are saved here so you can reopen them. History stays until you delete it."
-            control={<LinkButton disabled={diskLoading || deleting !== null || movingRuns} onClick={() => { refreshCache(); void refreshDirs(); void refreshRuns(); }}>Refresh</LinkButton>} />
-          {diskError ? <Row title="Could not load saved conversations" description={diskError} control={null} />
-            : diskLoading && diskRuns.length === 0 ? <Row title="Measuring saved conversations…" description="Reading saved history sizes." control={null} />
-            : <Row title={`${diskRuns.length} saved conversation${diskRuns.length === 1 ? "" : "s"}`}
-                description="Largest first. Deletion is available when all conversations have finished or stopped."
-                control={<CodeText>{formatBytes(diskRuns.reduce((sum, run) => sum + run.bytes, 0))}</CodeText>} />}
-          {!diskError && diskRuns.slice(0, diskLimit).map(run => <Row key={run.id} title={run.title || "Untitled conversation"}
-            description={`${relativeTime(run.updatedMs)} · ${formatBytes(run.transcriptBytes)} messages and activity · ${formatBytes(run.supportingBytes)} supporting data`}
-            control={<div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <CodeText>{formatBytes(run.bytes)}</CodeText>
-              <LinkButton disabled={deleting !== null || movingRuns || diskLoading} onClick={() => void removeDiskRun(run)}>{deleting === run.id ? "Deleting…" : "Delete…"}</LinkButton>
-            </div>} />)}
-          {!diskError && diskRuns.length > diskLimit && <Row title={`${diskRuns.length - diskLimit} more conversations`} description="Continue through the list by size." control={<GhostButton onClick={() => setDiskLimit(limit => limit + 20)}>Show more</GhostButton>} />}
-        </Panel>
+      <SettingBlock title="Saved conversations" action={
+        <button type="button" className="klide-button klide-button-ghost"
+          disabled={diskLoading || deleting !== null || movingRuns}
+          onClick={() => { refreshCache(); void refreshDirs(); void refreshRuns(); }}>
+          {diskLoading ? "Refreshing…" : "Refresh"}
+        </button>
+      }>
+        <div className="storage-conversations" aria-busy={diskLoading}>
+          <p className="storage-intro">Your conversations, kept on this device until you delete them.</p>
+          {diskError ? <div className="storage-empty" role="alert">Could not load saved conversations. {diskError}</div>
+            : diskLoading && diskRuns.length === 0 ? <div className="storage-empty" role="status">Measuring saved conversations…</div>
+            : <>
+              <div className="storage-summary">
+                <div className="storage-total">
+                  <strong>{formatBytes(diskBytes)}</strong>
+                  <span>{diskRuns.length} saved conversation{diskRuns.length === 1 ? "" : "s"}</span>
+                </div>
+                <div className="storage-breakdown">
+                  <div className="storage-breakdown-bar" aria-hidden="true">
+                    <span style={{ flex: breakdownBytes ? transcriptBytes / breakdownBytes : 0 }} />
+                    <span style={{ flex: breakdownBytes ? supportingBytes / breakdownBytes : 0 }} />
+                  </div>
+                  <div className="storage-legend">
+                    <span><i />Messages & activity <b>{formatBytes(transcriptBytes)}</b></span>
+                    <span><i />Supporting data <b>{formatBytes(supportingBytes)}</b></span>
+                  </div>
+                </div>
+              </div>
+              {diskRuns.length > 0 ? <>
+                <div className="storage-list-toolbar">
+                  <label className="storage-search">
+                    <SearchIcon size={15} />
+                    <input type="search" aria-label="Search saved conversations" placeholder="Find a conversation…"
+                      value={diskQuery} onChange={event => { setDiskQuery(event.target.value); setDiskLimit(6); }} />
+                  </label>
+                  <span>{query ? `${filteredRuns.length} result${filteredRuns.length === 1 ? "" : "s"} · ` : ""}Largest first</span>
+                </div>
+                <ul className="storage-run-list" aria-label="Saved conversations">
+                  {filteredRuns.slice(0, diskLimit).map(run => <li key={run.id} className="storage-run" data-setting={run.title} tabIndex={-1}>
+                    <div className="storage-run-copy">
+                      <div className="storage-run-title" title={run.title || "Untitled conversation"}>{run.title || "Untitled conversation"}</div>
+                      <div className="storage-run-detail">
+                        <span>{relativeTime(run.updatedMs)}</span>
+                        <span>{formatBytes(run.transcriptBytes)} messages · {formatBytes(run.supportingBytes)} supporting data</span>
+                      </div>
+                    </div>
+                    <span className="storage-run-size">{formatBytes(run.bytes)}</span>
+                    <button type="button" className="storage-delete" aria-label={`Delete ${run.title || "untitled conversation"}`}
+                      title="Permanently delete conversation…" disabled={deleting !== null || movingRuns || diskLoading}
+                      onClick={() => void removeDiskRun(run)}>
+                      {deleting === run.id ? <span>…</span> : <DeleteIcon size={16} />}
+                    </button>
+                  </li>)}
+                </ul>
+                {filteredRuns.length === 0 && <div className="storage-empty" role="status">No conversations match “{diskQuery}”.</div>}
+                <div className="storage-list-footer">
+                  <span>{filteredRuns.length > diskLimit ? `Showing ${diskLimit} of ${filteredRuns.length}` : `${filteredRuns.length} conversation${filteredRuns.length === 1 ? "" : "s"}`}</span>
+                  {filteredRuns.length > diskLimit && <GhostButton onClick={() => setDiskLimit(limit => limit + 20)}>Show more</GhostButton>}
+                </div>
+                <p className="storage-footnote">Deletion is permanent and available once all conversations have finished or stopped.</p>
+              </> : <div className="storage-empty">No saved conversations yet. Your history will appear here.</div>}
+            </>}
+        </div>
       </SettingBlock>
 
       <SettingBlock title="Local conversation cache">

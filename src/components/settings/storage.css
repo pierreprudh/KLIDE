@@ -1,0 +1,42 @@
+.storage-conversations { container-type: inline-size; }
+.storage-intro, .storage-footnote { margin: 0; color: var(--fg-subtle); font-size: 13px; line-height: 1.5; }
+.storage-summary { display: flex; align-items: center; gap: 48px; padding: 26px 0 28px; }
+.storage-total { display: grid; gap: 5px; flex-shrink: 0; }
+.storage-total strong { color: var(--fg-strong); font-size: 32px; font-weight: 500; line-height: 1.1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.storage-total > span { color: var(--fg-subtle); font-size: 12px; }
+.storage-breakdown { flex: 1; min-width: 0; }
+.storage-breakdown-bar { display: flex; gap: 3px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--border); }
+.storage-breakdown-bar > span:first-child, .storage-legend > span:first-child i { background: var(--fg-subtle); }
+.storage-breakdown-bar > span:last-child, .storage-legend > span:last-child i { background: color-mix(in srgb, var(--fg-subtle) 30%, var(--bg)); }
+.storage-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; }
+.storage-legend > span { display: flex; align-items: center; gap: 6px; color: var(--fg-subtle); font-size: 11.5px; }
+.storage-legend i { width: 6px; height: 6px; border-radius: 2px; }
+.storage-legend b { margin-left: 3px; color: var(--fg); font-weight: 400; font-variant-numeric: tabular-nums; }
+.storage-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.storage-search { display: flex; align-items: center; gap: 8px; color: var(--fg-subtle); min-width: 0; }
+.storage-search svg { flex-shrink: 0; }
+.storage-search input { width: 220px; max-width: 100%; min-width: 0; padding: 5px 2px; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 12.5px; }
+.storage-search input::placeholder { color: var(--fg-subtle); }
+.storage-search input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: 3px; }
+.storage-list-toolbar > span, .storage-list-footer > span { color: var(--fg-subtle); font-size: 11.5px; white-space: nowrap; }
+.storage-run-list { list-style: none; padding: 0; margin: 0; }
+.storage-run { display: grid; grid-template-columns: minmax(0, 1fr) 64px 30px; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 52%, transparent); }
+.storage-run-copy { min-width: 0; }
+.storage-run-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; line-height: 1.5; font-weight: 400; color: var(--fg-strong); }
+.storage-run-detail { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 4px; color: var(--fg-subtle); font-size: 11.5px; line-height: 1.5; }
+.storage-run-size { color: var(--fg-subtle); text-align: right; white-space: nowrap; font-size: 11.5px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.storage-delete { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: none; border-radius: 5px; color: var(--fg-subtle); background: transparent; cursor: pointer; transition: color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
+.storage-delete:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.storage-delete:focus-visible { color: var(--danger); outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.storage-delete:disabled { opacity: .4; cursor: not-allowed; }
+.storage-list-footer { display: flex; align-items: center; justify-content: space-between; min-height: 44px; gap: 12px; }
+.storage-footnote { font-size: 11.5px; margin-top: 2px; }
+.storage-empty { padding: 24px 0; color: var(--fg-subtle); font-size: 13px; line-height: 1.5; }
+@container (max-width: 520px) {
+  .storage-summary { align-items: stretch; flex-direction: column; gap: 20px; padding: 22px 0; }
+  .storage-run { gap: 10px; grid-template-columns: minmax(0, 1fr) 54px 30px; }
+  .storage-run-detail > span:last-child { display: none; }
+  .storage-search { flex: 1; }
+  .storage-search input { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .storage-delete { transition: none; } }
