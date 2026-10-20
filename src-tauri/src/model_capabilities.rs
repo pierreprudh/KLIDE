@@ -919,8 +919,19 @@ pub fn cost_for_run(
     input_tokens: i64,
     output_tokens: i64,
 ) -> Option<f64> {
+    cost_for_turn(provider, model, crate::pricing::PromptTokens::uncached(input_tokens), output_tokens)
+}
+
+/// [`cost_for_run`] with the prompt split the way the provider billed it —
+/// cache reads at the cached rate, cache writes at their premium.
+pub fn cost_for_turn(
+    provider: &str,
+    model: &str,
+    prompt: crate::pricing::PromptTokens,
+    output_tokens: i64,
+) -> Option<f64> {
     match price_class(provider, model) {
-        PriceClass::Priced(price) => Some(price.cost(input_tokens, output_tokens)),
+        PriceClass::Priced(price) => Some(price.cost_with_cache(prompt, output_tokens)),
         _ => None,
     }
 }

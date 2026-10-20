@@ -94,9 +94,12 @@ fn truncate_line(line: &str, max_chars: usize) -> String {
 /// replay paths call it without touching disk. Returns `None` when the
 /// content is too small to bother retaining.
 pub(super) fn stub_for(tool_name: &str, tool_call_id: &str, content: &str) -> Option<String> {
-    if content.len() < RETAIN_MIN_BYTES {
-        return None;
-    }
+    (content.len() >= RETAIN_MIN_BYTES).then(|| stub_text(tool_name, tool_call_id, content))
+}
+
+/// The stub itself, whatever the size. Where a value file exists, this is
+/// what the model reads in place of the result — live and on replay alike.
+fn stub_text(tool_name: &str, tool_call_id: &str, content: &str) -> String {
     let id = value_id(tool_call_id);
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
@@ -123,7 +126,7 @@ pub(super) fn stub_for(tool_name: &str, tool_call_id: &str, content: &str) -> Op
             stub.push('\n');
         }
     }
-    Some(stub)
+    stub
 }
 
 /// Live-loop retention: store the full content, hand back the stub. On any
@@ -137,17 +140,33 @@ pub(super) fn retain_large_result(
     content: &str,
 ) -> Option<String> {
     let stub = stub_for(tool_name, tool_call_id, content)?;
+    store(runs_dir, run_id, tool_call_id, content).then_some(stub)
+}
+
+/// Retention after the fact, for a result the compactor is cutting from an
+/// old turn: any size, as long as the stub is the smaller of the two. The
+/// model keeps a way back to the full text, and replay — which stubs every
+/// result whose file exists — rebuilds exactly this message.
+pub(super) fn retain_compacted(
+    runs_dir: &Path,
+    run_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    content: &str,
+) -> Option<String> {
+    let stub = stub_text(tool_name, tool_call_id, content);
+    (stub.len() < content.len() && store(runs_dir, run_id, tool_call_id, content)).then_some(stub)
+}
+
+fn store(runs_dir: &Path, run_id: &str, tool_call_id: &str, content: &str) -> bool {
     let dir = values_dir(runs_dir, run_id);
     if std::fs::create_dir_all(&dir).is_err() {
-        return None;
+        return false;
     }
     let path = value_path(runs_dir, run_id, tool_call_id);
     // A value file is a verbatim tool result — file contents, command output —
     // so it lands owner-only, the same mode transcripts use.
-    match crate::durable::write_atomic_private(&path, content.as_bytes()) {
-        Ok(()) => Some(stub),
-        Err(_) => None,
-    }
+    crate::durable::write_atomic_private(&path, content.as_bytes()).is_ok()
 }
 
 /// Replay-time stub: same shape as the live one, but never writes — the file
@@ -167,7 +186,7 @@ pub(super) fn stub_for_replay(
     if !stored {
         return content.to_string();
     }
-    stub_for(tool_name, tool_call_id, content).unwrap_or_else(|| content.to_string())
+    stub_text(tool_name, tool_call_id, content)
 }
 
 /// Executor for the `peek_value` tool. Reads a line range (default: the first

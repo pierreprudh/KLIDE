@@ -633,6 +633,23 @@ AnthropicAdapter   (~95 lines)
 
 New provider (e.g. LM Studio) = one adapter, not 120 lines of duplicated infrastructure.
 
+### Prompt caching (one invariant)
+
+Every request a Run sends must open with the exact bytes of the request before
+it — provider caches match prefixes, and the first changed byte re-bills
+everything after it. So: only the *first* message is the system prompt (keep it
+frozen — per-turn context goes in the conversation), the loop's own messages
+(TODO snapshots, nudges, skill instructions, goal verdicts) are appended and
+recorded as `ContextInjected` so replay puts them back in place, history is
+never rewritten except by a deliberate compaction (one batch, retained), and
+tool calls are built by `run_core::wire_tool_call` on both the live and replay
+paths. The Anthropic adapter places the breakpoints
+(`adapters::anthropic_cache_breakpoints`: prefix on the hour, the conversation
+on one lifetime — hour for a person's conversation, five minutes headless).
+`each_request_opens_with_the_previous_one_byte_for_byte` and
+`a_continuation_opens_with_the_prompt_the_last_turn_sent` guard it; usage's
+`cacheReadTokens` is the live signal.
+
 ### Provider registry (one row, published to the renderer)
 
 Provider *facts* are declared once, on the `ProviderEntry` row in

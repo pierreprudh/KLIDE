@@ -91,6 +91,11 @@ export type AgentUsage = {
    *  gauge's denominator when present. Absent for hosted providers, whose
    *  window is a fixed property of the model. */
   contextWindow?: number;
+  /** Prompt tokens served from the provider's prompt cache — a part of
+   *  `promptTokens`, not added to it. */
+  cacheReadTokens?: number;
+  /** Prompt tokens written to the cache this turn — also part of `promptTokens`. */
+  cacheWriteTokens?: number;
 };
 
 /** Provider-turn timing measured by the Rust harness around the provider call
@@ -322,6 +327,9 @@ export type AgentEvent =
    *  otherwise the reloaded transcript looks like an unbroken conversation
    *  that mysteriously forgot its early turns. */
   | { type: "context_compacted"; runId: string; summary: string; ts: number }
+  /** What the Harness put in front of the model that nobody typed, recorded
+   *  so replay rebuilds the cached prompt. Rust reads it; no surface draws it. */
+  | { type: "context_injected"; runId: string; role: string; content: string; ts: number }
   | { type: "observer_completed"; runId: string; shellId: string; text: string; ts: number }
   | { type: "steering_injected"; runId: string; reason: string; ts: number }
   /** An `auto` request settled on this pair. Follows `run_started` (which

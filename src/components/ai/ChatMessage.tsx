@@ -1054,9 +1054,9 @@ function formatDuration(ms: number): string {
 
 // Quiet per-message stats — centered under the answer, barely-there by
 // default, full strength on hover (see .klide-msg-meta in tokens.css).
-// Order: tok/s, tokens, time, total, TTFT — spacing alone separates the
+// Order: tok/s, tokens, time, total, TTFT, cached, cost — spacing alone separates the
 // parts; every one is self-labeled, so a glyph between them is noise.
-function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number } }) {
+function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; cachedPct?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number } }) {
   const parts: string[] = [];
   if (meta.tps) parts.push(`${meta.tps} tok/s`);
   if (meta.tokens) parts.push(`${meta.exact ? "" : "~"}${meta.tokens.toLocaleString()} tokens`);
@@ -1073,6 +1073,9 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
   if (meta.ttftMs !== undefined && (durationMs === undefined || formatDuration(meta.ttftMs) !== formatDuration(durationMs))) {
     parts.push(`TTFT ${formatDuration(meta.ttftMs)}`);
   }
+  // How much of the prompt the provider read from its cache — the number
+  // that says caching works. Only shown when the provider reported it.
+  if (meta.cachedPct !== undefined && meta.cachedPct > 0) parts.push(`${meta.cachedPct}% cached`);
   // Cost last, so the eye lands on it. Sub-cent turns show "<$0.01".
   if (meta.costUsd !== undefined && meta.costUsd > 0) {
     parts.push(meta.costUsd < 0.01 ? "<$0.01" : `$${meta.costUsd.toFixed(meta.costUsd < 1 ? 3 : 2)}`);

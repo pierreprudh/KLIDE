@@ -148,9 +148,6 @@ pub struct ProviderCaps {
     /// (MLX, Ollama) made a bare "hello" feel broken when handed project
     /// metadata, so their chat turns stay tiny.
     pub minimal_chat_context: bool,
-    /// MLX prefix caches can reuse history only up to the first changed token.
-    /// Keep old TODO snapshots stable and append changes for this provider.
-    pub append_todo_updates: bool,
 }
 
 impl ProviderCaps {
@@ -160,7 +157,6 @@ impl ProviderCaps {
     pub const HOSTED: ProviderCaps = ProviderCaps {
         structured_replay: true,
         minimal_chat_context: false,
-        append_todo_updates: false,
     };
 
     /// The quirks for a provider id: the row's `caps`, or `HOSTED` for an id
@@ -320,7 +316,6 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             // replay — the one text-fold provider.
             structured_replay: false,
             minimal_chat_context: true,
-            append_todo_updates: false,
         },
         context_window: None,
     },
@@ -360,7 +355,6 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             structured_replay: true,
             minimal_chat_context: true,
             // Prefix caches reuse history up to the first changed token.
-            append_todo_updates: true,
         },
         context_window: Some(128_000),
     },
@@ -391,7 +385,6 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         caps: ProviderCaps {
             structured_replay: true,
             minimal_chat_context: true,
-            append_todo_updates: true,
         },
         context_window: Some(crate::llamacpp_models::LOCAL_CONTEXT),
     },
@@ -1567,6 +1560,21 @@ pub(crate) struct AiUsage {
     /// not something a request can set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) context_window: Option<u64>,
+    /// Prompt tokens served from the provider's prompt cache. A *part* of
+    /// `prompt_tokens`, never added to it: every adapter reports
+    /// `prompt_tokens` as the whole prompt, so the gauge reads the same number
+    /// whether or not the cache hit. Anthropic's `input_tokens` is only the
+    /// uncached remainder; its adapter sums the three fields back up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_read_tokens: Option<u64>,
+    /// Prompt tokens written to the cache this turn (Anthropic bills them at
+    /// a premium over plain input). Also a part of `prompt_tokens`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_write_tokens: Option<u64>,
+    /// The share of `cache_write_tokens` written with the one-hour lifetime,
+    /// which bills at twice the input price rather than 1.25×. Pricing only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_write_long_tokens: Option<u64>,
 }
 
 impl AiUsage {
@@ -1577,6 +1585,8 @@ impl AiUsage {
             && self.prompt_eval_duration_ms.is_none()
             && self.cost_usd.is_none()
             && self.context_window.is_none()
+            && self.cache_read_tokens.is_none()
+            && self.cache_write_tokens.is_none()
     }
 }
 
@@ -1732,6 +1742,12 @@ pub(crate) struct ProviderTurn {
     pub num_ctx: Option<usize>,
     pub num_predict: Option<usize>,
     pub reflection_level: Option<String>,
+    /// Cache this conversation for an hour rather than five minutes: a person
+    /// is in it, and the gap before their next message — or a pause for a diff
+    /// review — routinely outlasts the short lifetime. Headless Runs and
+    /// one-off calls keep the short one; their next request comes seconds
+    /// later. Only Anthropic reads it.
+    pub cache_hour: bool,
 }
 
 /// Where a turn routes, decided before any network call — the pure half of
@@ -1802,6 +1818,7 @@ pub(crate) async fn dispatch(
         num_ctx,
         num_predict,
         reflection_level,
+        cache_hour,
     } = turn;
     // Keys resolve against *this turn's* workspace, not whatever folder the
     // window has open — a run must not lose its `.env` because the UI moved
@@ -1822,6 +1839,7 @@ pub(crate) async fn dispatch(
                 false,
                 custom_token(&id, key_scope.as_deref()),
                 None,
+                crate::adapters::OpenAiCache::default(),
                 model,
                 messages,
                 tools,
@@ -1868,6 +1886,7 @@ pub(crate) async fn dispatch(
                 messages,
                 tools,
                 reflection_level,
+                cache_hour,
                 on_chunk,
             )
             .await
@@ -1890,6 +1909,7 @@ pub(crate) async fn dispatch(
                 } else {
                     None
                 },
+                crate::adapters::OpenAiCache::for_turn(provider_id, &model, run_id.as_deref()),
                 model,
                 messages,
                 tools,

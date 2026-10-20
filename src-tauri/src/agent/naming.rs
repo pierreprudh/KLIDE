@@ -185,6 +185,7 @@ pub async fn name(namer: &PreferredModel, first_message: &str, workspace_root: O
         num_ctx: None,
         num_predict: Some(NAME_TOKENS),
         reflection_level: None,
+        cache_hour: false,
     };
     let response = match tokio::time::timeout(NAME_TIMEOUT, providers::dispatch(turn, &sink)).await {
         Ok(Ok(response)) => response,

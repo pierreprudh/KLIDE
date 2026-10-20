@@ -304,6 +304,7 @@ impl Describer for LiveEyes {
             num_ctx: None,
             num_predict: None,
             reflection_level: None,
+        cache_hour: false,
         };
         let response = tokio::time::timeout(DESCRIBE_TIMEOUT, providers::dispatch(turn, &sink))
             .await
@@ -543,7 +544,7 @@ mod tests {
             eval_duration_ms: None,
             prompt_eval_duration_ms: None,
             cost_usd: Some(cost),
-            context_window: None,
+            context_window: None,cache_read_tokens: None, cache_write_tokens: None,
         }
     }
 

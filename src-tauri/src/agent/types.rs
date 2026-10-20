@@ -395,6 +395,14 @@ pub struct AgentUsage {
     /// window is a fixed property of the model.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub context_window: Option<u64>,
+    /// Prompt tokens the provider served from its prompt cache — a part of
+    /// `prompt_tokens`, not added to it. What says the cache is working.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_read_tokens: Option<u64>,
+    /// Prompt tokens written to the cache this turn — also a part of
+    /// `prompt_tokens`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_write_tokens: Option<u64>,
 }
 
 /// Wall-clock timing for one provider turn, measured in the harness around the
@@ -558,6 +566,7 @@ impl AgentEvent {
             | AgentEvent::RunResult { ts, .. }
             | AgentEvent::RunError { ts, .. }
             | AgentEvent::ContextCompacted { ts, .. }
+            | AgentEvent::ContextInjected { ts, .. }
             | AgentEvent::UserQuestionRequested { ts, .. }
             | AgentEvent::UserQuestionResolved { ts, .. }
             | AgentEvent::SubagentRequested { ts, .. }
@@ -798,6 +807,20 @@ pub enum AgentEvent {
         summary: String,
         ts: i64,
     },
+    /// A message the loop put in front of the model that nobody typed — a
+    /// TODO snapshot, a steering nudge, a requested skill's instructions, a
+    /// `/goal` check's verdict — with the exact role and text it rode as.
+    /// Replay puts it back where it was, so a continuation's prompt opens with
+    /// the very bytes the provider cached on the turn before; leaving these out
+    /// changed the history at its first snapshot and the cache missed from
+    /// there. Not something a surface shows: `SteeringInjected` is the line
+    /// for people.
+    ContextInjected {
+        run_id: String,
+        role: String,
+        content: String,
+        ts: i64,
+    },
     /// The loop monitor detected the run repeating a tool call without progress
     /// and injected a one-time steering nudge into the model's context. `reason`
     /// is the short human-readable line the transcript shows (the long nudge the
@@ -982,7 +1005,7 @@ mod tests {
             eval_duration_ms: Some(450),
             prompt_eval_duration_ms: None,
             cost_usd: None,
-            context_window: Some(32_768),
+            context_window: Some(32_768),cache_read_tokens: None, cache_write_tokens: None,
         };
         let v = serde_json::to_value(&u).expect("serialize");
         assert_eq!(v["promptTokens"], 120);
@@ -1023,7 +1046,7 @@ mod tests {
                 eval_duration_ms: Some(200),
                 prompt_eval_duration_ms: None,
                 cost_usd: None,
-                context_window: None,
+                context_window: None,cache_read_tokens: None, cache_write_tokens: None,
             }),
             timing: None,
             ts: 1_700_000_000,
