@@ -86,6 +86,11 @@ pub fn clean(raw: &str) -> Option<String> {
         if end < start { break; }
         text.replace_range(start..end + "</think>".len(), "");
     }
+    // A thinking block the token cap cut off before it closed: everything
+    // after it is reasoning, never a name.
+    if let Some(start) = text.find("<think>") {
+        text.truncate(start);
+    }
     let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
     let dressing = |c: char| matches!(c, '"' | '“' | '”' | '\'' | '`' | '*' | '_' | '#' | '-' | ' ');
     let line = line.trim_matches(dressing).trim_end_matches('.').trim_matches(dressing);
@@ -215,6 +220,8 @@ mod tests {
         assert_eq!(clean("\"Understanding the project stack.\"\n"), Some("Understanding the project stack".into()));
         assert_eq!(clean("<think>they want a name</think>\n\nName: Picker row order"), Some("Picker row order".into()));
         assert_eq!(clean("  **Rail  title   rewrite**  "), Some("Rail title rewrite".into()));
+        assert_eq!(clean("<think>\nThe person wants a quiz about the project, so"), None);
+        assert_eq!(clean("<think>a</think>\n<think>\nstill going"), None);
         assert_eq!(clean(""), None);
         assert_eq!(clean("   \n  "), None);
         assert!(clean(&"word ".repeat(30)).is_none());
