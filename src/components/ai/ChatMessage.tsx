@@ -1649,11 +1649,13 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
     // Everything the model thought out loud, however it arrived — structured
     // block, inline <think> leak, or plan-JSON fallback (see extractThinking).
     const mergedThinking = thinkingOverride ?? extractThinking(m);
-    // Streaming: no content yet → show thinking open. After arrival: closed.
+    // Streaming: no answer yet → show thinking open. After arrival: closed.
+    // `visibleContent`, not the raw content: a model that thinks inline
+    // streams `<think>…` *as* content, and the live "Thinking" header must
+    // run for it too.
     const streaming =
       active &&
       visibleContent === "" &&
-      m.content === "" &&
       !!mergedThinking;
     return (
       <>
