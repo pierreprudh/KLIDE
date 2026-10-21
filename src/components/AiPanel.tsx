@@ -2156,6 +2156,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         runId: currentId,
         provider: oneShotProvider,
         model: oneShotModel,
+        contextWindow: effectiveContextLimit || null,
       });
       // The marker lands at the end of the transcript, after the turns it
       // keeps — the panel shows it where a reload will.

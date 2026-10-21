@@ -335,7 +335,9 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
 - [ ] Record peer-mail delivery in the transcript (it still breaks the cached
   prefix on the next turn).
 - [ ] Ollama replays continuations as text folds, so its KV prefix breaks at the
-  first prior tool call.
+  first prior tool call — and trimming / squeeze-to-fit can't see the folded
+  results (only the summary can fold them). Structured replay for Ollama would
+  fix both.
 - [ ] Upgrade ironcalc to 0.9 (zip ≥ 9) and drop the three ignores in
   `.cargo/audit.toml`.
 - [ ] Refresh base list prices in `pricing.rs` (e.g. gpt-5 input is $1.25, the
