@@ -138,6 +138,14 @@ function hasThinking(m: Msg): boolean {
  *  placeholder a streaming turn starts as). The answer is prose with no
  *  call behind it, or a call that draws a card: a planned Mission, a
  *  delegation — the agent addressing the operator (see `SPEAKING_TOOLS`). */
+/** A compaction marker the Run drew between two of its own steps. Inside a
+ *  stretch of work it is one more step — a line in the fold, like a call —
+ *  not a break that starts a second "Worked for". One before a turn, or a
+ *  Compact between turns, is not inside any run and keeps its own line. */
+function isCompactionMarker(m: Msg): boolean {
+  return m.role === "system" && !!m.compaction;
+}
+
 function isToolWork(m: Msg): boolean {
   if (m.role === "tool") return true;
   if (m.role !== "assistant") return false;
@@ -281,7 +289,9 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     // part of that sentence's turn, not the start of a new stretch of work —
     // folding it would repeat the names already drawn above the fold.
     const owner = pairing.claimed.get(i);
-    const work = owner !== undefined ? isToolWork(msgs[owner]) : isToolWork(msgs[i]) || stillArriving(msgs[i], i, opts, start);
+    const work = owner !== undefined
+      ? isToolWork(msgs[owner])
+      : isToolWork(msgs[i]) || (start >= 0 && isCompactionMarker(msgs[i])) || stillArriving(msgs[i], i, opts, start);
     if (work) {
       if (start < 0) start = i;
       continue;
