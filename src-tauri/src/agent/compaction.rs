@@ -15,6 +15,7 @@
 //! model call and write the marker.
 
 use super::types::{AgentContentBlock, AgentEvent};
+use std::collections::HashSet;
 
 /// The events the model's conversation is made of: the newest marker's
 /// summary, the events it kept, then everything after it. Without a marker,
@@ -148,7 +149,7 @@ pub(super) fn summary_request(messages: &[serde_json::Value]) -> Vec<serde_json:
 /// from the folded turns, word for word: what the user asked is the one fact
 /// a weak summary must not be allowed to lose ("what's my first message?"),
 /// and it costs a few hundred tokens.
-pub(super) fn summary_text(model_notes: &str, events: &[AgentEvent], cut: Cut) -> String {
+pub(super) fn summary_text(model_notes: &str, events: &[AgentEvent], cut: Cut, stored: &HashSet<String>) -> String {
     let (answer, _thinking) = crate::adapters::split_thinking_tags(model_notes);
     let notes = answer.trim();
     let mut summary = if notes.is_empty() {
@@ -183,7 +184,88 @@ pub(super) fn summary_text(model_notes: &str, events: &[AgentEvent], cut: Cut) -
             previous = Some(i);
         }
     }
+    summary.push_str(&tool_ledger(&events[..cut.start], stored));
     summary
+}
+
+/// What the folded turns *did*, from the events: each tool call with the
+/// argument that names it, failed ones marked, and — where the result was
+/// saved — the id to reopen it with. A small model's notes forget progress
+/// (dogfood: lfm2.5 re-read files it had already read after every
+/// compaction, compacting again each time); this list can't.
+fn tool_ledger(events: &[AgentEvent], stored: &HashSet<String>) -> String {
+    let failed: HashSet<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolCallFinished { tool_call_id, result, .. } if !result.ok => Some(tool_call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut lines: Vec<(String, String)> = Vec::new();
+    for event in events {
+        let AgentEvent::AssistantMessage { content, .. } = event else { continue };
+        for block in content {
+            let AgentContentBlock::ToolCall { tool_call_id, name, input } = block else { continue };
+            let arg = ["path", "command", "query", "pattern", "url", "id"]
+                .iter()
+                .find_map(|k| input.get(*k).and_then(|v| v.as_str()))
+                .map(str::to_string)
+                .unwrap_or_else(|| clip(&input.to_string(), 80));
+            let key = format!("{name} {arg}");
+            let mut line = format!("- {key}");
+            if failed.contains(tool_call_id.as_str()) {
+                line.push_str(" (failed)");
+            } else if stored.contains(tool_call_id) {
+                line.push_str(&format!(" — result stored: peek_value id \"{}\"", super::retained::value_id(tool_call_id)));
+            }
+            // The same call again replaces its line: the newest result is the one to reopen.
+            lines.retain(|(k, _)| *k != key);
+            lines.push((key, line));
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    const MAX_LINES: usize = 40;
+    let hidden = lines.len().saturating_sub(MAX_LINES);
+    let mut out = String::from("\n\nAlready done in the folded turns — reopen a stored result with peek_value instead of running the call again:");
+    if hidden > 0 {
+        out.push_str(&format!("\n- … {hidden} earlier call(s)"));
+    }
+    for (_, line) in &lines[hidden..] {
+        out.push('\n');
+        out.push_str(line);
+    }
+    out
+}
+
+/// Save each folded tool result through `store` (the run's value store) and
+/// return the call ids that landed — the ledger's "reopen with" ids.
+pub(super) fn store_folded_results(
+    folded: &[AgentEvent],
+    store: &mut dyn FnMut(&str, &str, &str) -> bool,
+) -> HashSet<String> {
+    let names: std::collections::HashMap<&str, &str> = folded
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::AssistantMessage { content, .. } => Some(content.iter().filter_map(|b| match b {
+                AgentContentBlock::ToolCall { tool_call_id, name, .. } => Some((tool_call_id.as_str(), name.as_str())),
+                _ => None,
+            })),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    folded
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolCallFinished { tool_call_id, result, .. } if result.ok => {
+                let name = names.get(tool_call_id.as_str()).copied().unwrap_or("tool");
+                store(tool_call_id, name, &result.content).then(|| tool_call_id.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -362,11 +444,36 @@ mod tests {
         let mut events: Vec<AgentEvent> = (0..20).map(|i| user(&format!("request {i}"))).collect();
         events.push(assistant("ok"));
         let cut = Cut { start: 20, kept: 1 };
-        let summary = summary_text("notes", &events, cut);
+        let summary = summary_text("notes", &events, cut, &HashSet::new());
         assert!(summary.contains("\n1. request 0"), "the first request survives: {summary}");
         assert!(summary.contains("\n…\n10. request 9"), "{summary}");
-        assert!(summary.ends_with("\n20. request 19"));
+        assert!(summary.ends_with("\n20. request 19"), "no calls, no ledger");
         assert!(!summary.contains("request 3\n"), "the middle is elided");
+    }
+
+    #[test]
+    fn the_folded_calls_are_listed_with_where_to_reopen_them() {
+        let events = vec![
+            user("read them"),
+            calls("a.rs"),
+            result("a.rs", 4_000),
+            calls("b.rs"),
+            AgentEvent::ToolCallFinished {
+                run_id: "r".into(),
+                tool_call_id: "c-b.rs".into(),
+                result: ToolResult { ok: false, content: "no such file".into(), metadata: None },
+                ts: 0,
+            },
+            calls("a.rs"),
+            result("a.rs", 4_000),
+            assistant("ok"),
+        ];
+        let stored: HashSet<String> = ["c-a.rs".to_string()].into();
+        let summary = summary_text("notes", &events, Cut { start: 7, kept: 1 }, &stored);
+        let ledger = summary.split("Already done in the folded turns").nth(1).expect("a ledger");
+        assert!(ledger.contains("- read_file b.rs (failed)"), "{ledger}");
+        assert!(ledger.contains("- read_file a.rs — result stored: peek_value id"), "{ledger}");
+        assert_eq!(ledger.matches("read_file a.rs").count(), 1, "a repeated call is one line");
     }
 
     #[test]
@@ -381,16 +488,16 @@ mod tests {
     fn the_operators_request_survives_its_own_fold() {
         let events = vec![user("rename the parser module"), calls("a.rs"), result("a.rs", 4_000), calls("b.rs"), result("b.rs", 10)];
         let cut = Cut { start: 3, kept: 2 };
-        let summary = summary_text("Read a.rs; it defines Parser.", &events, cut);
+        let summary = summary_text("Read a.rs; it defines Parser.", &events, cut, &HashSet::new());
         assert!(summary.starts_with("Read a.rs"));
-        assert!(summary.ends_with("verbatim (oldest first):\n1. rename the parser module"), "{summary}");
-        let fallback = summary_text("  ", &events, cut);
+        assert!(summary.contains("verbatim (oldest first):\n1. rename the parser module"), "{summary}");
+        let fallback = summary_text("  ", &events, cut, &HashSet::new());
         assert!(fallback.contains("Files touched: a.rs"), "{fallback}");
         // A model that thinks inline: the reasoning goes, the notes stay.
-        let thought = summary_text("<think>\nWe need to read the file…</think>\nParser lives in a.rs.", &events, cut);
+        let thought = summary_text("<think>\nWe need to read the file…</think>\nParser lives in a.rs.", &events, cut, &HashSet::new());
         assert!(thought.starts_with("Parser lives in a.rs."), "{thought}");
         // Reasoning that never closed is no notes at all: the stand-in.
-        let unclosed = summary_text("<think>\nWe need to read the file", &events, cut);
+        let unclosed = summary_text("<think>\nWe need to read the file", &events, cut, &HashSet::new());
         assert!(unclosed.contains("Files touched: a.rs"), "{unclosed}");
     }
 }
