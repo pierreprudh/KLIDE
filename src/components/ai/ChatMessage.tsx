@@ -1153,9 +1153,8 @@ function compactSummaryCard(summary: string, centered: boolean) {
 }
 
 // Context-compaction. Two layouts, picked by `source`:
-//   "agent"  → a row of the conversation: the mark in the gutter where the
-//              agent marks sit, and the same disclosure line as "Worked for"
-//              in the text column, opening onto the summary.
+//   "agent"  → nested under the run: mark and line in the text column, the
+//              same disclosure line as "Worked for", opening onto the summary.
 //   "manual" → a full-width divider row (hairline · label · hairline), reading
 //              as a deliberate conversation boundary the user asked for.
 // Three states either way: running (live label), error (danger), done
@@ -1236,13 +1235,17 @@ export function CompactionRow({
     );
   }
 
-  // ---- Agent: a conversation row — mark in the gutter, line in the text column
+  // ---- Agent: nested under the run — the gutter stays the agent marks',
+  // and the mark + line start in the text column, where "Worked for" starts.
   return (
     <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-      <span aria-hidden="true" style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", color: tone }}>
-        <CompactionGlyph />
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>{line}</div>
+      <span aria-hidden="true" style={{ width: 22, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <span aria-hidden="true" style={{ height: 22, flexShrink: 0, display: "grid", placeItems: "center", color: tone }}>
+          <CompactionGlyph />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>{line}</div>
+      </div>
     </div>
   );
 }
