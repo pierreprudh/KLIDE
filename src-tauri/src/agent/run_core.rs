@@ -703,6 +703,62 @@ pub(super) fn prompt_fit_error(
     ))
 }
 
+/// The last resort before a request is refused for size: store tool results
+/// in the run's value store — recent ones too, which trimming protects — and
+/// leave `peek_value` stubs, until the request fits. Trimming and the summary
+/// both need *older* turns to fold; a single turn whose tool batch alone
+/// overflows the window (a small model reading nine files at once, measured)
+/// has none, and used to end the Run.
+///
+/// Results the provider hasn't seen yet — the batch after the newest
+/// assistant turn — go first: rewriting those costs the prompt cache nothing.
+/// Then older ones, oldest first. It stops as soon as the request fits, so it
+/// edits as little as it can. Where `retain` declines, a result becomes a
+/// header and an excerpt, as in trimming.
+pub(super) fn squeeze_to_fit(
+    messages: &mut [serde_json::Value],
+    tools: Option<&Vec<serde_json::Value>>,
+    context_window: usize,
+    reply_reserve: usize,
+    retain: &mut dyn FnMut(&str, &str, &str) -> Option<String>,
+) {
+    let fits = |m: &[serde_json::Value]| prompt_fit_error(m, tools, context_window, reply_reserve).is_none();
+    if fits(messages) {
+        return;
+    }
+    let squeezable = |m: &serde_json::Value| {
+        m["role"] == "tool"
+            && m["content"].as_str().is_some_and(|c| {
+                c.len() > MIN_COMPACTABLE_BYTES && !c.starts_with("[retained #") && !c.starts_with("[compacted: ")
+            })
+    };
+    let unsent_from = messages.iter().rposition(|m| m["role"] == "assistant").map_or(0, |i| i + 1);
+    let order: Vec<usize> = (unsent_from..messages.len())
+        .chain(0..unsent_from)
+        .filter(|&i| squeezable(&messages[i]))
+        .collect();
+    for i in order {
+        let name = messages[i]["name"].as_str().unwrap_or("tool").to_string();
+        let call_id = messages[i]["tool_call_id"].as_str().unwrap_or_default().to_string();
+        let content = messages[i]["content"].as_str().unwrap_or_default().to_string();
+        let stub = (!call_id.is_empty())
+            .then(|| retain(&call_id, &name, &content))
+            .flatten();
+        match stub {
+            Some(stub) => messages[i]["content"] = serde_json::Value::String(stub),
+            None => {
+                let summary = compacted_tool_summary(&name, &content);
+                if summary.len() < content.len() {
+                    messages[i]["content"] = serde_json::Value::String(summary);
+                }
+            }
+        }
+        if fits(messages) {
+            return;
+        }
+    }
+}
+
 /// Auto-compaction, expressed purely. Replaces the body of *older* verbose
 /// `role: "tool"` messages with something short so a long conversation doesn't
 /// blow the model's context window while still preserving the shape of what
@@ -1146,6 +1202,31 @@ mod tests {
             parallel_read_calls(&calls, None, 3, |_call, _root| { Some(ToolKind::ReadOnly) })
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn an_overflowing_batch_is_squeezed_unsent_first_and_only_as_far_as_needed() {
+        let body = "line of a file\n".repeat(800); // ~12 KB, ~3k tokens
+        let mut messages = vec![
+            serde_json::json!({ "role": "system", "content": "sys" }),
+            serde_json::json!({ "role": "user", "content": "read them all" }),
+            serde_json::json!({ "role": "tool", "tool_call_id": "old", "name": "read_file", "content": body }),
+            serde_json::json!({ "role": "assistant", "content": "", "tool_calls": [] }),
+        ];
+        for i in 0..4 {
+            messages.push(serde_json::json!({ "role": "tool", "tool_call_id": format!("new{i}"), "name": "read_file", "content": body }));
+        }
+        let mut retained = Vec::new();
+        let mut retain = |id: &str, _: &str, _: &str| {
+            retained.push(id.to_string());
+            Some(format!("[retained #{id}] stub"))
+        };
+        // Room for roughly three of the five results.
+        let window = estimate_prompt_tokens(&messages) - 2 * (body.len() / 4) + 100;
+        squeeze_to_fit(&mut messages, None, window, 0, &mut retain);
+        assert_eq!(retained, vec!["new0", "new1"], "unsent results first, and no more than needed");
+        assert_eq!(messages[2]["content"], body, "the sent prefix is untouched");
+        assert!(prompt_fit_error(&messages, None, window, 0).is_none());
     }
 
     #[test]
