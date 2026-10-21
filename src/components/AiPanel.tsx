@@ -209,6 +209,7 @@ import {
   contextTone as contextToneFor,
   conversationCost,
   lastCompactionIndex,
+  COMPACT_OFFER_RATIO,
   conversationTokenEstimate,
 } from "./ai/contextBudget";
 import { TweenedNumber } from "./ai/TweenedNumber";
@@ -5161,13 +5162,22 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
-              {/* The gauge is also the Compact action: the ring is where the
-                  fullness is read, so it is where it is relieved. */}
-              <button ref={contextTriggerRef} type="button"
-                aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${canCompact ? " — click to compact" : ""}`}
-                disabled={compacting}
-                onClick={() => { if (canCompact) { closeContextTooltip(); void compactConversation(); } }}
-                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: canCompact ? "pointer" : "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
+              {/* Compact, beside the gauge it relieves: the notification's
+                  pill, shown once the conversation is half full. The Run
+                  compacts by itself when it has to; this is "now". */}
+              {(canCompact || compacting) && contextRatio >= COMPACT_OFFER_RATIO && (
+                <button type="button" disabled={compacting} onClick={() => void compactConversation()}
+                  title="Fold the older turns into notes now; the newest stay"
+                  style={{ flexShrink: 0, height: 26, padding: "0 11px", display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, border: "none", background: "color-mix(in srgb, var(--fg) 7%, transparent)", color: "var(--fg-strong)", fontSize: 12, fontFamily: "var(--font-ui)", cursor: compacting ? "default" : "pointer", opacity: compacting ? 0.7 : 1, transition: "transform 160ms var(--ease-out)" }}
+                  onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.96)"; }}
+                  onPointerUp={(e) => { e.currentTarget.style.transform = ""; }}
+                  onPointerLeave={(e) => { e.currentTarget.style.transform = ""; }}>
+                  <CompactIcon size={13} />
+                  {compacting ? "Compacting…" : "Compact"}
+                </button>
+              )}
+              <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
+                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
                 onMouseEnter={(e) => { openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseLeave={(e) => { closeContextTooltip(); e.currentTarget.style.background = "transparent"; }}
                 onFocus={openContextTooltip}
@@ -5213,12 +5223,6 @@ This user request requires workspace inspection. Before answering, you MUST call
                       })}
                     </div>
                     <div style={{ height: 1, background: "var(--border)", margin: "10px 0 8px" }} />
-                    {canCompact && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--fg)", fontSize: 12, margin: "0 0 8px" }}>
-                        <CompactIcon size={14} />
-                        <span>Click the ring to compact — older turns fold into notes, the newest stay.</span>
-                      </div>
-                    )}
                     <div style={{ display: "grid", gap: 4, color: "var(--fg-dim)", fontSize: 10.5, lineHeight: 1.35 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                         <span>Prompt + draft</span>
