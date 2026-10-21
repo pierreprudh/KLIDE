@@ -1193,10 +1193,13 @@ export function CompactionRow({
   );
   const tone = failed ? "var(--danger)" : "var(--fg-subtle)";
   const expandable = !failed && status === "done" && !!summary;
+  // FoldLine turns its chevron from `expanded`, inline — so the row tracks
+  // its own open state rather than leaving it to a stylesheet rule.
+  const [open, setOpen] = useState(false);
   const line = expandable ? (
-    <details className="klide-compaction" style={{ margin: 0 }}>
+    <details className="klide-compaction" style={{ margin: 0 }} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
       <summary style={{ ...foldLineStyle, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
-        <FoldLine expanded={false}>{text}</FoldLine>
+        <FoldLine expanded={open}>{text}</FoldLine>
       </summary>
       {compactSummaryCard(summary, source === "manual")}
     </details>
