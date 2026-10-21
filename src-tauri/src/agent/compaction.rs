@@ -146,9 +146,9 @@ pub(super) fn summary_request(messages: &[serde_json::Value]) -> Vec<serde_json:
 /// What the marker stores: the model's notes — its private reasoning cut
 /// away, since a model that thinks inline returns `<think>…` as text — or a
 /// deterministic stand-in when it wrote none. Then the user's own requests
-/// from the folded turns, word for word: what the user asked is the one fact
-/// a weak summary must not be allowed to lose ("what's my first message?"),
-/// and it costs a few hundred tokens.
+/// from the folded turns, with the latest kept word for word: what the user
+/// asked is the one fact a weak summary must not lose ("what's my first
+/// message?"), even when a constraint is at the end of a long request.
 pub(super) fn summary_text(model_notes: &str, events: &[AgentEvent], cut: Cut, stored: &HashSet<String>) -> String {
     let (answer, _thinking) = crate::adapters::split_thinking_tags(model_notes);
     let notes = answer.trim();
@@ -160,7 +160,7 @@ pub(super) fn summary_text(model_notes: &str, events: &[AgentEvent], cut: Cut, s
     let requests: Vec<&str> = events[..cut.start]
         .iter()
         .filter_map(|e| match e {
-            AgentEvent::UserMessage { text, .. } if !text.trim().is_empty() => Some(text.trim()),
+            AgentEvent::UserMessage { text, .. } if !text.trim().is_empty() => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -174,13 +174,18 @@ pub(super) fn summary_text(model_notes: &str, events: &[AgentEvent], cut: Cut, s
         .filter(|(i, _)| *i == 0 || *i + MAX_REQUESTS > requests.len())
         .collect();
     if !shown.is_empty() {
-        summary.push_str("\n\nThe user's requests in the folded turns, verbatim (oldest first):");
+        summary.push_str("\n\nThe user's requests in the folded turns (oldest first; latest verbatim, older requests may be shortened):");
         let mut previous = None;
         for (i, text) in shown {
             if previous.is_some_and(|p: usize| i > p + 1) {
                 summary.push_str("\n…");
             }
-            summary.push_str(&format!("\n{}. {}", i + 1, clip(text, 600)));
+            summary.push_str(&format!("\n{}. ", i + 1));
+            if i + 1 == requests.len() {
+                summary.push_str(text);
+            } else {
+                summary.push_str(&clip(text, 600));
+            }
             previous = Some(i);
         }
     }
@@ -212,7 +217,11 @@ fn tool_ledger(events: &[AgentEvent], stored: &HashSet<String>) -> String {
                 .map(str::to_string)
                 .unwrap_or_else(|| clip(&input.to_string(), 80));
             let key = format!("{name} {arg}");
-            let mut line = format!("- {key}");
+            // Deduplicate on the full arguments, but only carry a short,
+            // single-line label. Commands can contain whole scripts; copying
+            // those into the notes defeats compaction. Keep the reopen id
+            // outside the clipped label so it always remains usable.
+            let mut line = format!("- {}", clip(&key.replace(['\r', '\n'], " "), 240));
             if failed.contains(tool_call_id.as_str()) {
                 line.push_str(" (failed)");
             } else if stored.contains(tool_call_id) {
@@ -227,8 +236,21 @@ fn tool_ledger(events: &[AgentEvent], stored: &HashSet<String>) -> String {
         return String::new();
     }
     const MAX_LINES: usize = 40;
-    let hidden = lines.len().saturating_sub(MAX_LINES);
-    let mut out = String::from("\n\nAlready done in the folded turns — reopen a stored result with peek_value instead of running the call again:");
+    const MAX_BYTES: usize = 8_192;
+    const HEADER: &str = "\n\nAlready done in the folded turns — reopen a stored result with peek_value instead of running the call again:";
+    // Keep the newest entries within a byte budget as well as a line limit:
+    // a Unicode label can cost several bytes per character. Reserve space
+    // for the omitted-call count rather than clipping any result id.
+    let mut bytes = HEADER.len() + 80;
+    let mut hidden = lines.len();
+    for (_, line) in lines.iter().rev().take(MAX_LINES) {
+        if bytes + 1 + line.len() > MAX_BYTES {
+            break;
+        }
+        bytes += 1 + line.len();
+        hidden -= 1;
+    }
+    let mut out = String::from(HEADER);
     if hidden > 0 {
         out.push_str(&format!("\n- … {hidden} earlier call(s)"));
     }
@@ -452,6 +474,57 @@ mod tests {
     }
 
     #[test]
+    fn the_latest_folded_request_keeps_constraints_after_600_characters() {
+        let request = format!("\n  {}\nDo not deploy or delete any files.\n", "背景🦀 ".repeat(200));
+        let events = vec![user("the first request"), user(&request), assistant("ok")];
+        for notes in ["Work so far.", ""] {
+            let summary = summary_text(notes, &events, Cut { start: 2, kept: 1 }, &HashSet::new());
+            assert!(summary.contains(&request), "the latest request must survive in full: {summary}");
+        }
+    }
+
+    #[test]
+    fn a_ledger_of_long_commands_is_bounded_and_keeps_the_newest_reopen_ids() {
+        let mut events = Vec::new();
+        let mut stored = HashSet::new();
+        for i in 0..80 {
+            let id = format!("command-{i}");
+            stored.insert(id.clone());
+            events.push(AgentEvent::AssistantMessage {
+                run_id: "r".into(), message_id: format!("a-{i}"),
+                content: vec![AgentContentBlock::ToolCall {
+                    tool_call_id: id, name: "run_command".into(),
+                    input: serde_json::json!({ "command": format!("echo {i}\n{}", "背景🦀".repeat(2_000)) }),
+                }],
+                usage: None, timing: None, ts: 0,
+            });
+        }
+        let ledger = tool_ledger(&events, &stored);
+        assert!(ledger.len() <= 8_192, "ledger grew to {} bytes", ledger.len());
+        assert!(ledger.contains("earlier call(s)"));
+        assert!(ledger.contains("peek_value id \"command-79\""));
+        assert!(!ledger.contains("peek_value id \"command-0\""));
+        assert!(ledger.lines().filter(|line| line.starts_with("- run_command")).all(|line| line.chars().count() < 400));
+    }
+
+    #[test]
+    fn ledger_deduplication_uses_the_full_arguments_not_the_shortened_labels() {
+        let prefix = "echo ".repeat(200);
+        let events: Vec<_> = ["first", "second"].iter().map(|suffix| AgentEvent::AssistantMessage {
+            run_id: "r".into(), message_id: suffix.to_string(),
+            content: vec![AgentContentBlock::ToolCall {
+                tool_call_id: suffix.to_string(), name: "run_command".into(),
+                input: serde_json::json!({ "command": format!("{prefix}{suffix}") }),
+            }],
+            usage: None, timing: None, ts: 0,
+        }).collect();
+        let stored = ["first".to_string(), "second".to_string()].into();
+        let ledger = tool_ledger(&events, &stored);
+        assert!(ledger.contains("peek_value id \"first\""));
+        assert!(ledger.contains("peek_value id \"second\""));
+    }
+
+    #[test]
     fn the_folded_calls_are_listed_with_where_to_reopen_them() {
         let events = vec![
             user("read them"),
@@ -490,7 +563,7 @@ mod tests {
         let cut = Cut { start: 3, kept: 2 };
         let summary = summary_text("Read a.rs; it defines Parser.", &events, cut, &HashSet::new());
         assert!(summary.starts_with("Read a.rs"));
-        assert!(summary.contains("verbatim (oldest first):\n1. rename the parser module"), "{summary}");
+        assert!(summary.contains("\n1. rename the parser module"), "{summary}");
         let fallback = summary_text("  ", &events, cut, &HashSet::new());
         assert!(fallback.contains("Files touched: a.rs"), "{fallback}");
         // A model that thinks inline: the reasoning goes, the notes stay.

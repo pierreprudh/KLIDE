@@ -6490,7 +6490,7 @@ mod run_loop_tests {
             })
             .expect("the run compacted itself");
         assert!(notes.starts_with("NOTES:"), "{notes}");
-        assert!(notes.contains("verbatim (oldest first):\n1. Read the four files."), "the request survives: {notes}");
+        assert!(notes.contains("\n1. Read the four files."), "the request survives: {notes}");
         assert!(notes.contains("- read_file f0.txt — result stored: peek_value id"), "the ledger points at stored results: {notes}");
         assert!(kept.unwrap() >= 2, "the newest turn stays verbatim: {kept:?}");
 
