@@ -134,8 +134,31 @@ pub fn list_price_for_model(model: &str) -> Option<ModelPricing> {
     }
     // OpenAI (direct). Caching is automatic; a cached input token bills at
     // the published cached-input rate.
-    if m.starts_with("gpt-5") {
-        return Some(ModelPricing::new(2.5, 10.0, Some(0.25)));
+    // The GPT-5 family runs from $0.05 to $30/M input, so one prefix row
+    // misprices most of it. Most specific first, as with Anthropic; cached
+    // input bills at a tenth. An unlisted 5.x falls to `gpt-5`'s price.
+    const OPENAI_GPT5: &[(&str, f64, f64)] = &[
+        ("gpt-5.6-sol", 4.0, 20.0),
+        ("gpt-5.6-terra", 2.0, 12.0),
+        ("gpt-5.6-luna", 0.20, 1.20),
+        ("gpt-5.5-pro", 30.0, 180.0),
+        ("gpt-5.5", 5.0, 30.0),
+        ("gpt-5.4-pro", 30.0, 180.0),
+        ("gpt-5.4-nano", 0.20, 1.25),
+        ("gpt-5.4-mini", 0.75, 4.50),
+        ("gpt-5.4", 2.50, 15.0),
+        ("gpt-5.3", 1.75, 14.0),
+        ("gpt-5.2-pro", 21.0, 168.0),
+        ("gpt-5.2", 1.75, 14.0),
+        ("gpt-5.1-codex-mini", 0.25, 2.0),
+        ("gpt-5.1", 1.25, 10.0),
+        ("gpt-5-pro", 15.0, 120.0),
+        ("gpt-5-nano", 0.05, 0.40),
+        ("gpt-5-mini", 0.25, 2.0),
+        ("gpt-5", 1.25, 10.0),
+    ];
+    if let Some((_, input, output)) = OPENAI_GPT5.iter().find(|(prefix, _, _)| m.starts_with(prefix)) {
+        return Some(ModelPricing::new(*input, *output, Some(input / 10.0)));
     }
     if m.starts_with("gpt-4.1") {
         return Some(ModelPricing::new(2.5, 10.0, Some(0.625)));
@@ -228,7 +251,13 @@ mod tests {
 
     #[test]
     fn hosted_openai_matches_published_prices() {
-        assert_eq!(list_price_for_model("gpt-5"), Some(ModelPricing::new(2.5, 10.0, Some(0.25))));
+        assert_eq!(list_price_for_model("gpt-5"), Some(ModelPricing::new(1.25, 10.0, Some(0.125))));
+        assert_eq!(list_price_for_model("gpt-5-mini"), Some(ModelPricing::new(0.25, 2.0, Some(0.025))));
+        assert_eq!(list_price_for_model("gpt-5-nano"), Some(ModelPricing::new(0.05, 0.40, Some(0.005))));
+        assert_eq!(list_price_for_model("gpt-5.4"), Some(ModelPricing::new(2.5, 15.0, Some(0.25))));
+        assert_eq!(list_price_for_model("gpt-5.4-mini"), Some(ModelPricing::new(0.75, 4.5, Some(0.075))));
+        assert_eq!(list_price_for_model("gpt-5.6-luna"), Some(ModelPricing::new(0.20, 1.20, Some(0.02))));
+        assert_eq!(list_price_for_model("gpt-5.2-codex"), Some(ModelPricing::new(1.75, 14.0, Some(0.175))));
         assert_eq!(list_price_for_model("gpt-4.1"), Some(ModelPricing::new(2.5, 10.0, Some(0.625))));
     }
 
@@ -253,12 +282,12 @@ mod tests {
 
     #[test]
     fn cost_scales_linearly_with_tokens() {
-        // 1M input + 1M output at gpt-5 rates = 2.5 + 10 = 12.5 USD
+        // 1M input + 1M output at gpt-5 rates = 1.25 + 10 = 11.25 USD
         let c = list_price_cost("gpt-5", 1_000_000, 1_000_000).unwrap();
-        assert!((c - 12.5).abs() < 1e-9);
-        // Half a million each = 6.25
+        assert!((c - 11.25).abs() < 1e-9);
+        // Half a million each = 5.625
         let c = list_price_cost("gpt-5", 500_000, 500_000).unwrap();
-        assert!((c - 6.25).abs() < 1e-9);
+        assert!((c - 5.625).abs() < 1e-9);
     }
 
     #[test]

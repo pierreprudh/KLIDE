@@ -1808,6 +1808,38 @@ impl ops::CoordinationHost for SupervisorHost<'_> {
     }
 }
 
+/// `auto` becomes a concrete pair here, before anything downstream reads the
+/// provider: the failure budget, the summary, the RunStarted line and the
+/// adapters all see what will actually run. A continuation reuses the pair
+/// its own transcript recorded — the choice is locked for the conversation,
+/// never remade per turn. The system prompt was written before the pick, so
+/// the model it names is filled in here; locked, so every turn writes the
+/// same bytes.
+async fn route_auto(runs_dir: &Path, id: &str, request: &mut StartRunRequest) -> Result<(), String> {
+    if !routing::is_auto(&request.provider) {
+        return Ok(());
+    }
+    match read_run_origin(runs_dir, id)? {
+        Some(origin) => {
+            request.provider = origin.provider;
+            request.model = origin.model;
+        }
+        None => {
+            let resolved = routing::resolve(request).await?;
+            request.provider = resolved.provider;
+            request.model = resolved.model;
+            request.routed = Some(RouteDecision {
+                reason: resolved.reason,
+                skipped: resolved.skipped,
+            });
+        }
+    }
+    if let Some(prompt) = request.system_prompt.as_mut() {
+        *prompt = prompt.replace(routing::ROUTED_MODEL_TOKEN, &request.model);
+    }
+    Ok(())
+}
+
 async fn start_run(
     app: tauri::AppHandle,
     mut request: StartRunRequest,
@@ -1864,28 +1896,7 @@ async fn start_run(
         .unwrap_or_else(run_id);
     // The id names the transcript file — refuse anything path-shaped.
     validate_run_id(&id)?;
-    // `auto` becomes a concrete pair here, before anything downstream reads the
-    // provider: the failure budget, the summary, the RunStarted line and the
-    // adapters all see what will actually run. A continuation reuses the pair
-    // its own transcript recorded — the choice is locked for the conversation,
-    // never remade per turn.
-    if routing::is_auto(&request.provider) {
-        match read_run_origin(&runs_dir, &id)? {
-            Some(origin) => {
-                request.provider = origin.provider;
-                request.model = origin.model;
-            }
-            None => {
-                let resolved = routing::resolve(&request).await?;
-                request.provider = resolved.provider;
-                request.model = resolved.model;
-                request.routed = Some(RouteDecision {
-                    reason: resolved.reason,
-                    skipped: resolved.skipped,
-                });
-            }
-        }
-    }
+    route_auto(&runs_dir, &id, &mut request).await?;
     let mission_link = match (
         request.workspace_root.clone(),
         request.mission_id.clone(),
@@ -6332,6 +6343,26 @@ mod run_loop_tests {
         )
         .await
         .expect("run loop settles without an infrastructure error");
+    }
+
+    /// An Auto continuation stays on the pair its first turn ran on, and the
+    /// prompt names that model — never the word `auto`, which a model reads as
+    /// "re-routed every turn".
+    #[tokio::test]
+    async fn an_auto_continuation_is_locked_and_its_prompt_names_the_model() {
+        let (runs_dir, root) = sandbox("auto-lock");
+        let first = ScriptedProviderCaller::new(vec![scripted_turn("First answer.", vec![])]);
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        drive_loop(sup.clone(), &runs_dir, "thread", test_request(&root, &[]), first).await;
+
+        let mut request = test_request(&root, &[]);
+        request.provider = routing::AUTO_PROVIDER.to_string();
+        request.model = routing::AUTO_MODEL.to_string();
+        request.system_prompt = Some(format!("You are Kit, running on the `{}` model.", routing::ROUTED_MODEL_TOKEN));
+        route_auto(&runs_dir, "thread", &mut request).await.unwrap();
+        assert_eq!(request.model, "mock-model");
+        assert!(request.routed.is_none(), "a locked turn records no new route");
+        assert_eq!(request.system_prompt.as_deref(), Some("You are Kit, running on the `mock-model` model."));
     }
 
     /// A follow-up turn records the pair it ran on. The Transcript's first

@@ -91,11 +91,23 @@ because an unpriced candidate ranks after every priced one.
 
 | Tier | Members | Order inside the tier |
 |---|---|---|
-| 1 | starred | nearest the task's rung; then cheapest input price, unknown price last |
+| 1 | starred | nearest the task's rung; then cheapest, unknown price last |
 | 2 | ladder + local | nearest the task's rung; then Ollama's default; then cheapest |
 
-A starred model takes its rung from its Provider's ladder; a star on no
-ladder (a self-hosted endpoint) ranks as if it sat at the wanted rung. A
+**Price** is blended the way an agent turn spends tokens: three input to one
+output, `(3·in + out) / 4` per million (`models::model_blended_price`). Input
+alone misranks: OpenRouter lists `z-ai/glm-5.2` at $0.03/M in — the floor of
+34 endpoints, one fp4 host — and $7/M out, and it billed ~$0.62/M in on the
+endpoint OpenRouter actually routed to. Blended it is $1.78/M.
+
+A starred model takes its rung from its Provider's ladder. A star on no
+ladder — an OpenRouter model, a self-hosted one — takes the rung its blended
+price sits at (`rung_for_price`): under $0.75/M is light, from $6/M strong,
+standard between; the bands are read off the Anthropic and OpenAI ladders
+(Haiku and gpt-5-mini under the first, Opus over the second), and a test
+keeps them agreeing. Only an unpriced star on no ladder ranks as if it sat
+at the wanted rung. Before this, every star on no ladder sat at every rung,
+so with a dozen OpenRouter stars the cheapest-to-ask won every job. A
 local model is free, so at its rung it leads every hosted one — Chat goes
 local — and at the wrong rung a keyed model that fits the job leads it — a
 Goal goes to the standard model. Stars reorder this; nothing else does.
@@ -142,9 +154,9 @@ code.
 
 ```json
 { "type": "route_resolved",
-  "provider": "anthropic", "model": "claude-sonnet-4-6",
-  "reason": "cheapest · standard rung · $3/M · tools · 200k window",
-  "skipped": ["anthropic claude-haiku-4-5: cannot use tools"] }
+  "provider": "anthropic", "model": "claude-sonnet-5-5",
+  "reason": "cheapest · standard rung · $4.00/M blended · tools · 200k window",
+  "skipped": ["anthropic claude-haiku-5-5: cannot use tools"] }
 ```
 
 The reason names the rung the pick answered from. When nothing sat at the
@@ -154,6 +166,13 @@ bench with nothing better on it, not a routing mistake.
 
 `skipped` names every candidate that ranked *above* the pick and what ruled it
 out. The decision is auditable, not just its outcome.
+
+The model is told too. The renderer writes the system prompt before the pick,
+so on an Auto turn it names a slot, `{{klide:routed-model}}`
+(`ROUTED_MODEL_TOKEN`, drift-tested on both sides), and `start_run` fills in
+the routed model — the locked one on a continuation, so the prompt is the
+same bytes every turn and the cache holds. A model told it ran on "`auto`"
+said it was re-routed every turn.
 
 When nothing passes, the run does not start and the error says what was tried:
 

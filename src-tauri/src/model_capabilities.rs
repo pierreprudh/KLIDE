@@ -1194,7 +1194,7 @@ mod tests {
         // And the same id under a hosted Provider is priced.
         assert!(matches!(price_class("anthropic", "claude-sonnet-4-6"), PriceClass::Priced(_)));
         assert!(matches!(price_class("deepseek", "deepseek-chat"), PriceClass::Priced(_)));
-        assert!((cost_for_run("openai", "gpt-5", 1_000_000, 1_000_000).unwrap() - 12.5).abs() < 1e-9);
+        assert!((cost_for_run("openai", "gpt-5", 1_000_000, 1_000_000).unwrap() - 11.25).abs() < 1e-9);
         // Hosted but unpriced, a self-hosted endpoint, and `auto`: unknown.
         assert_eq!(price_class("openai", "gpt-9001-future"), PriceClass::Unknown);
         assert_eq!(price_class("custom:my-gateway", "gpt-5"), PriceClass::Unknown);

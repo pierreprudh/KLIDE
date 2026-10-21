@@ -337,8 +337,13 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
   fix both.
 - [ ] Upgrade ironcalc to 0.9 (zip ≥ 9) and drop the three ignores in
   `.cargo/audit.toml`.
-- [ ] Refresh base list prices in `pricing.rs` (e.g. gpt-5 input is $1.25, the
-  table says $2.50); cached-rate ratios are current.
+- [ ] Refresh base list prices in `pricing.rs`. The GPT-5 family is current
+  (2026-10-22, per version from OpenRouter's pass-through listing); the
+  Mistral, xAI and DeepSeek rows are unchecked, and Auto ranks on them.
+- [ ] Dogfood Auto in the app (the Rust side was probed live 2026-10-21,
+  `auto_on_this_bench`): picker row, the meta line names the routed model, a
+  follow-up stays on it, stars reorder the pick, reopen restores the thread,
+  and "which model are you?" gets the routed model's name.
 
 ## Small Follow-Ups
 

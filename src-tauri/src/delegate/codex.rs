@@ -880,9 +880,9 @@ mod tests {
         assert_eq!(run.output_tokens, 55);
         assert_eq!(run.files_touched, 0);
         assert_eq!(run.status, "running", "the latest turn starts with a user message");
-        // gpt-5.4 at 600 input + 55 output = 0.0015 + 0.00055.
+        // gpt-5.4 at 600 input + 55 output = 0.0015 + 0.000825.
         let c = run.cost_usd.expect("gpt-5.4 has a known price");
-        assert!((c - 0.00205).abs() < 1e-6, "got {c}");
+        assert!((c - 0.002325).abs() < 1e-6, "got {c}");
     }
 
     #[test]

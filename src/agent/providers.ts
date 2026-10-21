@@ -52,6 +52,13 @@ export const CLI_DEFAULT_MODEL = "default";
  *  the Rust `frontend_auto_sentinel_matches` test keeps the two sides equal. */
 export const AUTO_PROVIDER = "auto";
 export const AUTO_MODEL = "auto";
+/** Stands where the system prompt names the model on an Auto turn. The
+ *  renderer can't know the pick — Rust makes it at run start — so it writes
+ *  this, and `start_run` puts the routed model in its place, the same model
+ *  every turn of the conversation (the choice is locked), so the prompt
+ *  stays byte-identical for the cache. Mirrored by `ROUTED_MODEL_TOKEN` in
+ *  `agent/routing.rs`. */
+export const ROUTED_MODEL_TOKEN = "{{klide:routed-model}}";
 
 export function isAutoProvider(id: string): boolean {
   return id === AUTO_PROVIDER;

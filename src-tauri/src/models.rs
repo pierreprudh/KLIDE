@@ -273,6 +273,19 @@ pub(crate) fn seed_listing(provider: &str, ids: &[String]) {
     OPENAI_MODEL_META_CACHE.lock().unwrap().insert(provider.to_string(), (Instant::now(), meta));
 }
 
+/// Test-only, live: fill the cache from the key's real listing, prices and
+/// windows included — what the running app holds after a picker opens.
+#[cfg(test)]
+pub(crate) async fn load_listing_live(provider: &str) -> Result<Vec<String>, String> {
+    let ids = ai_provider_models(provider.to_string()).await?;
+    let is_openai_wire = providers::lookup(provider)
+        .is_some_and(|e| matches!(e.models, providers::ModelsHandler::OpenAiModels));
+    if is_openai_wire {
+        fetch_openai_model_meta(provider).await;
+    }
+    Ok(ids)
+}
+
 fn listing_names<'a>(mut ids: impl Iterator<Item = &'a String>, model: &str) -> bool {
     ids.any(|id| {
         id == model
@@ -283,25 +296,33 @@ fn listing_names<'a>(mut ids: impl Iterator<Item = &'a String>, model: &str) -> 
     })
 }
 
-/// USD per million input tokens for one hosted model, from the Provider's
-/// price class first (a list price for Anthropic, OpenAI, …) and its `/models`
-/// metadata second (OpenRouter reports prices per model). `None` when neither
-/// knows — the router ranks an unpriced model after every priced one.
-pub(crate) async fn model_input_price(provider: &str, model: &str) -> Option<f64> {
+/// USD per million tokens for one hosted model, blended the way an agent
+/// turn spends them: three input tokens to every output token. Input alone
+/// misranks — OpenRouter lists `z-ai/glm-5.2` at $0.03/M in (its cheapest
+/// endpoint) and $7/M out. From the Provider's price class first (a list
+/// price for Anthropic, OpenAI, …) and its `/models` metadata second
+/// (OpenRouter reports prices per model); an unknown output price blends as
+/// the input one. `None` when neither knows — the router ranks an unpriced
+/// model after every priced one.
+pub(crate) async fn model_blended_price(provider: &str, model: &str) -> Option<f64> {
     if let crate::model_capabilities::PriceClass::Priced(price) =
         crate::model_capabilities::price_class(provider, model)
     {
-        return Some(price.input_per_million);
+        return Some(blend(price.input_per_million, Some(price.output_per_million)));
     }
     if let Some(entry) = providers::lookup(provider) {
         if matches!(entry.models, providers::ModelsHandler::OpenAiModels) {
             return openai_model_meta(provider)
                 .await
                 .get(model)
-                .and_then(|m| m.input_per_million);
+                .and_then(|m| Some(blend(m.input_per_million?, m.output_per_million)));
         }
     }
     None
+}
+
+fn blend(input: f64, output: Option<f64>) -> f64 {
+    (3.0 * input + output.unwrap_or(input)) / 4.0
 }
 
 /// `GET {OLLAMA_URL}/api/tags` with a 10-second in-process cache.
@@ -485,6 +506,11 @@ pub(crate) async fn openai_model_meta(provider: &str) -> HashMap<String, ModelMe
     if LISTINGS_OFFLINE {
         return HashMap::new();
     }
+    fetch_openai_model_meta(provider).await
+}
+
+/// The network half of `openai_model_meta`: fetch, parse, and fill the cache.
+pub(crate) async fn fetch_openai_model_meta(provider: &str) -> HashMap<String, ModelMeta> {
     let Some(entry) = providers::lookup(provider) else {
         return HashMap::new();
     };
