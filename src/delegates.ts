@@ -20,6 +20,7 @@ export const DELEGATES = [
   { id: "amp", label: "Amp", binary: "amp", supportsAccounts: false },
   { id: "cursor", label: "Cursor", binary: "cursor-agent", supportsAccounts: false },
   { id: "factory", label: "Factory", binary: "droid", supportsAccounts: false },
+  { id: "copilot", label: "Copilot", binary: "copilot", supportsAccounts: false },
   { id: "hermes", label: "Hermes", binary: "hermes", supportsAccounts: false },
 ] as const;
 

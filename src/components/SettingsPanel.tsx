@@ -191,6 +191,10 @@ const DELEGATE_COPY: Record<DelegateId, { description: string; modelNote: string
     description: "Factory's Droid CLI. Run droid to sign in.",
     modelNote: "Uses Droid's configured default model.",
   },
+  copilot: {
+    description: "GitHub Copilot CLI on your Copilot plan. Sign in with copilot login.",
+    modelNote: "Uses Copilot's default model; overrides follow Copilot's model names.",
+  },
   hermes: {
     description: "Nous Research's Hermes agent. Configure credentials with hermes setup.",
     modelNote: "Uses Hermes's configured provider and model.",
