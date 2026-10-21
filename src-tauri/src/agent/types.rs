@@ -108,6 +108,11 @@ pub struct StartRunRequest {
     /// harness default; a runaway-loop guard, not a task-size limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
+    /// Compact once the request fills this share of the context window
+    /// (0.3–0.95), before the point where it would have to. `None` compacts
+    /// only when needed. The panel's "Auto-compact at" choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_at: Option<f64>,
     /// Seconds a `run_command` may run before it's killed. `None` uses the
     /// harness default (180s); a hang guard, not a task limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]

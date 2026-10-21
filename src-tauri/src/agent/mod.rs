@@ -746,6 +746,7 @@ async fn run_subagent_to_completion(
         reflection_level: None,
         max_parallel_tools: None,
         max_turns: spec.max_turns,
+        compact_at: None,
         preferred_models: vec![],
         eyes: None,
         naming: None,
@@ -1086,6 +1087,21 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
             estimated_tokens: 0,
             omitted: Vec::new(),
         })
+}
+
+/// The prompt size (messages, schemas excluded) at which a Run compacts. The
+/// point it has to — `needed_at` — or earlier when the user chose a share of
+/// the window: the gauge reads messages and schemas together, so the chosen
+/// share is measured the same way.
+fn chosen_compact_threshold(needed_at: usize, compact_at: Option<f64>, context_window: usize, schema_tokens: usize) -> usize {
+    match compact_at.filter(|f| f.is_finite()) {
+        Some(share) => {
+            let share = share.clamp(0.3, 0.95);
+            let chosen = ((context_window as f64) * share) as usize;
+            needed_at.min(chosen.saturating_sub(schema_tokens)).max(1)
+        }
+        None => needed_at,
+    }
 }
 
 /// Add a message nobody typed to the live prompt and record it, in that
@@ -2382,10 +2398,10 @@ async fn loop_body(
             .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW),
     };
     let reply_reserve = request.num_predict.unwrap_or(4096);
-    let compact_threshold = compaction_threshold(context_window, reply_reserve).min(
-        context_window.saturating_sub(reply_reserve)
-            .saturating_sub(tool_schema_tokens(tools.as_ref())),
-    );
+    let schema_tokens = tool_schema_tokens(tools.as_ref());
+    let needed_at = compaction_threshold(context_window, reply_reserve)
+        .min(context_window.saturating_sub(reply_reserve).saturating_sub(schema_tokens));
+    let compact_threshold = chosen_compact_threshold(needed_at, request.compact_at, context_window, schema_tokens);
 
     // Mid-run loop monitor: watches recent tool-call signatures and, when the
     // model gets stuck repeating the same call, injects a one-time steering
@@ -5017,6 +5033,18 @@ mod turn_decision_tests {
             compacted, 0,
             "recent reads must stay verbatim for synthesis"
         );
+    }
+
+    #[test]
+    fn a_chosen_share_compacts_earlier_but_never_later_than_needed() {
+        // 32k window, 8k of schemas: 70% of the window is 22.9k, minus schemas.
+        assert_eq!(chosen_compact_threshold(20_000, Some(0.7), 32_768, 8_000), 22_937 - 8_000);
+        // A share past the point it has to compact changes nothing.
+        assert_eq!(chosen_compact_threshold(20_000, Some(0.95), 32_768, 8_000), 20_000);
+        assert_eq!(chosen_compact_threshold(20_000, None, 32_768, 8_000), 20_000);
+        // Nonsense is clamped, never zero.
+        assert_eq!(chosen_compact_threshold(20_000, Some(0.0), 32_768, 8_000), 9_830 - 8_000);
+        assert!(chosen_compact_threshold(20_000, Some(0.3), 1_000, 8_000) >= 1);
     }
 
     #[test]

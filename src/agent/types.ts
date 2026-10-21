@@ -429,6 +429,9 @@ export type StartAgentRunInput = {
   /** Max tool turns before handing back to the user. Omit for the harness
    *  default; a runaway-loop guard, not a task-size limit. */
   maxTurns?: number;
+  /** Compact once the request fills this share of the context window
+   *  (Rust `compact_at`); absent → only when needed. */
+  compactAt?: number;
   /** Seconds a run_command may run before it's killed. Omit for the harness
    *  default (180s). */
   commandTimeoutSecs?: number;

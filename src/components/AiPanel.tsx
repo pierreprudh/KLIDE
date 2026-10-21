@@ -345,6 +345,7 @@ type AiHarnessSettings = {
   reflectionLevels?: Record<string, string>;
   maxParallelTools?: number;
   maxTurns?: number;
+  compactAt?: number;
   commandTimeoutSecs?: number;
   testAfterEditCommand?: string;
   serverConcurrency?: number;
@@ -892,6 +893,8 @@ export function AiPanel({
   // …unless you'd rather not look at yourself. Off, the mark and its gutter
   // both go: the bubbles keep the right edge to themselves.
   const [showAskerAvatar] = useSetting(SETTINGS.showAskerAvatar);
+  // Read and written here: the gauge's panel sets the auto-compact share.
+  const [harnessStore, setHarnessStore] = useSetting(SETTINGS.harnessSettings);
   /** The mark for one response: what produced THAT turn. A thread continued on
    *  another model shows both, each against the turn it actually ran.
    *
@@ -1222,6 +1225,29 @@ export function AiPanel({
       };
     },
   });
+  // The gauge's panel opens on hover as a preview and stays open on a click,
+  // so its controls can be reached.
+  const [contextPinned, setContextPinned] = useState(false);
+  const contextPanelRef = useRef<HTMLDivElement>(null);
+  const unpinContext = useCallback(() => {
+    setContextPinned(false);
+    closeContextTooltip();
+  }, [closeContextTooltip]);
+  useEffect(() => {
+    if (!contextPinned) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (contextTriggerRef.current?.contains(t) || contextPanelRef.current?.contains(t)) return;
+      unpinContext();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") unpinContext(); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [contextPinned, unpinContext, contextTriggerRef]);
   const toggleMode = () => {
     setNextSendMode(null);
     setAgentMode((m) => {
@@ -3253,6 +3279,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       reflectionLevel,
       maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
       maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
+      compactAt: harnessStore.compactAt,
       commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
       requireDiffReview,
       autoApproveCommands: autoApproveCommands || undefined,
@@ -5161,23 +5188,28 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
-              {/* The gauge is also the Compact action: the ring is where the
-                  fullness is read, so it is where it is relieved. */}
+              {/* The gauge opens the context panel: a hover previews it, a
+                  click keeps it open with the compaction controls. */}
               <button ref={contextTriggerRef} type="button"
-                aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${canCompact ? " — click to compact" : ""}`}
-                disabled={compacting}
-                onClick={() => { if (canCompact) { closeContextTooltip(); void compactConversation(); } }}
-                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: canCompact ? "pointer" : "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
+                aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent — open the context panel`}
+                aria-expanded={contextPinned}
+                onClick={() => { if (contextPinned) unpinContext(); else { openContextTooltip(); setContextPinned(true); } }}
+                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "pointer", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
                 onMouseEnter={(e) => { openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { closeContextTooltip(); e.currentTarget.style.background = "transparent"; }}
+                onMouseLeave={(e) => { if (!contextPinned) closeContextTooltip(); e.currentTarget.style.background = "transparent"; }}
                 onFocus={openContextTooltip}
-                onBlur={closeContextTooltip}>
+                onBlur={() => { if (!contextPinned) closeContextTooltip(); }}>
                 <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="var(--border)" strokeWidth="1.6" />
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" pathLength="100" strokeDasharray={`${Math.max(2, Math.round(contextRatio * 100))} 100`} transform="rotate(-90 11 11)" style={{ transition: "stroke-dasharray var(--motion-med) var(--ease-out), stroke var(--motion-med) var(--ease-out)" }} />
                 </svg>
                 {contextHover && contextTooltipPos && createPortal(
-                  <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: Z.tooltip }}>
+                  <div ref={contextPanelRef} role={contextPinned ? "dialog" : "tooltip"} aria-label="Context window" className="popover-enter"
+                    // The panel is a React child of the ring: keep its clicks
+                    // from reaching the ring's toggle.
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: contextPinned ? "auto" : "none", cursor: "default", zIndex: Z.tooltip }}>
                     <div style={{ display: "flex", alignItems: contextTooltipPos.compact ? "start" : "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9 }}>
                       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>Context window</span>
                       <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}><TweenedNumber value={contextUsed} format={formatContextTokens} /> / {formatContextTokens(effectiveContextLimit)} (<TweenedNumber value={contextRatio * 100} format={formatPercentWhole} />%)</span>
@@ -5213,11 +5245,38 @@ This user request requires workspace inspection. Before answering, you MUST call
                       })}
                     </div>
                     <div style={{ height: 1, background: "var(--border)", margin: "10px 0 8px" }} />
-                    {canCompact && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--fg)", fontSize: 12, margin: "0 0 8px" }}>
-                        <CompactIcon size={14} />
-                        <span>Click the ring to compact — older turns fold into notes, the newest stay.</span>
+                    {contextPinned ? (
+                      <div style={{ display: "grid", gap: 9, margin: "0 0 10px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                          <span style={{ color: "var(--fg)", fontSize: 12 }}>Auto-compact at</span>
+                          <div role="radiogroup" aria-label="Auto-compact at" style={{ display: "flex", gap: 2, padding: 2, borderRadius: "var(--radius-sm)", background: "var(--bg-hover)" }}>
+                            {([undefined, 0.6, 0.7, 0.8, 0.9] as const).map((share) => {
+                              const on = harnessStore.compactAt === share;
+                              return (
+                                <button key={String(share)} type="button" role="radio" aria-checked={on}
+                                  title={share === undefined ? "Only when the conversation no longer fits" : `Once it fills ${Math.round(share * 100)}% of the window`}
+                                  onClick={() => setHarnessStore((prev) => {
+                                    const next = { ...prev };
+                                    if (share === undefined) delete next.compactAt; else next.compactAt = share;
+                                    return next;
+                                  })}
+                                  style={{ padding: "2px 7px", borderRadius: 4, border: "none", fontSize: 11.5, fontFamily: "var(--font-ui)", cursor: "pointer", background: on ? "var(--bg-elevated)" : "transparent", color: on ? "var(--fg-strong)" : "var(--fg-subtle)", boxShadow: on ? "0 0 0 1px var(--border)" : "none" }}>
+                                  {share === undefined ? "When needed" : `${Math.round(share * 100)}%`}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <button type="button" disabled={!canCompact || compacting}
+                          onClick={() => { unpinContext(); void compactConversation(); }}
+                          title={canCompact ? "Fold the older turns into notes now; the newest stay" : "Nothing to compact right now"}
+                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "5px 10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--bg)", color: canCompact ? "var(--fg-strong)" : "var(--fg-dim)", fontSize: 12, fontFamily: "var(--font-ui)", cursor: canCompact && !compacting ? "pointer" : "default" }}>
+                          <CompactIcon size={14} />
+                          {compacting ? "Compacting…" : "Compact now"}
+                        </button>
                       </div>
+                    ) : (
+                      <div style={{ color: "var(--fg-dim)", fontSize: 11, margin: "0 0 8px" }}>Click the ring for compaction options.</div>
                     )}
                     <div style={{ display: "grid", gap: 4, color: "var(--fg-dim)", fontSize: 10.5, lineHeight: 1.35 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
