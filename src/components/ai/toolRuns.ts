@@ -22,7 +22,7 @@
 // → think order back exactly as it happened.
 
 import type { Msg } from "./types";
-import { splitThinking, stripPlanJson } from "../markdown";
+import { dropEmptyFences, splitThinking, stripPlanJson } from "../markdown";
 import { formatElapsed } from "./WorkingRow";
 import { delegateLabel } from "../../delegates";
 
@@ -76,7 +76,7 @@ export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "
 export function visibleProse(m: Extract<Msg, { role: "assistant" }>): string {
   const { content: withoutInlineThinking } = splitThinking(m.content);
   const { content } = stripPlanJson(withoutInlineThinking);
-  return content.trim();
+  return dropEmptyFences(content).trim();
 }
 
 /** Everything a turn thought, however it arrived — the structured field, an
@@ -90,6 +90,11 @@ function thoughtText(m: Extract<Msg, { role: "assistant" }>): string {
 /** Filler a thought opens with before it says anything. */
 const THOUGHT_FILLER = /^(ok(ay)?|hmm+|wait|so|alright|right|let me think|thinking)[\s.,!…:-]*$/i;
 
+/** A sentence that only restates the request — small reasoning models open
+ *  every thought with one ("The user wants me to read each file…"), so as a
+ *  gist it repeats on every step and says nothing about this one. */
+const RESTATES_REQUEST = /^(the\s+)?user\s+(wants|wanted|asks|asked|is asking|has asked|requests|requested|would like|needs)\b/i;
+
 /** The sentence a reasoning model would have written before its call, lifted
  *  from what it thought instead: the first paragraph that says something,
  *  two sentences at most, markdown furniture off, cut at a word past 240
@@ -101,12 +106,17 @@ export function thoughtGist(thinking: string): string {
     .split(/\n\s*\n/)
     .map((p) => p.replace(/^\s*(#{1,6}\s+|[-*•]\s+|\d+[.)]\s+)/gm, "").replace(/\*\*|__/g, "").replace(/\s+/g, " ").trim())
     .filter((p) => p && !THOUGHT_FILLER.test(p));
-  const first = paragraphs[0];
-  if (!first) return "";
   // A sentence ends at punctuation followed by space or the end — a dot
-  // inside a name (`slugify.js`, `README.md`) is not an end.
-  const sentences = first.match(/.+?[.!?]+["')\]]*(?=\s|$)|.+$/g) ?? [first];
-  let gist = sentences.slice(0, 2).join("").trim();
+  // inside a name (`slugify.js`, `README.md`) is not an end. The gist is
+  // the first paragraph with something left once its restatement is off.
+  let sentences: string[] = [];
+  for (const p of paragraphs) {
+    const all = (p.match(/.+?[.!?]+["')\]]*(?=\s|$)|.+$/g) ?? [p]).map((s) => s.trim());
+    const from = all.findIndex((s) => !RESTATES_REQUEST.test(s));
+    if (from >= 0) { sentences = all.slice(from); break; }
+  }
+  if (!sentences.length) return "";
+  let gist = sentences.slice(0, 2).join(" ").trim();
   if (gist.length > 240) {
     const cut = gist.slice(0, 239);
     gist = cut.slice(0, Math.max(cut.lastIndexOf(" "), 160)).trimEnd() + "…";

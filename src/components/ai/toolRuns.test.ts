@@ -368,6 +368,20 @@ describe("a turn that said nothing shows its thought's gist where the sentence w
     expect(thoughtGist("Hmm.\n\nWait")).toBe("");
   });
 
+  it("skips the sentence that only restates the request, so each step's gist says what it is doing", () => {
+    const thought = "The user wants me to read each file one at a time. I've already read three files. I should continue with slashCommands.ts. Let me read it.";
+    expect(thoughtGist(thought)).toBe("I've already read three files. I should continue with slashCommands.ts.");
+    expect(thoughtGist("The user asked for a summary.\n\nNext file: panelHost.ts.")).toBe("Next file: panelHost.ts.");
+  });
+
+  it("a stray empty fence after the thinking is not prose — the turn lends its thought instead", () => {
+    const stray: Msg = { role: "assistant", content: "<think>\nNext we read attachments.ts.\n</think>\n\n```", toolCalls: [{ name: "read_file", args: {} }] };
+    expect(liveWorkSteps([stray, result("read_file")], 0, 2)).toEqual([
+      { kind: "thought", index: 0, text: "Next we read attachments.ts." },
+      { kind: "work", names: ["read_file"], calls: 1 },
+    ]);
+  });
+
   it("a settled thinking-only turn is a thought step before its work; a thought still streaming is not read", () => {
     const quiet: Msg = { role: "assistant", content: "", thinking: "Let me read the README. Then the tests.", toolCalls: [{ name: "read_file", args: {} }] };
     expect(liveWorkSteps([quiet, result("read_file")], 0, 2)).toEqual([

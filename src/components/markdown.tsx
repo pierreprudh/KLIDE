@@ -1346,6 +1346,31 @@ export function fenceBareMarkup(text: string, streaming = false): string {
     .join("```");
 }
 
+/** A fenced segment (what sits between two ```) as its language and body:
+ *  the first line is the language when it looks like one. */
+function fenceParts(seg: string): { lang: string; code: string } {
+  const nl = seg.indexOf("\n");
+  if (nl >= 0) {
+    const first = seg.slice(0, nl).trim();
+    if (/^[\w+#-]*$/.test(first)) return { lang: first, code: seg.slice(nl + 1).replace(/\n$/, "") };
+  }
+  return { lang: "", code: seg.replace(/\n$/, "") };
+}
+
+/** The text without its empty fences — the ones `parseMarkdown` draws
+ *  nothing for — so a reader asking "did this turn say anything?" agrees
+ *  with what the renderer shows. */
+export function dropEmptyFences(text: string): string {
+  const segments = text.split("```");
+  return segments
+    .map((seg, idx) => {
+      if (idx % 2 === 0) return seg;
+      if (!fenceParts(seg).code.trim()) return "";
+      return "```" + seg + (idx < segments.length - 1 ? "```" : "");
+    })
+    .join("");
+}
+
 function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
   // Split on ``` so every odd-indexed segment is a code block and every
   // even-indexed segment is prose. Render code blocks first so their
@@ -1355,17 +1380,13 @@ function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
   const out: MdNode[] = [];
   segments.forEach((seg, idx) => {
     if (idx % 2 === 1) {
-      const nl = seg.indexOf("\n");
-      let lang = "";
-      let code = seg;
-      if (nl >= 0) {
-        const first = seg.slice(0, nl).trim();
-        if (/^[\w+#-]*$/.test(first)) { lang = first; code = seg.slice(nl + 1); }
-      }
-      code = code.replace(/\n$/, "");
+      const { lang, code } = fenceParts(seg);
       // A fence the split did not close is the streaming tail: its markup is
       // half-written, so it stays source until the closing fence arrives.
       const closed = idx < segments.length - 1;
+      // A fence with nothing in it is a stray mark — a small model writes
+      // a lone ``` after its thinking — not a block to frame.
+      if (!code.trim()) return;
       out.push(
         visuals && VISUAL_LANGS.has(lang.toLowerCase())
           ? <VisualBlock key={`code-${idx}`} code={code} lang={lang} closed={closed} streaming={options?.streaming === true} />
