@@ -321,16 +321,12 @@ hints, cache-aware cost, one-batch trimming with retained values, summary
 compaction owned by the Rust loop (`agent/compaction.rs`, `kept` markers),
 fit guard, adaptive thinking on current Claude models (dogfooded ✓).
 
-- [ ] Dogfood compaction in the app — not yet tested (a 1M-window Claude
-  conversation is too expensive to fill). Test cheaply on a local model with a
-  small window (Ollama/MLX at 16k–32k, free) or Haiku 4.5 (200k):
-  - [ ] a long agent run compacts itself mid-run and keeps going; marker shows,
-    gauge doesn't collapse to ~0
-  - [ ] the follow-up after a compaction answers with the thread intact (kept
-    turns + the verbatim latest request)
-  - [ ] `/compact` and the Compact button on a big conversation, then send
+- [x] Dogfood compaction in the app (2026-10-21, Ollama lfm2.5 at 32k): a batch
+  that overflows alone is squeezed to the value store; mid-run compaction keeps
+  going without re-reading (tool ledger); the follow-up keeps the thread
+  (verbatim requests); Compact from the gauge panel; the fit guard refuses only
+  what can't fit. Fixed along the way: PRs #219–#240.
   - [ ] a headless Run (worker or Mission attempt) compacts with no panel open
-  - [ ] the fit guard: an oversized single turn ends with `context_window_exceeded`
 - [ ] Dogfood the cache: reply after 10+ min on Anthropic and check "N% cached".
 - [ ] Stop a degenerate reply: a small model looping on one line streamed for minutes until the window filled (lfm2.5 after a bad prompt). A repetition guard on the stream, or a reply cap for local models.
 - [ ] Record peer-mail delivery in the transcript (it still breaks the cached
