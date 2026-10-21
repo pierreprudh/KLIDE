@@ -28,6 +28,19 @@ function burst(name: string, n: number): Msg[] {
 }
 
 describe("groupToolRuns", () => {
+  it("keeps a compaction mid-run inside the run, as one more step", () => {
+    // Dogfood 2026-10-21: each mid-run compaction split the work into its own
+    // "Worked for" line — three folds for one run.
+    const marker: Msg = { role: "system", content: "Compacted", compaction: { count: 6, summary: "notes", source: "agent" } };
+    const msgs: Msg[] = [asks("read them"), call("read_file"), result("read_file"), marker, call("read_file"), result("read_file"), says("done")];
+    const runs = groupToolRuns(msgs);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ start: 1, end: 6, calls: 2 });
+    // One before the turn, or between turns, keeps its own line.
+    const before: Msg[] = [marker, asks("again"), call("read_file"), result("read_file"), says("done")];
+    expect(groupToolRuns(before)).toMatchObject([{ start: 2, end: 4 }]);
+  });
+
   it("folds each stretch of tool work into its own run", () => {
     const msgs = [
       asks("fix and commit"),
