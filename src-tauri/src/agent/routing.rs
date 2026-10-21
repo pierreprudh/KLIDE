@@ -465,7 +465,7 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
         providers::PROVIDERS
             .iter()
             .filter(|e| !e.auto.is_empty() && matches!(e.key, KeySource::Hosted { .. }))
-            .filter(|e| matches!(providers::provider_key(e.id), Ok(Some(_))))
+            .filter(|e| has_key(e.id))
             .map(|e| e.id)
             .collect()
     })
@@ -514,6 +514,12 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
     pool
 }
 
+/// A hosted Provider with a key the router can send. `provider_key` answers
+/// `Ok(None)` for a key that was never set, so `is_ok()` is not enough.
+fn has_key(provider: &str) -> bool {
+    matches!(providers::provider_key(provider), Ok(Some(_)))
+}
+
 /// Ask the Provider about one Candidate. Availability first (a missing key or
 /// a down server is a Rejection, not an error), then tool support and the
 /// context window.
@@ -521,7 +527,7 @@ async fn inspect(candidate: Candidate) -> Result<Facts, Rejection> {
     let entry = providers::lookup(&candidate.provider);
     match entry.map(|e| e.key) {
         Some(KeySource::Hosted { .. }) => {
-            if !matches!(providers::provider_key(&candidate.provider), Ok(Some(_))) {
+            if !has_key(&candidate.provider) {
                 return Err(Rejection::NoKey);
             }
             // A key can be valid and still not reach a model (a plan without
@@ -858,7 +864,7 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
         // The ladders the bands were read off still agree with them.
         let blended = |m: &str| {
             let p = crate::pricing::list_price_for_model(m).unwrap();
-            (3.0 * p.input_per_million + p.output_per_million) / 4.0
+            crate::models::blend(p.input_per_million, Some(p.output_per_million))
         };
         assert_eq!(rung_for_price(blended("claude-haiku-5-5")), Rung::Light);
         assert_eq!(rung_for_price(blended("claude-sonnet-5-5")), Rung::Standard);
@@ -970,16 +976,19 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             .expect("live runtime");
         // Tests never fetch a listing on their own (`models::LISTINGS_OFFLINE`);
         // hand the gate each key's real one, as the running app would have it.
-        let mut listings = Vec::new();
-        for entry in providers::PROVIDERS.iter().filter(|e| !e.auto.is_empty()) {
-            if !matches!(providers::provider_key(entry.id), Ok(Some(_))) {
-                continue;
-            }
-            let listed = rt.block_on(crate::models::load_listing_live(entry.id));
-            listings.push((entry, listed));
-        }
+        let keyed: Vec<_> = providers::PROVIDERS
+            .iter()
+            .filter(|e| !e.auto.is_empty() && has_key(e.id))
+            .map(|e| (e, rt.block_on(crate::models::load_listing_live(e.id))))
+            .collect();
+        let stars: Vec<PreferredModel> = std::env::var("KLIDE_LIVE_STARS")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|pair| pair.trim().split_once(' '))
+            .map(|(provider, model)| PreferredModel { provider: provider.into(), model: model.into() })
+            .collect();
         for (label, mode, text) in shapes {
-            let request: StartRunRequest = serde_json::from_value(serde_json::json!({
+            let mut request: StartRunRequest = serde_json::from_value(serde_json::json!({
                 "workspaceRoot": null,
                 "mode": mode,
                 "provider": AUTO_PROVIDER,
@@ -989,13 +998,7 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
                 "systemPrompt": null,
             }))
             .expect("request");
-            let mut request = request;
-            request.preferred_models = std::env::var("KLIDE_LIVE_STARS")
-                .unwrap_or_default()
-                .split(',')
-                .filter_map(|pair| pair.trim().split_once(' '))
-                .map(|(provider, model)| PreferredModel { provider: provider.into(), model: model.into() })
-                .collect();
+            request.preferred_models = stars.clone();
             let needs = needs_for(&request);
             match rt.block_on(resolve(&request)) {
                 Ok(r) => {
@@ -1011,14 +1014,17 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             }
         }
         // A ladder slot the key's own listing doesn't name is a pick that
-        // fails at the first request.
-        for (entry, listed) in &listings {
+        // fails at the first request — the gate's own check, per slot.
+        for (entry, listed) in &keyed {
+            if let Err(e) = listed {
+                println!("ladder {}: listing failed: {e}", entry.id);
+                continue;
+            }
             for rung in Rung::ALL {
                 let Some(model) = rung.slot(&entry.auto) else { continue };
-                let verdict = match listed {
-                    Ok(ids) if ids.iter().any(|id| id == model) => "listed".to_string(),
-                    Ok(ids) => format!("NOT in the key's {} listed models", ids.len()),
-                    Err(e) => format!("listing failed: {e}"),
+                let verdict = match rt.block_on(crate::models::key_lists_model(entry.id, model)) {
+                    Some(false) => "NOT in the key's model list",
+                    _ => "listed",
                 };
                 println!("ladder {} {} {model}: {verdict}", entry.id, rung.word());
             }

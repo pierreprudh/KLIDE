@@ -321,7 +321,7 @@ pub(crate) async fn model_blended_price(provider: &str, model: &str) -> Option<f
     None
 }
 
-fn blend(input: f64, output: Option<f64>) -> f64 {
+pub(crate) fn blend(input: f64, output: Option<f64>) -> f64 {
     (3.0 * input + output.unwrap_or(input)) / 4.0
 }
 
