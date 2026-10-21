@@ -2490,7 +2490,13 @@ async fn loop_body(
                     ts: now_ms(),
                 };
                 let values = retention_enabled.then(|| (runs_dir.as_path(), id.as_str()));
-                let structured = ProviderCaps::for_provider(&request.provider).structured_replay;
+                // The shape this Run has been sending all along — structured
+                // tool messages — whatever the provider's continuation replay
+                // uses. Ollama's text fold attaches a result to the *next*
+                // assistant turn; mid-run the newest result has none yet, so
+                // it vanished and the prompt ended on the model's own pending
+                // call (dogfood: lfm2.5 then invented the file and looped).
+                let structured = true;
                 let mut checkpoint = events.clone();
                 checkpoint.push(marker.clone());
                 let replayed = reconstruct_prior_messages(&checkpoint, structured, values);
@@ -6566,6 +6572,39 @@ mod run_loop_tests {
         let sent = second.seen_messages.lock().unwrap().clone();
         assert_eq!(sent.len(), 2, "summary call, then the answer turn");
         assert!(estimate_prompt_tokens(&sent[1]) < estimate_prompt_tokens(&sent[0]) / 2);
+    }
+
+    /// Dogfood 2026-10-21: on Ollama, a Run reading files one per turn
+    /// compacted itself mid-run, and the rebuilt prompt — in Ollama's
+    /// continuation text fold — dropped the newest result and ended on the
+    /// model's own pending call. A mid-run rebuild keeps the live shape: the
+    /// newest result is there, as a tool message, last.
+    #[tokio::test]
+    async fn an_ollama_run_compacting_mid_run_keeps_its_newest_result() {
+        let (runs_dir, root) = sandbox("ollama-mid-run");
+        let mut script: Vec<_> = (0..4)
+            .map(|i| {
+                let body: String = (0..420).map(|n| format!("file {i} line {n} padding text\n")).collect();
+                std::fs::write(Path::new(&root).join(format!("f{i}.txt")), body).unwrap();
+                scripted_turn("Reading.", vec![scripted_tool_call(&format!("call_{i}"), "read_file", serde_json::json!({ "path": format!("f{i}.txt") }))])
+            })
+            .collect();
+        script.push(scripted_turn("NOTES: read four padding files.", vec![]));
+        script.push(scripted_turn("Done.", vec![]));
+        script.push(scripted_turn("Done.", vec![]));
+        let caller = ScriptedProviderCaller::new(script);
+        let mut request = test_request(&root, &[]);
+        request.provider = "ollama".into();
+        request.num_ctx = Some(21_000);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request, caller.clone()).await;
+
+        let events = read_events(&runs_dir, "thread").unwrap();
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ContextCompacted { .. })), "the run compacted mid-run");
+        let seen = caller.seen_messages.lock().unwrap().clone();
+        let ask = seen.iter().position(|m| m.last().unwrap()["content"].as_str().is_some_and(|c| c.starts_with("[Klide — context compaction"))).unwrap();
+        let after = &seen[ask + 1];
+        assert_eq!(after.last().unwrap()["role"], "tool", "the newest result is last, as a tool message: {:?}", after.last());
+        assert!(after.iter().any(|m| m["role"] == "assistant" && m["tool_calls"].as_array().is_some_and(|c| !c.is_empty())), "its call is structured too");
     }
 
     #[tokio::test]
