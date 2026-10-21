@@ -1223,6 +1223,18 @@ export function AiPanel({
       };
     },
   });
+  // The gauge's panel closes a beat after the pointer leaves the ring, so it
+  // can travel into the panel and use it; entering the panel holds it open.
+  const contextReleaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdContextPanel = useCallback(() => {
+    if (contextReleaseTimer.current) clearTimeout(contextReleaseTimer.current);
+    contextReleaseTimer.current = null;
+  }, []);
+  const releaseContextPanel = useCallback(() => {
+    holdContextPanel();
+    contextReleaseTimer.current = setTimeout(closeContextTooltip, 180);
+  }, [holdContextPanel, closeContextTooltip]);
+  useEffect(() => holdContextPanel, [holdContextPanel]);
   const toggleMode = () => {
     setNextSendMode(null);
     setAgentMode((m) => {
@@ -1972,19 +1984,19 @@ export function AiPanel({
   });
   // A different model, or a different cap, sizes its own window.
   useEffect(() => setReportedContextWindow(null), [provider, model, ctxOverride]);
-  const trainedWindowPhrase =
-    contextLimit !== null ? `the ${contextSizeLabel(contextLimit)} the model is trained to` : "the model's trained window, which it did not report";
+  // One short clause for the gauge's footer: what sets the window.
+  const trainedWindowPhrase = contextLimit !== null ? `up to ${contextSizeLabel(contextLimit)}` : "up to the trained max";
   const contextLimitNote = providerHasContextWindowSetting(provider)
     ? ctxOverride && ctxOverride > 0
-      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. It grows up to ${trainedWindowPhrase}.`
+      ? `capped at ${contextSizeLabel(ctxOverride)} (num_ctx), ${trainedWindowPhrase}`
       : reportedContextWindow !== null
-        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to ${trainedWindowPhrase}.`
-        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to ${trainedWindowPhrase}.`
+        ? `${contextSizeLabel(effectiveContextLimit)} window, ${trainedWindowPhrase}`
+        : `~${contextSizeLabel(effectiveContextLimit)} window, ${trainedWindowPhrase}`
     : isCustomProvider(provider)
-      ? "Self-hosted endpoint: Klide cannot set context here. Configure the server/model window upstream."
+      ? "window set by the server"
       : isLocalProvider
-        ? "Local OpenAI-compatible server: context is controlled by the server, not by Klide."
-        : "API provider: context is provider-controlled; Klide tracks usage against the advertised limit.";
+        ? "window set by the local server"
+        : "provider's window";
   const effortBudget = provider === "ollama" ? harnessSettings?.effortBudgets?.[model] : undefined;
   const reflectionStorageKey = `klide.reflectionLevel.${panelId ?? "ai-main"}.${provider}.${model}`;
   const [panelReflectionLevel, setPanelReflectionLevel] = useState<string | undefined>(undefined);
@@ -2143,6 +2155,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   // straight to `ai_chat`, which has no router. An Auto conversation asks the
   // model its turns actually ran on — the origin `RunStarted` stamped; before
   // a first run there is nothing to summarize anyway.
+  // Compaction is offered — the gauge shows its mark, the panel its button —
+  // once the conversation is half full and there's something to fold.
+  const compactOffered = canCompact && contextRatio >= COMPACT_OFFER_RATIO;
   const oneShotProvider = isAutoProvider(provider) ? (conversationSession.originProvider ?? provider) : provider;
   const oneShotModel = isAutoProvider(provider) ? (conversationSession.originModel ?? model) : model;
 
@@ -5162,32 +5177,33 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
-              {/* Compact, beside the gauge it relieves: the notification's
-                  pill, shown once the conversation is half full. The Run
-                  compacts by itself when it has to; this is "now". */}
-              {(canCompact || compacting) && contextRatio >= COMPACT_OFFER_RATIO && (
-                <button type="button" disabled={compacting} onClick={() => void compactConversation()}
-                  title="Fold the older turns into notes now; the newest stay"
-                  style={{ flexShrink: 0, height: 26, padding: "0 11px", display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, border: "none", background: "color-mix(in srgb, var(--fg) 7%, transparent)", color: "var(--fg-strong)", fontSize: 12, fontFamily: "var(--font-ui)", cursor: compacting ? "default" : "pointer", opacity: compacting ? 0.7 : 1, transition: "transform 160ms var(--ease-out)" }}
-                  onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.96)"; }}
-                  onPointerUp={(e) => { e.currentTarget.style.transform = ""; }}
-                  onPointerLeave={(e) => { e.currentTarget.style.transform = ""; }}>
-                  <CompactIcon size={13} />
-                  {compacting ? "Compacting…" : "Compact"}
-                </button>
-              )}
-              <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
+              <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${compactOffered ? ", can be compacted" : ""}`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
-                onMouseEnter={(e) => { openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { closeContextTooltip(); e.currentTarget.style.background = "transparent"; }}
-                onFocus={openContextTooltip}
-                onBlur={closeContextTooltip}>
+                onMouseEnter={(e) => { holdContextPanel(); openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { releaseContextPanel(); e.currentTarget.style.background = "transparent"; }}
+                onFocus={() => { holdContextPanel(); openContextTooltip(); }}
+                onBlur={releaseContextPanel}>
+                {/* Compaction available: its mark sits inside the ring. */}
+                {compactOffered && !compacting && (
+                  <span aria-hidden="true" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--fg-subtle)", pointerEvents: "none" }}>
+                    <CompactIcon size={10} />
+                  </span>
+                )}
                 <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="var(--border)" strokeWidth="1.6" />
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" pathLength="100" strokeDasharray={`${Math.max(2, Math.round(contextRatio * 100))} 100`} transform="rotate(-90 11 11)" style={{ transition: "stroke-dasharray var(--motion-med) var(--ease-out), stroke var(--motion-med) var(--ease-out)" }} />
                 </svg>
                 {contextHover && contextTooltipPos && createPortal(
-                  <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: Z.tooltip }}>
+                  <div role="tooltip" className="popover-enter"
+                    // The pointer can cross from the ring into the panel and
+                    // stay there (its Compact button); leaving it closes it.
+                    onMouseEnter={holdContextPanel}
+                    onMouseLeave={releaseContextPanel}
+                    // A React child of the ring: keep its clicks from
+                    // reaching the ring.
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                    style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", cursor: "default", zIndex: Z.tooltip }}>
                     <div style={{ display: "flex", alignItems: contextTooltipPos.compact ? "start" : "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9 }}>
                       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>Context window</span>
                       <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}><TweenedNumber value={contextUsed} format={formatContextTokens} /> / {formatContextTokens(effectiveContextLimit)} (<TweenedNumber value={contextRatio * 100} format={formatPercentWhole} />%)</span>
@@ -5229,17 +5245,28 @@ This user request requires workspace inspection. Before answering, you MUST call
                         <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}><TweenedNumber value={budget.promptUsed} format={formatWholeTokens} /></span>
                       </div>
                       <div>
-                        {measuredPromptTokens !== null && !streaming ? "Headline measured from provider usage; category split is estimated." : "Estimated before the next turn."}
+                        {[
+                          measuredPromptTokens !== null && !streaming ? "Measured" : "Estimated",
+                          contextLimitNote,
+                          effortBudget ? `${effortBudget.toLocaleString()} reply` : "",
+                          modelSupportsReflection ? `reflection ${reflectionLevel ?? "auto"}` : "",
+                        ].filter(Boolean).join(" · ")}
                       </div>
-                      <div>{contextLimitNote}</div>
-                      {(effortBudget || modelSupportsReflection) && (
-                        <div>
-                          {effortBudget ? `${effortBudget.toLocaleString()} reply budget` : ""}
-                          {effortBudget && modelSupportsReflection ? " · " : ""}
-                          {modelSupportsReflection ? `reflection ${reflectionLevel ?? "auto"}` : ""}
-                        </div>
-                      )}
                     </div>
+                    {/* Compact now — the notifications' pill. The Run compacts
+                        by itself when it has to; this is the early fold. */}
+                    {(compactOffered || compacting) && (
+                      <button type="button" disabled={compacting}
+                        onClick={() => { closeContextTooltip(); void compactConversation(); }}
+                        title="Fold the older turns into notes now; the newest stay"
+                        style={{ marginTop: 10, height: 26, padding: "0 11px", display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, border: "none", background: "color-mix(in srgb, var(--fg) 7%, transparent)", color: "var(--fg-strong)", fontSize: 12, fontFamily: "var(--font-ui)", cursor: compacting ? "default" : "pointer", opacity: compacting ? 0.7 : 1, transition: "transform 160ms var(--ease-out)" }}
+                        onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.96)"; }}
+                        onPointerUp={(e) => { e.currentTarget.style.transform = ""; }}
+                        onPointerLeave={(e) => { e.currentTarget.style.transform = ""; }}>
+                        <CompactIcon size={13} />
+                        {compacting ? "Compacting…" : "Compact"}
+                      </button>
+                    )}
                   </div>,
                   document.body
                 )}
