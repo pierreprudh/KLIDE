@@ -171,6 +171,7 @@ impl Needs {
 /// What a Provider says about one Candidate once asked.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Facts {
+    pub supports_chat: bool,
     pub supports_tools: bool,
     pub context_window: usize,
 }
@@ -180,6 +181,7 @@ pub struct Facts {
 /// manifest — and only an unknown one plans as the module's named default.
 pub fn facts_from(caps: &crate::model_capabilities::ModelCapabilities) -> Facts {
     Facts {
+        supports_chat: caps.supports_chat,
         supports_tools: caps.supports_tools,
         context_window: caps.window_for_planning(),
     }
@@ -190,7 +192,9 @@ pub fn facts_from(caps: &crate::model_capabilities::ModelCapabilities) -> Facts 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Rejection {
     NoKey,
+    NotListed,
     ServerDown,
+    NoChat,
     NoTools,
     WindowTooSmall { window: usize, needed: usize },
     Unreachable(String),
@@ -200,7 +204,9 @@ impl Rejection {
     fn describe(&self) -> String {
         match self {
             Rejection::NoKey => "no API key".to_string(),
+            Rejection::NotListed => "not in this key's model list".to_string(),
             Rejection::ServerDown => "server not running".to_string(),
+            Rejection::NoChat => "embedding model, cannot chat".to_string(),
             Rejection::NoTools => "cannot use tools".to_string(),
             Rejection::WindowTooSmall { window, needed } => {
                 format!("{}k window, job needs {}k", window / 1000, needed / 1000)
@@ -265,6 +271,9 @@ fn ollama_tag_matches(installed: &str, wanted: &str) -> bool {
 /// Returns the reason phrase on a pass, the Rejection otherwise.
 pub fn judge(candidate: &Candidate, facts: Result<Facts, Rejection>, needs: Needs) -> Result<String, Rejection> {
     let facts = facts?;
+    if !facts.supports_chat {
+        return Err(Rejection::NoChat);
+    }
     if needs.tools && !facts.supports_tools {
         return Err(Rejection::NoTools);
     }
@@ -481,8 +490,13 @@ async fn inspect(candidate: Candidate) -> Result<Facts, Rejection> {
     let entry = providers::lookup(&candidate.provider);
     match entry.map(|e| e.key) {
         Some(KeySource::Hosted { .. }) => {
-            if providers::provider_key(&candidate.provider).is_err() {
+            if !matches!(providers::provider_key(&candidate.provider), Ok(Some(_))) {
                 return Err(Rejection::NoKey);
+            }
+            // A key can be valid and still not reach a model (a plan without
+            // the large tier): the request would fail at once with a 403.
+            if crate::models::key_lists_model(&candidate.provider, &candidate.model).await == Some(false) {
+                return Err(Rejection::NotListed);
             }
         }
         Some(KeySource::Local) => {
@@ -564,6 +578,7 @@ mod tests {
 
     fn ok(tools: bool, window: usize) -> Result<Facts, Rejection> {
         Ok(Facts {
+            supports_chat: true,
             supports_tools: tools,
             context_window: window,
         })
@@ -641,6 +656,19 @@ mod tests {
         let picked = pick(&ranked, GOAL, |c| ok(c.model != "chatty", 128_000)).unwrap();
         assert_eq!(picked.model, "llama3.1:8b");
         assert_eq!(picked.skipped, vec!["anthropic chatty: cannot use tools"]);
+    }
+
+    #[test]
+    fn an_embedding_model_is_never_picked_even_for_chat() {
+        let ranked = vec![local("bge-m3:latest"), local("qwen3.5:9b")];
+        let picked = pick(&ranked, CHAT, |c| {
+            let mut facts = ok(false, 8_192)?;
+            facts.supports_chat = c.model != "bge-m3:latest";
+            Ok(facts)
+        })
+        .unwrap();
+        assert_eq!(picked.model, "qwen3.5:9b");
+        assert_eq!(picked.skipped, vec!["ollama bge-m3:latest: embedding model, cannot chat"]);
     }
 
     #[test]
@@ -793,7 +821,7 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
     #[test]
     fn rungs_on_reads_every_slot_a_model_sits_at() {
         let anthropic = providers::lookup("anthropic").unwrap();
-        assert_eq!(rungs_on(&anthropic.auto, "claude-sonnet-4-6"), vec![Rung::Standard]);
+        assert_eq!(rungs_on(&anthropic.auto, "claude-sonnet-5-5"), vec![Rung::Standard]);
         assert_eq!(rungs_on(&anthropic.auto, "claude-3-opus"), Vec::<Rung>::new());
         let openrouter = providers::lookup("openrouter").unwrap();
         assert_eq!(rungs_on(&openrouter.auto, "openrouter/auto"), Rung::ALL.to_vec());
@@ -841,5 +869,78 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             line.contains(&format!("\"{AUTO_MODEL}\"")),
             "AUTO_MODEL drifted: rust={AUTO_MODEL:?} ts={line}"
         );
+    }
+
+    /// Live: what Auto picks on this machine, for each task shape. Reads the
+    /// real keys and local servers and asks each Provider for capabilities;
+    /// no model is ever sent a message. Prints the pick, the reason and what
+    /// ranked above it, and fails only if a shape neither resolves nor says
+    /// what it tried.
+    /// `cargo test --lib -- --ignored --nocapture auto_on_this_bench`
+    #[test]
+    #[ignore = "live: reads this machine's keys and local servers"]
+    fn auto_on_this_bench() {
+        let big = "x".repeat(70_000);
+        let shapes: [(&str, &str, &str); 4] = [
+            ("chat, short", "chat", "hi"),
+            ("plan, short", "plan", "plan a refactor of the parser"),
+            ("goal, short", "goal", "fix the failing test"),
+            ("goal, 17k-token brief", "goal", big.as_str()),
+        ];
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("live runtime");
+        // Tests never fetch a listing on their own (`models::LISTINGS_OFFLINE`);
+        // hand the gate each key's real one, as the running app would have it.
+        let mut listings = Vec::new();
+        for entry in providers::PROVIDERS.iter().filter(|e| !e.auto.is_empty()) {
+            if !matches!(providers::provider_key(entry.id), Ok(Some(_))) {
+                continue;
+            }
+            let listed = rt.block_on(crate::models::ai_provider_models(entry.id.to_string()));
+            if let Ok(ids) = &listed {
+                crate::models::seed_listing(entry.id, ids);
+            }
+            listings.push((entry, listed));
+        }
+        for (label, mode, text) in shapes {
+            let request: StartRunRequest = serde_json::from_value(serde_json::json!({
+                "workspaceRoot": null,
+                "mode": mode,
+                "provider": AUTO_PROVIDER,
+                "model": AUTO_MODEL,
+                "initialText": text,
+                "context": null,
+                "systemPrompt": null,
+            }))
+            .expect("request");
+            let needs = needs_for(&request);
+            match rt.block_on(resolve(&request)) {
+                Ok(r) => {
+                    println!("{label} [{}] → {} {}\n  why: {}", needs.rung.word(), r.provider, r.model, r.reason);
+                    for s in &r.skipped {
+                        println!("  above it: {s}");
+                    }
+                }
+                Err(e) => {
+                    println!("{label} [{}] → no pick\n  {e}", needs.rung.word());
+                    assert!(e.contains("Auto"), "an unresolved shape must explain itself: {e}");
+                }
+            }
+        }
+        // A ladder slot the key's own listing doesn't name is a pick that
+        // fails at the first request.
+        for (entry, listed) in &listings {
+            for rung in Rung::ALL {
+                let Some(model) = rung.slot(&entry.auto) else { continue };
+                let verdict = match listed {
+                    Ok(ids) if ids.iter().any(|id| id == model) => "listed".to_string(),
+                    Ok(ids) => format!("NOT in the key's {} listed models", ids.len()),
+                    Err(e) => format!("listing failed: {e}"),
+                };
+                println!("ladder {} {} {model}: {verdict}", entry.id, rung.word());
+            }
+        }
     }
 }
