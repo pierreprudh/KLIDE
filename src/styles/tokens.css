@@ -9746,3 +9746,29 @@ button:focus-visible .menu-leadout {
   opacity: 1;
   pointer-events: auto;
 }
+
+/* A pill action (the gauge panel's Compact, after the notifications' action):
+   on hover the wash deepens and the mark lifts a pixel; a press settles it.
+   Fades only — no bounce. */
+.klide-pill-action {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  transition: background-color var(--motion-fast) var(--ease-out), transform 160ms var(--ease-out);
+}
+.klide-pill-action:not(:disabled):hover {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.klide-pill-action-icon {
+  transition: transform var(--motion-med) var(--ease-out);
+}
+.klide-pill-action:not(:disabled):hover .klide-pill-action-icon {
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-pill-action,
+  .klide-pill-action-icon {
+    transition: none;
+  }
+  .klide-pill-action:not(:disabled):hover .klide-pill-action-icon {
+    transform: none;
+  }
+}
