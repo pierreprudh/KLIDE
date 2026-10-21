@@ -725,7 +725,18 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       // transcript still holds them all, so replay renders everything — but it
       // has to render the marker too, or a reloaded conversation looks like an
       // unbroken thread that mysteriously forgot its early turns.
-      rows.push({
+      // A compaction at the start of a Run — its turn asked, nothing answered
+      // yet — goes above that turn's message: the turn and its answer ran on
+      // the summary, so they read below it, and what's dimmed above it is what
+      // was summarized. The live panel draws it in the same place. Anywhere
+      // else (mid-run, or a Compact between turns) it sits where it happened.
+      let at = rows.length;
+      if (turnOpen) {
+        for (let i = rows.length - 1; i >= 0; i--) {
+          if (rows[i].kind === "user") { at = i; break; }
+        }
+      }
+      rows.splice(at, 0, {
         kind: "compaction",
         summary: event.summary,
         ...((event.contextTokens !== undefined || (event.kept ?? 0) > 0) ? {
@@ -734,9 +745,11 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
             eventTokenTotals[before] - eventTokenTotals[Math.max(0, before - (event.kept ?? 0))]
           ),
         } : {}),
-        count: rows.length,
+        count: at,
       });
-      return { changed: [rows.length - 1] };
+      if (open && open.idx >= at) open.idx += 1;
+      if (attemptStart >= at) attemptStart += 1;
+      return { changed: rows.map((_, i) => i).slice(at) };
     }
 
     if (event.type === "observer_completed") {

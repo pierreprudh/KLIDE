@@ -452,7 +452,10 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
     const d = deps();
     const conversationId = d.conversationId();
     const { transcript, client } = d;
-    const userIndex = transcript.read().findIndex((m) => m.role === "user" && m.queueId === turn.clientId);
+    let userIndex = transcript.read().findIndex((m) => m.role === "user" && m.queueId === turn.clientId);
+    // Whether this Run has answered anything yet — a compaction before that
+    // is drawn above the turn's message, one after it inside the run's rows.
+    let answered = false;
     if (userIndex < 0) return;
     const opening = [...transcript.read()];
     const userMsg = opening[userIndex];
@@ -577,14 +580,23 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
       }
       // Transcript events (deltas, finalized messages, tool cards) belong to
       // the turn driver; everything below is panel behaviour.
+      if (event.type === "assistant_message") answered = true;
       if (driver.handleEvent(event)) return;
       switch (event.type) {
         case "context_compacted": {
-          // The Rust auto-compactor collapsed the older turns mid-run. Without
-          // this the conversation silently loses its early context and the
-          // marker only appears after a reload (via foldEvents).
-          const prior = transcript.read();
-          commit([...prior, compactionMsg(prior.length, event.summary, event.contextTokens)]);
+          // The Run summarized the turns before this one. The marker goes
+          // right above this turn's message — where a reload's fold puts it —
+          // so what's dimmed above it is what was summarized, and this turn
+          // and its answer read below it. Appended at the end, it landed under
+          // the answer and dimmed the turn the model was still reading.
+          if (answered) {
+            // Mid-run: the marker belongs between the work before and after
+            // it, inside the run's own rows.
+            driver.foldEvent(event);
+          } else {
+            driver.insertAboveTurn(userIndex, compactionMsg(userIndex, event.summary, event.contextTokens));
+            userIndex += 1;
+          }
           break;
         }
         case "diff_proposed":

@@ -316,3 +316,24 @@ it("projects an observer completion in a live turn without exposing raw log text
   expect(h.ref.current.some((m) => m.role === "assistant" && m.content === "Your deployment finished.")).toBe(true);
   expect(JSON.stringify(h.ref.current)).not.toContain("raw build output");
 });
+
+describe("a compaction marker above the turn", () => {
+  it("lands above the turn's message and the run keeps writing below it", () => {
+    // Dogfood 2026-10-21: appended at the end, the marker sat under the
+    // answer. Inserted in front of the run's region, the region must move with
+    // it — or the foreign-edit guard detaches and the answer never draws.
+    const h = harness([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "earlier answer" },
+      { role: "user", content: "now summarize" },
+      { role: "assistant", content: "" },
+    ]);
+    const marker: Msg = { role: "system", content: "Compacted", compaction: { count: 2, summary: "notes", source: "agent" } };
+    h.driver.insertAboveTurn(2, marker);
+    h.driver.handleEvent(message([{ type: "text", text: "Here is the summary." }]));
+    h.driver.finish();
+    expect(h.detachments()).toBe(0);
+    expect(h.ref.current.map((m) => m.role)).toEqual(["user", "assistant", "system", "user", "assistant"]);
+    expect(h.ref.current[4].content).toBe("Here is the summary.");
+  });
+});
