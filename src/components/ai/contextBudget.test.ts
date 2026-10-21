@@ -10,6 +10,9 @@ import {
 } from "./contextBudget";
 import type { Msg } from "./types";
 import { conversationTokenEstimate } from "./contextBudget";
+import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
+import type { AgentEvent } from "../../agent/types";
+import { messageTokenEstimate } from "./utils";
 
 function user(content: string): Msg {
   return { role: "user", content };
@@ -59,6 +62,30 @@ describe("lastCompactionIndex", () => {
 });
 
 describe("computeContextBudget", () => {
+  it("counts the request inside a checkpoint once, then adds answers and later requests", () => {
+    const events: AgentEvent[] = [
+      { type: "user_message", runId: "r", messageId: "u", text: "x".repeat(4000), attachments: [{ path: "rules.md", content: "constraints".repeat(100) }], ts: 0 },
+      { type: "context_compacted", runId: "r", summary: "notes", kept: 1, contextTokens: 1600, ts: 1 },
+    ];
+    const beforeAnswer = foldedToMsgs(foldAgentEvents(events));
+    expect(beforeAnswer.map((m) => m.role)).toEqual(["user", "system"]);
+    expect(conversationTokenEstimate(beforeAnswer)).toBe(1600);
+    events.push({ type: "assistant_message", runId: "r", messageId: "a", content: [{ type: "text", text: "The answer." }], ts: 2 });
+    const afterAnswer = foldedToMsgs(foldAgentEvents(events));
+    const later = user("One more question");
+    expect(conversationTokenEstimate([...afterAnswer, later])).toBe(1600 + messageTokenEstimate(afterAnswer[2]) + messageTokenEstimate(later));
+    expect(conversationTokenEstimate(JSON.parse(JSON.stringify(afterAnswer)))).toBe(conversationTokenEstimate(afterAnswer));
+  });
+
+  it("does not skip a new request following a compaction between turns", () => {
+    const events: AgentEvent[] = [
+      { type: "context_compacted", runId: "r", summary: "notes", kept: 0, contextTokens: 700, ts: 0 },
+      { type: "user_message", runId: "r", messageId: "u", text: "A new request", attachments: [], ts: 1 },
+    ];
+    const msgs = foldedToMsgs(foldAgentEvents(events));
+    expect(conversationTokenEstimate(msgs)).toBe(700 + messageTokenEstimate(msgs[1]));
+  });
+
   it("counts only from the newest compaction marker onward", () => {
     // The loop this prevents: messages above the marker are still on screen but
     // no longer reach the model. Counting them over-states the window, the

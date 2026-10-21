@@ -9,6 +9,8 @@ import {
   type RunControllerHooks,
 } from "./runController";
 import type { Msg, QueuedTurn } from "./types";
+import { conversationTokenEstimate } from "./contextBudget";
+import { messageTokenEstimate } from "./utils";
 
 // `agent/client.ts` reaches for Tauri at import time; the controller only
 // takes its two pure helpers from it, and everything else through the fake.
@@ -220,6 +222,19 @@ const flush = async (rounds = 6) => { for (let i = 0; i < rounds; i++) await Pro
 // ── The queue ──
 
 describe("createRunController — the turn queue", () => {
+  it("keeps a live compaction checkpoint after the user so the gauge counts that request once", async () => {
+    const h = harness();
+    h.controller.send(turn("a", "x".repeat(4000)));
+    await flush();
+    h.backend.last().emit(started());
+    h.backend.last().emit({ type: "context_compacted", runId: CONVO, summary: "notes", kept: 1, contextTokens: 1100, ts: 1 });
+    h.backend.last().emit(message("The answer."));
+    h.backend.last().emit(finished());
+    await flush();
+    expect(h.msgs().map((m) => m.role)).toEqual(["user", "system", "assistant"]);
+    expect(conversationTokenEstimate(h.msgs())).toBe(1100 + messageTokenEstimate(h.msgs()[2]));
+  });
+
   it("runs turns one at a time, in send order, and settles each", async () => {
     const h = harness();
     h.controller.send(turn("a"));
