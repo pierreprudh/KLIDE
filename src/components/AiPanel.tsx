@@ -121,7 +121,7 @@ import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } fr
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon, MissionWorkflowIcon } from "../icons";
+import { AttachIcon, CloseIcon, CompactIcon, MissionWorkflowIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
 import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, RunFailedRow, WorkingSince } from "./ai/ChatMessage";
@@ -209,7 +209,6 @@ import {
   contextTone as contextToneFor,
   conversationCost,
   lastCompactionIndex,
-  COMPACT_PROMPT_RATIO,
   conversationTokenEstimate,
 } from "./ai/contextBudget";
 import { TweenedNumber } from "./ai/TweenedNumber";
@@ -2138,7 +2137,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     compacting,
     messageCount: msgs.length,
   });
-  const showCompactPrompt = canCompact && contextRatio >= COMPACT_PROMPT_RATIO;
 
   // One-shot model calls (compaction, memory notes, skill detection) go
   // straight to `ai_chat`, which has no router. An Auto conversation asks the
@@ -4873,20 +4871,6 @@ This user request requires workspace inspection. Before answering, you MUST call
             onSkip={skipQuestion}
           />
         )}
-        {showCompactPrompt && (
-          <div style={{ padding: "0 2px 6px" }}>
-            <button type="button" onClick={() => void compactConversation()} title="Summarize older turns to free up context"
-              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "2px 8px", borderRadius: "var(--radius-sm)", border: "1px solid transparent", background: "transparent", color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", fontSize: 11.5, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}>
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M3 4h10" /><path d="M5 8h6" /><path d="M6.5 12h3" />
-              </svg>
-              Compact
-              <span style={{ opacity: 0.55 }}>{Math.round(contextRatio * 100)}%</span>
-            </button>
-          </div>
-        )}
         {/* The run's changed-files outcome lives in the final answer's
             MessageActions row (revert slot) — no standalone strip here. */}
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
@@ -5177,8 +5161,13 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
-              <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
-                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
+              {/* The gauge is also the Compact action: the ring is where the
+                  fullness is read, so it is where it is relieved. */}
+              <button ref={contextTriggerRef} type="button"
+                aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${canCompact ? " — click to compact" : ""}`}
+                disabled={compacting}
+                onClick={() => { if (canCompact) { closeContextTooltip(); void compactConversation(); } }}
+                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: canCompact ? "pointer" : "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
                 onMouseEnter={(e) => { openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseLeave={(e) => { closeContextTooltip(); e.currentTarget.style.background = "transparent"; }}
                 onFocus={openContextTooltip}
@@ -5224,6 +5213,12 @@ This user request requires workspace inspection. Before answering, you MUST call
                       })}
                     </div>
                     <div style={{ height: 1, background: "var(--border)", margin: "10px 0 8px" }} />
+                    {canCompact && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--fg)", fontSize: 12, margin: "0 0 8px" }}>
+                        <CompactIcon size={14} />
+                        <span>Click the ring to compact — older turns fold into notes, the newest stay.</span>
+                      </div>
+                    )}
                     <div style={{ display: "grid", gap: 4, color: "var(--fg-dim)", fontSize: 10.5, lineHeight: 1.35 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                         <span>Prompt + draft</span>

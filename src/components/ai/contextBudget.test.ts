@@ -6,7 +6,6 @@ import {
   conversationCost,
   lastCompactionIndex,
   COMPACT_KEEP_RECENT,
-  COMPACT_PROMPT_RATIO,
   type ContextBudgetInput,
 } from "./contextBudget";
 import type { Msg } from "./types";
@@ -203,9 +202,6 @@ describe("canCompactConversation", () => {
     expect(canCompactConversation({ ...base, compacting: true })).toBe(false);
   });
 
-  it("offers compaction before the window is full", () => {
-    expect(COMPACT_PROMPT_RATIO).toBeLessThan(1);
-  });
 });
 
 describe("conversationCost", () => {
