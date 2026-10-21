@@ -32,6 +32,7 @@ import { CheckCircle } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ArrowsOut } from "@phosphor-icons/react/dist/csr/ArrowsOut";
 import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { ArrowUp } from "@phosphor-icons/react/dist/csr/ArrowUp";
+import { ArrowsInLineVertical } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
 import { BookmarkSimple } from "@phosphor-icons/react/dist/csr/BookmarkSimple";
 import { CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { Cards } from "@phosphor-icons/react/dist/csr/Cards";
@@ -98,6 +99,12 @@ export function FolderOpenIcon(p: GlyphProps) {
 
 export function FolderIcon(p: GlyphProps) {
   return <Icon as={Folder} {...p} />;
+}
+
+/** A compaction: turns pressed in toward one line — the conversation
+ *  folded into a summary at this point. */
+export function CompactIcon(p: GlyphProps) {
+  return <Icon as={ArrowsInLineVertical} {...p} />;
 }
 
 /** The AI panel — a conversation with Kit, so it gets a speech mark rather

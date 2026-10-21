@@ -2763,8 +2763,15 @@ textarea.klide-diff-comment-input:focus-visible {
   padding-bottom: 0;
   border-bottom: none;
 }
-.klide-think[open] > summary .klide-fold-chev {
+.klide-think[open] > summary .klide-fold-chev,
+.klide-compaction[open] > summary .klide-fold-chev {
   transform: rotate(90deg);
+}
+.klide-compaction > summary::-webkit-details-marker {
+  display: none;
+}
+.klide-compaction > summary:hover {
+  opacity: 0.82;
 }
 .klide-think > summary:hover {
   opacity: 0.82;
