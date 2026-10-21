@@ -497,6 +497,8 @@ describe("suggestConversationTitle — the CLI's name for a thread nobody named"
       conversation({ id: "fresh", title: "hello who are you", updatedAt: 2 }),
       conversation({ id: "named", title: "Payments", updatedAt: 1, renamed: true }),
     ]);
+    // A thinking tag is not a name, and does not use up the one suggestion.
+    suggestConversationTitle("fresh", "<think>");
     suggestConversationTitle("fresh", "Introduce OpenCode in Klide");
     suggestConversationTitle("named", "Something else");
     suggestConversationTitle("missing", "Nothing");

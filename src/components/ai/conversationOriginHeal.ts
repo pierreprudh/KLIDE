@@ -36,7 +36,7 @@
 
 import type { Conversation, Msg } from "./types";
 import { delegateProviderByName, isDelegateProvider } from "../../agent/providers";
-import { loadConversations, saveConversations } from "./storedConversations";
+import { deriveTitle, isThinkingTag, loadConversations, saveConversations } from "./storedConversations";
 import { isForeignModelFor } from "./rememberedModel";
 import type { RunOrigin } from "../../runs";
 
@@ -117,6 +117,35 @@ export function healStoredConversationModels(): number {
   const conversations = loadConversations<Conversation>();
   const next = conversations.map((conv) => {
     const fixed = healedConversationModel(conv);
+    if (!fixed) return conv;
+    healed += 1;
+    return fixed;
+  });
+  if (healed > 0) saveConversations(next, undefined, false);
+  return healed;
+}
+
+/* ─────────────── a name that was only a thinking tag ────────────── */
+
+/**
+ * The record with its derived title back, when the name it carries is the
+ * opening of a thinking block — or null when it is fine. A reasoning model
+ * asked to name a thread could spend the whole budget inside `<think>`, and
+ * the namer took that tag for a name (fixed in Rust `naming::clean`). Since
+ * a suggested name is stored as a rename, no later snapshot would undo it.
+ */
+export function healedConversationTitle(conv: Conversation): Conversation | null {
+  if (!conv.renamed || !isThinkingTag(conv.title)) return null;
+  return { ...conv, title: deriveTitle(conv.msgs), renamed: false };
+}
+
+/** Repair every stored thread named after a thinking tag. Returns how many
+ *  changed; the index is rewritten only when one did. */
+export function healStoredConversationTitles(): number {
+  let healed = 0;
+  const conversations = loadConversations<Conversation>();
+  const next = conversations.map((conv) => {
+    const fixed = healedConversationTitle(conv);
     if (!fixed) return conv;
     healed += 1;
     return fixed;

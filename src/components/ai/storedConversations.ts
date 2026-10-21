@@ -530,12 +530,19 @@ export function dropCachedImages(): number {
  *  derived title; an empty name is a no-op, not an erasure. The record is
  *  marked `renamed` so later snapshots keep it (see `upsertConversation`),
  *  and its place in the list is unchanged — naming a thread is not using it. */
+/** The opening of a reasoning model's thinking block, which an older namer
+ *  (and a reattached Run's transcript) could offer as a name. Never a name. */
+export function isThinkingTag(title: string): boolean {
+  return /^<\/?think/i.test(title.trim());
+}
+
 /** Adopt the name a Delegate CLI gave its session — once. The first
  *  suggestion names a thread nobody has named; it is recorded as a rename, so
  *  the snapshots that recompute the title keep it, and so a later suggestion
  *  (each new CLI session gets its own) never renames the thread again. A name
  *  the person typed is never touched. */
 export function suggestConversationTitle(id: string, title: string): void {
+  if (isThinkingTag(title)) return;
   const previous = loadConversations<Conversation>().find((c) => c.id === id);
   if (!previous || previous.renamed) return;
   renameStoredConversation(id, title);
