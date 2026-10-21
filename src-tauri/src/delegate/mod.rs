@@ -14,7 +14,7 @@
 
 mod additional;
 mod hermes_acp;
-pub use additional::{AMP, COPILOT, CURSOR, FACTORY, HERMES};
+pub use additional::{AMP, CURSOR, FACTORY, HERMES};
 mod chat;
 mod chat_server;
 pub(crate) mod chat_stream;
@@ -22,6 +22,7 @@ pub(crate) use chat_stream::summarize_call;
 mod cli_commands;
 mod claude_code;
 mod codex;
+mod copilot;
 pub mod home;
 mod omp;
 mod opencode;
@@ -33,6 +34,7 @@ pub use cli_commands::{claude_code_settings, cli_commands, CliCommands};
 pub use claude_code::ClaudeCode;
 pub use claude_code::EFFORT_LEVELS as CLAUDE_EFFORT_LEVELS;
 pub use codex::Codex;
+pub use copilot::Copilot;
 pub use home::{home_dir, Env, ProcessEnv};
 pub use omp::Omp;
 pub use opencode::OpenCode;
@@ -619,7 +621,7 @@ pub trait RunParser {
 }
 
 /// The registry — one adapter per delegate CLI Klide can dispatch.
-pub const ALL: [&dyn Delegate; 9] = [&ClaudeCode, &Codex, &OpenCode, &Omp, &AMP, &CURSOR, &FACTORY, &COPILOT, &HERMES];
+pub const ALL: [&dyn Delegate; 9] = [&ClaudeCode, &Codex, &OpenCode, &Omp, &AMP, &CURSOR, &FACTORY, &Copilot, &HERMES];
 
 pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
     ALL.into_iter().find(|d| d.id() == provider)

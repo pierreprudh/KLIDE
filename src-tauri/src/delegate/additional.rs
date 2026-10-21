@@ -22,11 +22,6 @@ pub static FACTORY: CliDelegate = CliDelegate {
     label: "Factory",
     binary: "droid",
 };
-pub static COPILOT: CliDelegate = CliDelegate {
-    id: "copilot",
-    label: "Copilot",
-    binary: "copilot",
-};
 pub static HERMES: CliDelegate = CliDelegate {
     id: "hermes",
     label: "Hermes",
@@ -49,20 +44,6 @@ impl Delegate for CliDelegate {
     }
     fn resumes_sessions(&self) -> bool { self.id == "hermes" }
     fn mcp_wiring(&self, spec: &super::McpServerSpec) -> Option<super::McpWiring> {
-        if self.id == "copilot" {
-            // `--additional-mcp-config @file` augments ~/.copilot/mcp-config.json
-            // for this session only; the user's own servers stay as they are.
-            let path = format!("{}/{}.copilot-mcp.json", spec.config_dir, spec.file_stem);
-            let content = serde_json::json!({ "mcpServers": { "klide": {
-                "type": "local", "command": spec.command, "args": spec.args,
-                "env": spec.env_json(), "tools": ["*"],
-            }}});
-            return Some(super::McpWiring {
-                args: vec!["--additional-mcp-config".into(), format!("@{path}")],
-                files: vec![(path, content.to_string())],
-                ..Default::default()
-            });
-        }
         if self.id != "hermes" { return None; }
         Some(super::McpWiring {
             env: vec![(super::hermes_acp::MCP_ENV.into(), serde_json::json!([{
@@ -85,7 +66,6 @@ impl Delegate for CliDelegate {
         match self.id {
             "amp" => super::home::xdg(env, "XDG_CONFIG_HOME", ".config", "amp"),
             "hermes" => super::home::overridable(env, "HERMES_HOME", ".hermes"),
-            "copilot" => super::home::overridable(env, "COPILOT_HOME", ".copilot"),
             _ => super::home_dir(env).map(|home| home.join(format!(".{}", self.id))),
         }
     }
@@ -135,7 +115,7 @@ impl Delegate for CliDelegate {
             .map(|t| {
                 format!(
                     " {}{}",
-                    match self.id { "hermes" => "--query ", "copilot" => "-i ", _ => "" },
+                    if self.id == "hermes" { "--query " } else { "" },
                     shell_quote(t)
                 )
             })
@@ -153,7 +133,6 @@ impl Delegate for CliDelegate {
             "amp" => format!("amp --execute {task}"),
             "cursor" => format!("cursor-agent --print --output-format text{model} {task}"),
             "factory" => format!("droid exec --output-format text{model} {task}"),
-            "copilot" => format!("copilot -s --no-ask-user --allow-tool write{model} -p {task}"),
             _ => format!("hermes chat --quiet --oneshot{model} --query {task}"),
         })
     }
@@ -162,9 +141,6 @@ impl Delegate for CliDelegate {
             "amp" => vec!["--execute"],
             "cursor" => vec!["--print", "--output-format", "text"],
             "factory" => vec!["exec", "--output-format", "text"],
-            // Edits are allowed without a prompt nobody is there to answer
-            // (Claude Code's acceptEdits); shell commands stay denied.
-            "copilot" => vec!["-s", "--no-ask-user", "--allow-tool", "write"],
             _ => vec!["chat", "--quiet", "--oneshot", "--query-file", "-"],
         }
         .into_iter()
@@ -188,19 +164,14 @@ impl Delegate for CliDelegate {
     fn chat_invocation(&self, cwd: &str, model: &str) -> Result<tokio::process::Command, String> {
         let cli = crate::cli::resolve_command(self.binary())?;
         let args = self.chat_args(cwd, model)?;
-        // Cursor documents a positional prompt, Copilot a `-p` value. Move
-        // stdin to that argument without evaluating any prompt text as shell
-        // code.
-        let mut command = if self.id == "cursor" || self.id == "copilot" {
+        // Cursor documents a positional prompt. Move stdin to that argument
+        // without evaluating any prompt text as shell code.
+        let mut command = if self.id == "cursor" {
             let mut c = tokio::process::Command::new("sh");
             c.args([
                 "-c",
-                if self.id == "copilot" {
-                    "prompt=$(cat); exec \"$@\" -p \"$prompt\""
-                } else {
-                    "prompt=$(cat); exec \"$@\" \"$prompt\""
-                },
-                "klide-cli",
+                "prompt=$(cat); exec \"$@\" \"$prompt\"",
+                "klide-cursor",
             ])
             .arg(cli)
             .args(args);
@@ -229,7 +200,6 @@ impl Delegate for CliDelegate {
             "amp" => "amp login",
             "cursor" => "cursor-agent login",
             "factory" => "droid",
-            "copilot" => "copilot login",
             _ => "hermes setup",
         }
         .into()]
@@ -250,12 +220,9 @@ impl Delegate for CliDelegate {
         if self.id == "amp" { &["version"] } else { &["--version"] }
     }
     fn update_args(&self) -> Option<&'static [&'static str]> { Some(&["update"]) }
-    // Copilot publishes on npm; the standalone releases are not tied to a
-    // verified npm version feed. Their own updater works; Klide does not
-    // claim it can compare releases.
-    fn release_package(&self) -> Option<&'static str> {
-        (self.id == "copilot").then_some("@github/copilot")
-    }
+    // Standalone releases are not tied to a verified npm version feed.
+    // The CLI's own updater works; Klide does not claim it can compare releases.
+    fn release_package(&self) -> Option<&'static str> { None }
     fn supports_session_import(&self) -> bool { false }
     fn discover_runs(&self, _env: &dyn Env) -> Vec<RunCandidate> {
         Vec::new()
@@ -291,22 +258,8 @@ mod tests {
         assert!(wiring.args.is_empty() && wiring.files.is_empty());
     }
     #[test]
-    fn copilot_gets_klide_as_a_session_only_mcp_server() {
-        let wiring = COPILOT.mcp_wiring(&super::super::McpServerSpec {
-            command:"/app/klide".into(), args:vec!["mcp".into(), "coordination".into()],
-            endpoint_path:"/tmp/endpoint".into(), session_id:"c:copilot".into(), secret_path:"/tmp/secret-file".into(),
-            config_dir:"/tmp/cfg".into(), file_stem:"c-copilot".into(),
-        }).unwrap();
-        assert_eq!(wiring.args, ["--additional-mcp-config", "@/tmp/cfg/c-copilot.copilot-mcp.json"]);
-        let (path, body) = &wiring.files[0];
-        assert_eq!(path, "/tmp/cfg/c-copilot.copilot-mcp.json");
-        let server = &serde_json::from_str::<serde_json::Value>(body).unwrap()["mcpServers"]["klide"];
-        assert_eq!(server["command"], "/app/klide");
-        assert_eq!(server["tools"][0], "*");
-    }
-    #[test]
     fn launches_use_cli_defaults_and_quote_prompts() {
-        for d in [&AMP, &CURSOR, &FACTORY, &COPILOT, &HERMES] {
+        for d in [&AMP, &CURSOR, &FACTORY, &HERMES] {
             let command = d
                 .mission_command(Some("don't run $(touch /tmp/nope)"), Some("default"))
                 .unwrap();
@@ -319,14 +272,6 @@ mod tests {
             ["chat", "--quiet", "--oneshot", "--query-file", "-"]
         );
         assert_eq!(AMP.chat_args("/tmp", "default").unwrap(), ["--execute"]);
-        assert_eq!(
-            COPILOT.chat_args("/tmp", "gpt-5.4").unwrap(),
-            ["-s", "--no-ask-user", "--allow-tool", "write", "--model", "gpt-5.4"]
-        );
-        assert_eq!(
-            COPILOT.spawn_command(Some("hi"), Some("default"), Some("abc"), None),
-            "copilot --resume 'abc' -i 'hi'"
-        );
         assert!(HERMES
             .spawn_command(Some("hello"), None, None, None)
             .contains("--query 'hello'"));

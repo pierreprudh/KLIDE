@@ -1051,3 +1051,47 @@ async fn installed_hermes_acp_streams_tools_and_resumes() {
     assert_eq!(remembered_session(&session_key(id, "hermes")).as_deref(), Some(remembered.as_str()));
     forget_session(&session_key(id, "hermes"));
 }
+
+/// Two real turns against the installed, logged-in `copilot`, through the same
+/// runner a Focus conversation uses: the first reads a file (an observed tool
+/// row, streamed text, a session id), the second resumes that session and
+/// remembers the first. Costs two premium requests, so it is opt-in:
+/// `cargo test --lib -- --ignored installed_copilot_streams_tools_and_resumes`
+#[cfg(test)]
+#[tokio::test]
+#[ignore = "Needs the installed copilot CLI, logged in"]
+async fn installed_copilot_streams_tools_and_resumes() {
+    let root = std::env::temp_dir().join(format!("klide-copilot-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("note.txt"), "copilot-smoke-ok\n").unwrap();
+    let root = root.to_string_lossy().to_string();
+    let chunks = std::sync::Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let sink = chunks.clone();
+    let channel = Channel::new(move |body| {
+        if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+            sink.lock().unwrap().push(serde_json::from_str(&json).unwrap());
+        }
+        Ok(())
+    });
+    let id = "installed-copilot-smoke";
+    let first = run_subscription_chat(&super::Copilot, "Copilot", String::new(), None,
+        vec![serde_json::json!({"role":"user","content":"Read note.txt and reply with its contents only."})],
+        Some(root.clone()), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+    assert!(first.content.contains("copilot-smoke-ok"), "{}", first.content);
+    let session = remembered_session(&session_key(id, "copilot")).expect("session recorded");
+    {
+        let chunks = chunks.lock().unwrap();
+        assert!(chunks.iter().any(|c| c["observed"].get("input").is_some()), "No tool call observed: {chunks:?}");
+        eprintln!("{} chunks; session {session}", chunks.len());
+    }
+    let second = run_subscription_chat(&super::Copilot, "Copilot", String::new(), None,
+        vec![
+            serde_json::json!({"role":"user","content":"Read note.txt and reply with its contents only."}),
+            serde_json::json!({"role":"assistant","content":first.content}),
+            serde_json::json!({"role":"user","content":"Repeat your previous reply, uppercased, nothing else. Use no tools."}),
+        ],
+        Some(root.clone()), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+    assert!(second.content.contains("COPILOT-SMOKE-OK"), "{}", second.content);
+    forget_session(&session_key(id, "copilot"));
+    let _ = std::fs::remove_dir_all(&root);
+}
