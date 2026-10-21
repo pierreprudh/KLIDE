@@ -164,6 +164,8 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   amp: "/amp-logo.svg",
   cursor: "/cursor-logo.svg",
   factory: "/factory-logo.svg",
+  // Primer Octicons copilot-24 (MIT, GitHub) — a black mark, inverted on dark.
+  copilot: "/copilot-logo.svg",
   "claude-code": "/claude-code-logo.png",
   codex: "/codex-logo.png",
 };

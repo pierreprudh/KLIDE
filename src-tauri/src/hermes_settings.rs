@@ -486,6 +486,7 @@ mod tests {
             "amp",
             "cursor",
             "factory",
+            "copilot",
             "hermes",
             "opencode",
             "omp",

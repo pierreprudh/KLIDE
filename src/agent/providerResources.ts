@@ -4,5 +4,6 @@ export const PROVIDER_DOCS: Readonly<Record<string, string>> = {
   amp: "https://ampcode.com/docs/cli",
   cursor: "https://cursor.com/docs/cli/overview",
   factory: "https://docs.factory.com/droid-cli/overview",
+  copilot: "https://github.com/github/copilot-cli",
   hermes: "https://hermes-agent.nousresearch.com/docs/user-guide/cli/",
 };
