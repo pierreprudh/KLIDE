@@ -27,8 +27,6 @@ type StartRunRequest = {
   reflectionLevel?: string;
   maxParallelTools?: number;
   maxTurns?: number;
-  /** Compact at this share of the context window (Rust `compact_at`). */
-  compactAt?: number;
   commandTimeoutSecs?: number;
   requireDiffReview?: boolean;
   autoApproveCommands?: boolean;
@@ -93,7 +91,6 @@ export async function startAgentRun(
       reflectionLevel: input.reflectionLevel,
       maxParallelTools: input.maxParallelTools,
       maxTurns: input.maxTurns,
-      compactAt: input.compactAt,
       commandTimeoutSecs: input.commandTimeoutSecs,
       requireDiffReview: input.requireDiffReview,
       autoApproveCommands: input.autoApproveCommands,
