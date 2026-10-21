@@ -55,7 +55,7 @@ use self::run_core::{
     apply_clean_context_if_requested, assistant_provider_message, compact_old_tool_results,
     compaction_system_message, compaction_threshold, context_event, decide_turn,
     estimate_prompt_tokens, includes_todo_context, injected_provider_message, last_recorded_todo,
-    prompt_fit_error, tool_schema_tokens,
+    prompt_fit_error, squeeze_to_fit, tool_schema_tokens,
     parallel_read_calls, plan_tool_step, provider_messages, refresh_todo_context, todo_update,
     tool_provider_message, retries_provider_calls, transient_provider_failure,
     user_provider_message, wire_tool_call, ProviderCaps, ToolStepPlan, TurnDecision, TurnStep,
@@ -2807,11 +2807,20 @@ async fn loop_body(
         }
 
         // Check after all last-minute context additions and compaction. A
-        // too-large retained turn or summary must not reach the provider.
+        // request that still doesn't fit first gives up inline tool results
+        // to the value store (`squeeze_to_fit`); only one that can't fit even
+        // then is refused rather than sent.
         if crate::delegate::lookup(&request.provider).is_none()
             && !crate::providers::is_subscription_provider(&request.provider)
         {
-            if let Some(message) = prompt_fit_error(&messages, turn_tools.as_ref(), context_window, reply_budget_override.or(request.num_predict).unwrap_or(4096)) {
+            let reply_reserve = reply_budget_override.or(request.num_predict).unwrap_or(4096);
+            let mut retain = |call_id: &str, name: &str, content: &str| {
+                retention_enabled
+                    .then(|| retained::retain_compacted(&runs_dir, &id, call_id, name, content))
+                    .flatten()
+            };
+            squeeze_to_fit(&mut messages, turn_tools.as_ref(), context_window, reply_reserve, &mut retain);
+            if let Some(message) = prompt_fit_error(&messages, turn_tools.as_ref(), context_window, reply_reserve) {
                 emit(AgentEvent::RunError {
                     run_id: id.clone(),
                     error: AgentError {
@@ -6469,6 +6478,45 @@ mod run_loop_tests {
         assert!(events.iter().any(|e| matches!(e, AgentEvent::ContextCompacted { .. })), "the guard must run after compaction, not merely before the first request");
         assert!(events.iter().any(|e| matches!(e, AgentEvent::RunError { error, .. } if error.code == error_code::CONTEXT_WINDOW_EXCEEDED && !error.retryable)));
         assert_eq!(read_summary(&runs_dir, "thread").unwrap().status, "error");
+    }
+
+    /// The dogfood failure of 2026-10-21: a small model read nine 12 KB files
+    /// in one turn on a 32k window. Nothing older could fold, so the fit guard
+    /// ended the Run. The batch now goes to the value store instead, the model
+    /// answers from the stubs (and can peek), and nothing is refused.
+    #[tokio::test]
+    async fn one_turn_that_overflows_the_window_is_squeezed_not_refused() {
+        let (runs_dir, root) = sandbox("squeeze-batch");
+        let calls: Vec<_> = (0..9)
+            .map(|i| {
+                let body: String = (0..420).map(|n| format!("file {i} line {n} padding text\n")).collect();
+                std::fs::write(Path::new(&root).join(format!("f{i}.txt")), body).unwrap();
+                scripted_tool_call(&format!("call_{i}"), "read_file", serde_json::json!({ "path": format!("f{i}.txt") }))
+            })
+            .collect();
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Reading all of them.", calls),
+            scripted_turn("Nine files of padding.", vec![]),
+        ]);
+        let mut request = test_request(&root, &[]);
+        request.num_ctx = Some(32_768);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request, caller.clone()).await;
+
+        let events = read_events(&runs_dir, "thread").unwrap();
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::RunError { .. })), "the run was refused");
+        let seen = caller.seen_messages.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "the answer turn was sent");
+        let stubs = seen[1].iter().filter(|m| m["content"].as_str().is_some_and(|c| c.starts_with("[retained #"))).count();
+        assert!(stubs >= 1, "the batch went to the value store");
+        assert!(stubs < 9, "and only as far as it had to");
+        // The follow-up replays the same stubs: the value files are on disk.
+        let follow = ScriptedProviderCaller::new(vec![scripted_turn("Yes.", vec![])]);
+        let mut again = test_request(&root, &[]);
+        again.num_ctx = Some(32_768);
+        again.initial_text = "Still there?".into();
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", again, follow.clone()).await;
+        let next = follow.seen_messages.lock().unwrap()[0].clone();
+        assert_eq!(&next[..seen[1].len()], &seen[1][..], "replay rebuilds the squeezed prompt");
     }
 
     #[tokio::test]
