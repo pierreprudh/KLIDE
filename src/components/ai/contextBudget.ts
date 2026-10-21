@@ -76,6 +76,10 @@ export type ContextBudget = {
 export const COMPACT_KEEP_RECENT = 4;
 
 
+/** The composer offers Compact once the gauge reads half full. The Run
+ *  compacts by itself when it has to; the button is for "now". */
+export const COMPACT_OFFER_RATIO = 0.5;
+
 /**
  * Index of the newest compaction marker, or -1.
  *

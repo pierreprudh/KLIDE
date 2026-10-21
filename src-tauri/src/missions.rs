@@ -1011,7 +1011,6 @@ fn start_request_for(
         reflection_level: None,
         max_parallel_tools: None,
         max_turns: None,
-        compact_at: None,
         command_timeout_secs: None,
         test_after_edit_command: None,
         goal: None,
