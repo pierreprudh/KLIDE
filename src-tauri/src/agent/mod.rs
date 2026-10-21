@@ -2482,9 +2482,19 @@ async fn loop_body(
                 // A failed or empty summary still frees the window: the
                 // stand-in is built from the turns themselves.
                 let notes = response.map(|r| r.content).unwrap_or_default();
+                // The folded turns' results go to the value store, so the
+                // summary's ledger can point at them and the model reopens a
+                // result instead of re-running the call.
+                let stored = if retention_enabled {
+                    compaction::store_folded_results(&events[..cut.start], &mut |call_id, name, content| {
+                        retained::retain_compacted(&runs_dir, &id, call_id, name, content).is_some()
+                    })
+                } else {
+                    Default::default()
+                };
                 let mut marker = AgentEvent::ContextCompacted {
                     run_id: id.clone(),
-                    summary: compaction::summary_text(&notes, &events, cut),
+                    summary: compaction::summary_text(&notes, &events, cut, &stored),
                     kept: Some(cut.kept),
                     context_tokens: None,
                     ts: now_ms(),
@@ -3752,7 +3762,10 @@ pub async fn agent_compact_conversation(
     .await
     .map(|response| response.content)
     .unwrap_or_default();
-    let summary = compaction::summary_text(&notes, &events, cut);
+    let stored = compaction::store_folded_results(&events[..cut.start], &mut |call_id, name, content| {
+        retained::retain_compacted(&runs_dir, &run_id, call_id, name, content).is_some()
+    });
+    let summary = compaction::summary_text(&notes, &events, cut, &stored);
     let mut marker = AgentEvent::ContextCompacted {
         run_id: run_id.clone(), summary: summary.clone(), kept: Some(cut.kept),
         context_tokens: None, ts: now_ms(),
@@ -6446,7 +6459,8 @@ mod run_loop_tests {
             })
             .expect("the run compacted itself");
         assert!(notes.starts_with("NOTES:"), "{notes}");
-        assert!(notes.ends_with("verbatim (oldest first):\n1. Read the four files."), "the request survives: {notes}");
+        assert!(notes.contains("verbatim (oldest first):\n1. Read the four files."), "the request survives: {notes}");
+        assert!(notes.contains("- read_file f0.txt — result stored: peek_value id"), "the ledger points at stored results: {notes}");
         assert!(kept.unwrap() >= 2, "the newest turn stays verbatim: {kept:?}");
 
         let seen = first.seen_messages.lock().unwrap().clone();
