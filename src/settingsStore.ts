@@ -55,6 +55,10 @@ export type HarnessSettings = {
    *  default (50). A runaway-loop guard; raise it for big multi-file / multi-
    *  agent tasks. The conversation can always be continued past the cap. */
   maxTurns?: number;
+  /** Compact a conversation once it fills this share of its context window
+   *  (0.6–0.9), earlier than the point it has to. Absent → only when needed.
+   *  Chosen in the context gauge's panel. */
+  compactAt?: number;
   /** Seconds a run_command may run before it's killed. Absent → 180. Raise it
    *  for slow builds; a hang guard, not a task limit. */
   commandTimeoutSecs?: number;
@@ -422,6 +426,7 @@ export const SETTINGS = {
       { label: "Effort & reflection", section: "ai", keywords: "effort budget reflection thinking reasoning" },
       { label: "Max parallel tools", section: "ai", keywords: "parallel tools concurrency simultaneous" },
       { label: "Max turns", section: "ai", keywords: "max turns loop limit iterations" },
+      { label: "Auto-compact", section: "ai", keywords: "compact compaction summarize context threshold auto" },
       { label: "Command timeout", section: "ai", keywords: "command timeout shell run seconds" },
       { label: "Test after edit", section: "ai", keywords: "test verify after edit syntax check command" },
       { label: "Auto-draft memory on run done", section: "ai", keywords: "memory draft auto note handoff summarize pending review" },
