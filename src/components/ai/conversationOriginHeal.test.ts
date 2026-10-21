@@ -4,6 +4,7 @@ import type { Conversation, Msg } from "./types";
 import {
   healStoredConversationModels,
   healStoredConversationOrigins,
+  healStoredConversationTitles,
   healStoredConversationsFromTranscripts,
   healedConversationFromRunOrigin,
   healedConversationOrigin,
@@ -101,6 +102,24 @@ describe("healStoredConversationModels", () => {
     expect(stored.find((c) => c.id === "opencode-ok")?.model).toBe("anthropic/claude-sonnet-4-6");
     expect(stored.find((c) => c.id === "router")?.model).toBe("deepseek/deepseek-v4.1-flash");
     expect(healStoredConversationModels()).toBe(0);
+  });
+});
+
+describe("healStoredConversationTitles", () => {
+  it("gives a thread named after a thinking tag its first message back, and leaves real names", () => {
+    saveConversations([
+      conversation({ id: "think", title: "<think>", renamed: true, updatedAt: 7 }),
+      conversation({ id: "named", title: "Loop refactor", renamed: true, updatedAt: 6 }),
+      conversation({ id: "derived", updatedAt: 5 }),
+    ]);
+    expect(healStoredConversationTitles()).toBe(1);
+    const stored = loadConversations<Conversation>();
+    const think = stored.find((c) => c.id === "think");
+    expect(think?.title).toBe("Refactor the loop");
+    expect(think?.renamed).toBe(false);
+    expect(think?.updatedAt).toBe(7);
+    expect(stored.find((c) => c.id === "named")?.title).toBe("Loop refactor");
+    expect(healStoredConversationTitles()).toBe(0);
   });
 });
 

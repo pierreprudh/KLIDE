@@ -10,6 +10,7 @@ import App from "./App";
 import {
   healStoredConversationModels,
   healStoredConversationOrigins,
+  healStoredConversationTitles,
   healStoredConversationsFromTranscripts,
 } from "./components/ai/conversationOriginHeal";
 import { fetchRunOrigins } from "./runs";
@@ -25,6 +26,8 @@ try {
   // And threads that kept another Provider's model when they were carried
   // onto a CLI (a Claude Code session showing DeepSeek in its composer).
   healStoredConversationModels();
+  // And threads a reasoning model named "<think>".
+  healStoredConversationTitles();
 } catch {
   /* a broken conversation index must never block the app from starting */
 }
