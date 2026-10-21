@@ -4158,7 +4158,10 @@ This user request requires workspace inspection. Before answering, you MUST call
           const isThinkingActive = streaming && isLast && m.role === "assistant" && m.content === "" && !!m.thinking;
           // Messages above the last compaction marker are kept for reference but
           // no longer in the model's context — dim them so that's legible.
-          const dimmed = compactionMarkerIdx > 0 && i < compactionMarkerIdx;
+          // A run-start marker sits under the turn's message: that message is
+          // what the summary served, not part of what it folded.
+          const dimmedBefore = compactionMarkerIdx > 0 && msgs[compactionMarkerIdx - 1]?.role === "user" ? compactionMarkerIdx - 1 : compactionMarkerIdx;
+          const dimmed = compactionMarkerIdx > 0 && i < dimmedBefore;
 
           if (m.role === "user") {
             // A wake turn has nothing to show; the response it produces opens
