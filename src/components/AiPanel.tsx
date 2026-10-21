@@ -5253,20 +5253,21 @@ This user request requires workspace inspection. Before answering, you MUST call
                         ].filter(Boolean).join(" · ")}
                       </div>
                     </div>
-                    {/* Compact now — the notifications' pill. The Run compacts
-                        by itself when it has to; this is the early fold. */}
-                    {(compactOffered || compacting) && (
-                      <button type="button" disabled={compacting}
+                    {/* Compact now — the notifications' pill, always here and
+                        centred; quiet when there is nothing to fold. The Run
+                        compacts by itself when it has to; this is the early fold. */}
+                    <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+                      <button type="button" disabled={compacting || !canCompact}
                         onClick={() => { closeContextTooltip(); void compactConversation(); }}
-                        title="Fold the older turns into notes now; the newest stay"
-                        style={{ marginTop: 10, height: 26, padding: "0 11px", display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, border: "none", background: "color-mix(in srgb, var(--fg) 7%, transparent)", color: "var(--fg-strong)", fontSize: 12, fontFamily: "var(--font-ui)", cursor: compacting ? "default" : "pointer", opacity: compacting ? 0.7 : 1, transition: "transform 160ms var(--ease-out)" }}
-                        onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.96)"; }}
+                        title={canCompact ? "Fold the older turns into notes now; the newest stay" : "Nothing to compact yet"}
+                        style={{ height: 26, padding: "0 11px", display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, border: "none", background: "color-mix(in srgb, var(--fg) 7%, transparent)", color: canCompact || compacting ? "var(--fg-strong)" : "var(--fg-dim)", fontSize: 12, fontFamily: "var(--font-ui)", cursor: canCompact && !compacting ? "pointer" : "default", opacity: compacting ? 0.7 : 1, transition: "transform 160ms var(--ease-out)" }}
+                        onPointerDown={(e) => { if (canCompact) e.currentTarget.style.transform = "scale(0.96)"; }}
                         onPointerUp={(e) => { e.currentTarget.style.transform = ""; }}
                         onPointerLeave={(e) => { e.currentTarget.style.transform = ""; }}>
                         <CompactIcon size={13} />
                         {compacting ? "Compacting…" : "Compact"}
                       </button>
-                    )}
+                    </div>
                   </div>,
                   document.body
                 )}
