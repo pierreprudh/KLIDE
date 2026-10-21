@@ -10,7 +10,7 @@ import {
 } from "./coordinationPeers";
 import { readCoordinationSnapshot, type CoordinationEnvelope, type CoordinationEnvelopeSnapshot } from "../../agent/coordination";
 import { DotGridLoader, ProviderLogo, ToolIcon } from "./icons";
-import { AskIcon } from "../../icons";
+import { AskIcon, CompactIcon } from "../../icons";
 import "./askCard.css";
 import { SIGHT_TOOL } from "../../agent/foldEvents";
 import { eyesName } from "./sight";
@@ -1121,32 +1121,23 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
   );
 }
 
-// Fold glyph that marks a compaction — three collapsing rules, echoing the
-// "many turns → fewer" idea. Shared by every compaction state.
+// The compaction mark, from the app's icon vocabulary.
 function CompactionGlyph() {
-  return (
-    <span aria-hidden style={{ display: "grid", placeItems: "center", color: "currentColor", flexShrink: 0 }}>
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 4h10" />
-        <path d="M5 8h6" />
-        <path d="M6.5 12h3" />
-      </svg>
-    </span>
-  );
+  return <CompactIcon size={15} style={{ flexShrink: 0 }} />;
 }
+
+const COMPACT_MONO = { fontFamily: "var(--font-mono)", fontSize: 11.5 } as const;
 
 // A thin hairline used to fill the gutter of the full-width (manual) layout.
 function Hairline() {
   return <span aria-hidden style={{ flex: 1, height: 1, background: "var(--border)", minWidth: 12 }} />;
 }
 
-const COMPACT_MONO = { fontFamily: "var(--font-mono)", fontSize: 11.5 } as const;
-
 function compactSummaryCard(summary: string, centered: boolean) {
   return (
     <div
       style={{
-        margin: centered ? "7px 0 2px" : "5px 0 3px 20px",
+        margin: centered ? "7px 0 2px" : "4px 0 3px",
         padding: "7px 11px",
         fontSize: 12,
         lineHeight: 1.55,
@@ -1162,11 +1153,13 @@ function compactSummaryCard(summary: string, centered: boolean) {
 }
 
 // Context-compaction. Two layouts, picked by `source`:
-//   "agent"  → a slim, left-aligned mono row in the tool-call idiom, so an
-//              inline/automatic compaction nests in the run's tool flow.
+//   "agent"  → a row of the conversation: the mark in the gutter where the
+//              agent marks sit, and the same disclosure line as "Worked for"
+//              in the text column, opening onto the summary.
 //   "manual" → a full-width divider row (hairline · label · hairline), reading
 //              as a deliberate conversation boundary the user asked for.
-// Three states either way: running (loader), error (danger), done (expandable).
+// Three states either way: running (live label), error (danger), done
+// (expandable).
 export function CompactionRow({
   count,
   summary,
@@ -1184,46 +1177,47 @@ export function CompactionRow({
   messages?: number;
   toolCalls?: number;
 }) {
-  const label =
-    error != null
-      ? "Compaction failed"
-      : status === "running"
-        ? "Compacting"
-        : "Compacted";
   // Done marker reports the folded slice as "N messages + M tool calls"; older
   // markers without the breakdown fall back to the plain turn count.
   const doneDetail =
     messages != null || toolCalls != null
       ? `${messages ?? 0} message${messages === 1 ? "" : "s"} + ${toolCalls ?? 0} tool call${toolCalls === 1 ? "" : "s"}`
       : `${count ?? 0} earlier turn${count === 1 ? "" : "s"}`;
-  const detail =
-    error != null
-      ? error
-      : status === "running"
-        ? "older turns…"
-        : doneDetail;
-  const tone = error != null ? "var(--danger)" : "var(--fg-subtle)";
-  const leading =
-    error != null ? (
-      <CompactionGlyph />
-    ) : status === "running" ? (
-      <DotGridLoader size={11} label="Compacting" />
-    ) : (
-      <CompactionGlyph />
-    );
+  const failed = error != null;
+  const text = failed ? (
+    <span style={{ color: "var(--danger)" }}>Compaction failed — {error}</span>
+  ) : status === "running" ? (
+    <LiveLabel label="Compacting" />
+  ) : (
+    `Compacted ${doneDetail}`
+  );
+  const tone = failed ? "var(--danger)" : "var(--fg-subtle)";
+  const expandable = !failed && status === "done" && !!summary;
+  // FoldLine turns its chevron from `expanded`, inline — so the row tracks
+  // its own open state rather than leaving it to a stylesheet rule.
+  const [open, setOpen] = useState(false);
+  const line = expandable ? (
+    <details className="klide-compaction" style={{ margin: 0 }} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary style={{ ...foldLineStyle, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+        <FoldLine expanded={open}>{text}</FoldLine>
+      </summary>
+      {compactSummaryCard(summary, source === "manual")}
+    </details>
+  ) : (
+    <div style={foldLineStyle}>{text}</div>
+  );
 
   // ---- Manual: full-width divider row -------------------------------------
   if (source === "manual") {
     const head = (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0, color: tone }}>
-        {leading}
-        <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500 }}>{label}</span>
-        <span style={{ ...COMPACT_MONO, color: tone }}>{detail}</span>
+        <CompactionGlyph />
+        <span style={{ ...foldLineStyle, color: failed ? "var(--danger)" : "var(--fg-subtle)" }}>{text}</span>
       </span>
     );
-    if (status === "done" && summary) {
+    if (expandable) {
       return (
-        <details style={{ margin: "12px 0" }}>
+        <details className="klide-compaction" style={{ margin: "12px 0" }}>
           <summary style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
             <Hairline />
             {head}
@@ -1242,24 +1236,13 @@ export function CompactionRow({
     );
   }
 
-  // ---- Agent: slim left-aligned tool-style row ----------------------------
-  if (status === "done" && summary) {
-    return (
-      <details style={{ margin: "5px 0" }}>
-        <summary style={{ display: "flex", alignItems: "center", gap: 8, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none", minWidth: 0, color: "var(--fg-subtle)" }}>
-          {leading}
-          <span style={{ ...COMPACT_MONO, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>{label}</span>
-          <span style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</span>
-        </summary>
-        {compactSummaryCard(summary, false)}
-      </details>
-    );
-  }
+  // ---- Agent: a conversation row — mark in the gutter, line in the text column
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: tone }}>
-      {leading}
-      <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>{label}</span>
-      <span style={{ ...COMPACT_MONO, color: tone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</span>
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <span aria-hidden="true" style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", color: tone }}>
+        <CompactionGlyph />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>{line}</div>
     </div>
   );
 }

@@ -4373,12 +4373,13 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
           }
 
-          // Compaction marker: a system event, not an assistant utterance —
-          // render it gutter-less and indented to align with tool output.
+          // Compaction marker: a system event, not an assistant utterance. The
+          // automatic one draws its own mark in the gutter column, like a
+          // response's, so it lines up with the rows around it.
           if (m.role === "system" && m.compaction) {
             const manual = m.compaction.source === "manual";
             return (
-              <div key={i} className="ai-msg-in" style={{ margin: manual ? "4px 0" : "10px 0 10px 32px" }}>
+              <div key={i} className="ai-msg-in" style={{ margin: manual ? "4px 0" : "6px 0 8px" }}>
                 {renderMessageBody(m)}
               </div>
             );
