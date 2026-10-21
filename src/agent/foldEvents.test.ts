@@ -801,9 +801,9 @@ describe("foldAgentEvents", () => {
     expect(runs[0].calls).toBe(2);
   });
 
-  it("draws a run-start compaction above the turn it served, and a later one where it happened", () => {
-    // Dogfood 2026-10-21: the marker landed under the answer and dimmed the
-    // turn the model was still reading.
+  it("draws a run-start compaction as the response's first step, and a later one where it happened", () => {
+    // Dogfood 2026-10-21: under the answer it dimmed the turn the model was
+    // still reading; it is the first step of the response (folded with it).
     const runStart = foldAgentEvents([
       userMessage("read the files"),
       assistantMessage("done"),
@@ -811,7 +811,7 @@ describe("foldAgentEvents", () => {
       compacted("notes"),
       assistantMessage("summary"),
     ]);
-    expect(runStart.map((r) => r.kind)).toEqual(["user", "assistant", "compaction", "user", "assistant"]);
+    expect(runStart.map((r) => r.kind)).toEqual(["user", "assistant", "user", "compaction", "assistant"]);
     // A Compact between turns stays below the exchange it folded.
     const between = foldAgentEvents([userMessage("read the files"), assistantMessage("done"), compacted("notes")]);
     expect(between.map((r) => r.kind)).toEqual(["user", "assistant", "compaction"]);
@@ -824,15 +824,13 @@ describe("foldAgentEvents", () => {
       steered("try a different tool"),
       assistantMessage("recovered"),
     ]);
-    // A compaction before the turn answered goes above the turn's message;
-    // the steering marker stays at its place in the turn.
     expect(rows.map((row) => row.kind)).toEqual([
-      "compaction",
       "user",
+      "compaction",
       "steering",
       "assistant",
     ]);
-    expect(rows[0]).toMatchObject({ kind: "compaction", summary: "earlier context" });
+    expect(rows[1]).toMatchObject({ kind: "compaction", summary: "earlier context" });
     expect(rows[2]).toEqual({ kind: "steering", reason: "try a different tool" });
   });
 });
@@ -1013,8 +1011,7 @@ describe("foldedToMsgs — the AI panel shape", () => {
   });
 
   it("singularises the fallback text for a single collapsed message", () => {
-    // One answered row before the turn that ran on the summary.
-    const msgs = foldedToMsgs(foldAgentEvents([assistantMessage("earlier"), userMessage("now"), compacted("gist")]));
+    const msgs = foldedToMsgs(foldAgentEvents([userMessage("one"), compacted("gist")]));
     const marker = msgs[1] as Extract<Msg, { role: "system" }>;
     expect(marker.content).toContain("1 earlier message");
     expect(marker.content).not.toContain("messages");

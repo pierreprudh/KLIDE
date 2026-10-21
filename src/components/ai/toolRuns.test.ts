@@ -36,9 +36,17 @@ describe("groupToolRuns", () => {
     const runs = groupToolRuns(msgs);
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ start: 1, end: 6, calls: 2 });
-    // One before the turn, or between turns, keeps its own line.
-    const before: Msg[] = [marker, asks("again"), call("read_file"), result("read_file"), says("done")];
-    expect(groupToolRuns(before)).toMatchObject([{ start: 2, end: 4 }]);
+    // A Compact between turns — no answer follows it — keeps its own line.
+    const between: Msg[] = [says("done"), marker, asks("again"), call("read_file"), result("read_file"), says("done")];
+    expect(groupToolRuns(between)).toMatchObject([{ start: 3, end: 5 }]);
+  });
+
+  it("folds a compaction that opened the response with the answer's thought", () => {
+    const marker: Msg = { role: "system", content: "Compacted", compaction: { count: 15, summary: "notes", source: "agent" } };
+    const answer: Msg = { role: "assistant", content: "Your first message asked…", thinking: "Look in the notes.", thinkingMs: 9000 };
+    const runs = groupToolRuns([asks("what was my first message?"), marker, answer]);
+    expect(runs).toMatchObject([{ start: 1, end: 2, calls: 0, answer: 2, thinkingMs: 9000 }]);
+    expect(toolRunLabel(runs[0]).label).toBe("Thought for 9.0s");
   });
 
   it("folds each stretch of tool work into its own run", () => {

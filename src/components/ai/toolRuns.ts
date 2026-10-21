@@ -138,10 +138,10 @@ function hasThinking(m: Msg): boolean {
  *  placeholder a streaming turn starts as). The answer is prose with no
  *  call behind it, or a call that draws a card: a planned Mission, a
  *  delegation — the agent addressing the operator (see `SPEAKING_TOOLS`). */
-/** A compaction marker the Run drew between two of its own steps. Inside a
- *  stretch of work it is one more step — a line in the fold, like a call —
- *  not a break that starts a second "Worked for". One before a turn, or a
- *  Compact between turns, is not inside any run and keeps its own line. */
+/** A compaction marker the Run drew. It is a step of the response it sits
+ *  in — a line in the fold, like a call — whether it opened the response or
+ *  came between two of its calls. A Compact between turns is followed by no
+ *  answer, so it folds into nothing and keeps its own line. */
 function isCompactionMarker(m: Msg): boolean {
   return m.role === "system" && !!m.compaction;
 }
@@ -245,6 +245,7 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     if (start < 0) return;
     let calls = 0;
     let results = 0;
+    let compactions = 0;
     let thinkingMs: number | undefined;
     let workedMs: number | undefined;
     const names: string[] = [];
@@ -252,6 +253,7 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
       const m = msgs[i];
       calls += callsIn(m);
       if (m.role === "tool") results++;
+      if (isCompactionMarker(m)) compactions++;
       if (m.role === "assistant") {
         if (m.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + m.thinkingMs;
         if (m.meta?.ms !== undefined) workedMs = (workedMs ?? 0) + m.meta.ms;
@@ -262,14 +264,20 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     }
     // A run of results with no calls in view (the calls were compacted away)
     // is still a run — count the rows so the summary is never "0 tool calls".
-    if (calls === 0 && results > 0) calls = end - start;
-    if (calls === 0) {
+    if (calls === 0 && results > 0) calls = end - start - compactions;
+    const next = msgs[end];
+    // A response that only compacted before answering is still a fold — the
+    // compaction and the answer's thought — but a marker no answer follows (a
+    // Compact between turns) is nobody's step and keeps its own line.
+    if (calls === 0 && !(compactions > 0 && next?.role === "assistant")) {
       start = -1;
       return;
     }
+    if (calls === 0 && workedMs === undefined && next?.role === "assistant" && next.meta?.ms !== undefined) {
+      workedMs = next.meta.ms;
+    }
     // The answer's own reasoning is the last step of the work it closes.
     let answer: number | undefined;
-    const next = msgs[end];
     if (next?.role === "assistant" && hasThinking(next)) {
       answer = end;
       if (next.thinkingMs !== undefined) thinkingMs = (thinkingMs ?? 0) + next.thinkingMs;
@@ -291,7 +299,7 @@ export function groupToolRuns(msgs: Msg[], pairing: ToolResultPairing = pairTool
     const owner = pairing.claimed.get(i);
     const work = owner !== undefined
       ? isToolWork(msgs[owner])
-      : isToolWork(msgs[i]) || (start >= 0 && isCompactionMarker(msgs[i])) || stillArriving(msgs[i], i, opts, start);
+      : isToolWork(msgs[i]) || isCompactionMarker(msgs[i]) || stillArriving(msgs[i], i, opts, start);
     if (work) {
       if (start < 0) start = i;
       continue;
@@ -406,7 +414,7 @@ function stillArriving(m: Msg, index: number, opts: RunFoldOptions, runStart: nu
  *  row they made the line a sentence nobody read, but a pointer resting on
  *  it is a question. */
 export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs" | "workedMs" | "observedBy">): { label: string; count: string; names: string } {
-  const count = `${run.calls} tool call${run.calls === 1 ? "" : "s"}`;
+  const count = run.calls === 0 ? "context compacted" : `${run.calls} tool call${run.calls === 1 ? "" : "s"}`;
   // A Delegate's work says whose it was: "Hermes worked for" beside Kit's
   // plain "Worked for", so the reader sees which runs Klide gated.
   const who = run.observedBy ? `${delegateLabel(run.observedBy)} ` : "";

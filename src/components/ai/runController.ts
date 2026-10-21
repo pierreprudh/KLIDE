@@ -452,9 +452,9 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
     const d = deps();
     const conversationId = d.conversationId();
     const { transcript, client } = d;
-    let userIndex = transcript.read().findIndex((m) => m.role === "user" && m.queueId === turn.clientId);
+    const userIndex = transcript.read().findIndex((m) => m.role === "user" && m.queueId === turn.clientId);
     // Whether this Run has answered anything yet — a compaction before that
-    // is drawn above the turn's message, one after it inside the run's rows.
+    // heads the run's rows, one after it sits among them.
     let answered = false;
     if (userIndex < 0) return;
     const opening = [...transcript.read()];
@@ -584,18 +584,17 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
       if (driver.handleEvent(event)) return;
       switch (event.type) {
         case "context_compacted": {
-          // The Run summarized the turns before this one. The marker goes
-          // right above this turn's message — where a reload's fold puts it —
-          // so what's dimmed above it is what was summarized, and this turn
-          // and its answer read below it. Appended at the end, it landed under
-          // the answer and dimmed the turn the model was still reading.
+          // The Run summarized the turns before this one. The marker is a step
+          // of the response — where a reload's fold puts it — never appended
+          // under the answer, where it dimmed the turn the model was reading.
           if (answered) {
             // Mid-run: the marker belongs between the work before and after
             // it, inside the run's own rows.
             driver.foldEvent(event);
           } else {
-            driver.insertAboveTurn(userIndex, compactionMsg(userIndex, event.summary, event.contextTokens));
-            userIndex += 1;
+            // The run's first step: under the turn's message, at the head of
+            // the run's region (the region moves down with it).
+            driver.insertAboveTurn(userIndex + 1, compactionMsg(userIndex + 1, event.summary, event.contextTokens));
           }
           break;
         }

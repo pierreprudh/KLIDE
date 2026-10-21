@@ -68,11 +68,10 @@ export type TurnDriver = {
   /** True when this turn stopped reaching the screen partway through. The
    *  panel heals from the Transcript instead of leaving the answer on disk. */
   isDetached(): boolean;
-  /** Insert `msg` right above this turn's user message (at `userIndex`) and
-   *  move the run's region down with it — the place a compaction marker for
-   *  this turn belongs. The caller's own indices at or past `userIndex` shift
-   *  by one. */
-  insertAboveTurn(userIndex: number, msg: Msg): void;
+  /** Insert `msg` at `index`, in front of the run's region (at most its
+   *  start), and move the region down with it — a compaction marker heading
+   *  the run. The caller's own indices at or past `index` shift by one. */
+  insertAboveTurn(index: number, msg: Msg): void;
   /** Fold an event the driver doesn't consume by itself into the run's rows,
    *  at its place in the turn (a compaction marker mid-run). */
   foldEvent(event: AgentEvent): void;
