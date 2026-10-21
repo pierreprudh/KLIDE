@@ -82,6 +82,9 @@ pub struct ModelCapabilities {
     pub context_window: Option<usize>,
     pub max_output_tokens: Option<usize>,
     pub supports_tools: bool,
+    /// False only for a model that cannot answer a message at all — an
+    /// Ollama embedding model, which reports `embedding` and no `completion`.
+    pub supports_chat: bool,
     pub supports_vision: bool,
     /// The reasoning efforts the pair accepts, weakest first. Empty = no dial.
     pub reasoning_levels: Vec<String>,
@@ -599,6 +602,8 @@ struct ShowFacts {
     window: Option<usize>,
     /// `None` when the daemon is too old to report capabilities.
     tools: Option<bool>,
+    /// False only for an embedding model (`embedding`, no `completion`).
+    chat: bool,
     vision: bool,
     thinking: bool,
 }
@@ -623,6 +628,7 @@ fn show_facts(value: &serde_json::Value) -> ShowFacts {
     ShowFacts {
         window: crate::models::find_context_window(value),
         tools,
+        chat: !(has("embedding") && !has("completion")),
         vision: has("vision"),
         thinking: has("thinking"),
     }
@@ -735,6 +741,7 @@ async fn resolve_uncached(
                 max_output_tokens: None,
                 context_window: None,
                 supports_tools: true,
+                supports_chat: true,
                 supports_vision: false,
                 reasoning_levels: Vec::new(),
                 price_class,
@@ -778,6 +785,7 @@ async fn resolve_uncached(
                 max_output_tokens: opencode.as_ref().and_then(|facts| facts.max_output_tokens),
                 context_window,
                 supports_tools: true,
+                supports_chat: true,
                 supports_vision: false,
                 reasoning_levels,
                 price_class,
@@ -817,6 +825,7 @@ async fn resolve_uncached(
                 max_output_tokens: None,
                 context_window: show.window.or(names.window),
                 supports_tools: show.tools.unwrap_or(true),
+                supports_chat: show.chat,
                 supports_vision: show.vision,
                 reasoning_levels: wire_levels_if(reasons),
                 price_class,
@@ -870,6 +879,7 @@ async fn resolve_uncached(
 
             context_window,
             supports_tools,
+            supports_chat: true,
             supports_vision,
             reasoning_levels: api_reasoning_levels.unwrap_or_else(|| wire_levels_if(reasons)),
             price_class,
@@ -1242,6 +1252,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_ollama_embedding_model_cannot_chat() {
+        let _guard = SERIAL.lock().unwrap();
+        clear_memo();
+        let probe = FakeOllama::new(serde_json::json!({ "capabilities": ["embedding"] }), false);
+        let caps = resolve_with(&probe, "ollama", "bge-m3:latest", false).await.unwrap();
+        assert!(!caps.supports_chat);
+        clear_memo();
+        let probe = FakeOllama::new(serde_json::json!({ "capabilities": ["completion", "tools"] }), false);
+        let caps = resolve_with(&probe, "ollama", "qwen3.5:9b", false).await.unwrap();
+        assert!(caps.supports_chat);
+    }
+
+    #[tokio::test]
     async fn ollama_facts_come_from_the_daemon_first_and_the_table_last() {
         let _guard = SERIAL.lock().unwrap();
         clear_memo();
@@ -1299,7 +1322,7 @@ mod tests {
         });
         assert_eq!(
             show_facts(&modern),
-            ShowFacts { window: Some(128_000), tools: Some(true), vision: false, thinking: true }
+            ShowFacts { window: Some(128_000), tools: Some(true), chat: true, vision: false, thinking: true }
         );
         // A daemon too old to list capabilities: the known tool-capable
         // families are trusted, everything else is not.
@@ -1400,6 +1423,7 @@ mod tests {
             max_output_tokens: None,
             context_window: None,
             supports_tools: true,
+            supports_chat: true,
             supports_vision: false,
             reasoning_levels: Vec::new(),
             price_class: PriceClass::Unknown,

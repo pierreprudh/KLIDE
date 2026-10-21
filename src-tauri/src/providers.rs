@@ -465,9 +465,9 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         default_model: Some("claude-sonnet-4-6"),
         presets: NO_PRESETS,
         auto: AutoLadder {
-            light: Some("claude-haiku-4-5"),
-            standard: Some("claude-sonnet-4-6"),
-            strong: Some("claude-opus-4-6"),
+            light: Some("claude-haiku-5-5"),
+            standard: Some("claude-sonnet-5-5"),
+            strong: Some("claude-opus-5-5"),
         },
         brand: "anthropic",
         credits: CreditsSource::None,

@@ -74,7 +74,7 @@ pool: a fresh install with one API key and no stars gets a pick.
 
 | Row | light | standard | strong |
 |---|---|---|---|
-| Anthropic | claude-haiku-4-5 | claude-sonnet-4-6 | claude-opus-4-6 |
+| Anthropic | claude-haiku-5-5 | claude-sonnet-5-5 | claude-opus-5-5 |
 | OpenAI | gpt-5-mini | gpt-5 | — |
 | Mistral | mistral-small-latest | mistral-medium-latest | mistral-large-latest |
 | xAI | — | grok-4 | — |
@@ -110,7 +110,9 @@ model. What the gate asks:
 | Check | Source | Rejection recorded as |
 |---|---|---|
 | hosted Provider has a key | `providers::provider_key` | `no API key` |
+| the key's own `/models` listing names the model (a dated snapshot counts for its alias; no listing, no verdict) | `models::key_lists_model` | `not in this key's model list` |
 | local server is up | `local_servers::local_server_is_up` | `server not running` |
+| the model can answer a message (an Ollama embedding model can't) | `model_capabilities::capabilities` | `embedding model, cannot chat` |
 | tool support, when the Mode is Plan or Goal | `model_capabilities::capabilities` | `cannot use tools` |
 | context window ≥ 2 × prompt tokens + 4 096 | `model_capabilities::capabilities` | `Nk window, job needs Mk` |
 

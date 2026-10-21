@@ -248,6 +248,41 @@ pub(crate) async fn installed_ollama_models() -> Result<Vec<String>, String> {
     fetch_ollama_tags().await
 }
 
+/// Does this key's own `/models` listing name the model? `None` when it
+/// can't say — no listing for the Provider, or the listing came back empty —
+/// so only a listing that loaded and leaves the model out rules it out. A
+/// dated snapshot (`claude-haiku-4-5-20251001`) counts for its alias.
+pub(crate) async fn key_lists_model(provider: &str, model: &str) -> Option<bool> {
+    let entry = providers::lookup(provider)?;
+    let listed = match entry.models {
+        providers::ModelsHandler::AnthropicModels => anthropic_model_meta().await,
+        providers::ModelsHandler::OpenAiModels => openai_model_meta(provider).await,
+        _ => return None,
+    };
+    if listed.is_empty() {
+        return None;
+    }
+    Some(listing_names(listed.keys(), model))
+}
+
+/// Test-only: stand in for a `/models` listing — the cache a test seeds, per
+/// the offline rule above.
+#[cfg(test)]
+pub(crate) fn seed_listing(provider: &str, ids: &[String]) {
+    let meta = ids.iter().map(|id| (id.clone(), ModelMeta::default())).collect();
+    OPENAI_MODEL_META_CACHE.lock().unwrap().insert(provider.to_string(), (Instant::now(), meta));
+}
+
+fn listing_names<'a>(mut ids: impl Iterator<Item = &'a String>, model: &str) -> bool {
+    ids.any(|id| {
+        id == model
+            || id
+                .strip_prefix(model)
+                .and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|date| date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// USD per million input tokens for one hosted model, from the Provider's
 /// price class first (a list price for Anthropic, OpenAI, …) and its `/models`
 /// metadata second (OpenRouter reports prices per model). `None` when neither
@@ -1098,6 +1133,26 @@ pub(crate) async fn ai_count_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listing_names_a_model_by_id_or_by_its_dated_snapshot() {
+        let ids = ["claude-haiku-4-5-20251001".to_string(), "mistral-medium-latest".to_string()];
+        assert!(listing_names(ids.iter(), "mistral-medium-latest"));
+        assert!(listing_names(ids.iter(), "claude-haiku-4-5"));
+        assert!(!listing_names(ids.iter(), "mistral-large-latest"));
+        // A longer name is another model, not a snapshot.
+        assert!(!listing_names(ids.iter(), "claude-haiku-4"));
+        assert!(!listing_names(ids.iter(), "mistral-medium"));
+    }
+
+    #[tokio::test]
+    async fn only_a_listing_that_loaded_can_rule_a_model_out() {
+        assert_eq!(key_lists_model("deepseek", "deepseek-chat").await, None);
+        seed_listing("deepseek", &["deepseek-chat".to_string()]);
+        assert_eq!(key_lists_model("deepseek", "deepseek-chat").await, Some(true));
+        assert_eq!(key_lists_model("deepseek", "deepseek-reasoner").await, Some(false));
+        assert_eq!(key_lists_model("ollama", "anything").await, None);
+    }
 
     #[test]
     fn opencode_variants_follow_each_models_metadata() {
