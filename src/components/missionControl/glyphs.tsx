@@ -136,6 +136,10 @@ export function SourceLogo({
   if (source === "omp") {
     return <OmpLogo size={size} />;
   }
+  // Copilot routes to several makers' models; the row is still Copilot's.
+  if (source === "copilot") {
+    return <ProviderLogo id="copilot" size={size} />;
+  }
   const path = BRAND_PATH[source];
   const color = "var(--fg-strong)";
   if (path) {
