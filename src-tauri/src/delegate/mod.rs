@@ -14,7 +14,7 @@
 
 mod additional;
 mod hermes_acp;
-pub use additional::{AMP, CURSOR, FACTORY, HERMES};
+pub use additional::{AMP, COPILOT, CURSOR, FACTORY, HERMES};
 mod chat;
 mod chat_server;
 pub(crate) mod chat_stream;
@@ -619,7 +619,7 @@ pub trait RunParser {
 }
 
 /// The registry — one adapter per delegate CLI Klide can dispatch.
-pub const ALL: [&dyn Delegate; 8] = [&ClaudeCode, &Codex, &OpenCode, &Omp, &AMP, &CURSOR, &FACTORY, &HERMES];
+pub const ALL: [&dyn Delegate; 9] = [&ClaudeCode, &Codex, &OpenCode, &Omp, &AMP, &CURSOR, &FACTORY, &COPILOT, &HERMES];
 
 pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
     ALL.into_iter().find(|d| d.id() == provider)

@@ -443,6 +443,7 @@ export const SOURCE_COLOR: Record<RunSource, string> = {
   amp: "var(--fg-subtle)",
   cursor: "var(--fg-subtle)",
   factory: "var(--fg-subtle)",
+  copilot: "var(--fg-subtle)",
   hermes: "var(--fg-subtle)",
   klide: "var(--accent)",
 };

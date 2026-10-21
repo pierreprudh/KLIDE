@@ -813,6 +813,18 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         caps: HOSTED_CAPS, context_window: None,
     },
     ProviderEntry {
+        id: "copilot", label: "Copilot", short_label: None,
+        group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
+        key: KeySource::Local, models: ModelsHandler::Subscription,
+        subscription: Some(SubscriptionSpec {
+            delegate: &crate::delegate::COPILOT, default_models: &["default"],
+            cached_models: || None,
+        }),
+        default_model: None, presets: NO_PRESETS, auto: NO_LADDER, brand: "copilot",
+        credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
+        caps: HOSTED_CAPS, context_window: None,
+    },
+    ProviderEntry {
         id: "hermes", label: "Hermes", short_label: None,
         group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
         key: KeySource::Local, models: ModelsHandler::Subscription,
