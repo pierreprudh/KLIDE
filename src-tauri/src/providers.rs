@@ -817,7 +817,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
         key: KeySource::Local, models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            delegate: &crate::delegate::COPILOT, default_models: &["default"],
+            delegate: &crate::delegate::Copilot, default_models: &["default"],
             cached_models: || None,
         }),
         default_model: None, presets: NO_PRESETS, auto: NO_LADDER, brand: "copilot",
