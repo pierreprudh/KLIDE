@@ -75,8 +75,6 @@ export type ContextBudget = {
  *  Compact action. What a compaction keeps is Rust's call (`compaction.rs`). */
 export const COMPACT_KEEP_RECENT = 4;
 
-/** Offer compaction at ~80% of the window. */
-export const COMPACT_PROMPT_RATIO = 0.8;
 
 /**
  * Index of the newest compaction marker, or -1.
