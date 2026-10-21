@@ -11,7 +11,7 @@ Klide resumes this exact CLI session in one of its AI panels, in the folder
 you are working in. Nothing is copied or summarized: it is the same session.
 
 1. Pick your provider id: Codex → `codex`, OpenCode → `opencode`,
-   Oh My Pi → `omp`, Claude Code → `claude-code`.
+   Oh My Pi → `omp`, Claude Code → `claude-code`, GitHub Copilot → `copilot`.
 
 2. Run exactly this, with that id in place of `PROVIDER`, nothing else:
 
