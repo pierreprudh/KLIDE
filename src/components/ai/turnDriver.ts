@@ -68,6 +68,14 @@ export type TurnDriver = {
   /** True when this turn stopped reaching the screen partway through. The
    *  panel heals from the Transcript instead of leaving the answer on disk. */
   isDetached(): boolean;
+  /** Insert `msg` right above this turn's user message (at `userIndex`) and
+   *  move the run's region down with it — the place a compaction marker for
+   *  this turn belongs. The caller's own indices at or past `userIndex` shift
+   *  by one. */
+  insertAboveTurn(userIndex: number, msg: Msg): void;
+  /** Fold an event the driver doesn't consume by itself into the run's rows,
+   *  at its place in the turn (a compaction marker mid-run). */
+  foldEvent(event: AgentEvent): void;
 };
 
 export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
@@ -288,6 +296,19 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
     },
     isDetached() {
       return transcript.isDetached();
+    },
+    foldEvent(event) {
+      transcript.apply(event);
+      projectCommit();
+    },
+    insertAboveTurn(userIndex, msg) {
+      // Whatever is still pending belongs to the region as it stands now.
+      cancelFlush();
+      drainPending();
+      projectCommit();
+      const current = opts.read();
+      opts.commit([...current.slice(0, userIndex), msg, ...current.slice(userIndex)]);
+      transcript.shiftRegion(1);
     },
   };
 }

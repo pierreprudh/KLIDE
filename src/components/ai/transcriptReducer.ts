@@ -54,6 +54,9 @@ export type RunTranscript = {
    *  on screen, so the caller must heal from the Transcript rather than trust
    *  what it last projected. */
   isDetached(): boolean;
+  /** Messages were inserted in front of the region (a compaction marker above
+   *  the turn's user message): the region moved down by `by`. */
+  shiftRegion(by: number): void;
 };
 
 export function createRunTranscript(opts: {
@@ -81,6 +84,7 @@ export function createRunTranscript(opts: {
   let flat: Msg[] = [];
   const dirty = new Set<number>();
   let detached = false;
+  let regionStart = opts.regionStart;
   if (opts.seed) {
     rowMsgs.push([opts.seed]);
     flat = [opts.seed];
@@ -100,7 +104,7 @@ export function createRunTranscript(opts: {
       // Foreign-edit guard: everything we projected last time must still be
       // there, by reference. If not, someone else owns the region now.
       for (let i = 0; i < flat.length; i++) {
-        if (current[opts.regionStart + i] !== flat[i]) {
+        if (current[regionStart + i] !== flat[i]) {
           detached = true;
           opts.onDetached?.();
           return null;
@@ -124,9 +128,9 @@ export function createRunTranscript(opts: {
       // what the region contains; the loop above guarantees an entry for each.
       for (let i = 0; i < rows.length; i++) nextFlat.push(...rowMsgs[i]);
       const next = [
-        ...current.slice(0, opts.regionStart),
+        ...current.slice(0, regionStart),
         ...nextFlat,
-        ...current.slice(opts.regionStart + flat.length),
+        ...current.slice(regionStart + flat.length),
       ];
       flat = nextFlat;
       return next;
@@ -136,12 +140,16 @@ export function createRunTranscript(opts: {
       return detached;
     },
 
+    shiftRegion(by) {
+      regionStart += by;
+    },
+
     assistantIndex() {
       const rows = fold.rows();
       let offset = 0;
-      let found = opts.regionStart;
+      let found = regionStart;
       for (let i = 0; i < rowMsgs.length && i < rows.length; i++) {
-        if (rows[i].kind === "assistant") found = opts.regionStart + offset;
+        if (rows[i].kind === "assistant") found = regionStart + offset;
         offset += rowMsgs[i].length;
       }
       return found;
