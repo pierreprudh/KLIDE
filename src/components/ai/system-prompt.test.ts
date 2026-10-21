@@ -28,6 +28,12 @@ describe("selected harness identity", () => {
   });
 });
 
+it("leaves the model's name to Rust on an Auto turn", () => {
+  const text = prompt("auto", "auto");
+  expect(text).toContain("`{{klide:routed-model}}`");
+  expect(text).not.toContain("`auto`");
+});
+
 it("preserves Claude Code identity with a Nous Portal model selection", () => {
   const text = prompt("claude-code", 'harness-source:{"provider":"hermes-subscription:nous","model":"anthropic/claude-sonnet-test"}');
   expect(text).toContain("Claude Code");

@@ -34,6 +34,10 @@ use crate::providers::{self, AutoLadder, KeySource};
 /// `resolve` gives it one.
 pub const AUTO_PROVIDER: &str = "auto";
 pub const AUTO_MODEL: &str = "auto";
+/// Where an Auto turn's system prompt names its model — the renderer writes
+/// it, `start_run` replaces it with the routed (or locked) model. Mirrors
+/// `ROUTED_MODEL_TOKEN` in `src/agent/providers.ts`.
+pub const ROUTED_MODEL_TOKEN: &str = "{{klide:routed-model}}";
 
 pub fn is_auto(provider: &str) -> bool {
     provider.eq_ignore_ascii_case(AUTO_PROVIDER)
@@ -105,6 +109,27 @@ pub fn rung_for(mode: &AgentMode, prompt_tokens: usize, attachments: usize) -> R
     }
 }
 
+/// Blended $/M below which a model sits at `Light`, and from which it sits
+/// at `Strong`. Read off the Anthropic and OpenAI ladders: Haiku and
+/// gpt-5-mini blend under the first, Opus over the second, Sonnet and gpt-5
+/// between.
+pub const LIGHT_BELOW: f64 = 0.75;
+pub const STRONG_FROM: f64 = 6.0;
+
+/// The rung a starred model on no ladder answers from, read off its blended
+/// price. Price is the one fact every market publishes about how much model
+/// it is; a star without this took every rung at once, and the cheapest star
+/// won every job — a Goal went to whatever was cheapest to ask.
+pub fn rung_for_price(per_million: f64) -> Rung {
+    if per_million < LIGHT_BELOW {
+        Rung::Light
+    } else if per_million < STRONG_FROM {
+        Rung::Standard
+    } else {
+        Rung::Strong
+    }
+}
+
 /// Every rung a ladder names `model` at — OpenRouter's router sits on all
 /// three. Empty for a model on no ladder.
 pub fn rungs_on(ladder: &AutoLadder, model: &str) -> Vec<Rung> {
@@ -125,12 +150,15 @@ pub struct Candidate {
     /// Served by a local runtime (Ollama). Free, and available only while the
     /// server is up.
     pub local: bool,
-    /// USD per million input tokens. `None` = the price isn't known, which
+    /// USD per million tokens, blended three input to one output
+    /// (`models::model_blended_price`). `None` = the price isn't known, which
     /// ranks after every known price — an unpriced pick is never "cheapest".
-    pub input_per_million: Option<f64>,
-    /// The rungs this model fills: its Provider's ladder slots, or `Light`
-    /// for an installed local model. Empty means unplaced — a starred model
-    /// on no ladder — which ranks as if it were at the wanted rung.
+    pub per_million: Option<f64>,
+    /// The rungs this model fills: its Provider's ladder slots, `Light` for
+    /// an installed local model, or — for a starred model on no ladder — the
+    /// rung its price sits at (`rung_for_price`). Empty means unplaced, an
+    /// unpriced star on no ladder, which ranks as if it were at the wanted
+    /// rung.
     pub rungs: Vec<Rung>,
 }
 
@@ -221,7 +249,7 @@ impl Rejection {
 pub struct Resolved {
     pub provider: String,
     pub model: String,
-    /// Why this one, in a phrase: `starred · $3/M · tools · 200k window`.
+    /// Why this one, in a phrase: `starred · $3.00/M blended · tools · 200k window`.
     pub reason: String,
     /// Candidates that ranked above the pick and what ruled each one out,
     /// as `provider model: why`. Empty when the top of the ranking won.
@@ -244,7 +272,7 @@ pub fn rank(mut candidates: Vec<Candidate>, local_default: &str, wanted: Rung) -
             1
         }
     };
-    let price = |c: &Candidate| -> f64 { c.input_per_million.unwrap_or(f64::INFINITY) };
+    let price = |c: &Candidate| -> f64 { c.per_million.unwrap_or(f64::INFINITY) };
     let is_default = |c: &Candidate| -> bool { c.local && ollama_tag_matches(&c.model, local_default) };
     candidates.sort_by(|a, b| {
         tier(a)
@@ -299,10 +327,10 @@ pub fn judge(candidate: &Candidate, facts: Result<Facts, Rejection>, needs: Need
             format!("{} rung for a {} job", rung.word(), needs.rung.word())
         });
     }
-    parts.push(match candidate.input_per_million {
+    parts.push(match candidate.per_million {
         Some(p) if p == 0.0 => "free".to_string(),
-        Some(p) if p >= 1.0 => format!("${p:.0}/M"),
-        Some(p) => format!("${p:.2}/M"),
+        Some(p) if p >= 10.0 => format!("${p:.0}/M blended"),
+        Some(p) => format!("${p:.2}/M blended"),
         None => "unpriced".to_string(),
     });
     if facts.supports_tools {
@@ -405,22 +433,25 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
             continue;
         }
         let local = matches!(entry.map(|e| e.key), Some(KeySource::Local));
-        let input_per_million = if local {
+        let per_million = if local {
             Some(0.0)
         } else {
-            crate::models::model_input_price(&pref.provider, &pref.model).await
+            crate::models::model_blended_price(&pref.provider, &pref.model).await
         };
         let rungs = if local {
             vec![Rung::Light]
         } else {
-            entry.map(|e| rungs_on(&e.auto, &pref.model)).unwrap_or_default()
+            match entry.map(|e| rungs_on(&e.auto, &pref.model)).unwrap_or_default() {
+                placed if !placed.is_empty() => placed,
+                _ => per_million.map(|p| vec![rung_for_price(p)]).unwrap_or_default(),
+            }
         };
         pool.push(Candidate {
             provider: pref.provider.clone(),
             model: pref.model.clone(),
             starred: true,
             local,
-            input_per_million,
+            per_million,
             rungs,
         });
     }
@@ -454,7 +485,7 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
                 model: model.to_string(),
                 starred: false,
                 local: false,
-                input_per_million: crate::models::model_input_price(id, model).await,
+                per_million: crate::models::model_blended_price(id, model).await,
                 rungs: vec![rung],
             });
         }
@@ -475,7 +506,7 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
                 model: tag,
                 starred: false,
                 local: true,
-                input_per_million: Some(0.0),
+                per_million: Some(0.0),
                 rungs: vec![Rung::Light],
             });
         }
@@ -548,7 +579,7 @@ mod tests {
             model: model.into(),
             starred: true,
             local: false,
-            input_per_million: price,
+            per_million: price,
             rungs: vec![],
         }
     }
@@ -559,7 +590,7 @@ mod tests {
             model: model.into(),
             starred: false,
             local: true,
-            input_per_million: Some(0.0),
+            per_million: Some(0.0),
             rungs: vec![Rung::Light],
         }
     }
@@ -571,7 +602,7 @@ mod tests {
             model: model.into(),
             starred: false,
             local: false,
-            input_per_million: Some(price),
+            per_million: Some(price),
             rungs: vec![at],
         }
     }
@@ -676,7 +707,7 @@ mod tests {
         let ranked = rank(vec![starred("anthropic", "chatty", Some(1.0))], "llama3.1:8b", CHAT.rung);
         let picked = pick(&ranked, CHAT, |_| ok(false, 128_000)).unwrap();
         assert_eq!(picked.model, "chatty");
-        assert_eq!(picked.reason, "starred · $1/M · 128k window");
+        assert_eq!(picked.reason, "starred · $1.00/M blended · 128k window");
     }
 
     #[test]
@@ -694,7 +725,7 @@ mod tests {
         );
         let picked = pick(&ranked, GOAL, |_| ok(true, 200_000)).unwrap();
         assert_eq!(picked.model, "claude-sonnet-4-6");
-        assert_eq!(picked.reason, "starred · $3/M · tools · 200k window");
+        assert_eq!(picked.reason, "starred · $3.00/M blended · tools · 200k window");
         assert!(picked.skipped.is_empty());
     }
 
@@ -778,7 +809,7 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
         assert_eq!(order(Rung::Strong), ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]);
         let picked = pick(&rank(ladder(), "llama3.1:8b", GOAL.rung), GOAL, |_| ok(true, 200_000)).unwrap();
         assert_eq!(picked.model, "claude-sonnet-4-6");
-        assert_eq!(picked.reason, "cheapest · standard rung · $3/M · tools · 200k window");
+        assert_eq!(picked.reason, "cheapest · standard rung · $3.00/M blended · tools · 200k window");
     }
 
     #[test]
@@ -816,6 +847,42 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
         // A star on no ladder ranks as if it sat at the wanted rung.
         let unplaced = starred("custom:lab", "house-model", Some(1.0));
         assert_eq!(rank(vec![opus.clone(), unplaced], "z", Rung::Strong)[0].model, "house-model");
+    }
+
+    #[test]
+    fn a_price_places_a_star_the_ladders_dont_name() {
+        assert_eq!(rung_for_price(0.11), Rung::Light);
+        assert_eq!(rung_for_price(LIGHT_BELOW), Rung::Standard);
+        assert_eq!(rung_for_price(1.78), Rung::Standard);
+        assert_eq!(rung_for_price(STRONG_FROM), Rung::Strong);
+        // The ladders the bands were read off still agree with them.
+        let blended = |m: &str| {
+            let p = crate::pricing::list_price_for_model(m).unwrap();
+            (3.0 * p.input_per_million + p.output_per_million) / 4.0
+        };
+        assert_eq!(rung_for_price(blended("claude-haiku-5-5")), Rung::Light);
+        assert_eq!(rung_for_price(blended("claude-sonnet-5-5")), Rung::Standard);
+        assert_eq!(rung_for_price(blended("claude-opus-5-5")), Rung::Strong);
+        assert_eq!(rung_for_price(blended("gpt-5-mini")), Rung::Light);
+        assert_eq!(rung_for_price(blended("gpt-5")), Rung::Standard);
+    }
+
+    #[test]
+    fn a_goal_goes_to_the_cheapest_star_at_its_rung_not_the_cheapest_star() {
+        // The bench that sent a Goal to GLM: OpenRouter stars on no ladder,
+        // priced blended, each placed by its price.
+        let star = |model: &str, p: f64| Candidate { rungs: vec![rung_for_price(p)], ..starred("openrouter", model, Some(p)) };
+        let pool = vec![
+            star("deepseek/deepseek-v4-flash", 0.11),
+            star("z-ai/glm-5.2", 1.78),
+            star("moonshotai/kimi-k2.7-code", 1.34),
+            star("openai/gpt-5.6-sol", 8.0),
+            Candidate { rungs: vec![Rung::Light], local: true, ..starred("ollama", "klide-8b:latest", Some(0.0)) },
+        ];
+        let first = |wanted| rank(pool.clone(), "llama3.1:8b", wanted)[0].model.clone();
+        assert_eq!(first(Rung::Standard), "moonshotai/kimi-k2.7-code");
+        assert_eq!(first(Rung::Light), "klide-8b:latest");
+        assert_eq!(first(Rung::Strong), "openai/gpt-5.6-sol");
     }
 
     #[test]
@@ -869,6 +936,14 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             line.contains(&format!("\"{AUTO_MODEL}\"")),
             "AUTO_MODEL drifted: rust={AUTO_MODEL:?} ts={line}"
         );
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const ROUTED_MODEL_TOKEN ="))
+            .expect("ROUTED_MODEL_TOKEN in providers.ts");
+        assert!(
+            line.contains(&format!("\"{ROUTED_MODEL_TOKEN}\"")),
+            "ROUTED_MODEL_TOKEN drifted: rust={ROUTED_MODEL_TOKEN:?} ts={line}"
+        );
     }
 
     /// Live: what Auto picks on this machine, for each task shape. Reads the
@@ -876,6 +951,8 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
     /// no model is ever sent a message. Prints the pick, the reason and what
     /// ranked above it, and fails only if a shape neither resolves nor says
     /// what it tried.
+    /// `KLIDE_LIVE_STARS="openrouter z-ai/glm-5.2,ollama qwen3.5:9b"` adds
+    /// stars, as the picker would send them.
     /// `cargo test --lib -- --ignored --nocapture auto_on_this_bench`
     #[test]
     #[ignore = "live: reads this machine's keys and local servers"]
@@ -898,10 +975,7 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             if !matches!(providers::provider_key(entry.id), Ok(Some(_))) {
                 continue;
             }
-            let listed = rt.block_on(crate::models::ai_provider_models(entry.id.to_string()));
-            if let Ok(ids) = &listed {
-                crate::models::seed_listing(entry.id, ids);
-            }
+            let listed = rt.block_on(crate::models::load_listing_live(entry.id));
             listings.push((entry, listed));
         }
         for (label, mode, text) in shapes {
@@ -915,6 +989,13 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
                 "systemPrompt": null,
             }))
             .expect("request");
+            let mut request = request;
+            request.preferred_models = std::env::var("KLIDE_LIVE_STARS")
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|pair| pair.trim().split_once(' '))
+                .map(|(provider, model)| PreferredModel { provider: provider.into(), model: model.into() })
+                .collect();
             let needs = needs_for(&request);
             match rt.block_on(resolve(&request)) {
                 Ok(r) => {

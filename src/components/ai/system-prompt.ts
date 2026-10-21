@@ -1,4 +1,4 @@
-import { isDelegateProvider, providerName } from "../../agent/providers";
+import { isAutoProvider, isDelegateProvider, providerName, ROUTED_MODEL_TOKEN } from "../../agent/providers";
 import { enabledSkillsPrompt, type Skill } from "../../skills";
 import type { AgentMode, ProviderId } from "../../agent/types";
 import spreadsheetGuide from "../../spreadsheets/agent-guide.md?raw";
@@ -38,6 +38,10 @@ export function buildSystemPrompt(
       modelLabel = typeof selected.model === "string" ? selected.model : undefined;
     } catch { modelLabel = undefined; }
   }
+  // On Auto the model is chosen in Rust after this prompt is written; name
+  // the slot, never the word `auto` — a model told it runs on "auto" says it
+  // is re-routed every turn.
+  if (harnessProvider && isAutoProvider(harnessProvider)) modelLabel = ROUTED_MODEL_TOKEN;
   const delegateName = harnessProvider && isDelegateProvider(harnessProvider) ? providerName(harnessProvider) : null;
   const identity = delegateName
     ? `You are ${delegateName}, a coding agent running inside Klide. ${delegateName} is the selected agent harness; Klide hosts this conversation${modelLabel ? `, and the intelligence comes from the \`${modelLabel}\` model` : ""}.
