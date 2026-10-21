@@ -3690,6 +3690,7 @@ pub async fn agent_compact_conversation(
     run_id: String,
     provider: String,
     model: String,
+    context_window: Option<usize>,
 ) -> Result<CompactionOutcome, String> {
     validate_run_id(&run_id)?;
     if run_is_active(&app, &run_id) {
@@ -3703,10 +3704,15 @@ pub async fn agent_compact_conversation(
     if events.is_empty() {
         return Err("No conversation to compact yet".to_string());
     }
-    let window = crate::model_capabilities::capabilities(&provider, &model, false)
-        .await
-        .map(|caps| caps.window_for_planning())
-        .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW);
+    // The window the panel's gauge reads — an Ollama cap, not the model's
+    // trained maximum — when the panel knows it.
+    let window = match context_window.filter(|w| *w > 0) {
+        Some(window) => window,
+        None => crate::model_capabilities::capabilities(&provider, &model, false)
+            .await
+            .map(|caps| caps.window_for_planning())
+            .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW),
+    };
     let cut = compaction::plan_cut(&events, compaction_threshold(window, 4096) / 4)
         .ok_or_else(|| "Nothing to compact yet — every turn is still recent.".to_string())?;
     let cwd = events.iter().find_map(|e| match e {
@@ -6517,6 +6523,49 @@ mod run_loop_tests {
         drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", again, follow.clone()).await;
         let next = follow.seen_messages.lock().unwrap()[0].clone();
         assert_eq!(&next[..seen[1].len()], &seen[1][..], "replay rebuilds the squeezed prompt");
+    }
+
+    /// Dogfood 2026-10-21, second message: on Ollama (text-fold replay) the
+    /// follow-up to a nine-file batch opened over the window. Trimming and the
+    /// squeeze only see `role: "tool"` messages, which that replay doesn't
+    /// have, so the summary is the only fold there — and its cut refused one
+    /// coarse exchange (pinned by `compaction::tests::one_exchange_with_a_big_
+    /// batch_folds_the_batch_and_keeps_the_answer`). End to end: the follow-up
+    /// summarizes and goes on instead of ending at the fit guard.
+    #[tokio::test]
+    async fn an_ollama_follow_up_to_a_huge_batch_summarizes_instead_of_failing() {
+        let (runs_dir, root) = sandbox("ollama-follow-up");
+        let calls: Vec<_> = (0..9)
+            .map(|i| {
+                let body: String = (0..420).map(|n| format!("file {i} line {n} padding text\n")).collect();
+                std::fs::write(Path::new(&root).join(format!("f{i}.txt")), body).unwrap();
+                scripted_tool_call(&format!("call_{i}"), "read_file", serde_json::json!({ "path": format!("f{i}.txt") }))
+            })
+            .collect();
+        let mut request = test_request(&root, &[]);
+        request.provider = "ollama".into();
+        // The app ships ~8k tokens of tool schemas; the test registry fewer, so
+        // the window is tighter to overflow the same way.
+        request.num_ctx = Some(26_000);
+        let first = ScriptedProviderCaller::new(vec![scripted_turn("Reading.", calls), scripted_turn("Nine files of padding.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request.clone(), first).await;
+
+        let second = ScriptedProviderCaller::new(vec![
+            scripted_turn("NOTES: nine padding files were read.", vec![]),
+            scripted_turn("One more file of padding.", vec![]),
+        ]);
+        let mut follow = request.clone();
+        // The real follow-up tipped a just-fitting prompt over by ~700
+        // tokens; a longer message tips this one over deterministically.
+        follow.initial_text = format!("Now read one more and give one line. {}", "detail ".repeat(3_500));
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", follow, second.clone()).await;
+
+        let events = read_events(&runs_dir, "thread").unwrap();
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::RunError { .. })), "the follow-up was refused");
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ContextCompacted { kept: Some(k), .. } if *k >= 1)), "the batch was folded");
+        let sent = second.seen_messages.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2, "summary call, then the answer turn");
+        assert!(estimate_prompt_tokens(&sent[1]) < estimate_prompt_tokens(&sent[0]) / 2);
     }
 
     #[tokio::test]

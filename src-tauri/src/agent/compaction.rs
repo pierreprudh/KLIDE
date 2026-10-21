@@ -94,30 +94,32 @@ pub(super) fn plan_cut(events: &[AgentEvent], keep_tokens: usize) -> Option<Cut>
             };
             marker - kept
         });
-    let mut tail = 0usize;
-    let mut chosen = None;
-    for i in (floor..events.len()).rev() {
-        tail += event_tokens(&events[i]);
-        if opens_a_turn(&events[i]) && i > floor {
-            chosen = Some(i);
-            if tail >= keep_tokens {
-                break;
+    let openers: Vec<usize> = (floor + 1..events.len()).filter(|&i| opens_a_turn(&events[i])).collect();
+    // A user turn keeps the context the loop recorded in front of it.
+    let with_context = |mut start: usize| {
+        if matches!(events[start], AgentEvent::UserMessage { .. }) {
+            while start > floor + 1 && matches!(events[start - 1], AgentEvent::ContextInjected { .. }) {
+                start -= 1;
             }
         }
-    }
-    let mut start = chosen?;
-    // A user turn keeps the context the loop recorded in front of it.
-    if matches!(events[start], AgentEvent::UserMessage { .. }) {
-        while start > floor + 1 && matches!(events[start - 1], AgentEvent::ContextInjected { .. }) {
-            start -= 1;
-        }
-    }
-    let folded: usize = events[floor..start].iter().map(event_tokens).sum();
-    // Folding a sliver buys nothing and spends a model call.
-    if folded < 512 {
-        return None;
-    }
-    Some(Cut { start, kept: events.len() - start })
+        start
+    };
+    let tail = |start: usize| events[start..].iter().map(event_tokens).sum::<usize>();
+    // The budget's cut: the latest boundary that keeps at least `keep_tokens`,
+    // or, when even the whole tail is smaller, the earliest one.
+    let budget = openers
+        .iter()
+        .rposition(|&i| tail(with_context(i)) >= keep_tokens)
+        .unwrap_or(0);
+    // Turns are coarse: one exchange can hold a whole batch of tool results,
+    // and the boundary that meets the budget may keep all of it and fold
+    // nothing. Then a later boundary — keeping less than the budget — is the
+    // one that frees the window.
+    openers[budget..].iter().map(|&i| with_context(i)).find_map(|start| {
+        let folded: usize = events[floor..start].iter().map(event_tokens).sum();
+        // Folding a sliver buys nothing and spends a model call.
+        (folded >= 512).then(|| Cut { start, kept: events.len() - start })
+    })
 }
 
 /// The instruction the model answers to write its summary. It rides as one
@@ -308,6 +310,20 @@ mod tests {
         // user turn, and reaches back over its TODO snapshot.
         let cut = plan_cut(&events, 2).unwrap();
         assert!(matches!(events[cut.start], AgentEvent::ContextInjected { .. }), "{cut:?}");
+    }
+
+    #[test]
+    fn one_exchange_with_a_big_batch_folds_the_batch_and_keeps_the_answer() {
+        // Dogfood 2026-10-21: one request, one turn reading nine files, the
+        // answer. The budget's boundary (the reading turn) kept everything; the
+        // compaction refused with "every turn is still recent".
+        let mut events = vec![user("read the nine files"), calls("f0.rs")];
+        for i in 0..9 {
+            events.push(result(&format!("f{i}.rs"), 12_000));
+        }
+        events.push(assistant("one line per file"));
+        let cut = plan_cut(&events, 5_000).expect("the batch is worth folding");
+        assert_eq!(cut.start, events.len() - 1, "the answer stays verbatim");
     }
 
     #[test]
