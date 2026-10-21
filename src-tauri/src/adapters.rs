@@ -884,7 +884,7 @@ pub(crate) fn openai_chat_body(
     body
 }
 
-fn split_thinking_tags(raw: &str) -> (String, String) {
+pub(crate) fn split_thinking_tags(raw: &str) -> (String, String) {
     const OPEN: &str = "<think>";
     const CLOSE: &str = "</think>";
     let mut thinking = String::new();

@@ -125,13 +125,15 @@ pub(super) fn plan_cut(events: &[AgentEvent], keep_tokens: usize) -> Option<Cut>
 /// The instruction the model answers to write its summary. It rides as one
 /// more user turn after the conversation exactly as the model last read it,
 /// so the call reads the provider's cached prefix instead of paying for it.
-pub(super) const SUMMARY_INSTRUCTION: &str = "[Klide: compacting this conversation]\n\
-The conversation is close to the context window. Write the notes that will replace the earlier part \
-of it as your own memory; the most recent turns stay verbatim after them. Keep everything needed to \
-carry on: the user's goal and requests, decisions made and why, files and functions touched, facts \
-established (paths, names, commands, errors and their fixes), and the work still open. Be concise — \
-bullets or a tight paragraph. Do not call any tool, do not address the user, invent nothing; reply \
-with the notes only.";
+/// Worded so a small model can't mistake it for the next step of the task
+/// (dogfood: lfm2.5 answered "We need to read the file…").
+pub(super) const SUMMARY_INSTRUCTION: &str = "[Klide — context compaction. This is not a message from the user, and not part of the task.]\n\
+Stop working on the task for this one reply. The conversation is about to be shortened: everything \
+before the most recent turns will be replaced by notes you write now, and you will continue from \
+those notes. Write them: the user's goal, decisions made and why, files and functions touched, facts \
+established (paths, names, commands, errors and their fixes), and the work still open. Bullets or a \
+tight paragraph. Do not call a tool, do not answer or continue the task, do not address the user. \
+Reply with the notes only.";
 
 /// The summary request: the conversation as sent, plus the instruction.
 pub(super) fn summary_request(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -140,27 +142,56 @@ pub(super) fn summary_request(messages: &[serde_json::Value]) -> Vec<serde_json:
     request
 }
 
-/// What the marker stores. The model's notes, or a deterministic stand-in
-/// when it wrote none — compaction must free the window either way. When the
-/// operator's latest message is among the folded turns, it rides along word
-/// for word: the task itself is never left to a paraphrase.
+/// What the marker stores: the model's notes — its private reasoning cut
+/// away, since a model that thinks inline returns `<think>…` as text — or a
+/// deterministic stand-in when it wrote none. Then the user's own requests
+/// from the folded turns, word for word: what the user asked is the one fact
+/// a weak summary must not be allowed to lose ("what's my first message?"),
+/// and it costs a few hundred tokens.
 pub(super) fn summary_text(model_notes: &str, events: &[AgentEvent], cut: Cut) -> String {
-    let notes = model_notes.trim();
+    let (answer, _thinking) = crate::adapters::split_thinking_tags(model_notes);
+    let notes = answer.trim();
     let mut summary = if notes.is_empty() {
         fallback_summary(&events[..cut.start])
     } else {
         notes.to_string()
     };
-    let latest_request = events.iter().rposition(|e| matches!(e, AgentEvent::UserMessage { .. }));
-    if let Some(i) = latest_request.filter(|i| *i < cut.start) {
-        if let AgentEvent::UserMessage { text, .. } = &events[i] {
-            if !text.trim().is_empty() {
-                summary.push_str("\n\nThe user's latest request, verbatim:\n");
-                summary.push_str(text.trim());
+    let requests: Vec<&str> = events[..cut.start]
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::UserMessage { text, .. } if !text.trim().is_empty() => Some(text.trim()),
+            _ => None,
+        })
+        .collect();
+    // The first request and the newest ones: a long thread keeps its opening
+    // and its recent asks without the list growing with every compaction.
+    const MAX_REQUESTS: usize = 12;
+    let shown: Vec<(usize, &str)> = requests
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(i, _)| *i == 0 || *i + MAX_REQUESTS > requests.len())
+        .collect();
+    if !shown.is_empty() {
+        summary.push_str("\n\nThe user's requests in the folded turns, verbatim (oldest first):");
+        let mut previous = None;
+        for (i, text) in shown {
+            if previous.is_some_and(|p: usize| i > p + 1) {
+                summary.push_str("\n…");
             }
+            summary.push_str(&format!("\n{}. {}", i + 1, clip(text, 600)));
+            previous = Some(i);
         }
     }
     summary
+}
+
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() > n {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    } else {
+        s.to_string()
+    }
 }
 
 /// Notes built from the events themselves: the requests as typed and the
@@ -327,6 +358,18 @@ mod tests {
     }
 
     #[test]
+    fn every_folded_request_is_kept_word_for_word_first_and_newest() {
+        let mut events: Vec<AgentEvent> = (0..20).map(|i| user(&format!("request {i}"))).collect();
+        events.push(assistant("ok"));
+        let cut = Cut { start: 20, kept: 1 };
+        let summary = summary_text("notes", &events, cut);
+        assert!(summary.contains("\n1. request 0"), "the first request survives: {summary}");
+        assert!(summary.contains("\n…\n10. request 9"), "{summary}");
+        assert!(summary.ends_with("\n20. request 19"));
+        assert!(!summary.contains("request 3\n"), "the middle is elided");
+    }
+
+    #[test]
     fn nothing_worth_folding_is_left_alone() {
         assert_eq!(plan_cut(&[user("hi"), assistant("hello")], 10), None);
         // Behind a fresh marker whose kept tail is tiny, there is nothing new to fold.
@@ -340,8 +383,14 @@ mod tests {
         let cut = Cut { start: 3, kept: 2 };
         let summary = summary_text("Read a.rs; it defines Parser.", &events, cut);
         assert!(summary.starts_with("Read a.rs"));
-        assert!(summary.ends_with("verbatim:\nrename the parser module"));
+        assert!(summary.ends_with("verbatim (oldest first):\n1. rename the parser module"), "{summary}");
         let fallback = summary_text("  ", &events, cut);
         assert!(fallback.contains("Files touched: a.rs"), "{fallback}");
+        // A model that thinks inline: the reasoning goes, the notes stay.
+        let thought = summary_text("<think>\nWe need to read the file…</think>\nParser lives in a.rs.", &events, cut);
+        assert!(thought.starts_with("Parser lives in a.rs."), "{thought}");
+        // Reasoning that never closed is no notes at all: the stand-in.
+        let unclosed = summary_text("<think>\nWe need to read the file", &events, cut);
+        assert!(unclosed.contains("Files touched: a.rs"), "{unclosed}");
     }
 }

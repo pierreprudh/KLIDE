@@ -6440,11 +6440,11 @@ mod run_loop_tests {
             })
             .expect("the run compacted itself");
         assert!(notes.starts_with("NOTES:"), "{notes}");
-        assert!(notes.ends_with("verbatim:\nRead the four files."), "the request survives: {notes}");
+        assert!(notes.ends_with("verbatim (oldest first):\n1. Read the four files."), "the request survives: {notes}");
         assert!(kept.unwrap() >= 2, "the newest turn stays verbatim: {kept:?}");
 
         let seen = first.seen_messages.lock().unwrap().clone();
-        let ask = seen.iter().find(|m| m.last().unwrap()["content"].as_str().is_some_and(|c| c.starts_with("[Klide: compacting"))).unwrap();
+        let ask = seen.iter().find(|m| m.last().unwrap()["content"].as_str().is_some_and(|c| c.starts_with("[Klide — context compaction"))).unwrap();
         assert!(ask.len() > 8, "the summary call carries the conversation as sent");
         let after = seen.last().unwrap().clone();
         assert!(after[1]["content"].as_str().unwrap().starts_with("[Earlier conversation compacted"));
@@ -6479,7 +6479,7 @@ mod run_loop_tests {
         request.initial_text = "request ".repeat(300);
         drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request, caller.clone()).await;
         let seen = caller.seen_messages.lock().unwrap();
-        assert!(!seen.iter().skip(1).any(|messages| messages.last().is_some_and(|m| m["role"] != "user" || !m["content"].as_str().unwrap_or_default().starts_with("[Klide: compacting"))), "an oversized rebuilt request reached the provider");
+        assert!(!seen.iter().skip(1).any(|messages| messages.last().is_some_and(|m| m["role"] != "user" || !m["content"].as_str().unwrap_or_default().starts_with("[Klide — context compaction"))), "an oversized rebuilt request reached the provider");
         let events = read_events(&runs_dir, "thread").unwrap();
         assert!(events.iter().any(|e| matches!(e, AgentEvent::ContextCompacted { .. })), "the guard must run after compaction, not merely before the first request");
         assert!(events.iter().any(|e| matches!(e, AgentEvent::RunError { error, .. } if error.code == error_code::CONTEXT_WINDOW_EXCEEDED && !error.retryable)));
