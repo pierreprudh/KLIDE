@@ -164,7 +164,24 @@ export function replayForAdoption(
     ...(errorLine ? [errorLine] : []),
     ...queuedLocal,
   ];
-  return conversationWeight(replayed) >= conversationWeight(current) ? replayed : null;
+  if (conversationWeight(replayed) >= conversationWeight(current)) return replayed;
+  // The replay is refused — the screen holds more conversation than the fold
+  // (streamed text the fold renders differently). Two facts about the Run
+  // still belong on screen, or a turn reads as finished when it is working,
+  // or as a crash when it failed (dogfood: "Worked for 12.9s" and nothing
+  // under it, through a three-minute wait and the failure that ended it).
+  const kept = current.filter((m) => !(m.role === "user" && m.queueState === "queued"));
+  const last = kept[kept.length - 1];
+  const placeholder = last?.role === "assistant" && !last.content && !last.thinking && !last.toolCalls?.length;
+  if (errorLine && !kept.some((m) => m.role === "system" && m.runError)) {
+    return [...(placeholder ? kept.slice(0, -1) : kept), errorLine, ...queuedLocal];
+  }
+  if (active && !placeholder && last?.role !== "user") {
+    const started = [...events].reverse().find((event) => event.type === "run_started");
+    return [...kept, { role: "assistant", content: "", provider: started?.provider ?? live.provider,
+      model: started?.model, delegateHeadless: live.delegateHeadless }, ...queuedLocal];
+  }
+  return null;
 }
 
 /** Why a turn's view ended up short of its Run's Transcript. */
