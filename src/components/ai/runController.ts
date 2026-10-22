@@ -289,6 +289,8 @@ export type RunControllerDeps = {
   /** The Conversation session's Run activity — `streaming` is derived there. */
   session: {
     runStarted(activity: ConversationRunActivity, dispatched?: { provider: ProviderId; model: string }): void;
+    /** The pair Rust's `run_started` names — the routed one on Auto. */
+    originResolved(pair: { provider: ProviderId; model: string }): void;
     runSettled(): void;
   };
   /** How a Delegate's turn reaches this surface: through a PTY console (no
@@ -581,6 +583,7 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
       // Transcript events (deltas, finalized messages, tool cards) belong to
       // the turn driver; everything below is panel behaviour.
       if (event.type === "assistant_message") answered = true;
+      if (event.type === "run_started") deps().session.originResolved({ provider: event.provider, model: event.model });
       if (driver.handleEvent(event)) return;
       switch (event.type) {
         case "context_compacted": {

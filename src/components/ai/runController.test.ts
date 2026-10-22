@@ -165,7 +165,7 @@ function harness(opts: { delegateStyle?: "console" | "headless"; initial?: Msg[]
   let msgs: Msg[] = opts.initial ?? [];
   let conversationId = CONVO;
   let clock = 0;
-  const session = { runStarted: vi.fn(), runSettled: vi.fn() };
+  const session = { runStarted: vi.fn(), originResolved: vi.fn(), runSettled: vi.fn() };
   const hooks = {
     onOpenCliSession: vi.fn(),
     onTurnQueued: vi.fn(),
@@ -253,6 +253,9 @@ describe("createRunController — the turn queue", () => {
     expect(h.msgs()[1]).toMatchObject({ role: "assistant", content: "", provider: "ollama", model: "m" });
 
     h.backend.last().emit(started());
+    // Rust's `run_started` is the pair that runs — on Auto, the only place
+    // the thread learns what it is.
+    expect(h.session.originResolved).toHaveBeenCalledWith({ provider: "ollama", model: "m" });
     h.backend.last().emit(message("first answer"));
     h.backend.last().emit(finished());
     await flush();

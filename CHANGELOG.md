@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An Auto thread shows up in the rail, under the Provider it ran on. The panel stamped the thread's origin with the picker's `auto` at dispatch, so the thread was filed under no Provider and missing from the rail until a restart healed it from its transcript. `auto` no longer stamps an origin; Rust's `run_started` — the routed pair — does.
 - Auto sends a Goal to the cheapest star that fits the job, not the cheapest star. A star on no Provider ladder (every OpenRouter star) sat at every rung at once, so with a dozen of them Auto picked whichever was cheapest to ask: a Goal went to `z-ai/glm-5.2`. Such a star now takes the rung its price sits at — under $0.75/M light, from $6/M strong — bands read off the Anthropic and OpenAI ladders.
 - Auto ranks on what a turn costs, not what its input costs. Prices are blended three input tokens to one output; OpenRouter lists GLM 5.2 at $0.03/M in (the floor of 34 endpoints) and $7/M out — $1.78/M blended. The reason line says "blended". The GPT-5 family is priced per version (gpt-5 $1.25/M in, 5.4 $2.50, 5.5 $5, the 5.6 Luna / Terra / Sol tiers, minis and nanos) instead of one `gpt-5` row at $2.50 for all of it — which also corrects Codex run costs.
 - An Auto conversation knows its model. The system prompt said Kit was "running on the `auto` model", and the model told the user it was re-routed every turn; it now names the model Rust routed to (the locked one on every later turn, so the prompt cache holds).
