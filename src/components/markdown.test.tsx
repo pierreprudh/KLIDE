@@ -51,8 +51,23 @@ describe("renderMarkdown streaming tail", () => {
     const keys = (nodes: ReturnType<typeof renderMarkdown>) =>
       nodes.flatMap((n) => (typeof n === "string" ? [] : (n.props as { children: unknown[] }).children))
         .filter((c): c is { key: string } => typeof c === "object" && c !== null && "key" in c)
-        .map((c) => c.key);
+        .map((c) => c.key)
+        .filter((k) => !k.endsWith("-caret"));
     expect(keys(b).slice(0, keys(a).length)).toEqual(keys(a));
+  });
+
+  it("draws the caret inside the line it marks, after the last word", () => {
+    const out = html("First line\n\nstill typing", true);
+    expect(out).toMatch(/<span class="ai-word-in">typing<\/span><span class="ai-caret"><\/span><\/div>$/);
+  });
+
+  it("draws no caret under a code block — the block is what grows", () => {
+    expect(html("Look:\n\n```ts\nconst a = 1;\n```\n", true)).not.toContain("ai-caret");
+    expect(html("Look:\n\n```ts\nconst a = 1;", true)).not.toContain("ai-caret");
+  });
+
+  it("draws no caret on a settled message", () => {
+    expect(html("Done.")).not.toContain("ai-caret");
   });
 
   it("treats a list item the model is still typing as the tail", () => {

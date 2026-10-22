@@ -26,12 +26,11 @@ export function LiveWork({ msgs, start, end, pairing }: { msgs: Msg[]; start: nu
             const m = msgs[step.index];
             if (m.role !== "assistant") return null;
             // The last step is the sentence still arriving; the rest are
-            // settled and need no streaming cursor.
+            // settled and need no streaming cursor (the markdown tail draws it).
             const streaming = i === steps.length - 1 && step.index === msgs.length - 1;
             return (
               <div key={step.index} style={{ margin: "6px 0", fontSize: 14, lineHeight: 1.6 }}>
                 {renderMarkdown(visibleProse(m), { streaming, visuals: true })}
-                {streaming && <span className="ai-caret" />}
               </div>
             );
           }
