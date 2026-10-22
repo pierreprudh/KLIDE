@@ -9266,10 +9266,6 @@ button:focus-visible .menu-leadout {
   width: 100%;
   color: var(--fg-dim);
 }
-/* The mosaic is the caret while it is the last thing on the page: the bar
-   that marks where the next word lands has nothing to mark under a picture
-   still being drawn. */
-:has(> .inline-visual-drafting:last-child) ~ .ai-caret { display: none; }
 .inline-visual-draft-grid {
   display: grid;
   grid-template-columns: repeat(40, minmax(0, 1fr));

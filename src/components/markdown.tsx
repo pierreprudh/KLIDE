@@ -789,11 +789,17 @@ function renderInline(text: string, keyBase: string): MdNode[] {
 // split one span per word (a word plus its trailing space) so only the words
 // that just arrived mount — and animate. Keys are positional; the text only
 // grows at its end, so an existing word keeps its key and its node.
+// The caret rides the last word, inside the line it marks: drawn after the
+// blocks it fell to a line of its own, and under a code block — which grows
+// by itself — it stood there marking nothing. A blank tail line (the newline
+// after a fence, a paragraph break) has no word to ride, so no caret.
 function renderInlineTail(text: string, keyBase: string): MdNode[] {
   const nodes = renderInline(text, keyBase);
+  if (!text.trim()) return nodes;
+  const caret = <span key={`${keyBase}-caret`} className="ai-caret" />;
   const lastIdx = nodes.length - 1;
   const last = nodes[lastIdx];
-  if (typeof last !== "string") return nodes;
+  if (typeof last !== "string") return [...nodes, caret];
   const words: MdNode[] = [];
   const re = /\S+\s*/g;
   let w = 0;
@@ -808,7 +814,7 @@ function renderInlineTail(text: string, keyBase: string): MdNode[] {
       </span>
     );
   }
-  return [...nodes.slice(0, lastIdx), ...words];
+  return [...nodes.slice(0, lastIdx), ...words, caret];
 }
 
 // Block-level renderer: handles headers, ordered/unordered/task lists,

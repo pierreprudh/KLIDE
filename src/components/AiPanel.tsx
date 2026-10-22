@@ -4476,7 +4476,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i), questionVerdict: foldedTurns.verdicts.byQuestion.get(i), dropVerdict: foldedTurns.verdicts.replies.has(i) })}{isStreamingActive && <span className="ai-caret" />}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i), questionVerdict: foldedTurns.verdicts.byQuestion.get(i), dropVerdict: foldedTurns.verdicts.replies.has(i) })}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
