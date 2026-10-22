@@ -22,13 +22,34 @@ use tauri::ipc::Channel;
 // intended use.
 fn shared_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(180))
-            .build()
-            .unwrap_or_default()
-    })
+    CLIENT.get_or_init(|| client_with_idle(STREAM_IDLE))
+}
+
+/// How long a provider may send nothing before the turn gives up on it.
+/// Idle, not total: a reqwest `timeout` caps the whole request, streamed body
+/// included, so a long answer was cut off at three minutes however steadily
+/// it streamed ("error decoding response body"). A read timeout resets on
+/// every chunk. Generous, because a local model loading, or a large prompt's
+/// prefill, can be silent for minutes before the first token; OpenRouter
+/// sends keep-alive comments while it waits, so only a dead stream trips it.
+const STREAM_IDLE: Duration = Duration::from_secs(300);
+
+fn client_with_idle(idle: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .read_timeout(idle)
+        .build()
+        .unwrap_or_default()
+}
+
+/// A stream that broke after it started, said in words: a silent provider
+/// is named as one, rather than as reqwest's "error decoding response body".
+fn stream_error(provider: &str, idle: Duration, e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        format!("{provider} stopped sending — nothing for {} s. Try again.", idle.as_secs())
+    } else {
+        format!("{provider}'s stream broke: {e}")
+    }
 }
 
 // ── Provider streaming trait + shared loop ──────────────────────────────
@@ -120,7 +141,7 @@ async fn stream_provider<S: StreamingProvider>(
 
     let mut stream = res;
     let mut provider = provider;
-    while let Some(bytes) = stream.chunk().await.map_err(|e| e.to_string())? {
+    while let Some(bytes) = stream.chunk().await.map_err(|e| stream_error(provider.name(), STREAM_IDLE, &e))? {
         buf.extend_from_slice(&bytes);
         while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
             let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
@@ -1075,6 +1096,58 @@ fn anthropic_image_block(data_uri: Option<&str>) -> Option<serde_json::Value> {
         "type": "image",
         "source": { "type": "base64", "media_type": media_type, "data": data }
     }))
+}
+
+#[cfg(test)]
+mod stream_idle_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A local server that answers with a chunked body, one `chunk` every
+    /// `every`, `count` times, then holds the connection open for `stall`.
+    async fn trickle(every: Duration, count: usize, stall: Duration) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut req = [0u8; 1024];
+            let _ = sock.read(&mut req).await;
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").await;
+            for _ in 0..count {
+                tokio::time::sleep(every).await;
+                let _ = sock.write_all(b"6\r\ndata:\n\r\n").await;
+            }
+            tokio::time::sleep(stall).await;
+            let _ = sock.write_all(b"0\r\n\r\n").await;
+        });
+        format!("http://{addr}/")
+    }
+
+    async fn drain(client: &reqwest::Client, url: &str, idle: Duration) -> Result<usize, String> {
+        let mut res = client.get(url).send().await.map_err(|e| e.to_string())?;
+        let mut n = 0;
+        while let Some(bytes) = res.chunk().await.map_err(|e| stream_error("Test", idle, &e))? {
+            n += bytes.len();
+        }
+        Ok(n)
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_keeps_sending_outlives_the_idle_window() {
+        // Six chunks 300 ms apart: 1.8 s in all against a 1 s window. A cap
+        // on the whole request (the old `timeout`) would have cut it off.
+        let idle = Duration::from_secs(1);
+        let url = trickle(Duration::from_millis(300), 6, Duration::ZERO).await;
+        assert_eq!(drain(&client_with_idle(idle), &url, idle).await, Ok(36));
+    }
+
+    #[tokio::test]
+    async fn a_silent_stream_is_named_as_one() {
+        let idle = Duration::from_millis(500);
+        let url = trickle(Duration::ZERO, 1, Duration::from_secs(5)).await;
+        let err = drain(&client_with_idle(idle), &url, idle).await.unwrap_err();
+        assert!(err.starts_with("Test stopped sending"), "{err}");
+    }
 }
 
 #[cfg(test)]
