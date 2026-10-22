@@ -818,6 +818,12 @@ pub enum AgentEvent {
         /// system instructions and tool schemas. Used by the context gauge.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         context_tokens: Option<usize>,
+        /// Cost of the summary model call, separate from ordinary replies.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+        /// A Compact action between runs, rather than a step of a live Run.
+        #[serde(default)]
+        manual: bool,
         ts: i64,
     },
     /// A message the loop put in front of the model that nobody typed — a

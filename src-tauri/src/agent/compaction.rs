@@ -32,7 +32,10 @@ pub(super) fn effective_events(events: &[AgentEvent]) -> Vec<&AgentEvent> {
         _ => 0,
     };
     std::iter::once(&events[marker])
-        .chain(&events[marker - kept..marker])
+        // A second Compact can keep a tail that crosses an older marker.
+        // Only the newest summary is authoritative: replaying the old marker
+        // would clear the new notes and the recent turns just reconstructed.
+        .chain(events[marker - kept..marker].iter().filter(|event| !matches!(event, AgentEvent::ContextCompacted { .. })))
         .chain(&events[marker + 1..])
         .collect()
 }
@@ -85,6 +88,11 @@ fn opens_a_turn(event: &AgentEvent) -> bool {
 /// The cut never reaches behind the previous marker — what that marker folded
 /// is already the summary, and what it kept is folded again by this one.
 pub(super) fn plan_cut(events: &[AgentEvent], keep_tokens: usize) -> Option<Cut> {
+    // A manual Compact on a large-window model must still fold most of the
+    // conversation. A fraction of the model's capacity alone can exceed the
+    // entire history and keep almost everything (86k tokens on a 1M window).
+    let active_tokens: usize = effective_events(events).into_iter().map(event_tokens).sum();
+    let keep_tokens = keep_tokens.min((active_tokens / 4).max(1));
     let floor = events
         .iter()
         .rposition(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
@@ -390,7 +398,7 @@ mod tests {
         AgentEvent::ContextInjected { run_id: "r".into(), role: "system".into(), content: content.into(), ts: 0 }
     }
     fn marker(kept: Option<usize>) -> AgentEvent {
-        AgentEvent::ContextCompacted { run_id: "r".into(), summary: "notes".into(), kept, context_tokens: None, ts: 0 }
+        AgentEvent::ContextCompacted { run_id: "r".into(), summary: "notes".into(), kept, context_tokens: None, cost_usd: None, manual: false, ts: 0 }
     }
 
     #[test]
@@ -471,6 +479,21 @@ mod tests {
         assert!(summary.contains("\n…\n10. request 9"), "{summary}");
         assert!(summary.ends_with("\n20. request 19"), "no calls, no ledger");
         assert!(!summary.contains("request 3\n"), "the middle is elided");
+    }
+
+    #[test]
+    fn a_large_model_window_does_not_make_compact_keep_the_whole_conversation() {
+        let mut events = vec![user(&"request ".repeat(400))];
+        for i in 0..26 {
+            events.push(calls(&format!("f{i}.rs")));
+            events.push(result(&format!("f{i}.rs"), 12_000));
+        }
+        events.push(assistant(&"final explanation ".repeat(400)));
+        let cut = plan_cut(&events, 1_000_000 / 4).unwrap();
+        let before: usize = events.iter().map(event_tokens).sum();
+        let after: usize = events[cut.start..].iter().map(event_tokens).sum();
+        assert!(after < before / 2, "a 1M window kept {after} of {before} tokens: {cut:?}");
+        assert!(matches!(events[cut.start], AgentEvent::AssistantMessage { .. }));
     }
 
     #[test]

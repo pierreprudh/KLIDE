@@ -2,10 +2,48 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
 import { delegationThinking, extractThinking, normalizeThinking, renderMessageBody, type AttachedResult } from "./ChatMessage";
+import { responseCosts } from "./responseCost";
+import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
 }
+
+describe("response cost footer", () => {
+  it.each([true, false])("shows a compaction's own price after replay (manual=%s)", (manual) => {
+    const msgs = foldedToMsgs(foldAgentEvents([
+      { type: "context_compacted", runId: "r", summary: "Earlier findings", kept: 0, costUsd: 0.313914, manual, ts: 0 },
+    ]));
+    const restored: Msg = JSON.parse(JSON.stringify(msgs[0]));
+    const html = renderToStaticMarkup(renderMessageBody(restored));
+    expect(html).toContain("Compacted 0 earlier turns · $0.31");
+  });
+
+  it("does not invent a price for old compaction markers without recorded usage", () => {
+    const msgs = foldedToMsgs(foldAgentEvents([
+      { type: "context_compacted", runId: "r", summary: "Earlier findings", ts: 0 },
+    ]));
+    expect(renderToStaticMarkup(renderMessageBody(msgs[0]))).not.toContain("$");
+  });
+
+  it("renders the cost of all calls through the same wrapper the panel uses", () => {
+    const msgs: Msg[] = [
+      { role: "user", content: "Inspect the project" },
+      { role: "assistant", content: "Reading", toolCalls: [{ name: "read_file", args: {} }], meta: { costUsd: 0.854 } },
+      { role: "tool", content: "code", toolName: "read_file" },
+      { role: "assistant", content: "Here is the explanation", meta: { costUsd: 0.142, tokens: 5990 } },
+      { role: "system", content: "Compacted", compaction: { count: 4, summary: "notes", source: "manual" } },
+      { role: "user", content: "Continue" },
+      { role: "assistant", content: "Recap", meta: { costUsd: 0.586 } },
+    ];
+    const costs = responseCosts(msgs);
+    const html = renderToStaticMarkup(renderMessageBody(msgs[3], false, { responseCost: costs.get(3) }));
+    expect(html).toContain("$1.00 response total (2 priced calls)");
+    expect(html).not.toContain("$0.14 this call");
+    const followup = renderToStaticMarkup(renderMessageBody(msgs[6], false, { responseCost: costs.get(6) }));
+    expect(followup).toContain("$0.59 response total (1 priced call)");
+  });
+});
 
 describe("tool-run thinking", () => {
   it.each([
