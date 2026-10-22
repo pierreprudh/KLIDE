@@ -808,6 +808,9 @@ export function AiPanel({
       model: dispatched?.model,
     });
   }
+  function resolveConversationOrigin(pair: { provider: ProviderId; model: string }) {
+    transitionConversation({ type: "origin-resolved", ...pair });
+  }
   function settleConversationRun() {
     transitionConversation({ type: "run-settled" });
   }
@@ -3714,7 +3717,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       commit: setMsgs,
     },
     conversationId: () => conversationSessionRef.current.conversationId,
-    session: { runStarted: startConversationRun, runSettled: settleConversationRun },
+    session: { runStarted: startConversationRun, originResolved: resolveConversationOrigin, runSettled: settleConversationRun },
     delegateStyle: variant === "focus" ? "headless" : "console",
     pricing,
     request: buildTurnRequest,

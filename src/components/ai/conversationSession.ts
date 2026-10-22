@@ -1,5 +1,5 @@
 import type { ProviderId } from "../../agent/types";
-import { isDelegateProvider } from "../../agent/providers";
+import { isAutoProvider, isDelegateProvider } from "../../agent/providers";
 import { isForeignModelFor, switchModelForProvider } from "./rememberedModel";
 import type { Conversation, Msg } from "./types";
 import {
@@ -89,6 +89,9 @@ export type ConversationSessionAction =
       provider?: ProviderId;
       model?: string;
     }
+  /** Rust's `run_started`: the pair the Run is about to use. On Auto this is
+   *  the first moment the thread's real Provider is known. */
+  | { type: "origin-resolved"; provider: ProviderId; model: string }
   | { type: "run-settled" };
 
 function workspaceMatches(conversation: Conversation, workspaceRoot: string | null): boolean {
@@ -271,10 +274,21 @@ export function conversationSessionReducer(
         // never moves it: a thread that tried another Provider for one turn
         // is still filed, marked and reopened as the thread it began as. Each
         // message keeps its own stamp for what actually answered it.
-        originProvider: session.originProvider ?? action.provider ?? session.provider,
-        originModel: session.originProvider ? session.originModel : (action.model ?? session.model),
+        //
+        // `auto` is not a pair: the router answers in `run_started`
+        // (`origin-resolved` below). Stamping the picker's sentinel filed the
+        // thread under no Provider, and it vanished from the rail.
+        ...(session.originProvider || isAutoProvider(action.provider ?? session.provider)
+          ? {}
+          : { originProvider: action.provider ?? session.provider, originModel: action.model ?? session.model }),
         run: { active: true, activity: action.activity ?? null },
       };
+    case "origin-resolved":
+      // Only fills an origin nobody stamped — an Auto thread's first Run.
+      // A thread that began elsewhere keeps the pair it began on.
+      return session.originProvider
+        ? session
+        : { ...session, originProvider: action.provider, originModel: action.model };
     case "run-settled":
       return { ...session, run: { active: false, activity: null } };
   }
@@ -324,6 +338,7 @@ function transitionRebindsPanel(action: ConversationSessionAction): boolean {
     case "resumed":
     case "branched":
     case "run-started":
+    case "origin-resolved":
       return true;
     case "configured":
       return action.provider !== undefined || action.workspaceRoot !== undefined;

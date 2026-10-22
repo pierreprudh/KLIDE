@@ -576,6 +576,36 @@ describe("a thread records the Provider that produced it, not the picker", () =>
     expect(snapshot?.model).toBe("default");
   });
 
+  it("an Auto thread is filed under the pair the router picked, not under `auto`", () => {
+    const dispatched = conversationSessionReducer(
+      session({ provider: "auto", model: "auto" }),
+      { type: "run-started", activity: "thinking", provider: "auto", model: "auto" },
+    );
+    expect(dispatched.originProvider).toBeUndefined();
+    const routed = conversationSessionReducer(dispatched, {
+      type: "origin-resolved",
+      provider: "openrouter",
+      model: "moonshotai/kimi-k2.7-code",
+    });
+    expect(snapshotConversationSession(routed, 100)?.provider).toBe("openrouter");
+    expect(snapshotConversationSession(routed, 100)?.model).toBe("moonshotai/kimi-k2.7-code");
+    // The next turn's `run_started` names the locked pair again; nothing moves.
+    const again = conversationSessionReducer(
+      conversationSessionReducer(routed, { type: "run-started", provider: "auto", model: "auto" }),
+      { type: "origin-resolved", provider: "openrouter", model: "moonshotai/kimi-k2.7-code" },
+    );
+    expect(again.originProvider).toBe("openrouter");
+  });
+
+  it("a thread's origin is not moved by a later Run's resolved pair", () => {
+    const ran = conversationSessionReducer(
+      session({ provider: "claude-code", model: "default" }),
+      { type: "run-started", provider: "claude-code", model: "default" },
+    );
+    const later = conversationSessionReducer(ran, { type: "origin-resolved", provider: "openrouter", model: "x" });
+    expect(later.originProvider).toBe("claude-code");
+  });
+
   it("a fresh identity is unstamped until its own Run", () => {
     const ran = conversationSessionReducer(session(), {
       type: "run-started",
