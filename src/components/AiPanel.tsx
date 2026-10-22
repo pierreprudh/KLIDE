@@ -130,6 +130,7 @@ import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
 import { groupToolRuns, pairToolResults, questionVerdicts, toolRunLabel, turnsAfterQuestions } from "./ai/toolRuns";
+import { responseCosts } from "./ai/responseCost";
 import { LiveWork } from "./ai/LiveWork";
 import type { AttachedResult } from "./ai/ChatMessage";
 import { MessageActions } from "./ai/MessageActions";
@@ -1318,6 +1319,7 @@ export function AiPanel({
   // them.
   const delegationThoughts = useMemo(() => delegationThinking(msgs), [msgs]);
   const toolPairing = useMemo(() => pairToolResults(msgs), [msgs]);
+  const responseCostTotals = useMemo(() => responseCosts(msgs), [msgs]);
   // The row still arriving, while the run is live: the fold keeps it at the
   // foot of the work it follows rather than reading it as the answer.
   const arrivingRow = streaming && msgs[msgs.length - 1]?.role === "assistant" ? msgs.length - 1 : undefined;
@@ -2169,7 +2171,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     setCompacting(true);
     setCompactError(null);
     try {
-      const { summary, contextTokens } = await invoke<{ summary: string; kept: number; contextTokens: number }>("agent_compact_conversation", {
+      const { summary, contextTokens, costUsd } = await invoke<{ summary: string; kept: number; contextTokens: number; costUsd?: number }>("agent_compact_conversation", {
         runId: currentId,
         provider: oneShotProvider,
         model: oneShotModel,
@@ -2186,7 +2188,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       const summaryMsg: Msg = {
         role: "system",
         content: `Compacted earlier messages:\n${summary}`,
-        compaction: { count: current.length, summary, contextTokens, source: "manual", messages: compactedMessages, toolCalls: compactedToolCalls },
+        compaction: { count: current.length, summary, contextTokens, costUsd: costUsd ?? undefined, source: "manual", messages: compactedMessages, toolCalls: compactedToolCalls },
       };
       const next: Msg[] = [...current, summaryMsg];
       setMsgs(next);
@@ -4479,7 +4481,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i), questionVerdict: foldedTurns.verdicts.byQuestion.get(i), dropVerdict: foldedTurns.verdicts.replies.has(i) })}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, responseCost: responseCostTotals.get(i), workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i), questionVerdict: foldedTurns.verdicts.byQuestion.get(i), dropVerdict: foldedTurns.verdicts.replies.has(i) })}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions

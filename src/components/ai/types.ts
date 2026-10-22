@@ -98,6 +98,8 @@ export type Msg =
         summary: string;
         /** Rust's estimate of summary plus retained recent history. */
         contextTokens?: number;
+        /** The separate model call that wrote these notes. */
+        costUsd?: number;
         source?: "manual" | "agent";
         /** Breakdown shown in the marker: conversation messages + tool calls
          *  folded. Optional for back-compat with markers written before this. */

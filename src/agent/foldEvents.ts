@@ -124,6 +124,8 @@ export type FoldedRow =
       kind: "compaction";
       summary: string;
       contextTokens?: number;
+      costUsd?: number;
+      source?: "manual";
       /** Conversation rows that preceded the marker — i.e. what the model
        *  stopped seeing verbatim from this point on. Derived here rather than
        *  carried on the wire, which has no count. */
@@ -733,6 +735,8 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       rows.splice(at, 0, {
         kind: "compaction",
         summary: event.summary,
+        ...(event.costUsd !== undefined ? { costUsd: event.costUsd } : {}),
+        ...(event.manual ? { source: "manual" as const } : {}),
         ...((event.contextTokens !== undefined || (event.kept ?? 0) > 0) ? {
           contextTokens: event.contextTokens ?? (
             estimateTokens(`[Earlier conversation compacted to save context]\n${event.summary}`) +
@@ -923,15 +927,14 @@ export type FoldedMsgView = {
 /** The one compaction-marker Msg. Shared by the replay mapper below and the
  *  live `context_compacted` handler in AiPanel — the marker must read the
  *  same in both; only `count` differs by what each side could see. */
-export function compactionMsg(count: number, summary: string, contextTokens?: number): Msg {
+export function compactionMsg(count: number, summary: string, contextTokens?: number, costUsd?: number, source: "agent" | "manual" = "agent"): Msg {
   return {
     role: "system",
     // Plain-text fallback for serialization and search.
     content: `Compacted ${count} earlier message${count === 1 ? "" : "s"} to free context.`,
-    // "agent" layout (the slim tool-style row): the wire event carries no
-    // manual/automatic distinction, and the unobtrusive row is the safe
-    // default for a harness-emitted marker.
-    compaction: { count, summary, source: "agent", ...(contextTokens !== undefined ? { contextTokens } : {}) },
+    // Older events carry no manual/automatic distinction; the unobtrusive
+    // agent row stays their default. New manual markers keep their layout.
+    compaction: { count, summary, source, ...(contextTokens !== undefined ? { contextTokens } : {}), ...(costUsd !== undefined ? { costUsd } : {}) },
   };
 }
 
@@ -953,7 +956,7 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
     ];
   }
   if (row.kind === "compaction") {
-    return [compactionMsg(row.count, row.summary, row.contextTokens)];
+    return [compactionMsg(row.count, row.summary, row.contextTokens, row.costUsd, row.source)];
   }
   if (row.kind === "observer") {
     return [{ role: "system", content: "Background observer finished", observer: { shellId: row.shellId }, ts: row.ts }];

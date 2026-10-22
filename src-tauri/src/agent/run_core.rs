@@ -1051,7 +1051,7 @@ mod tests {
         assert_eq!(last_recorded_todo(&prior).as_deref(), Some("[TODO list]\n- [x] a"));
         assert!(todo_update(last_recorded_todo(&prior).as_deref(), Some("- [x] a")).is_none());
         let mut compacted = prior.clone();
-        compacted.push(AgentEvent::ContextCompacted { run_id: "r".into(), summary: "s".into(), kept: None, context_tokens: None, ts: 0 });
+        compacted.push(AgentEvent::ContextCompacted { run_id: "r".into(), summary: "s".into(), kept: None, context_tokens: None, cost_usd: None, manual: false, ts: 0 });
         assert_eq!(last_recorded_todo(&compacted), None, "a compaction folds the snapshot away");
     }
 

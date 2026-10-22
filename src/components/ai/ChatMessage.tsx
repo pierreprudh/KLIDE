@@ -15,6 +15,7 @@ import "./askCard.css";
 import { SIGHT_TOOL } from "../../agent/foldEvents";
 import { eyesName } from "./sight";
 import { formatCost } from "../../runs";
+import type { ResponseCost } from "./responseCost";
 import { ConnectorMark } from "../linkMark";
 import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
@@ -1071,7 +1072,7 @@ function formatDuration(ms: number): string {
 // default, full strength on hover (see .klide-msg-meta in tokens.css).
 // Order: tok/s, tokens, time, total, TTFT, cached, cost — spacing alone separates the
 // parts; every one is self-labeled, so a glyph between them is noise.
-function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; cachedPct?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number } }) {
+function MessageMeta({ meta, responseCost }: { meta: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; cachedPct?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number }; responseCost?: ResponseCost }) {
   const parts: string[] = [];
   if (meta.tps) parts.push(`${meta.tps} tok/s`);
   if (meta.tokens) parts.push(`${meta.exact ? "" : "~"}${meta.tokens.toLocaleString()} tokens`);
@@ -1092,14 +1093,17 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
   // that says caching works. Only shown when the provider reported it.
   if (meta.cachedPct !== undefined && meta.cachedPct > 0) parts.push(`${meta.cachedPct}% cached`);
   // Cost last, so the eye lands on it. Sub-cent turns show "<$0.01".
-  if (meta.costUsd !== undefined && meta.costUsd > 0) {
-    parts.push(meta.costUsd < 0.01 ? "<$0.01" : `$${meta.costUsd.toFixed(meta.costUsd < 1 ? 3 : 2)}`);
+  if (meta.costUsd !== undefined && meta.costUsd > 0 && !responseCost) {
+    parts.push(`${formatCost(meta.costUsd)} this call`);
+  }
+  if (responseCost && responseCost.costUsd > 0) {
+    parts.push(`${formatCost(responseCost.costUsd)} response total (${responseCost.calls} priced call${responseCost.calls === 1 ? "" : "s"})`);
   }
   if (parts.length === 0) return null;
   return (
     <div
       className="klide-msg-meta"
-      title="This response only. Model speed excludes tool execution. Tokens and cost exclude external CLI agents; their usage is unavailable here."
+      title="Tokens, speed, timing and cache describe the last model call. Response total includes all known model-call costs behind this answer, including automatic compaction. Manual compaction is priced on its own marker. External CLI usage is unavailable here."
       style={{
         marginTop: 6,
         display: "flex",
@@ -1113,7 +1117,7 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
         userSelect: "none",
       }}
     >
-      <span>This response</span>
+      <span>Last model call</span>
       {parts.map((p, i) => (
         <span key={i}>{p}</span>
       ))}
@@ -1167,6 +1171,7 @@ export function CompactionRow({
   source = "agent",
   messages,
   toolCalls,
+  costUsd,
 }: {
   count?: number;
   summary?: string;
@@ -1175,6 +1180,7 @@ export function CompactionRow({
   source?: "manual" | "agent";
   messages?: number;
   toolCalls?: number;
+  costUsd?: number;
 }) {
   // Done marker reports the folded slice as "N messages + M tool calls"; older
   // markers without the breakdown fall back to the plain turn count.
@@ -1188,7 +1194,7 @@ export function CompactionRow({
   ) : status === "running" ? (
     <LiveLabel label="Compacting" />
   ) : (
-    `Compacted ${doneDetail}`
+    `Compacted ${doneDetail}${costUsd !== undefined && costUsd > 0 ? ` · ${formatCost(costUsd)}` : ""}`
   );
   const tone = failed ? "var(--danger)" : "var(--fg-subtle)";
   const expandable = !failed && status === "done" && !!summary;
@@ -1536,6 +1542,7 @@ export function delegationThinking(msgs: Msg[]): Map<number, string> {
 }
 
 type MessageBodyOptions = {
+  responseCost?: ResponseCost;
   /** Lets a delivered-agent-message row fetch its bodies from the journal. */
   workspaceRoot?: string | null;
   onOpenRun?: (runId: string) => void;
@@ -1564,7 +1571,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, thinkingOverride, inRun, nested, questionVerdict, dropVerdict }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun, hideThinking, thinkingOverride, inRun, nested, questionVerdict, dropVerdict, responseCost }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.observer) {
     return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
   }
@@ -1583,7 +1590,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
     return <RunInterruptedRow />;
   }
   if (m.role === "system" && m.compaction) {
-    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} messages={m.compaction.messages} toolCalls={m.compaction.toolCalls} />;
+    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} messages={m.compaction.messages} toolCalls={m.compaction.toolCalls} costUsd={m.compaction.costUsd} />;
   }
 
   if (m.role === "tool") {
@@ -1677,7 +1684,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
           );
         })()}
         {m.meta && !active && !nested && visibleContent !== "" && !m.toolCalls?.length && (
-          <MessageMeta meta={m.meta} />
+          <MessageMeta meta={m.meta} responseCost={responseCost} />
         )}
       </>
     );
@@ -1721,6 +1728,7 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
       active={active}
       workspaceRoot={opts?.workspaceRoot}
       results={opts?.results}
+      responseCost={opts?.responseCost}
       onOpenRun={opts?.onOpenRun}
       thinkingOverride={opts?.thinkingOverride}
       hideThinking={opts?.hideThinking}

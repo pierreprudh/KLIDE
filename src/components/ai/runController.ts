@@ -597,7 +597,7 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
           } else {
             // The run's first step: under the turn's message, at the head of
             // the run's region (the region moves down with it).
-            driver.insertAboveTurn(userIndex + 1, compactionMsg(userIndex + 1, event.summary, event.contextTokens));
+            driver.insertAboveTurn(userIndex + 1, compactionMsg(userIndex + 1, event.summary, event.contextTokens, event.costUsd));
           }
           break;
         }

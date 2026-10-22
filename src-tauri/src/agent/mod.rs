@@ -2492,6 +2492,15 @@ async fn loop_body(
                 };
                 // A failed or empty summary still frees the window: the
                 // stand-in is built from the turns themselves.
+                let response = response.ok();
+                let summary_usage = response.as_ref().and_then(|r| agent_usage_from(r.usage.clone(), &request.provider, &request.model));
+                if let Some(u) = &summary_usage {
+                    summary.input_tokens = summary.input_tokens.saturating_add(u.prompt_tokens.unwrap_or(0) as i64);
+                    summary.output_tokens = summary.output_tokens.saturating_add(u.completion_tokens.unwrap_or(0) as i64);
+                    if let Some(cost) = u.cost_usd {
+                        summary.cost_usd = Some(summary.cost_usd.unwrap_or(0.0) + cost);
+                    }
+                }
                 let notes = response.map(|r| r.content).unwrap_or_default();
                 // The folded turns' results go to the value store, so the
                 // summary's ledger can point at them and the model reopens a
@@ -2508,6 +2517,8 @@ async fn loop_body(
                     summary: compaction::summary_text(&notes, &events, cut, &stored),
                     kept: Some(cut.kept),
                     context_tokens: None,
+                    cost_usd: summary_usage.and_then(|u| u.cost_usd),
+                    manual: false,
                     ts: now_ms(),
                 };
                 let values = retention_enabled.then(|| (runs_dir.as_path(), id.as_str()));
@@ -3702,6 +3713,7 @@ pub struct CompactionOutcome {
     pub summary: String,
     pub kept: usize,
     pub context_tokens: usize,
+    pub cost_usd: Option<f64>,
 }
 
 /// Compact a conversation now — the `/compact` command and the Compact
@@ -3747,15 +3759,17 @@ pub async fn agent_compact_conversation(
         _ => None,
     });
     let structured = ProviderCaps::for_provider(&provider).structured_replay;
-    let messages = compaction::summary_request(&reconstruct_prior_messages(
+    let prior = reconstruct_prior_messages(
         &events,
         structured,
         Some((runs_dir.as_path(), run_id.as_str())),
-    ));
-    let notes = crate::providers::dispatch(
+    );
+    let before_tokens = estimate_prompt_tokens(&prior);
+    let messages = compaction::summary_request(&prior);
+    let response = crate::providers::dispatch(
         crate::providers::ProviderTurn {
-            provider,
-            model,
+            provider: provider.clone(),
+            model: model.clone(),
             messages,
             tools: None,
             workspace_root: cwd,
@@ -3771,8 +3785,9 @@ pub async fn agent_compact_conversation(
         &Channel::new(|_| Ok(())),
     )
     .await
-    .map(|response| response.content)
-    .unwrap_or_default();
+    .ok();
+    let cost_usd = response.as_ref().and_then(|r| agent_usage_from(r.usage.clone(), &provider, &model)).and_then(|u| u.cost_usd);
+    let notes = response.map(|r| r.content).unwrap_or_default();
     let stored = compaction::store_folded_results(&events[..cut.start], &mut |call_id, name, content| {
         retained::retain_compacted(&runs_dir, &run_id, call_id, name, content).is_some()
     });
@@ -3780,17 +3795,22 @@ pub async fn agent_compact_conversation(
     let mut marker = AgentEvent::ContextCompacted {
         run_id: run_id.clone(), summary: summary.clone(), kept: Some(cut.kept),
         context_tokens: None, ts: now_ms(),
+        cost_usd,
+        manual: true,
     };
     let mut checkpoint = events.clone();
     checkpoint.push(marker.clone());
     let context_tokens = estimate_prompt_tokens(&reconstruct_prior_messages(
         &checkpoint, structured, Some((runs_dir.as_path(), run_id.as_str())),
     ));
+    if context_tokens >= before_tokens {
+        return Err("Compaction would not reduce this conversation. The existing context was kept; try again after more tool work or turns.".into());
+    }
     if let AgentEvent::ContextCompacted { context_tokens: tokens, .. } = &mut marker {
         *tokens = Some(context_tokens);
     }
     append_event(&runs_dir, &run_id, events.len() as u64, &marker)?;
-    Ok(CompactionOutcome { summary, kept: cut.kept, context_tokens })
+    Ok(CompactionOutcome { summary, kept: cut.kept, context_tokens, cost_usd })
 }
 
 /// The Provider/model each of these Conversations actually started on.
@@ -4358,6 +4378,8 @@ mod replay_tests {
             summary: "we set up auth and fixed the parser".into(),
             kept: None,
             context_tokens: None,
+            cost_usd: None,
+            manual: false,
             ts: 9,
         };
         let out = reconstruct(
@@ -4690,6 +4712,55 @@ mod replay_tests {
     }
 
     #[test]
+    fn repeated_compaction_never_replays_an_older_marker_over_the_new_notes() {
+        let events = vec![
+            user_msg("original request"),
+            assistant_text("recent answer"),
+            AgentEvent::ContextCompacted {
+                run_id: "r".into(), summary: "old notes".into(), kept: Some(1), context_tokens: None,
+                cost_usd: None, manual: true, ts: 3,
+            },
+            AgentEvent::ContextCompacted {
+                run_id: "r".into(), summary: "new notes".into(), kept: Some(2), context_tokens: None,
+                cost_usd: None, manual: true, ts: 4,
+            },
+        ];
+        for structured in [true, false] {
+            let messages = reconstruct(&events, structured);
+            assert_eq!(messages.len(), 2);
+            assert!(messages[0]["content"].as_str().unwrap().contains("new notes"));
+            assert_eq!(messages[1]["content"], "recent answer");
+        }
+    }
+
+    #[test]
+    fn a_large_window_compaction_shrinks_replayed_history_and_keeps_the_answer() {
+        let mut events = vec![user_msg(&"inspect the flow ".repeat(200))];
+        for _ in 0..26 {
+            events.push(assistant_with_tool_call());
+            events.push(tool_result("tc1", &"code line\n".repeat(1_200)));
+        }
+        events.push(assistant_text(&"the explanation ".repeat(400)));
+        let before = estimate_prompt_tokens(&reconstruct(&events, true));
+        let cut = compaction::plan_cut(&events, compaction_threshold(1_000_000, 4096) / 4).unwrap();
+        let summary = compaction::summary_text("Inspected the message flow. Preserve the user's constraints.", &events, cut, &Default::default());
+        events.push(AgentEvent::ContextCompacted {
+            run_id: "r".into(), summary, kept: Some(cut.kept), context_tokens: None,
+            cost_usd: Some(0.03), manual: true, ts: 9,
+        });
+        let after = reconstruct(&events, true);
+        assert!(estimate_prompt_tokens(&after) < before / 2);
+        assert_eq!(after.last().unwrap()["content"], "the explanation ".repeat(400));
+        let serialized = serde_json::to_value(events.last().unwrap()).unwrap();
+        assert_eq!(serialized["costUsd"], 0.03);
+        assert_eq!(serialized["manual"], true);
+        let old_marker: AgentEvent = serde_json::from_value(serde_json::json!({
+            "type": "context_compacted", "runId": "r", "summary": "old", "ts": 0
+        })).unwrap();
+        assert!(matches!(old_marker, AgentEvent::ContextCompacted { cost_usd: None, manual: false, .. }));
+    }
+
+    #[test]
     fn structured_replay_preserves_compaction() {
         let out = reconstruct(
             &[
@@ -4700,6 +4771,8 @@ mod replay_tests {
                     summary: "did the thing".into(),
                     kept: None,
                     context_tokens: None,
+                    cost_usd: None,
+                    manual: false,
                     ts: 9,
                 },
                 user_msg("new"),
@@ -6472,7 +6545,9 @@ mod run_loop_tests {
         let mut script: Vec<_> = (0..3)
             .map(|i| scripted_turn("Reading.", vec![scripted_tool_call(&format!("call_{i}"), "read_file", serde_json::json!({ "path": format!("f{i}.txt") }))]))
             .collect();
-        script.push(scripted_turn("NOTES: read f0-f2, each is padding.", vec![]));
+        let mut notes = scripted_turn("NOTES: read f0-f2, each is padding.", vec![]).unwrap();
+        notes.usage = Some(AiUsage { cost_usd: Some(0.03), ..Default::default() });
+        script.push(Ok(notes));
         script.push(scripted_turn("All three read.", vec![]));
         let first = ScriptedProviderCaller::new(script);
         let mut request = test_request(&root, &[]);
@@ -6490,6 +6565,8 @@ mod run_loop_tests {
             })
             .expect("the run compacted itself");
         assert!(notes.starts_with("NOTES:"), "{notes}");
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::ContextCompacted { cost_usd: Some(cost), manual: false, .. } if (*cost - 0.03).abs() < 1e-9)));
+        assert_eq!(read_summary(&runs_dir, "thread").unwrap().cost_usd, Some(0.03));
         assert!(notes.contains("\n1. Read the four files."), "the request survives: {notes}");
         assert!(notes.contains("- read_file f0.txt — result stored: peek_value id"), "the ledger points at stored results: {notes}");
         assert!(kept.unwrap() >= 2, "the newest turn stays verbatim: {kept:?}");

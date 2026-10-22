@@ -229,5 +229,5 @@ export function canCompactConversation(opts: {
 /** Running cost of a conversation: the sum of every turn's own cost. Stays 0
  *  for local, subscription and unknown-price models. */
 export function conversationCost(msgs: Msg[]): number {
-  return msgs.reduce((sum, m) => sum + (m.role === "assistant" ? m.meta?.costUsd ?? 0 : 0), 0);
+  return msgs.reduce((sum, m) => sum + (m.role === "assistant" ? m.meta?.costUsd ?? 0 : m.role === "system" ? m.compaction?.costUsd ?? 0 : 0), 0);
 }
