@@ -181,6 +181,45 @@ describe("replayForAdoption", () => {
     expect(replayForAdoption([], onScreen)).toBeNull();
   });
 
+  it("keeps a working row under a re-adopted Run even when the replay is refused", () => {
+    const running = [...transcript];
+    const onScreen: Msg[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello, and a longer streamed line" },
+    ];
+    const live = { provider: "openrouter" as const };
+    const healed = replayForAdoption(running, onScreen, live);
+    expect(healed?.map((m) => m.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(healed?.[2]).toMatchObject({ role: "assistant", content: "" });
+    // Once there, a later read adds nothing.
+    expect(replayForAdoption(running, healed ?? [], live)).toBeNull();
+    // Not running: nothing to say.
+    expect(replayForAdoption(running, onScreen)).toBeNull();
+  });
+
+  it("says a Run failed even when the replay itself is refused", () => {
+    // Dogfood: a remount mid-run, then the provider stream died. The screen
+    // held more text than the fold, so the replay was refused — and the
+    // failure with it, leaving "Worked for 12.9s" and nothing under it.
+    const failed: AgentEvent[] = [
+      ...transcript,
+      { type: "run_error", runId: "r1", error: { code: "provider_unavailable", message: "OpenRouter stopped sending", retryable: true }, ts: 4 } as unknown as AgentEvent,
+    ];
+    const queued: Msg = { role: "user", content: "and then?", queueState: "queued" };
+    const onScreen: Msg[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello, and a longer streamed line" },
+      { role: "assistant", content: "" },
+      queued,
+    ];
+    const healed = replayForAdoption(failed, onScreen);
+    expect(healed?.map((m) => m.role)).toEqual(["user", "assistant", "system", "user"]);
+    expect(healed?.[2]).toMatchObject({ runError: { message: "OpenRouter stopped sending", retryable: true } });
+    expect(healed?.[3]).toBe(queued);
+    // Already said: nothing to add.
+    expect(replayForAdoption(failed, healed ?? [])).toBeNull();
+  });
+
   it("adopts a delegate turn whose live view holds rows the Transcript never will", () => {
     // The reload-mid-generation bug, built from the two streams Rust actually
     // produces. A delegate CLI's own tool activity is sent on the
