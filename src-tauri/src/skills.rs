@@ -275,7 +275,19 @@ pub(crate) fn scan_filesystem_skills(
             });
         }
     }
-    Ok(out)
+    Ok(first_of_each_name(out))
+}
+
+/// One row per skill name. The same skill installed twice — copied into the
+/// workspace and also under `~/.claude/skills` — answers one `/` command, so
+/// the most specific copy wins: the sources are scanned workspace-first, and a
+/// later copy with a name already seen is the one it shadows.
+fn first_of_each_name(skills: Vec<FileSystemSkill>) -> Vec<FileSystemSkill> {
+    let mut seen = std::collections::HashSet::new();
+    skills
+        .into_iter()
+        .filter(|s| seen.insert(s.name.trim().to_lowercase()))
+        .collect()
 }
 
 /// Install a skill from a GitHub-style package spec (e.g. `anthropics/skills`,
@@ -436,6 +448,26 @@ mod tests {
         // No author, no repo → Personal.
         assert_eq!(skill_group_label("home-agents", "", ""), "Personal");
         assert_eq!(skill_group_label("home-claude", "", ""), "Personal");
+    }
+
+    #[test]
+    fn a_workspace_copy_shadows_the_same_skill_installed_for_the_user() {
+        let row = |source: &str, name: &str| FileSystemSkill {
+            id: format!("file-{source}-{name}"),
+            name: name.to_string(),
+            description: String::new(),
+            instructions: String::new(),
+            from_file: String::new(),
+            source: source.to_string(),
+            group: String::new(),
+        };
+        let kept = first_of_each_name(vec![
+            row("workspace-agents", "software-factory"),
+            row("home-agents", "tdd"),
+            row("home-claude", "Software-Factory"),
+        ]);
+        let ids: Vec<&str> = kept.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["file-workspace-agents-software-factory", "file-home-agents-tdd"]);
     }
 
     #[test]

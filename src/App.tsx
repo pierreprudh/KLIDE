@@ -639,8 +639,22 @@ function App() {
 
   const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
 
+  // The skill ids the last scan of this workspace found — what a new scan is
+  // compared against to say a skill was added. Null until the first scan, so
+  // opening a project never announces what was already there.
+  const knownFsSkillsRef = useRef<{ root: string | null; ids: Set<string> } | null>(null);
+
   const reloadFilesystemSkills = useCallback(async () => {
     const fsSkills = await loadFilesystemSkills(workspaceRoot);
+    const known = knownFsSkillsRef.current;
+    knownFsSkillsRef.current = { root: workspaceRoot, ids: new Set(fsSkills.map((s) => s.id)) };
+    const added = known && known.root === workspaceRoot ? fsSkills.filter((s) => !known.ids.has(s.id)) : [];
+    if (added.length) {
+      notify(added.length === 1 ? `Skill added — ${added[0].name}` : `${added.length} skills added`, {
+        tone: "success",
+        action: { label: "Open Skills", run: () => setSkillsVisible(true) },
+      });
+    }
     setSkills((prev) => {
       const userDefined = prev.filter((s) => !s.fromFile);
       return [...userDefined, ...fsSkills];
@@ -1711,10 +1725,7 @@ function App() {
           setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
         }}
         onOpenMemory={() => setMemoryVisible(true)}
-        onSkillGenerated={(skill) => {
-          void reloadFilesystemSkills();
-          setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
-        }}
+        onSkillGenerated={() => void reloadFilesystemSkills()}
       />
     );
   }
