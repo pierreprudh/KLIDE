@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enabledFirst, enabledRunSkills, enabledSkillsPrompt } from "./skills";
+import { enabledFirst, enabledRunSkills, enabledSkillsPrompt, skillFolderOf } from "./skills";
 
 describe("enabledFirst", () => {
   it("moves the enabled skills ahead and keeps each side's own order", () => {
@@ -42,5 +42,19 @@ describe("enabledSkillsPrompt", () => {
     expect(prompt).not.toContain("long body");
     expect(enabledRunSkills(skills)).toEqual([{ command: "draw-pictures", name: "Draw Pictures", description: skills[0].description, instructions: skills[0].instructions }]);
     expect(enabledSkillsPrompt([])).toBe("");
+  });
+});
+
+describe("skillFolderOf", () => {
+  it("names the skill a SKILL.md in any of the skill locations belongs to", () => {
+    expect(skillFolderOf(".agents/skills/software-factory/SKILL.md")).toBe("software-factory");
+    expect(skillFolderOf(".klide/skills/review/SKILL.md")).toBe("review");
+    expect(skillFolderOf("/Users/p/.claude/skills/tdd/SKILL.md")).toBe("tdd");
+  });
+
+  it("ignores a skill's other files and SKILL.md files elsewhere", () => {
+    expect(skillFolderOf(".agents/skills/software-factory/RUNNERS.md")).toBeNull();
+    expect(skillFolderOf("docs/skills/x/SKILL.md")).toBeNull();
+    expect(skillFolderOf(".agents/skills/SKILL.md")).toBeNull();
   });
 });

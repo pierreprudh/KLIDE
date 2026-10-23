@@ -117,7 +117,7 @@ import type {
   ProviderId,
   StartAgentRunInput,
 } from "../agent/types";
-import { enabledRunSkills, enabledSkillsPrompt, type Skill } from "../skills";
+import { enabledRunSkills, enabledSkillsPrompt, skillFolderOf, type Skill } from "../skills";
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { formatClock, formatDayStamp } from "../time";
@@ -3790,6 +3790,8 @@ This user request requires workspace inspection. Before answering, you MUST call
         // the watcher would catch it eventually but with a 250ms delay and
         // only on file events, not for create/delete-then-recreate.
         onWorkspaceChanged?.();
+        const skillName = skillFolderOf(path);
+        if (skillName) onSkillGenerated?.({ relPath: path, name: skillName });
       },
       // The executor (this run's model) called `consult_advisor` and is parked
       // on the shared question oneshot. Put its question to a STRONGER advisor
