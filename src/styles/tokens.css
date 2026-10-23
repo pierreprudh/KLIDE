@@ -7735,52 +7735,13 @@ button:focus-visible .menu-leadout {
   color: var(--fg-strong);
 }
 
-.klide-focus-composer {
-  position: relative;
-  overflow: hidden;
-  border: 1px solid var(--composer-border);
-  border-radius: 15px;
-  background: var(--composer-glass);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 92%, transparent),
-    0 1px 2px rgba(28, 28, 28, 0.025),
-    0 18px 48px rgba(28, 28, 28, 0.065);
-  backdrop-filter: blur(28px) saturate(1.18);
-  -webkit-backdrop-filter: blur(28px) saturate(1.18);
-  transition:
-    border-color 240ms var(--ease-out),
-    box-shadow 340ms var(--ease-soft),
-    transform 340ms var(--ease-spring);
-}
-
-.klide-focus-composer::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 52%;
-  pointer-events: none;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-highlight) 58%, transparent), transparent);
-  opacity: 0.34;
-  transition: opacity 280ms var(--ease-out);
-}
-
-/* Typing is not an event. Focus keeps the hairline and the lift — no accent
-   frame, no coloured ring: a bar of colour arriving the moment you write is
-   exactly the busy chrome this surface is supposed to be free of. */
-.klide-focus-composer[data-focused="true"] {
-  border-color: var(--border-strong);
-  box-shadow:
-    inset 0 1px 0 var(--panel-highlight),
-    0 22px 54px rgba(28, 28, 28, 0.085);
-  transform: translateY(-2px) scale(1.002);
-}
-
-/* The same surface on the conversation's composer (AiPanel variant="focus"),
-   so the box doesn't change colour once a conversation starts. The glass and
-   its blur live on ::before, not the box: backdrop-filter or transform on the
-   box would become the containing block for the composer's position:fixed
-   menus and pin them inside it. Same reason the focused state doesn't lift. */
-.klide-conversation-composer {
+/* The one composer surface — Focus's start stage, the conversation in Focus,
+   and every AI panel in the workbench wear it, so the box you type in never
+   changes colour between them. The glass and its blur live on ::before, not
+   the box, and focus doesn't lift: backdrop-filter or transform on the box
+   would become the containing block for the composer's position:fixed menus
+   and pin them inside it. */
+.klide-composer-surface {
   position: relative;
   isolation: isolate;
   border: 1px solid var(--composer-border);
@@ -7794,7 +7755,7 @@ button:focus-visible .menu-leadout {
     box-shadow 340ms var(--ease-soft);
 }
 
-.klide-conversation-composer::before {
+.klide-composer-surface::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -7808,23 +7769,26 @@ button:focus-visible .menu-leadout {
   -webkit-backdrop-filter: blur(28px) saturate(1.18);
 }
 
-.klide-conversation-composer[data-focused="true"] {
+/* Typing is not an event. Focus deepens the hairline and the shadow — no
+   accent frame, no coloured ring, no lift: a bar of colour arriving the
+   moment you write is exactly the busy chrome this surface is free of. */
+.klide-composer-surface[data-focused="true"] {
   border-color: var(--border-strong);
   box-shadow:
     inset 0 1px 0 var(--panel-highlight),
     0 22px 54px rgba(28, 28, 28, 0.085);
 }
 
-/* Dragging a photo or document over the start stage. A drag IS an event — it
+/* Dragging a photo or document over the composer. A drag IS an event — it
    asks "will you take this?" — so here the accent hairline earns its place.
    Still a hairline: no ring, no dashed outline, no overlay. The named landing
    line below carries the answer. */
-.klide-focus-composer[data-dropping] {
+.klide-composer-surface[data-dropping] {
   border-color: var(--accent);
-  box-shadow:
-    inset 0 1px 0 var(--panel-highlight),
-    0 22px 54px rgba(28, 28, 28, 0.085);
-  transform: translateY(-2px) scale(1.002);
+}
+
+.klide-focus-composer {
+  overflow: hidden;
 }
 
 /* One line where the tray will be, so the drop has a named landing place. */
@@ -8318,8 +8282,7 @@ button:focus-visible .menu-leadout {
   .klide-focus-nav-row:focus-visible .klide-focus-nav-chevron,
   .klide-focus-nav-row[data-active="true"] .klide-focus-nav-chevron,
   .klide-focus-nav-chevron[data-expanded="true"],
-  .klide-focus-composer,
-  .klide-focus-composer::before,
+  .klide-composer-surface,
   .klide-focus-send {
     transition: none;
   }

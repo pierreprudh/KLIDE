@@ -17,10 +17,11 @@ import { eyesName, type Eyes } from "./sight";
 
 const CARD = 56;
 const TILE = 40;
-// Tints of the text colour over the composer's surface: darker on the light
-// themes, lighter on the dark ones, without a token per theme.
-const CARD_FILL = "color-mix(in srgb, var(--fg-strong) 4%, var(--bg-elevated))";
-const TILE_FILL = "color-mix(in srgb, var(--fg-strong) 7%, var(--bg-elevated))";
+// Faint tints of the text colour laid over whatever the composer's glass is:
+// darker on the light themes, lighter on the dark ones, without a token per
+// theme. Just enough to lift the card off the box, never a colour of its own.
+const CARD_FILL = "color-mix(in srgb, var(--fg-strong) 2.5%, transparent)";
+const TILE_FILL = "color-mix(in srgb, var(--fg-strong) 4.5%, transparent)";
 
 export function AttachmentTray({
   attachments,
@@ -102,8 +103,8 @@ function AttachmentTile({
         boxSizing: "border-box",
         borderRadius: 16,
         border: "1px solid var(--border)",
-        // A step off the composer it sits in (which is --bg-elevated), so
-        // the card reads as a thing laid on the box, not printed into it.
+        // A step off the composer it sits in, so the card reads as a thing
+        // laid on the box, not printed into it.
         background: CARD_FILL,
         flexShrink: 0,
       }}
