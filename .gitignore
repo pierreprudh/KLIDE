@@ -73,6 +73,9 @@ src-tauri/gen/
 .klide/coordination/
 # Per-conversation agent todo stores — run scratch state, never repo content.
 .agents/todos/
+# Skills installed into this checkout by hand or by a Run — personal tooling,
+# not part of Klide.
+.agents/skills/
 
 # --- Prompt A/B harness output ---
 scripts/prompt-ab/results.json
