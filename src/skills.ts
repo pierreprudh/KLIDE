@@ -296,6 +296,15 @@ export function skillSlashName(name: string): string {
     .replace(/^-|-$/g, "");
 }
 
+/** The skill folder name when `path` is a `SKILL.md` inside one of the four
+ *  skill locations (`.agents/skills`, `.klide/skills`, `.claude/skills`),
+ *  else null. A Run that writes one has added or changed a skill, so the
+ *  list re-reads the disk rather than waiting for the next launch. */
+export function skillFolderOf(path: string): string | null {
+  const m = path.replace(/\\/g, "/").match(/(?:^|\/)\.(?:agents|klide|claude)\/skills\/([^/]+)\/SKILL\.md$/);
+  return m ? m[1] : null;
+}
+
 /** The Skills list with the enabled ones first, each side keeping its own
  *  order. What is on is what the next run will follow, so it reads first;
  *  toggling a row moves it across the line rather than leaving it buried

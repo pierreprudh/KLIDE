@@ -331,6 +331,12 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
   const [tools, setTools] = useState<ToolEntry[]>(SKILL_TOOLS);
   const [connectors, setConnectors] = useState<Connector[]>([]);
 
+  // Skills land on disk from outside the modal too — a terminal `npx skills
+  // add`, an agent writing a SKILL.md — so opening the list re-reads it.
+  useEffect(() => {
+    if (open) void onReloadFilesystemSkills();
+  }, [open, onReloadFilesystemSkills]);
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
