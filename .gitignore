@@ -42,6 +42,7 @@ docs/*
 !docs/MISSION_ORCHESTRATION.md
 !docs/OPENCODE_DELEGATE.md
 !docs/PROVIDER_RESOURCES.md
+!docs/SOFTWARE_FACTORY.md
 
 .vscode
 
