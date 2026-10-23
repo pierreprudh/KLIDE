@@ -9456,6 +9456,38 @@ button:focus-visible .menu-leadout {
   background: var(--bg-hover);
   outline: none;
 }
+.klide-choice-other:focus-within {
+  background: var(--bg-hover);
+}
+
+/* A row's letter is its keycap: square, the label's height, and it wakes with
+   the row — the key you would press is the one under the pointer. */
+.klide-choice-key {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--fg-dim);
+  transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out);
+}
+.klide-choice-row:hover .klide-choice-key,
+.klide-choice-row:focus-visible .klide-choice-key,
+.klide-choice-other:focus-within .klide-choice-key {
+  color: var(--fg-strong);
+  border-color: var(--border-strong);
+}
+
+/* Send waits greyed until there is an answer to send, and does not lift. */
+.klide-question-send:disabled {
+  opacity: 0.42;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
 
 /* The question card's last row is the model picker itself: its trigger takes
    the rows' type size and height so the list reads as one column. */

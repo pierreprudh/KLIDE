@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../hooks/useCustomProviders", () => ({ useCustomProviders: () => [] }));
 
-import { liftLetteredChoices, QuestionCard } from "./QuestionCard";
+import { choiceIndexForKey, liftLetteredChoices, QuestionCard, splitQuestion } from "./QuestionCard";
 
 function render(props: Partial<Parameters<typeof QuestionCard>[0]> = {}) {
   return renderToStaticMarkup(
@@ -72,5 +72,25 @@ describe("QuestionCard", () => {
   it("leaves real answers and unmatched letters alone", () => {
     expect(liftLetteredChoices("Which?", ["Yes", "No"])).toBeNull();
     expect(liftLetteredChoices("Which?\nA. one", ["A", "B"])).toBeNull();
+  });
+
+  // Each answer wears its letter as a keycap, and the typed answer is the
+  // next letter down — the row after the last answer, not a box in the foot.
+  it("letters the answers and the something-else row after them", () => {
+    const html = render({ choices: { options: ["Postgres", "Redis"] }, onChoose: () => {} });
+    expect(html).toMatch(/klide-choice-key">A<[\s\S]*klide-choice-key">B<[\s\S]*klide-choice-key">C<[\s\S]*Something else…/);
+  });
+
+  it("picks by letter whatever the layout, and by digit by key code", () => {
+    expect(choiceIndexForKey({ key: "a", code: "KeyQ" })).toBe(0);
+    expect(choiceIndexForKey({ key: "C", code: "KeyC" })).toBe(2);
+    expect(choiceIndexForKey({ key: "&", code: "Digit1" })).toBe(0);
+    expect(choiceIndexForKey({ key: "a", code: "KeyA", metaKey: true })).toBe(-1);
+    expect(choiceIndexForKey({ key: "Enter", code: "Enter" })).toBe(-1);
+  });
+
+  it("titles the question with its first line and keeps the rest as its reason", () => {
+    expect(splitQuestion("Which store?\nEvery request reads it.")).toEqual({ title: "Which store?", detail: "Every request reads it." });
+    expect(splitQuestion("  Which store?  ")).toEqual({ title: "Which store?", detail: "" });
   });
 });
