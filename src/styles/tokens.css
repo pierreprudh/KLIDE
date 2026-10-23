@@ -9464,11 +9464,11 @@ button:focus-visible .menu-leadout {
    hairline under it, and it wakes with the row — the key you would press is
    the one under the pointer. */
 .klide-choice-key {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
-  border-radius: 6px;
+  border-radius: 5px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 55%, var(--bg-elevated));
   box-shadow:
@@ -9476,7 +9476,7 @@ button:focus-visible .menu-leadout {
     inset 0 -1px 0 color-mix(in srgb, var(--border-strong) 55%, transparent);
   color: var(--fg-subtle);
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: 10.5px;
   line-height: 1;
   transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out);
 }
@@ -9496,8 +9496,8 @@ button:focus-visible .menu-leadout {
 /* The question card's ring: open while nothing is answered, closed in the
    accent once there is an answer to send. */
 .klide-question-ring {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
   border-radius: 50%;
   border: 1.5px solid var(--border-strong);

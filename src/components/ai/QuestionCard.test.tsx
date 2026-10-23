@@ -31,7 +31,7 @@ describe("QuestionCard", () => {
   it("draws plain answers as wrapping rows and still takes a typed one", () => {
     const options = ["A pending draft in .klide/memory/proposals/, excluded from recall until a person accepts it", "A reviewed entry"];
     const html = render({ choices: { options }, onChoose: () => {} });
-    expect(html).toContain(`<span style="min-width:0;overflow-wrap:anywhere;padding-top:1.5px">${options[0]}</span>`);
+    expect(html).toContain(`<span style="min-width:0;overflow-wrap:anywhere">${options[0]}</span>`);
     expect(html).not.toContain("white-space:nowrap");
     expect(html).toContain("Something else…");
   });

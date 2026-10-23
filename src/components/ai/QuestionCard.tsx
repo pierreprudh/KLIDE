@@ -230,10 +230,10 @@ function ChoiceRows({ choices, onChoose, current, flush, labels, other, onOther,
           onOther();
         }
       }}
-      // The rows sit 10px in from the card's edge so their hover fill is a
+      // The rows sit 6px in from the card's edge so their hover fill is a
       // rounded row, not a stripe — and their keys still land on the
-      // question's column (10 + 8 = the card's 18).
-      style={{ display: "grid", gap: 2, padding: flush ? "2px 0 4px" : "10px 10px 0", outline: "none" }}
+      // question's column (6 + 8 = the card's 14).
+      style={{ display: "grid", gap: 1, padding: flush ? "2px 0 4px" : "6px 6px 0", outline: "none" }}
     >
       {choices.options.map((option, index) => {
         const { label: own, note } = choiceLabel(option, choices);
@@ -251,27 +251,27 @@ function ChoiceRows({ choices, onChoose, current, flush, labels, other, onOther,
             style={{
               display: "flex",
               alignItems: plain ? "flex-start" : "center",
-              gap: plain ? 12 : 10,
-              padding: plain ? "7px 8px" : "6px 8px",
+              gap: 10,
+              padding: plain ? "4px 8px" : "6px 8px",
               border: "none",
               background: "transparent",
               color: "var(--fg-strong)",
               font: "inherit",
-              fontSize: plain ? 14 : 13,
+              fontSize: plain ? 13.5 : 13,
               lineHeight: 1.5,
               textAlign: "left",
               cursor: "pointer",
               minWidth: 0,
             }}
           >
-            <span aria-hidden style={{ width: plain ? 24 : 18, height: plain ? 24 : 18, flexShrink: 0, display: "grid", placeItems: "center" }}>
+            <span aria-hidden style={{ width: plain ? 20 : 18, height: plain ? 20 : 18, flexShrink: 0, display: "grid", placeItems: "center" }}>
               <ChoiceMark option={option} index={index} choices={choices} />
             </span>
             <span
               style={{
                 minWidth: 0,
                 ...(plain
-                  ? { overflowWrap: "anywhere" as const, paddingTop: 1.5 }
+                  ? { overflowWrap: "anywhere" as const }
                   : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }),
                 fontFamily: code ? "var(--font-mono)" : undefined,
                 fontSize: code ? 12 : undefined,
@@ -310,16 +310,16 @@ function ButtonKeys({ keys }: { keys: string[] }) {
         <kbd
           key={k}
           style={{
-            minWidth: 20,
-            height: 20,
-            padding: "0 4px",
+            minWidth: 17,
+            height: 17,
+            padding: "0 3px",
             display: "grid",
             placeItems: "center",
-            borderRadius: 5,
+            borderRadius: 4,
             background: "color-mix(in srgb, var(--control-primary-fg) 14%, transparent)",
             color: "color-mix(in srgb, var(--control-primary-fg) 82%, transparent)",
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: 10,
             lineHeight: 1,
           }}
         >
@@ -403,16 +403,16 @@ export function QuestionCard({
       style={{
         flex: 1,
         minWidth: 0,
-        minHeight: picking ? 21 : 32,
+        minHeight: picking ? 20 : 30,
         maxHeight: 168,
         resize: "none",
         background: "transparent",
         border: "none",
         color: "var(--fg-strong)",
         font: "inherit",
-        fontSize: 14,
+        fontSize: 13.5,
         lineHeight: 1.5,
-        padding: picking ? "1.5px 0 0" : "6px 0 5px",
+        padding: picking ? 0 : "5px 0 4px",
         outline: "none",
         display: "block",
       }}
@@ -435,7 +435,7 @@ export function QuestionCard({
         // quieter here: the head's tile already says who is waiting.
         background: "var(--bg-elevated)",
         border: "1px solid color-mix(in srgb, var(--accent) 16%, var(--border))",
-        borderRadius: 14,
+        borderRadius: 12,
         marginBottom: 8,
         overflow: "hidden",
         display: "flex",
@@ -444,36 +444,36 @@ export function QuestionCard({
     >
       {/* Who is asking, in a tinted tile, and a ring that closes once there
           is an answer to send. The question below is the card's body. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 18px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px 0" }}>
         <span
           aria-hidden="true"
           style={{
-            width: 30,
-            height: 30,
+            width: 22,
+            height: 22,
             flexShrink: 0,
             display: "grid",
             placeItems: "center",
-            borderRadius: 8,
+            borderRadius: 6,
             color: "var(--accent)",
             background: "color-mix(in srgb, var(--accent) 12%, transparent)",
             border: "1px solid color-mix(in srgb, var(--accent) 22%, transparent)",
           }}
         >
-          <AskIcon size={16} />
+          <AskIcon size={13} />
         </span>
-        <span style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 15, fontWeight: 700 }}>Question</span>
+        <span style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, fontWeight: 700 }}>Question</span>
         <span
           aria-hidden="true"
           className="klide-question-ring"
           data-ready={canSend ? "1" : undefined}
         />
       </div>
-      <div style={{ padding: "14px 18px 0", maxHeight: "min(260px, 32dvh)", overflowY: "auto", overscrollBehavior: "contain" }}>
-        <div style={{ color: "var(--fg-strong)", fontSize: 15, lineHeight: 1.45, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+      <div style={{ padding: "8px 14px 0", maxHeight: "min(240px, 30dvh)", overflowY: "auto", overscrollBehavior: "contain" }}>
+        <div style={{ color: "var(--fg-strong)", fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
           {title}
         </div>
         {detail && (
-          <div style={{ marginTop: 4, color: "var(--fg-subtle)", fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+          <div style={{ marginTop: 2, color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
             {detail}
           </div>
         )}
@@ -492,9 +492,9 @@ export function QuestionCard({
             <div
               className="klide-choice-row klide-choice-other"
               onClick={() => answerRef.current?.focus()}
-              style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "7px 8px", cursor: "text", minWidth: 0 }}
+              style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "4px 8px", cursor: "text", minWidth: 0 }}
             >
-              <span aria-hidden style={{ width: 24, height: 24, flexShrink: 0, display: "grid", placeItems: "center" }}>
+              <span aria-hidden style={{ width: 20, height: 20, flexShrink: 0, display: "grid", placeItems: "center" }}>
                 <LetterKey index={options.length} />
               </span>
               {answerBox}
@@ -502,14 +502,14 @@ export function QuestionCard({
           ) : undefined}
         />
       )}
-      {!picking && <div style={{ display: "flex", padding: "6px 18px 0" }}>{answerBox}</div>}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, padding: "12px 18px 18px" }}>
+      {!picking && <div style={{ display: "flex", padding: "4px 14px 0" }}>{answerBox}</div>}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6, padding: "8px 12px 12px" }}>
         <button
           type="button"
           onClick={onSkip}
           title="Answer nothing and let the run carry on (Esc)"
           className="klide-button klide-button-secondary klide-question-skip"
-          style={{ minHeight: 32, padding: "0 12px", borderRadius: 9, fontSize: 13, fontWeight: 400 }}
+          style={{ minHeight: 26, padding: "0 10px", borderRadius: 7, fontSize: 12.5, fontWeight: 400 }}
         >
           Skip
         </button>
@@ -521,7 +521,7 @@ export function QuestionCard({
             aria-label="Send answer"
             title={picking ? "Send answer (↩)" : "Send answer (⌘↩)"}
             className="klide-button klide-button-primary klide-question-send"
-            style={{ minHeight: 32, padding: "0 6px 0 14px", borderRadius: 9, gap: 10, fontSize: 13 }}
+            style={{ minHeight: 26, padding: "0 5px 0 11px", borderRadius: 7, gap: 8, fontSize: 12.5 }}
           >
             Send
             <ButtonKeys keys={picking ? ["↩"] : ["⌘", "↩"]} />
