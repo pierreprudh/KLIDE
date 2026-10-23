@@ -15,8 +15,8 @@ import { attachmentSize, isPhotoAttachment, markupPreviewUri } from "./attachmen
 import { DocumentAppMark, documentApp } from "../../documentAppLogo";
 import { eyesName, type Eyes } from "./sight";
 
-const CARD = 52;
-const TILE = 38;
+const CARD = 56;
+const TILE = 40;
 
 export function AttachmentTray({
   attachments,
@@ -90,13 +90,13 @@ function AttachmentTile({
         position: "relative",
         display: "flex",
         alignItems: "center",
-        gap: 10,
+        gap: 11,
         height: CARD,
-        minWidth: 168,
-        maxWidth: 232,
-        padding: `0 30px 0 ${(CARD - TILE) / 2 - 1}px`,
+        minWidth: 176,
+        maxWidth: 240,
+        padding: `0 32px 0 ${(CARD - TILE) / 2}px`,
         boxSizing: "border-box",
-        borderRadius: 12,
+        borderRadius: 16,
         border: "1px solid var(--border)",
         background: "var(--bg-elevated)",
         flexShrink: 0,
@@ -110,7 +110,7 @@ function AttachmentTile({
           flexShrink: 0,
           display: "grid",
           placeItems: "center",
-          borderRadius: 8,
+          borderRadius: 10,
           overflow: "hidden",
           background: "var(--bg-hover)",
           cursor: onOpen ? "zoom-in" : "default",
@@ -139,7 +139,8 @@ function AttachmentTile({
       <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
         <span
           style={{
-            fontSize: 13,
+            fontSize: 13.5,
+            lineHeight: 1.25,
             color: "var(--fg-strong)",
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -148,7 +149,7 @@ function AttachmentTile({
         >
           {name}
         </span>
-        <span style={{ fontSize: 11.5, color: "var(--fg-subtle)" }}>{attachmentSize(attachment)}</span>
+        <span style={{ fontSize: 12, lineHeight: 1.25, color: "var(--fg-subtle)" }}>{attachmentSize(attachment)}</span>
       </div>
       <button
         type="button"
@@ -157,24 +158,29 @@ function AttachmentTile({
         onClick={onRemove}
         style={{
           position: "absolute",
-          top: 5,
-          right: 5,
+          top: 6,
+          right: 6,
           width: 22,
           height: 22,
           display: "grid",
           placeItems: "center",
           padding: 0,
-          border: "1px solid var(--border-strong)",
+          border: "none",
           borderRadius: "50%",
-          background: "var(--bg-elevated)",
-          color: "var(--fg)",
+          background: "color-mix(in srgb, var(--fg) 4%, var(--bg-elevated))",
+          // A soft lift and a whisper of a ring — it floats over the card
+          // rather than being drawn onto it.
+          boxShadow: "var(--shadow-raised), 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent)",
+          color: "var(--fg-strong)",
           cursor: "pointer",
           lineHeight: 1,
           opacity: hover ? 1 : 0,
-          transition: "opacity var(--motion-fast) var(--ease-out)",
+          transform: hover ? "scale(1)" : "scale(0.85)",
+          pointerEvents: hover ? "auto" : "none",
+          transition: "opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out)",
         }}
       >
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
           <path d="M6 6l12 12M18 6L6 18" />
         </svg>
       </button>
