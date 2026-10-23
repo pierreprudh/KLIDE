@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ATTACH_ACCEPT,
+  attachmentSize,
   MAX_DOC_CHARS,
   MAX_IMAGE_BYTES,
   MAX_STAGED,
@@ -187,5 +188,15 @@ describe("markupPreviewUri", () => {
       { allowPhotos: false },
     );
     expect(attachments.map(markupPreviewUri)).toEqual([null, null]);
+  });
+});
+
+describe("attachmentSize", () => {
+  it("weighs a photo by its decoded bytes and a document by its UTF-8 text", () => {
+    const photo = { path: "a.png", content: "", dataUri: `data:image/png;base64,${"A".repeat(4000)}` };
+    expect(attachmentSize(photo)).toBe("3 KB");
+    expect(attachmentSize({ path: "n.txt", content: "two\nlines" })).toBe("9 B");
+    expect(attachmentSize({ path: "é.txt", content: "é".repeat(600) })).toBe("1 KB");
+    expect(attachmentSize({ path: "big.csv", content: "x".repeat(2_400_000) })).toBe("2.4 MB");
   });
 });
