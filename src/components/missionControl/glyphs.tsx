@@ -9,6 +9,7 @@ import { BRAND_LOGO_PATHS, BrandImage, KlideMark, ProviderLogo } from "../ai/ico
 import { ProviderModelMark, resolveModelLogo } from "../../modelIdentity";
 import type { ProviderId } from "../../agent/types";
 import type { RunKind, RunSource } from "../../runs";
+import { isDelegateId } from "../../delegates";
 import { Tooltip } from "../Tooltip";
 
 /* ────────────────────────────── brand + source marks ─────────────────────── */
@@ -136,9 +137,11 @@ export function SourceLogo({
   if (source === "omp") {
     return <OmpLogo size={size} />;
   }
-  // Copilot routes to several makers' models; the row is still Copilot's.
-  if (source === "copilot") {
-    return <ProviderLogo id="copilot" size={size} />;
+  // Every other Delegate (Amp, Cursor, Factory, Copilot, Hermes) wears its own
+  // mark — they route to several makers' models, but the row is still the
+  // CLI's. Without this they fell through to the anonymous spark.
+  if (source !== "opencode" && isDelegateId(source)) {
+    return <ProviderLogo id={source} size={size} />;
   }
   const path = BRAND_PATH[source];
   const color = "var(--fg-strong)";
@@ -270,6 +273,9 @@ export function ActionButton({
   );
 }
 
+// How much an action icon grows under the pointer.
+const HOVER_ZOOM = 1.45;
+
 // Icon-only action button — the detail-pane action bar reads as a tidy row of
 // glyphs (and provider logos) rather than a wall of text buttons. The label is
 // surfaced via tooltip + aria-label so it stays accessible.
@@ -311,26 +317,41 @@ export function IconActionButton({
           display: "grid",
           placeItems: "center",
           border: "none",
+          padding: 0,
           color: accent ? "var(--accent)" : "var(--fg-subtle)",
           background: "transparent",
           opacity: disabled ? 0.45 : 1,
           cursor: disabled ? "default" : "pointer",
-          transform: "scale(1)",
-          transformOrigin: "center bottom",
-          transition:
-            "transform 220ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms var(--ease-out)",
+          transition: "color 160ms var(--ease-out)",
         }}
         onMouseEnter={(e) => {
           if (disabled) return;
-          e.currentTarget.style.transform = "scale(1.45)";
+          const art = e.currentTarget.firstElementChild as HTMLElement | null;
+          if (art) art.style.transform = "scale(1)";
           if (!accent) e.currentTarget.style.color = "var(--fg)";
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.transform = "scale(1)";
+          const art = e.currentTarget.firstElementChild as HTMLElement | null;
+          if (art) art.style.transform = `scale(${1 / HOVER_ZOOM})`;
           if (!accent) e.currentTarget.style.color = "var(--fg-subtle)";
         }}
       >
-        {icon}
+        {/* Drawn at hover size and shrunk at rest: a transform scales the
+            bitmap WebKit already painted, so growing a 16px logo on hover
+            blurred it. Shrinking a large paint stays sharp, and the hover
+            state is the icon at its native resolution. */}
+        <span
+          style={{
+            display: "grid",
+            placeItems: "center",
+            zoom: HOVER_ZOOM,
+            transform: `scale(${1 / HOVER_ZOOM})`,
+            transformOrigin: "center bottom",
+            transition: "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+          }}
+        >
+          {icon}
+        </span>
       </button>
     </Tooltip>
   );
