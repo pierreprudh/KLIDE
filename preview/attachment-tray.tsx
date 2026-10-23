@@ -21,9 +21,9 @@ const attachments = [
 function Preview() {
   return (
     <main style={{ width: 620, margin: "24px auto", fontFamily: "var(--font-ui)", color: "var(--fg)" }}>
-      {/* Inside a box shaped like the composer, so the card's fill is judged
+      {/* Inside the composer's own surface, so the card's fill is judged
           against the surface it actually sits on. */}
-      <div style={{ border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", paddingBottom: 40 }}>
+      <div className="klide-composer-surface" style={{ paddingBottom: 40 }}>
         <AttachmentTray attachments={attachments} onRemove={() => {}} />
       </div>
     </main>

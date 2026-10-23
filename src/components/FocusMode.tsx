@@ -2053,7 +2053,7 @@ function FocusComposer({
         <MentionMenu subagents={mentionSubagents} files={mentionPaths} activeIdx={mentionIdx} onHover={setMentionIdx} onAccept={acceptMention} />
       )}
       <div
-        className="klide-focus-composer"
+        className="klide-composer-surface klide-focus-composer"
         data-focused={focused || undefined}
         data-dropping={dropping || undefined}
         onDragOver={(e) => {

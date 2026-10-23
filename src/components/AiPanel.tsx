@@ -4932,19 +4932,16 @@ This user request requires workspace inspection. Before answering, you MUST call
         )}
         {/* The run's changed-files outcome lives in the final answer's
             MessageActions row (revert slot) — no standalone strip here. */}
-        {/* In Focus the composer wears the start stage's surface, so starting a
-            conversation doesn't swap the box you were typing in for another. */}
-        <div
-          className={variant === "focus" ? "klide-conversation-composer" : undefined}
-          data-focused={variant === "focus" ? composerFocused : undefined}
-          style={variant === "focus" ? undefined : { position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
+        {/* The one composer surface (tokens.css) — the same box as Focus's
+            start stage, so starting a conversation never swaps it for another. */}
+        <div className="klide-composer-surface" data-focused={composerFocused}>
           {slash !== null && (
             <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} ledes={ledes} />
           )}
           {mention !== null && (
             <MentionMenu subagents={subagentMatches} files={mentionMatches} activeIdx={mentionIdx} onHover={setMentionIdx} onAccept={acceptMentionAt} />
           )}
-          <div style={{ overflow: "hidden", borderRadius: variant === "focus" ? 15 : "var(--radius-lg)" }}>
+          <div style={{ overflow: "hidden", borderRadius: 15 }}>
           <input
             ref={filePickerRef}
             type="file"
