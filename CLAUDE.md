@@ -60,6 +60,7 @@ Klide/
 │   ├── MISSION_ORCHESTRATION.md   Agent dispatch of approved tasks, exact-attempt inspection, and limits
 │   ├── MEMORY_ENGINE.md           All-in-one memory architecture + PR sequence
 │   ├── MODEL_ROUTING.md           Auto model routing — the rule, the wire, what it deliberately is not
+│   ├── SOFTWARE_FACTORY.md        The factory that builds Klide (PR reviewer) + Klide as its control panel
 │   └── (local only)               adr/, delegate replay, competitors, website plans
 ├── preview/                   Throwaway browser harnesses for single surfaces (vite, no Tauri)
 ├── schemas/                   Versioned JSON Schemas for durable/wire contracts

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "autoupdate": false,
+  "permission": {
+    "edit": "deny",
+    "bash": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": "deny",
+    "task": "deny",
+    "question": "deny"
+  },
+  "agent": {
+    "review": {
+      "mode": "primary",
+      "description": "Read-only Klide PR reviewer",
+      "steps": 40
+    }
+  }
+}
