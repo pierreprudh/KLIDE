@@ -221,7 +221,7 @@ Klide/
 │   │       ├── panelHost.ts       App↔AiPanel contract — identity, handoffs, resume policy
 │   │       ├── workspaceFiles.ts  Bounded file walk for @mentions
 │   │       ├── summarize.ts       Summarize-and-handoff + auto-skill detect
-│   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, refuse binaries (AttachmentTray.tsx: staged strip)
+│   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, PDF → its text per page (Rust), refuse binaries (AttachmentTray.tsx: staged strip)
 │   │       ├── sight.ts           The composer's half of eyes for a blind model — may a photo be dropped, what the hint says, who looked
 │   │       ├── conversationNaming.ts When a run asks for a name — first turn, nobody named it, not a subagent — and the pinned pair
 │   │       ├── toolRuns.ts        Everything before the answer folds to one line — "Worked for 19s ›" over a hairline, opened for the rows
@@ -305,6 +305,7 @@ Klide/
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
     │   ├── memory.rs             Project Memory schema, Markdown I/O, and local retrieval
     │   ├── spreadsheet.rs        File persistence for the sheet surface — containment, size, conflict checks
+    │   ├── pdf_text.rs           A dropped PDF's text, page by page — refuses scans and passwords by name
     │   ├── documents.rs          Open / Reveal / Refuse — what may leave the app, by kind, mode bits and header
     │   ├── run_documents.rs      Recover read-only document references from older transcripts
     │   ├── preview.rs            A picture of what Klide can't render (deck, PDF) via macOS `qlmanage`

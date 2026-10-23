@@ -155,6 +155,7 @@ import { readHarnessSourceSupport } from "../ipc/hermes";
 import { conversationMark } from "../modelIdentity";
 import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
+import { extractPdfText } from "../ipc/pdf";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
@@ -1917,6 +1918,7 @@ export function AiPanel({
       allowPhotos: photoGate.allowPhotos,
       alreadyStaged: pendingAttachments.length,
       alreadyImageBytes: stagedImageBytes(pendingAttachments),
+      readPdf: extractPdfText,
     });
     for (const notice of notices) notify(notice.text, { tone: notice.tone });
     if (attachments.length) setPendingAttachments((prev) => [...prev, ...attachments]);

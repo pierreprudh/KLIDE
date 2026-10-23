@@ -37,6 +37,7 @@ mod memory;
 mod missions;
 mod model_capabilities;
 mod models;
+mod pdf_text;
 mod preview;
 mod spreadsheet;
 mod run_documents;
@@ -618,6 +619,19 @@ async fn preview_file(workspace_root: String, path: String, size: Option<u32>) -
     .await
 }
 
+/// The text of a PDF dropped on a composer, one string per page (see
+/// `pdf_text.rs`). The bytes arrive as the raw invoke body — a dropped `File`
+/// has no path, and a JSON array of a few million numbers is no way to carry
+/// them.
+#[tauri::command]
+async fn pdf_extract_text(request: tauri::ipc::Request<'_>) -> Result<Vec<String>, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected the PDF's bytes.".to_string());
+    };
+    let bytes = bytes.clone();
+    blocking::run(move || pdf_text::extract_pages(&bytes)).await
+}
+
 /// Hand a file to the application the machine already opens it with — when
 /// `documents.rs` says it is a document. A folder or an unknown kind is shown
 /// in Finder instead, and anything macOS would execute is refused: the click
@@ -1144,6 +1158,7 @@ pub fn run() {
             delete_entry,
             open_entry,
             preview_file,
+            pdf_extract_text,
             reveal_entry,
             conversation_store::conversations_load,
             conversation_store::conversations_write,

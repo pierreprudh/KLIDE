@@ -8,14 +8,20 @@
 //  · a **document** becomes a text attachment — the same `{ path, content }`
 //    shape an `@mention` produces — so it works on every model, blind or not.
 //
-// Anything else (a PDF, a zip, a binary) is refused by name rather than
-// attached as garbage: Klide has no document wire yet, and folding raw bytes
-// into the prompt would read as support that isn't there.
+// A **PDF** is a document whose text has to be read out first: Rust extracts
+// it page by page (`pdf_text.rs`) and it stages as text like any other. Its
+// layout and pictures don't come along, and a scan with no text layer is
+// refused by name.
+//
+// Anything else (a zip, a binary) is refused by name rather than attached as
+// garbage: folding raw bytes into the prompt would read as support that isn't
+// there.
 //
 // Kept free of React, Tauri and the toast bus so both composers — the AI
 // panel's and Focus's start stage — share one set of rules, and the rules
-// stay testable.
+// stay testable. The PDF reader is handed in for the same reason.
 import type { AgentAttachment as Attachment } from "../../agent/types";
+import { errMessage } from "../../errors";
 
 /** Per-image ceiling. The harness clamps to the same number at run ingress
  *  (`run_core::clamp_attachments`); this one exists so a composer can refuse a
@@ -29,6 +35,13 @@ export const MAX_TOTAL_IMAGE_BYTES = 12_000_000;
 export const MAX_DOC_BYTES = 2_000_000;
 /** Same text budget an `@mention` attachment gets. */
 export const MAX_DOC_CHARS = 12_000;
+/** Per-PDF ceiling, before extraction — a PDF's pictures weigh far more than
+ *  its words. Rust holds the same line (`pdf_text::MAX_PDF_BYTES`). */
+export const MAX_PDF_BYTES = 25_000_000;
+/** A PDF's text budget. Larger than a text document's because a PDF is
+ *  usually the whole point of the turn — a paper, a spec, an invoice — and
+ *  about ten pages of prose fit, roughly 10k tokens. Cut at a page boundary. */
+export const MAX_PDF_CHARS = 40_000;
 /** How many files one drop/paste may stage at once. */
 export const MAX_FILES_PER_DROP = 8;
 /** How many attachments may sit staged on a composer. */
@@ -84,10 +97,16 @@ export const ATTACH_ACCEPT = [
   ...FORWARDABLE_IMAGE_MIMES,
   "text/*",
   ...[...TEXT_EXTENSIONS].map((ext) => `.${ext}`),
+  "application/pdf",
+  ".pdf",
 ].join(",");
 
 /** The file kinds a composer can stage. `"other"` is refused. */
-export type AttachmentKind = "photo" | "document" | "other";
+export type AttachmentKind = "photo" | "document" | "pdf" | "other";
+
+/** Reads a PDF's text out, one string per page — `extractPdfText` in
+ *  `src/ipc/pdf.ts`. Rejects with a sentence a person can read. */
+export type PdfReader = (bytes: ArrayBuffer) => Promise<string[]>;
 
 /** What a composer should say out loud after a staging attempt. Returned
  *  rather than raised so the caller owns the notification surface. */
@@ -116,6 +135,7 @@ function extensionOf(name: string): string {
 
 export function classifyFile(file: Pick<StageableFile, "name" | "type">): AttachmentKind {
   if (FORWARDABLE_IMAGE_MIMES.has(file.type)) return "photo";
+  if (file.type === "application/pdf" || (!file.type && extensionOf(file.name) === "pdf")) return "pdf";
   if (file.type.startsWith("text/") || TEXT_MIMES.has(file.type)) return "document";
   if (!file.type && TEXT_EXTENSIONS.has(extensionOf(file.name))) return "document";
   return "other";
@@ -178,16 +198,42 @@ export function attachmentSize(a: Attachment): string {
   return bytes < 1000 ? `${bytes} B` : humanSize(bytes);
 }
 
+/** A PDF's pages as one text attachment's content, each under a `[page N]`
+ *  line so the model can say where something is. Past `budget`, whole pages
+ *  are dropped and the cut is said out loud; a first page longer than the
+ *  whole budget is sliced, since some text beats none. */
+export function pdfContent(pages: readonly string[], budget = MAX_PDF_CHARS): string {
+  let out = "";
+  let kept = 0;
+  for (const [i, page] of pages.entries()) {
+    const block = `${i === 0 ? "" : "\n\n"}[page ${i + 1}]\n${page}`;
+    if (out.length + block.length > budget) {
+      if (kept === 0) {
+        out = block.slice(0, budget);
+        kept = 1;
+      }
+      break;
+    }
+    out += block;
+    kept += 1;
+  }
+  if (kept < pages.length) {
+    out += `\n…(truncated after page ${kept} of ${pages.length})`;
+  }
+  return out;
+}
+
 /**
  * Turn dropped/pasted files into staged attachments.
  *
  * `allowPhotos` is the vision gate: when the chosen model is blind, a photo is
  * refused by name instead of being sent somewhere it can't be seen. Documents
- * are never gated — text reaches every model.
+ * are never gated — text reaches every model. `readPdf` is how a PDF's text
+ * gets read; without one, a PDF is refused like any kind Klide can't read.
  */
 export async function stageFiles(
   files: readonly StageableFile[],
-  opts: { allowPhotos: boolean; alreadyStaged?: number; alreadyImageBytes?: number },
+  opts: { allowPhotos: boolean; alreadyStaged?: number; alreadyImageBytes?: number; readPdf?: PdfReader },
 ): Promise<StagingResult> {
   const notices: StagingNotice[] = [];
   const room = Math.max(0, MAX_STAGED - (opts.alreadyStaged ?? 0));
@@ -204,7 +250,7 @@ export async function stageFiles(
   for (const file of considered) {
     const name = file.name || "attachment";
     const kind = classifyFile(file);
-    if (kind === "other") {
+    if (kind === "other" || (kind === "pdf" && !opts.readPdf)) {
       notices.push({
         text: file.type.startsWith("image/")
           ? `${name} isn't a format the models accept — convert it to PNG, JPEG, GIF or WebP first.`
@@ -217,7 +263,7 @@ export async function stageFiles(
       notices.push({ text: `This model can't see images — ${name} wasn't attached.`, tone: "warn" });
       continue;
     }
-    const limit = kind === "photo" ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
+    const limit = kind === "photo" ? MAX_IMAGE_BYTES : kind === "pdf" ? MAX_PDF_BYTES : MAX_DOC_BYTES;
     if (file.size > limit) {
       notices.push({ text: `${name} is too large to attach (max ${humanSize(limit)}).`, tone: "warn" });
       continue;
@@ -235,6 +281,16 @@ export async function stageFiles(
         const dataUri = `data:${mime};base64,${base64Of(await file.arrayBuffer())}`;
         staged.push({ path: name, content: "", mime, dataUri });
         imageBytes += file.size;
+      } else if (kind === "pdf") {
+        let pages: string[];
+        try {
+          pages = await opts.readPdf!(await file.arrayBuffer());
+        } catch (err) {
+          // The reader's refusal is already a sentence (a scan, a password).
+          notices.push({ text: `${name}: ${errMessage(err)}`, tone: "warn" });
+          continue;
+        }
+        staged.push({ path: name, content: pdfContent(pages) });
       } else {
         const full = await file.text();
         let content = full;

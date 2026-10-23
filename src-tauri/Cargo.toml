@@ -57,6 +57,7 @@ syn = { version = "2", features = ["full"] }
 tiny_http = "0.12"
 ironcalc = "=0.8.3"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
+pdf-extract = "0.12.1"
 
 # Process-group signals for commands a Run starts (`agent/process.rs`): a
 # direct kill(2) instead of forking `/bin/kill`, and a signal-0 liveness probe.
