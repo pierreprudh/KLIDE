@@ -121,18 +121,28 @@ describe("stageFiles", () => {
   });
 
   it("stages a PDF as its text, page by page, on every model", async () => {
-    const seen: number[] = [];
+    const seen: string[] = [];
     const { attachments, notices } = await stageFiles([fake("spec.pdf", "application/pdf", "%PDF-1.4")], {
       allowPhotos: false,
-      readPdf: async (bytes) => {
-        seen.push(bytes.byteLength);
-        return ["Goals", "Non-goals"];
+      readPdf: async (bytes, name) => {
+        seen.push(`${name}:${bytes.byteLength}`);
+        return { pages: ["Goals", "Non-goals"], stored: "ab12/spec.pdf" };
       },
     });
     expect(notices).toEqual([]);
-    expect(seen).toEqual([8]);
-    expect(attachments).toEqual([{ path: "spec.pdf", content: "[page 1]\nGoals\n\n[page 2]\nNon-goals" }]);
+    expect(seen).toEqual(["spec.pdf:8"]);
+    expect(attachments).toEqual([
+      { path: "spec.pdf", content: "[page 1]\nGoals\n\n[page 2]\nNon-goals", stored: "ab12/spec.pdf" },
+    ]);
     expect(isPhotoAttachment(attachments[0])).toBe(false);
+  });
+
+  it("still stages the text when the original couldn't be kept", async () => {
+    const { attachments } = await stageFiles([fake("spec.pdf", "application/pdf", "%PDF")], {
+      allowPhotos: true,
+      readPdf: async () => ({ pages: ["Goals"], stored: null }),
+    });
+    expect(attachments).toEqual([{ path: "spec.pdf", content: "[page 1]\nGoals" }]);
   });
 
   it("says why a PDF couldn't be read, in the reader's words", async () => {
@@ -158,7 +168,7 @@ describe("stageFiles", () => {
     let read = false;
     const { attachments, notices } = await stageFiles(
       [fake("atlas.pdf", "application/pdf", "%PDF", MAX_PDF_BYTES + 1)],
-      { allowPhotos: true, readPdf: async () => ((read = true), ["x"]) },
+      { allowPhotos: true, readPdf: async () => ((read = true), { pages: ["x"] }) },
     );
     expect(read).toBe(false);
     expect(attachments).toEqual([]);

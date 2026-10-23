@@ -43,6 +43,11 @@ export type AgentAttachment = {
    *  those eyes. `content` then holds the description and the attachment
    *  reaches the model as text; `dataUri` stays so the thread still draws it. */
   seenBy?: string;
+  /** For a dropped PDF: where Klide kept the original, `<sha256>/<name>.pdf`
+   *  under the app's `attachments/` folder (`attachment_store.rs`). The model
+   *  reads `content`, the extracted text; this only lets the thread reopen
+   *  the file (`openStoredAttachment`). */
+  stored?: string;
 };
 
 export type AgentContextPayload = {

@@ -104,9 +104,13 @@ export const ATTACH_ACCEPT = [
 /** The file kinds a composer can stage. `"other"` is refused. */
 export type AttachmentKind = "photo" | "document" | "pdf" | "other";
 
-/** Reads a PDF's text out, one string per page — `extractPdfText` in
- *  `src/ipc/pdf.ts`. Rejects with a sentence a person can read. */
-export type PdfReader = (bytes: ArrayBuffer) => Promise<string[]>;
+/** Reads a PDF's text out, one string per page, and keeps the original —
+ *  `extractPdfText` in `src/ipc/pdf.ts`. Rejects with a sentence a person can
+ *  read. */
+export type PdfReader = (
+  bytes: ArrayBuffer,
+  name: string,
+) => Promise<{ pages: string[]; stored?: string | null }>;
 
 /** What a composer should say out loud after a staging attempt. Returned
  *  rather than raised so the caller owns the notification surface. */
@@ -282,15 +286,17 @@ export async function stageFiles(
         staged.push({ path: name, content: "", mime, dataUri });
         imageBytes += file.size;
       } else if (kind === "pdf") {
-        let pages: string[];
+        let read: Awaited<ReturnType<PdfReader>>;
         try {
-          pages = await opts.readPdf!(await file.arrayBuffer());
+          read = await opts.readPdf!(await file.arrayBuffer(), name);
         } catch (err) {
           // The reader's refusal is already a sentence (a scan, a password).
           notices.push({ text: `${name}: ${errMessage(err)}`, tone: "warn" });
           continue;
         }
-        staged.push({ path: name, content: pdfContent(pages) });
+        const doc: Attachment = { path: name, content: pdfContent(read.pages) };
+        if (read.stored) doc.stored = read.stored;
+        staged.push(doc);
       } else {
         const full = await file.text();
         let content = full;

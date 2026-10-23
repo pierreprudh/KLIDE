@@ -577,6 +577,7 @@ mod tests {
             mime: Some("image/png".into()),
             data_uri: Some("data:image/png;base64,AAAA".into()),
             seen_by: None,
+            stored: None,
         }
     }
 
@@ -587,6 +588,7 @@ mod tests {
             mime: None,
             data_uri: None,
             seen_by: None,
+            stored: None,
         }
     }
 
