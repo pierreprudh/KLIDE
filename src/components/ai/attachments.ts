@@ -167,6 +167,17 @@ function humanSize(bytes: number): string {
     : `${Math.max(1, Math.round(bytes / 1000))} KB`;
 }
 
+/** What a staged attachment weighs, in the words the tray shows under its
+ *  name: a photo by its decoded bytes, a document by the UTF-8 text it will
+ *  send. Under a kilobyte it says bytes, so a two-line note isn't "1 KB". */
+export function attachmentSize(a: Attachment): string {
+  const uri = a.dataUri ?? "";
+  const bytes = uri
+    ? Math.floor(((uri.length - uri.indexOf(",") - 1) * 3) / 4)
+    : new TextEncoder().encode(a.content).length;
+  return bytes < 1000 ? `${bytes} B` : humanSize(bytes);
+}
+
 /**
  * Turn dropped/pasted files into staged attachments.
  *
