@@ -59,6 +59,11 @@ export const AUTO_MODEL = "auto";
  *  stays byte-identical for the cache. Mirrored by `ROUTED_MODEL_TOKEN` in
  *  `agent/routing.rs`. */
 export const ROUTED_MODEL_TOKEN = "{{klide:routed-model}}";
+/** OpenRouter's own router — what an Auto Run is sent to when it hands the
+ *  choice among the user's OpenRouter stars to OpenRouter. Not a model: the
+ *  `route_locked` event names the one that answered. Mirrors
+ *  `OPENROUTER_ROUTER` in `agent/routing.rs`. */
+export const OPENROUTER_ROUTER = "openrouter/auto";
 
 export function isAutoProvider(id: string): boolean {
   return id === AUTO_PROVIDER;

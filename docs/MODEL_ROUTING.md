@@ -143,6 +143,34 @@ same thing from the other side — routing happens "along natural cache
 boundaries" because mid-session switching "has shown increased cost without
 ample improvements in quality."
 
+## OpenRouter's router decides among your OpenRouter stars
+
+Price and names are poor stand-ins for how good a model is: DeepSeek V4 Flash
+blends to $0.11/M and performs, for a lot of work, like Opus at $10. Klide has
+no way to measure that on a bench of one. OpenRouter does: `openrouter/auto` is
+a classifier trained on their traffic, and it accepts a list to choose from
+(`plugins: [{ id: "auto-router", allowed_models: [...] }]`). So:
+
+- **When** a tool job (Plan, Goal) has at least two gate-passing OpenRouter
+  stars (`ROUTER_MIN_CHOICES`), Auto sends it to `openrouter/auto` restricted
+  to them (`router_among`). Chat keeps the walk — it goes local and free.
+  Stars on other Providers (Anthropic direct, Ollama, self-hosted) are not in
+  the list; the router can only pick OpenRouter models.
+- **The list** is every OpenRouter star that passes the gate, in rank order.
+  A `~vendor/model-latest` alias is left out with a reason: the router
+  refuses aliases ("No models match"). `RouteResolved` records the list as
+  `pool`.
+- **The lock.** Every streamed chunk names the model that answered. After the
+  first response the loop sends the rest of the Run to that model directly,
+  emits `RouteLocked`, and `read_run_origin` returns that pair — so the next
+  turn neither re-routes nor loses the prompt cache. An origin that never
+  locked (the first request failed) is routed again, never sent to the router
+  unrestricted. The panel restamps the turn's rows and the thread's origin
+  from `route_locked`.
+
+Dogfood probe, restricted to five stars: "say hi" → DeepSeek V4 Flash, a
+proof-and-design prompt → Opus 4.8, a tool call → GLM 5.2.
+
 ## What the Transcript records
 
 `RunStarted` already names the provider and model a run is about to use, so it
@@ -235,11 +263,8 @@ Four things every router above agrees on, all of which this follows:
 
 In the order they earn their place:
 
-1. **Lock `openrouter/auto` to its answer.** OpenRouter names the model
-   that actually answered in the response's `model` field. Recording that
-   as the Run's origin would lock the conversation to the concrete model
-   from turn two on, keeping the prompt cache; today it locks to the router
-   slug and OpenRouter may re-route each turn.
+1. ~~**Lock `openrouter/auto` to its answer.**~~ Done (2026-10-23) with the
+   router section above: `RouteLocked` after the first response.
 2. **Privacy as a gate.** A `local-only` policy that rules out every hosted
    Provider. The gate has the slot; the setting does not exist yet.
 3. **Stars in Rust.** Today the renderer sends them on the request, so a

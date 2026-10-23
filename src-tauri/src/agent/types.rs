@@ -229,6 +229,9 @@ pub struct PreferredModel {
 pub struct RouteDecision {
     pub reason: String,
     pub skipped: Vec<String>,
+    /// OpenRouter's router only: the models it may choose from, sent as
+    /// `allowed_models` until the first answer names one (`RouteLocked`).
+    pub pool: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -578,6 +581,7 @@ impl AgentEvent {
             | AgentEvent::ObserverCompleted { ts, .. }
             | AgentEvent::SteeringInjected { ts, .. }
             | AgentEvent::RouteResolved { ts, .. }
+            | AgentEvent::RouteLocked { ts, .. }
             | AgentEvent::SightStarted { ts, .. }
             | AgentEvent::SightResolved { ts, .. } => *ts,
         }
@@ -870,6 +874,20 @@ pub enum AgentEvent {
         model: String,
         reason: String,
         skipped: Vec<String>,
+        /// The models OpenRouter's router may choose from, when the pick is
+        /// that router (`routing::OPENROUTER_ROUTER`). Empty otherwise.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pool: Vec<String>,
+        ts: i64,
+    },
+    /// OpenRouter's router answered with this model. The rest of the Run is
+    /// sent to it directly, and the conversation's origin is this pair, not
+    /// the router — a continuation stays on the model that answered, and its
+    /// prompt cache with it. Emitted once, after the first response.
+    RouteLocked {
+        run_id: String,
+        provider: String,
+        model: String,
         ts: i64,
     },
     /// The turn carries photos the run's own model cannot see, and this pair

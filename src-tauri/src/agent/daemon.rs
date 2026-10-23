@@ -385,6 +385,7 @@ mod tests {
                 self.started.notify_one();
                 self.finish.notified().await;
                 Ok(AiChatResponse {
+                    answered_model: None,
                     content: "Saved while away".into(),
                     thinking: None,
                     tool_calls: vec![],

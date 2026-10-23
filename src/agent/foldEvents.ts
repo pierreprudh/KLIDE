@@ -21,6 +21,7 @@ import type {
 import type { Msg } from "../components/ai/types";
 import type { RunMessage, RunToolCall } from "../runs";
 import { estimateTokens } from "../components/ai/utils";
+import { OPENROUTER_ROUTER } from "./providers";
 import type { RunCompletion } from "./completion";
 
 /** The name the describing step wears in the thread. Not a Tool the model
@@ -375,6 +376,22 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         return { changed: [...interrupted, open.idx] };
       }
       return { changed: interrupted };
+    }
+
+    // OpenRouter's router answered. The attempt's rows were stamped with the
+    // router at `run_started`; they belong to the model that answered.
+    if (event.type === "route_locked") {
+      dispatch = { provider: event.provider, model: event.model };
+      const changed: number[] = [];
+      for (let i = attemptStart; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.kind === "assistant" && row.model === OPENROUTER_ROUTER) {
+          row.provider = event.provider;
+          row.model = event.model;
+          changed.push(i);
+        }
+      }
+      return { changed };
     }
 
     if (event.type === "user_message") {

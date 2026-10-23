@@ -366,6 +366,7 @@ impl StreamingProvider for OllamaAdapter {
                 Some(self.usage)
             },
             stop_reason: self.stop_reason,
+            answered_model: None,
         }
     }
 }
@@ -603,12 +604,17 @@ struct OpenAiAdapter {
     /// `OpenAiConfig::send_attribution`.
     send_attribution: bool,
     model: String,
+    /// OpenRouter's router only: restrict its choice to these models.
+    allowed_models: Vec<String>,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: Option<String>,
     reasoning_effort: Option<String>,
     cache: OpenAiCache,
     usage: AiUsage,
+    /// The `model` the stream named — OpenRouter's router puts its choice
+    /// on every chunk.
+    answered_model: Option<String>,
 }
 
 /// What an OpenAI-wire request does for the provider's prompt cache. Most of
@@ -694,6 +700,9 @@ impl StreamingProvider for OpenAiAdapter {
         if let Some(key) = &self.cache.key {
             body["prompt_cache_key"] = serde_json::Value::String(key.clone());
         }
+        if !self.allowed_models.is_empty() {
+            body["plugins"] = serde_json::json!([{ "id": "auto-router", "allowed_models": self.allowed_models }]);
+        }
         if self.cache.breakpoints {
             if let Some(messages) = body["messages"].as_array_mut() {
                 mark_openai_breakpoints(messages);
@@ -748,6 +757,9 @@ impl StreamingProvider for OpenAiAdapter {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             return Ok(());
         };
+        if self.answered_model.is_none() {
+            self.answered_model = value.get("model").and_then(|m| m.as_str()).map(str::to_string);
+        }
         if let Some(error) = value.get("error") {
             let message = error
                 .get("message")
@@ -879,6 +891,7 @@ impl StreamingProvider for OpenAiAdapter {
             // Hosted providers report finish_reason too, but the
             // num_ctx-truncation warning this drives is Ollama-specific.
             stop_reason: None,
+            answered_model: self.answered_model.filter(|m| *m != self.model),
         }
     }
 }
@@ -945,6 +958,7 @@ pub(crate) async fn openai_compatible_chat(
     reasoning_effort: Option<String>,
     cache: OpenAiCache,
     model: String,
+    allowed_models: Vec<String>,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     on_chunk: &Channel<StreamChunk>,
@@ -963,6 +977,8 @@ pub(crate) async fn openai_compatible_chat(
         reasoning_effort,
         cache,
         usage: AiUsage::default(),
+        allowed_models,
+        answered_model: None,
     };
     stream_provider(adapter, on_chunk).await
 }
@@ -1731,6 +1747,7 @@ impl StreamingProvider for AnthropicAdapter {
             // `length` is the loop's word for "the provider hit its cap";
             // reported so its own cut-off handling applies here too.
             stop_reason: cut_off.then(|| "length".to_string()),
+            answered_model: None,
         }
     }
 }
@@ -2228,6 +2245,8 @@ mod tests {
         Vec<StreamChunk>,
     ) {
         let mut adapter = OpenAiAdapter {
+            allowed_models: Vec::new(),
+            answered_model: None,
             provider: "openai".to_string(),
             chat_url: "https://api.openai.com/v1/chat/completions".to_string(),
             include_tools: true,
@@ -2309,6 +2328,8 @@ mod tests {
     #[test]
     fn openai_request_body_includes_reasoning_effort_when_configured() {
         let adapter = OpenAiAdapter {
+            allowed_models: Vec::new(),
+            answered_model: None,
             provider: "openai".to_string(),
             chat_url: "https://api.openai.com/v1/chat/completions".to_string(),
             include_tools: true,
@@ -2332,11 +2353,79 @@ mod tests {
         assert_eq!(value["reasoning_effort"], "high");
     }
 
+    #[test]
+    fn openrouters_router_gets_the_pool_and_says_which_model_answered() {
+        let mut adapter = OpenAiAdapter {
+            allowed_models: vec!["deepseek/deepseek-v4-flash".into(), "anthropic/claude-opus-4.8".into()],
+            answered_model: None,
+            provider: "openrouter".to_string(),
+            chat_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+            include_tools: true,
+            include_usage_in_stream: true,
+            include_cost_accounting: true,
+            send_attribution: true,
+            model: "openrouter/auto".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            key: Some("sk-test".to_string()),
+            reasoning_effort: None,
+            usage: AiUsage::default(),
+            cache: Default::default(),
+        };
+        let request = adapter.build_request(&reqwest::Client::new()).unwrap().build().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(request.body().and_then(|b| b.as_bytes()).unwrap()).unwrap();
+        assert_eq!(
+            value["plugins"],
+            serde_json::json!([{ "id": "auto-router", "allowed_models": ["deepseek/deepseek-v4-flash", "anthropic/claude-opus-4.8"] }])
+        );
+        // Every chunk names the model the router chose — the shape OpenRouter streams.
+        let (mut content, mut thinking, mut tools) = (String::new(), String::new(), Vec::new());
+        for line in [
+            r#"data: {"model":"deepseek/deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"Hi"}}]}"#,
+            r#"data: {"model":"deepseek/deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ] {
+            adapter.parse_line(line, &mut content, &mut thinking, &mut tools, &|_| {}).unwrap();
+        }
+        let response = adapter.finalize_response(content, thinking, tools);
+        assert_eq!(response.answered_model.as_deref(), Some("deepseek/deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn a_model_that_answers_as_itself_names_no_other() {
+        let mut adapter = OpenAiAdapter {
+            allowed_models: Vec::new(),
+            answered_model: None,
+            provider: "openrouter".to_string(),
+            chat_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+            include_tools: true,
+            include_usage_in_stream: true,
+            include_cost_accounting: true,
+            send_attribution: true,
+            model: "z-ai/glm-5.2".to_string(),
+            messages: vec![],
+            tools: None,
+            key: None,
+            reasoning_effort: None,
+            usage: AiUsage::default(),
+            cache: Default::default(),
+        };
+        let request = adapter.build_request(&reqwest::Client::new()).unwrap().build().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(request.body().and_then(|b| b.as_bytes()).unwrap()).unwrap();
+        assert!(value.get("plugins").is_none(), "no pool, no plugin");
+        let (mut content, mut thinking, mut tools) = (String::new(), String::new(), Vec::new());
+        adapter
+            .parse_line(r#"data: {"model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"content":"ok"}}]}"#, &mut content, &mut thinking, &mut tools, &|_| {})
+            .unwrap();
+        assert_eq!(adapter.finalize_response(content, thinking, tools).answered_model, None);
+    }
+
     fn build_flagged_request(
         include_cost_accounting: bool,
         send_attribution: bool,
     ) -> reqwest::Request {
         let adapter = OpenAiAdapter {
+            allowed_models: Vec::new(),
+            answered_model: None,
             provider: "any-openai-wire".to_string(),
             chat_url: "https://example.test/v1/chat/completions".to_string(),
             include_tools: true,
@@ -2503,6 +2592,8 @@ mod tests {
     #[test]
     fn openai_surfaces_mid_stream_error() {
         let mut adapter = OpenAiAdapter {
+            allowed_models: Vec::new(),
+            answered_model: None,
             provider: "mistral".to_string(),
             chat_url: "https://api.mistral.ai/v1/chat/completions".to_string(),
             include_tools: true,
@@ -3080,6 +3171,8 @@ mod tests {
     fn openai_wire_reads_the_cached_share() {
         let parse = |provider: &str, line: &str| {
             let mut adapter = OpenAiAdapter {
+                allowed_models: Vec::new(),
+                answered_model: None,
                 provider: provider.to_string(),
                 chat_url: String::new(),
                 include_tools: true,

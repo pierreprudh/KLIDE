@@ -439,6 +439,7 @@ async fn ai_chat(
         providers::ProviderTurn {
             provider,
             model,
+            allowed_models: Vec::new(),
             messages,
             tools,
             workspace_root,
