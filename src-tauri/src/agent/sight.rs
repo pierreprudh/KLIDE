@@ -294,6 +294,7 @@ impl Describer for LiveEyes {
         let turn = providers::ProviderTurn {
             provider: eyes.provider.clone(),
             model: eyes.model.clone(),
+            allowed_models: Vec::new(),
             messages,
             tools: None,
             workspace_root: workspace_root.map(str::to_string),

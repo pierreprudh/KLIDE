@@ -8,6 +8,7 @@ import {
   restoreConversationSession,
   snapshotConversationSession,
   type ConversationSession,
+  type ConversationSessionAction,
 } from "./conversationSession";
 import type { PanelSession } from "./storedConversations";
 
@@ -595,6 +596,20 @@ describe("a thread records the Provider that produced it, not the picker", () =>
       { type: "origin-resolved", provider: "openrouter", model: "moonshotai/kimi-k2.7-code" },
     );
     expect(again.originProvider).toBe("openrouter");
+  });
+
+  it("a thread on OpenRouter's router is filed under the model that answered", () => {
+    const routed = [
+      { type: "run-started", provider: "auto", model: "auto" },
+      { type: "origin-resolved", provider: "openrouter", model: "openrouter/auto" },
+      { type: "origin-resolved", provider: "openrouter", model: "deepseek/deepseek-v4-flash" },
+      // The next turn's run_started names the locked model; nothing moves.
+      { type: "origin-resolved", provider: "openrouter", model: "deepseek/deepseek-v4-flash" },
+    ].reduce(
+      (s, a) => conversationSessionReducer(s, a as ConversationSessionAction),
+      session({ provider: "auto", model: "auto" }),
+    );
+    expect(snapshotConversationSession(routed, 100)?.model).toBe("deepseek/deepseek-v4-flash");
   });
 
   it("a thread's origin is not moved by a later Run's resolved pair", () => {

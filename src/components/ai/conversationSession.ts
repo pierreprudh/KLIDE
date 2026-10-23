@@ -1,5 +1,5 @@
 import type { ProviderId } from "../../agent/types";
-import { isAutoProvider, isDelegateProvider } from "../../agent/providers";
+import { isAutoProvider, isDelegateProvider, OPENROUTER_ROUTER } from "../../agent/providers";
 import { isForeignModelFor, switchModelForProvider } from "./rememberedModel";
 import type { Conversation, Msg } from "./types";
 import {
@@ -284,9 +284,11 @@ export function conversationSessionReducer(
         run: { active: true, activity: action.activity ?? null },
       };
     case "origin-resolved":
-      // Only fills an origin nobody stamped — an Auto thread's first Run.
+      // Only fills an origin nobody stamped — an Auto thread's first Run —
+      // or one that named OpenRouter's router, which is not a model: the
+      // thread began on whichever model it answered with (`route_locked`).
       // A thread that began elsewhere keeps the pair it began on.
-      return session.originProvider
+      return session.originProvider && session.originModel !== OPENROUTER_ROUTER
         ? session
         : { ...session, originProvider: action.provider, originModel: action.model };
     case "run-settled":

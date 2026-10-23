@@ -512,6 +512,7 @@ pub fn read_run_origin(runs_dir: &Path, run_id: &str) -> Result<Option<RunOrigin
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Unable to read transcript: {e}")),
     };
+    let mut origin: Option<RunOrigin> = None;
     for raw in std::io::BufReader::new(file)
         .lines()
         .take(ORIGIN_SCAN_LINES)
@@ -527,18 +528,24 @@ pub fn read_run_origin(runs_dir: &Path, run_id: &str) -> Result<Option<RunOrigin
         let Ok(row) = serde_json::from_str::<TranscriptLine>(&raw) else {
             continue;
         };
-        if let AgentEvent::RunStarted {
-            provider, model, ..
-        } = row.event
-        {
-            return Ok(Some(RunOrigin {
-                run_id: run_id.to_string(),
-                provider,
-                model,
-            }));
+        match row.event {
+            // OpenRouter's router is not a model: the thread began on
+            // whichever one it locked to, a few lines on.
+            AgentEvent::RunStarted { provider, model, .. } if origin.is_none() => {
+                if model != crate::agent::routing::OPENROUTER_ROUTER {
+                    return Ok(Some(RunOrigin { run_id: run_id.to_string(), provider, model }));
+                }
+                origin = Some(RunOrigin { run_id: run_id.to_string(), provider, model });
+            }
+            AgentEvent::RouteLocked { provider, model, .. } if origin.is_some() => {
+                return Ok(Some(RunOrigin { run_id: run_id.to_string(), provider, model }));
+            }
+            _ => {}
         }
     }
-    Ok(None)
+    // A router origin that never locked (its first request failed) is still
+    // the evidence there is; `route_auto` routes such a thread again.
+    Ok(origin)
 }
 
 pub fn list_summaries(

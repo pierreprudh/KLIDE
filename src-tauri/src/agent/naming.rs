@@ -180,6 +180,7 @@ pub async fn name(namer: &PreferredModel, first_message: &str, workspace_root: O
     let turn = providers::ProviderTurn {
         provider: namer.provider.clone(),
         model: namer.model.clone(),
+        allowed_models: Vec::new(),
         messages,
         tools: None,
         workspace_root,

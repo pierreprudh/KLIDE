@@ -144,6 +144,17 @@ describe("foldAgentEvents", () => {
       });
     });
 
+    it("stamps a turn on OpenRouter's router with the model that answered", () => {
+      const locked = { type: "route_locked", runId: RUN, provider: "openrouter", model: "deepseek/deepseek-v4-flash", ts: at() } as AgentEvent;
+      const rows = foldAgentEvents([
+        runStarted("openrouter", "openrouter/auto"),
+        userMessage("go"),
+        locked,
+        assistantMessage("done"),
+      ]);
+      expect(rows[1]).toMatchObject({ kind: "assistant", provider: "openrouter", model: "deepseek/deepseek-v4-flash" });
+    });
+
     it("leaves an earlier turn alone when the thread continues on another model", () => {
       const rows = foldAgentEvents([
         runStarted("openrouter", "deepseek/deepseek-v4-flash"),
