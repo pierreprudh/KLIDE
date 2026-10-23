@@ -145,9 +145,9 @@ impl Catalog {
                         "properties": {
                             "connector": { "type": "string", "enum": ids },
                             "tool": { "type": "string" },
-                            "arguments": { "type": "object", "description": "The tool's arguments, matching its schema." }
+                            "arguments": { "type": "object", "description": "The tool's arguments, matching its schema. Send `{}` for a tool that takes none." }
                         },
-                        "required": ["connector", "tool"]
+                        "required": ["connector", "tool", "arguments"]
                     }
                 }
             }),
@@ -260,6 +260,73 @@ fn first_line(text: &str) -> String {
     }
 }
 
+/// The target tool's own arguments, when a model left out `arguments` and put
+/// them beside `connector` and `tool` instead.
+fn stray_arguments(input: &Value) -> Value {
+    let stray = input
+        .as_object()
+        .map(|map| {
+            map.iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "connector" | "tool" | "arguments"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Value::Object(stray)
+}
+
+/// The fields the tool's schema requires that `arguments` doesn't carry. Only
+/// the top-level `required` list — enough to catch a call that sent nothing,
+/// while anything subtler stays the server's to judge.
+fn missing_required(schema: &Value, arguments: &Value) -> Vec<String> {
+    let required = schema.get("required").and_then(Value::as_array).cloned().unwrap_or_default();
+    required
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|key| arguments.get(*key).map_or(true, Value::is_null))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Answered without reaching the server: which fields are missing, what each
+/// one is, and the call written out whole. A server's own reply ("missing
+/// required parameter: method") names one field and no shape, and a small
+/// model repeats the same empty call against it until steering gives up.
+fn argument_hint(connector: &str, tool: &McpTool, arguments: &Value, missing: &[String]) -> String {
+    let properties = tool.input_schema.get("properties");
+    let lines: Vec<String> = missing
+        .iter()
+        .map(|key| {
+            let property = properties.and_then(|p| p.get(key));
+            let kind = property.and_then(|p| p.get("type")).and_then(Value::as_str).unwrap_or("value");
+            let options = property
+                .and_then(|p| p.get("enum"))
+                .and_then(Value::as_array)
+                .map(|values| {
+                    let names: Vec<&str> = values.iter().filter_map(Value::as_str).collect();
+                    format!(", one of: {}", names.join(", "))
+                })
+                .unwrap_or_default();
+            let about = property.and_then(|p| p.get("description")).and_then(Value::as_str).map(first_line);
+            match about {
+                Some(about) if !about.is_empty() => format!("- {key} ({kind}{options}): {about}"),
+                _ => format!("- {key} ({kind}{options})"),
+            }
+        })
+        .collect();
+    let mut example = arguments.as_object().cloned().unwrap_or_default();
+    for key in missing {
+        example.insert(key.clone(), Value::String(format!("<{key}>")));
+    }
+    let example = json!({ "connector": connector, "tool": tool.name, "arguments": example });
+    format!(
+        "Not sent: `{}` requires these inside `arguments`, and they are missing:\n{}\nCall {CONNECTOR_CALL} again with every required field filled in, shaped like:\n{}",
+        tool.name,
+        lines.join("\n"),
+        example
+    )
+}
+
 fn failed(content: String) -> ToolResult {
     ToolResult { ok: false, content, metadata: None }
 }
@@ -310,7 +377,7 @@ where
         })));
     };
     let arguments = match call.input.get("arguments") {
-        None | Some(Value::Null) => json!({}),
+        None | Some(Value::Null) => stray_arguments(&call.input),
         Some(Value::Object(map)) => Value::Object(map.clone()),
         // Small models sometimes send the arguments as a JSON string.
         Some(Value::String(raw)) => match serde_json::from_str::<Value>(raw) {
@@ -319,6 +386,10 @@ where
         },
         Some(_) => return Ok(ToolOutcome::Produced(failed("`arguments` must be an object.".to_string()))),
     };
+    let missing = missing_required(&t.input_schema, &arguments);
+    if !missing.is_empty() {
+        return Ok(ToolOutcome::Produced(failed(argument_hint(&connector, t, &arguments, &missing))));
+    }
     if t.read_only == Some(true) {
         return Ok(ToolOutcome::Produced(execute(connector, tool, arguments, workspace).await));
     }
@@ -451,6 +522,10 @@ mod tests {
     /// connector store, so a call that gets past the gate fails with "not
     /// enabled" — which is how these tests tell "ran" from "was stopped".
     async fn dispatch(input: Value, decision: Option<&str>) -> (ToolResult, Vec<AgentEvent>) {
+        dispatch_with(&github(), input, decision).await
+    }
+
+    async fn dispatch_with(catalog: &Catalog, input: Value, decision: Option<&str>) -> (ToolResult, Vec<AgentEvent>) {
         use super::super::test_support::*;
         use std::sync::{Arc, Mutex};
         let root = std::env::temp_dir().join(format!("klide-connector-gate-{}-{}", std::process::id(), super::super::transcripts::now_ms()));
@@ -467,9 +542,8 @@ mod tests {
             sink.lock().unwrap().push(event);
             Ok(())
         };
-        let catalog = github();
         let call = call(CONNECTOR_CALL, input);
-        let run = tokio::time::timeout(Duration::from_secs(15), process(&ctx, &call, &catalog, &mut emit));
+        let run = tokio::time::timeout(Duration::from_secs(15), process(&ctx, &call, catalog, &mut emit));
         let outcome = match decision {
             Some(decision) => tokio::join!(run, answer_permission(&sup, "connector-run", decision)).0,
             None => run.await,
@@ -515,6 +589,58 @@ mod tests {
         let (read, events) = dispatch(json!({ "connector": TEST_ID, "tool": "list_pull_requests" }), None).await;
         assert!(events.is_empty(), "a read-only tool asks nothing: {events:?}");
         assert!(read.content.contains("not enabled"), "{}", read.content);
+    }
+
+    fn pull_request_read() -> McpTool {
+        McpTool {
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "method": { "type": "string", "enum": ["get", "get_diff"], "description": "Action to specify what pull request data to read.\nPossible options: …" },
+                    "owner": { "type": "string" },
+                    "pullNumber": { "type": "number", "description": "Pull request number" }
+                },
+                "required": ["method", "owner", "pullNumber"]
+            }),
+            ..tool("pull_request_read", Some(true))
+        }
+    }
+
+    #[test]
+    fn a_call_missing_required_fields_names_each_one_and_the_whole_call() {
+        let t = pull_request_read();
+        let sent = json!({ "owner": "mattpocock", "pullNumber": null });
+        let missing = missing_required(&t.input_schema, &sent);
+        assert_eq!(missing, ["method", "pullNumber"]);
+        let hint = argument_hint("github", &t, &sent, &missing);
+        assert!(hint.contains("- method (string, one of: get, get_diff): Action to specify what pull request data to read."), "{hint}");
+        assert!(hint.contains("- pullNumber (number): Pull request number"), "{hint}");
+        assert!(!hint.contains("- owner"), "{hint}");
+        assert!(hint.contains(r#""owner":"mattpocock""#) && hint.contains(r#""method":"<method>""#), "{hint}");
+        assert!(missing_required(&t.input_schema, &json!({ "method": "get", "owner": "o", "pullNumber": 1 })).is_empty());
+        assert!(missing_required(&json!({ "type": "object" }), &json!({})).is_empty(), "no `required`, nothing to check");
+    }
+
+    #[test]
+    fn arguments_left_beside_connector_and_tool_are_taken_as_the_arguments() {
+        let input = json!({ "connector": "github", "tool": "pull_request_read", "method": "get", "pullNumber": 1316 });
+        assert_eq!(stray_arguments(&input), json!({ "method": "get", "pullNumber": 1316 }));
+        assert_eq!(stray_arguments(&json!({ "connector": "github", "tool": "x" })), json!({}));
+    }
+
+    #[tokio::test]
+    async fn an_empty_call_is_answered_here_and_never_reaches_the_server() {
+        let catalog = Catalog::of(vec![ConnectorTools {
+            id: TEST_ID.to_string(),
+            label: "GitHub".to_string(),
+            instructions: None,
+            tools: vec![pull_request_read()],
+        }]);
+        let (result, events) = dispatch_with(&catalog, json!({ "connector": TEST_ID, "tool": "pull_request_read" }), None).await;
+        assert!(events.is_empty());
+        assert!(!result.ok);
+        assert!(result.content.starts_with("Not sent:"), "{}", result.content);
+        assert!(!result.content.contains("not enabled"), "the pool was never called: {}", result.content);
     }
 
     #[test]
