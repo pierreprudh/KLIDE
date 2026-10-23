@@ -175,9 +175,13 @@ function AttachmentTile({
           cursor: "pointer",
           lineHeight: 1,
           opacity: hover ? 1 : 0,
-          transform: hover ? "scale(1)" : "scale(0.85)",
+          transform: hover ? "scale(1)" : "scale(0.9)",
           pointerEvents: hover ? "auto" : "none",
-          transition: "opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out)",
+          willChange: "opacity, transform",
+          // Arrives unhurried and settles; leaves a touch quicker than it came.
+          transition: hover
+            ? "opacity var(--motion-slow) var(--ease-soft), transform var(--motion-slower) var(--ease-soft)"
+            : "opacity var(--motion-med) var(--ease-soft), transform var(--motion-med) var(--ease-soft)",
         }}
       >
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
