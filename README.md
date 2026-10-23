@@ -62,9 +62,18 @@ Coding agents work well in terminals, but their sessions, diffs, and evidence sp
 | **Keep work visible** | See working, waiting, blocked, and completed runs across the workspace |
 | **Review before trust** | Approve commands, inspect proposed edits, comment on diffs, and check validation evidence |
 | **Any agent, any intelligence** | Keep Claude Code, Codex, OpenCode, or Hermes as the agent and choose what powers it: an API key, Ollama or MLX, a self-hosted endpoint, or a subscription such as Nous Portal |
-| **Resume with context** | Reopen transcripts, hand work to another agent, and save reviewed project memory |
+| **Resume with context** | Reopen transcripts, share editable working notes across conversations and providers, and promote useful lessons to reviewed project memory |
 
 ## How work moves through Klide
+
+The **Shared notes** icon in the conversation’s right-side panel opens a compact
+summary. Use **Memory → Shared notes** to create a named set, select the
+conversations that should share it, and save decisions, open
+questions, and next steps. An answer's **Add to shared notes** action stages its
+text for editing before you save. Linked chats read the saved notes on their
+next turn, whichever provider they use. **Review lesson** extracts a
+lesson into the existing review inbox; it becomes Project Memory only when you
+keep it. See [Shared notes](docs/shared-notes.md) for scope and storage details.
 
 ```mermaid
 flowchart LR

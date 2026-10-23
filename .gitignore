@@ -43,6 +43,7 @@ docs/*
 !docs/OPENCODE_DELEGATE.md
 !docs/PROVIDER_RESOURCES.md
 !docs/SOFTWARE_FACTORY.md
+!docs/shared-notes.md
 
 .vscode
 
@@ -62,6 +63,8 @@ src-tauri/gen/
 # Agent-proposed lessons awaiting review: workspace quotes and unreviewed
 # notes, never repo content.
 .klide/memory-proposals/
+# Shared working notes and conversation membership are local/private.
+.klide/shared-notes/
 # Mission specs and append-only runtime events are local/private by default.
 # A repo can explicitly unignore or export authored mission Markdown later.
 .klide/missions/

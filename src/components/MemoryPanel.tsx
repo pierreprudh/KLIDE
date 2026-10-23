@@ -39,6 +39,7 @@ type Props = {
   onOpenTouchedFile?: (path: string) => void;
   /** Bumped when the AI panel writes a new entry, to force a refresh. */
   refreshKey?: number;
+  initialDraftId?: string | null;
   width: number;
   visible: boolean;
   fill?: boolean;
@@ -232,6 +233,7 @@ export function MemoryPanel({
   onOpenInEditor,
   onOpenTouchedFile,
   refreshKey = 0,
+  initialDraftId = null,
   width: _width,
   visible,
   fill,
@@ -246,7 +248,7 @@ export function MemoryPanel({
   const [searchOpen, setSearchOpen] = useState(false);
   const [rawView, setRawView] = useState(false);
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
-  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(initialDraftId);
 
   // Pending memory drafts (from finished runs) awaiting accept / edit / skip.
   // The store snapshot is shared across panels; filter to this workspace.

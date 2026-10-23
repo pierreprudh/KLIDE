@@ -2291,6 +2291,22 @@ async fn loop_body(
     // stay byte-identical for the prompt cache to serve it — and both are
     // recorded before the message itself, so replay puts them back in order.
     let mut opening_context: Vec<serde_json::Value> = Vec::new();
+    let mut shared_notes_context = None;
+    if let Some(root) = request.workspace_root.clone() {
+        let conversation_id = request.parent_id.clone().unwrap_or_else(|| id.clone());
+        let mut previous = None;
+        for event in compaction::effective_events(&prior_events) {
+            match event {
+                AgentEvent::ContextInjected { content, .. } if content.starts_with(crate::shared_notes::CONTEXT_HEADER) => previous = Some(content.clone()),
+                AgentEvent::ContextCompacted { .. } => previous = None,
+                _ => {}
+            }
+        }
+        let last = previous.clone();
+        let update = crate::blocking::run(move || crate::shared_notes::context_update(&root, &conversation_id, last.as_deref())).await?;
+        shared_notes_context = update.clone().or_else(|| previous.map(|content| serde_json::json!({ "role": "system", "content": content })));
+        if let Some(update) = update { opening_context.push(update); }
+    }
     if !wake {
         if let Some(instructions) = skill_resources::explicit_instructions(&id, &request.initial_text) {
             opening_context.push(serde_json::json!({
@@ -2560,6 +2576,13 @@ async fn loop_body(
                 summarized_at = Some(turn);
                 let system = messages[0].clone();
                 messages = std::iter::once(system).chain(replayed).collect();
+                // A summary may omit working notes. Restore this turn's exact
+                // snapshot, recording it so the next continuation replays it.
+                if let Some(notes) = &shared_notes_context {
+                    if !messages.iter().any(|message| message == notes) {
+                        inject_context(&mut messages, &mut emit, &id, notes.clone())?;
+                    }
+                }
             }
         }
 
@@ -6461,6 +6484,46 @@ mod run_loop_tests {
         )
         .await
         .expect("run loop settles without an infrastructure error");
+    }
+
+    #[tokio::test]
+    async fn shared_notes_follow_conversations_across_providers_and_record_changes() {
+        use crate::shared_notes::{self, Action};
+        let (runs_dir, root) = sandbox("shared-notes-providers");
+        let id = "shared-notes-chat";
+        let store = shared_notes::apply(&root, 0, Action::Create { title: "Remote execution".into(), conversation_id: id.into() }).unwrap();
+        let set_id = store.sets[0].id.clone();
+        let mut store = shared_notes::apply(&root, store.revision, Action::Edit { id: set_id.clone(), title: "Remote execution".into(), body: "Use event cursors.".into() }).unwrap();
+        for provider in ["ollama", "anthropic", "claude-code"] {
+            let caller = ScriptedProviderCaller::new(vec![scripted_turn("Understood.", vec![])]);
+            let mut request = test_request(&root, &[]);
+            request.provider = provider.into();
+            drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+            let messages = caller.seen_messages.lock().unwrap();
+            let notes = messages[0].iter().rev().find(|message| message["content"].as_str().is_some_and(|text| text.starts_with(shared_notes::CONTEXT_HEADER))).unwrap();
+            assert!(notes["content"].as_str().unwrap().contains("Use event cursors."), "{provider}");
+        }
+        let events = read_events(&runs_dir, id).unwrap();
+        assert_eq!(events.iter().filter(|event| matches!(event, AgentEvent::ContextInjected { content, .. } if content.starts_with(shared_notes::CONTEXT_HEADER))).count(), 1, "unchanged notes are recorded only once");
+        append_event(&runs_dir, id, events.len() as u64, &AgentEvent::ContextCompacted {
+            run_id: id.into(), summary: "Earlier conversation condensed.".into(), kept: Some(0), context_tokens: Some(10), cost_usd: None, manual: true, ts: now_ms(),
+        }).unwrap();
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Still have the notes.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
+        assert!(caller.seen_messages.lock().unwrap()[0].iter().any(|message| message["content"].as_str().is_some_and(|text| text.starts_with(shared_notes::CONTEXT_HEADER) && text.contains("Use event cursors."))), "compaction must not erase the shared notes");
+        store = shared_notes::apply(&root, store.revision, Action::Edit { id: set_id, title: "Remote execution".into(), body: "Test replay after reconnect.".into() }).unwrap();
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Updated.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
+        let messages = caller.seen_messages.lock().unwrap();
+        let notes = messages[0].iter().rev().find(|message| message["content"].as_str().is_some_and(|text| text.starts_with(shared_notes::CONTEXT_HEADER))).unwrap();
+        assert!(notes["content"].as_str().unwrap().contains("Test replay after reconnect."));
+        drop(messages);
+        shared_notes::apply(&root, store.revision, Action::Attach { id: None, conversation_id: id.into() }).unwrap();
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Unlinked.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
+        let messages = caller.seen_messages.lock().unwrap();
+        let notes = messages[0].iter().rev().find(|message| message["content"].as_str().is_some_and(|text| text.starts_with(shared_notes::CONTEXT_HEADER))).unwrap();
+        assert!(notes["content"].as_str().unwrap().ends_with("null"));
     }
 
     /// An Auto continuation stays on the pair its first turn ran on, and the

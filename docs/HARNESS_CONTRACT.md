@@ -420,6 +420,17 @@ Project Memory recall uses the same evidence path. `memory_search` and
 and source references. A reader never has to infer that boundary from the Tool
 name.
 
+Shared notes are explicit working context, separate from reviewed Memory.
+The Harness reads the Conversation's active note set from the Rust-owned
+Workspace store before a turn, records a changed snapshot as `context_injected`,
+and passes that same snapshot to every Provider. Unlinking, archiving, or
+deleting notes records a clearing snapshot; compaction restores the current
+turn's snapshot if it was folded away. Note text is JSON-quoted as data, and
+never overrides the user's current request. Interactive Delegate sessions
+receive notes through composer-submitted prompts; raw terminal input and CLI
+slash commands stay direct. Promotion is an operator-created Memory draft
+and uses the existing human review path before publication.
+
 Run summaries derive a Validation snapshot from the Transcript. The snapshot is
 evidence, not a correctness proof:
 

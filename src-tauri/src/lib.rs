@@ -34,6 +34,7 @@ mod local_servers;
 mod mcp_client;
 pub mod mcp_server;
 mod memory;
+mod shared_notes;
 mod missions;
 mod model_capabilities;
 mod models;
@@ -1272,6 +1273,9 @@ pub fn run() {
             memory_write,
             memory_list,
             memory_read,
+            shared_notes::shared_notes_read,
+            shared_notes::shared_notes_apply,
+            shared_notes::shared_notes_terminal_prompt,
             coordination::coordination_apply_command,
             coordination::coordination_snapshot,
             coordination::coordination_events,

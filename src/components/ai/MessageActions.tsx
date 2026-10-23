@@ -131,6 +131,7 @@ type Props = {
   onRetry: () => void;
   onBranch: () => void;
   onBranchInWorktree?: () => void;
+  onAddToSharedNotes?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
   /** Run outcome, shown right-aligned in the same row on the final answer:
@@ -149,6 +150,7 @@ export function MessageActions({
   onRetry,
   onBranch,
   onBranchInWorktree,
+  onAddToSharedNotes,
   onEdit,
   onDelete,
   revert,
@@ -172,6 +174,7 @@ export function MessageActions({
       <Chip title={copied ? "Copied" : "Copy message"} onClick={onCopy}>
         {copied ? <CheckIcon /> : <CopyIcon />}
       </Chip>
+      {onAddToSharedNotes && <Chip title="Add to shared notes" onClick={onAddToSharedNotes} disabled={disabled}><EditIcon /></Chip>}
       <Chip title="Retry from here" onClick={onRetry} disabled={disabled}>
         <RetryIcon />
       </Chip>

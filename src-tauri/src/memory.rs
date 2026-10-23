@@ -283,7 +283,7 @@ fn main_checkout_root(root: &Path) -> Option<PathBuf> {
 /// every run shares the one durable store. Returns `None` (caller keeps the
 /// run's own workspace) when the root is not a linked worktree or the hop
 /// cannot be resolved — same behavior as a plain checkout.
-fn resolve_memory_workspace(workspace: &Workspace) -> Option<Workspace> {
+pub(crate) fn resolve_memory_workspace(workspace: &Workspace) -> Option<Workspace> {
     let main_root = main_checkout_root(workspace.root())?;
     if main_root == workspace.root() {
         return None;

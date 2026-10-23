@@ -1,13 +1,22 @@
+import "./sharedNotes.css";
 import "./memoryPanel.css";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { MemoryPanel } from "./MemoryPanel";
 import { Z } from "../zLayers";
 
+import type { SharedNotesSeed } from "./ai/SharedNotesControl";
+const SharedNotesEditor = lazy(() => import("./SharedNotesDialog"));
+
 type Props = {
+  initialSection?: "memory" | "shared";
+  conversationId?: string;
+  sharedNotesSeed?: SharedNotesSeed | null;
   open: boolean;
   workspaceRoot: string | null;
   /** Bumped when the AI panel writes a new entry, to force a refresh. */
   refreshKey?: number;
+  /** Open a newly proposed lesson directly in the existing review editor. */
+  initialDraftId?: string | null;
   /** Open a memory entry's raw markdown as an editor tab. */
   onOpenInEditor?: (path: string, content: string) => void;
   /** Open a source file referenced by a memory entry. */
@@ -38,28 +47,42 @@ function CloseIcon() {
 export function MemoryModal({
   open,
   workspaceRoot,
+  initialSection = "memory",
+  conversationId = "",
+  sharedNotesSeed = null,
   refreshKey = 0,
+  initialDraftId,
   onOpenInEditor,
   onOpenTouchedFile,
   onClose,
 }: Props) {
+  const modalRoot = useRef<HTMLDivElement>(null);
+  const [section, setSection] = useState(initialSection);
+  const [sharedDirty, setSharedDirty] = useState(false);
+  useEffect(() => { if (open) { setSection(initialSection); setSharedDirty(false); } }, [open, initialSection]);
+  function close() {
+    if (sharedDirty && !window.confirm("Close Memory without saving your shared-notes draft?")) return;
+    onClose();
+  }
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      if (e.key === "Escape" && dialogs[dialogs.length - 1] === modalRoot.current) close();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, sharedDirty]);
 
   if (!open) return null;
 
   return (
     <div
+      ref={modalRoot}
       role="dialog"
       aria-modal="true"
       aria-label="Project memory"
-      onClick={onClose}
+      onClick={close}
       style={{
         position: "fixed",
         inset: 0,
@@ -107,9 +130,19 @@ export function MemoryModal({
           >
             Memory
           </span>
+          <div className="memory-sections" role="tablist" aria-label="Memory sections" onKeyDown={event => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const next = event.key === "Home" ? "memory" : event.key === "End" ? "shared" : section === "memory" ? "shared" : "memory";
+            setSection(next);
+            event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[next === "memory" ? 0 : 1]?.focus();
+          }}>
+            <button type="button" role="tab" aria-selected={section === "memory"} tabIndex={section === "memory" ? 0 : -1} onClick={() => setSection("memory")}>Project Memory</button>
+            <button type="button" role="tab" aria-selected={section === "shared"} tabIndex={section === "shared" ? 0 : -1} onClick={() => setSection("shared")}>Shared notes</button>
+          </div>
           <div style={{ flex: 1 }} />
           <button
-            onClick={onClose}
+            onClick={close}
             aria-label="Close"
             style={{
               width: 30,
@@ -143,15 +176,24 @@ export function MemoryModal({
             flexDirection: "column",
           }}
         >
+          <div hidden={section !== "memory"} style={{ flex: 1, minHeight: 0, display: section === "memory" ? "flex" : "none", flexDirection: "column" }}>
           <MemoryPanel
             fill
             visible
             width={0}
             workspaceRoot={workspaceRoot}
             refreshKey={refreshKey}
+            initialDraftId={initialDraftId}
             onOpenInEditor={onOpenInEditor}
             onOpenTouchedFile={onOpenTouchedFile}
           />
+          </div>
+          {workspaceRoot && <div hidden={section !== "shared"} style={{ flex: 1, minHeight: 0, display: section === "shared" ? "flex" : "none" }}>
+            {section === "shared" || sharedDirty ? <Suspense fallback={<p>Loading shared notes…</p>}>
+              <SharedNotesEditor embedded workspaceRoot={workspaceRoot} conversationId={conversationId} seed={sharedNotesSeed}
+                onDirtyChange={setSharedDirty} onChanged={() => {}} onClose={close} />
+            </Suspense> : null}
+          </div>}
         </div>
       </div>
     </div>

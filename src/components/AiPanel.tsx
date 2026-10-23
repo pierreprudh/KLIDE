@@ -6,6 +6,9 @@ import { useLlamaSetupMode, isSelectedLlamaProvider } from "../hooks/useLlamaSet
 import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
+import { SharedNotesControl, type SharedNotesSeed } from "./ai/SharedNotesControl";
+import { sharedNotesTerminalPrompt } from "../sharedNotes";
+import { transcriptWindowStart, TRANSCRIPT_PAGE_TURNS } from "./ai/transcriptWindow";
 import { wakeTurnMode } from "./ai/wake";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
@@ -1037,6 +1040,9 @@ export function AiPanel({
   // Index of the assistant message whose Copy button just fired, for a brief
   // "Copied" confirmation. Reset on the next copy or render of a new message.
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [sharedNotesOpen, setSharedNotesOpen] = useState(false);
+  const [sharedNotesSeed, setSharedNotesSeed] = useState<SharedNotesSeed | null>(null);
+  const terminalSendPending = useRef(false);
   // Inline editing of a user message: index being edited + draft text.
   // Editing happens in place — the bubble swaps to a textarea, the
   // trailing conversation stays untouched. Commit on ⌘/Ctrl+Enter or
@@ -2385,6 +2391,37 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [transcriptWindow, setTranscriptWindow] = useState<{ id: string; start: number | null }>({ id: currentId, start: null });
+  if (transcriptWindow.id !== currentId) {
+    setTranscriptWindow({ id: currentId, start: null });
+  }
+  const recentTranscriptStart = useMemo(() => transcriptWindowStart(msgs), [msgs]);
+  const transcriptStart = transcriptWindow.id === currentId && transcriptWindow.start !== null
+    ? Math.min(transcriptWindow.start, recentTranscriptStart)
+    : recentTranscriptStart;
+  const prependScroll = useRef<{ id: string; top: number; height: number } | null>(null);
+
+  // Restore before paint; native anchoring is disabled on this scroller so it
+  // cannot compensate for the same prepend a second time.
+  useLayoutEffect(() => {
+    const anchor = prependScroll.current;
+    prependScroll.current = null;
+    const el = scrollRef.current;
+    if (anchor?.id === currentId && el) {
+      el.scrollTop = anchor.top + el.scrollHeight - anchor.height;
+    } else if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [currentId, transcriptStart]);
+
+  function showEarlierMessages() {
+    const el = scrollRef.current;
+    if (!el || transcriptStart === 0) return;
+    prependScroll.current = { id: currentId, top: el.scrollTop, height: el.scrollHeight };
+    stickToBottomRef.current = false;
+    setStickToBottom(false);
+    setTranscriptWindow({ id: currentId, start: transcriptWindowStart(msgs, TRANSCRIPT_PAGE_TURNS, transcriptStart) });
+  }
   const taRef = useRef<HTMLTextAreaElement>(null);
   // The same element as taRef, in state: the skill lede reads the textarea's
   // own metrics, and a ref doesn't re-render when it lands.
@@ -2435,6 +2472,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   }, []);
 
   function forceStickToBottom() {
+    setTranscriptWindow({ id: currentId, start: null });
     stickToBottomRef.current = true;
     setStickToBottom(true);
     const el = scrollRef.current;
@@ -2446,6 +2484,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const isStuck = distanceFromBottom <= STICK_THRESHOLD_PX;
+    // A reader's window stays put while new exchanges arrive below it.
+    if (!isStuck && transcriptWindow.start === null) {
+      setTranscriptWindow({ id: currentId, start: transcriptStart });
+    }
     if (stickToBottomRef.current !== isStuck) {
       stickToBottomRef.current = isStuck;
       setStickToBottom(isStuck);
@@ -3214,11 +3256,11 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   const column = columnGeometry({
     planSlot,
-    resultUp: latestCompletion !== undefined,
+    resultUp: latestCompletion !== undefined || sharedNotesOpen,
     visualUp: latestVisuals !== null,
     observerUp: githubPresence.runId === currentId && githubPresence.present,
     missionUp: missionPresent,
-    hidden: sidePanelHidden,
+    hidden: sidePanelHidden && !sharedNotesOpen,
     canvasWidth,
   });
 
@@ -3511,9 +3553,19 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (delegateSession && !text.trim()) return;
     if (delegateSession) {
       // Delegate TUIs take text only — attachments aren't wired to their stdin.
-      setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
-      await writeDelegatePty(delegateSessionId(currentId, provider), `${text}\r`);
-      if (selectedOutput) setArtifactOutput(null);
+      if (terminalSendPending.current) return;
+      terminalSendPending.current = true;
+      try {
+        const prompt = workspaceRoot ? await sharedNotesTerminalPrompt(workspaceRoot, currentId, text) : text;
+        await writeDelegatePty(delegateSessionId(currentId, provider), prompt === text ? `${text}\r` : `\x1b[200~${prompt}\x1b[201~\r`);
+        if (conversationSessionRef.current.conversationId === currentId) {
+          setInput(current => current === rawText ? "" : current);
+          setMention(null); setSlash(null); setNextSendMode(null);
+          if (selectedOutput) setArtifactOutput(null);
+        }
+      } catch (error) {
+        notify(`Couldn't send the message: ${errMessage(error)}`, { tone: "error" });
+      } finally { terminalSendPending.current = false; }
       return;
     }
     cancelledWarmupRef.current = false;
@@ -3930,7 +3982,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       document.body,
     )}
     <aside
-      className={variant === "focus" ? "klide-focus-ai-surface" : "floating-panel"}
+      className={`shared-notes-host ${variant === "focus" ? "klide-focus-ai-surface" : "floating-panel"}`}
       aria-label="AI conversation"
       style={{ width: fill ? "100%" : width, height: fill ? "100%" : undefined, margin: fill ? 0 : "4px 4px 4px 0", display: fill || visible ? "flex" : "none", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}
       onDragOver={(e) => { if (canAttachFiles && Array.from(e.dataTransfer?.types ?? []).includes("Files")) { e.preventDefault(); setFileDragOver(true); } }}
@@ -4075,11 +4127,12 @@ This user request requires workspace inspection. Before answering, you MUST call
       </header>
       ) : null}
 
+
       <div ref={canvasRef} style={{ position: "relative", flex: 1, minHeight: 0, display: "flex" }}>
         <div
           ref={scrollRef}
           onScroll={updateStickFromScroll}
-          style={{ flex: 1, overflowX: "hidden", overflowY: delegateSession ? "hidden" : "auto", padding: delegateSession ? 0 : variant === "focus" ? `14px ${focusGutterRight} ${16 + focusFade + todoDockHeight}px ${focusGutterLeft}` : `10px 12px ${12 + todoDockHeight}px`, transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)", maskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, WebkitMaskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, fontSize: variant === "focus" ? 13.5 : 13, display: delegateSession ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !delegateSession && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain", ["--reading-bleed" as string]: `${Math.round(readingBleed)}px` } as CSSProperties}
+          style={{ flex: 1, overflowX: "hidden", overflowY: delegateSession ? "hidden" : "auto", padding: delegateSession ? 0 : variant === "focus" ? `14px ${focusGutterRight} ${16 + focusFade + todoDockHeight}px ${focusGutterLeft}` : `10px 12px ${12 + todoDockHeight}px`, transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)", maskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, WebkitMaskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, fontSize: variant === "focus" ? 13.5 : 13, display: delegateSession ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !delegateSession && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain", overflowAnchor: "none", ["--reading-bleed" as string]: `${Math.round(readingBleed)}px` } as CSSProperties}
         >
         {delegateSession ? (
           <DelegateTerminalSurface
@@ -4158,8 +4211,19 @@ This user request requires workspace inspection. Before answering, you MUST call
             )}
           </div>
         )}
+        {!delegateSession && transcriptStart > 0 && (
+          <div style={{ textAlign: "center", margin: "4px 0 16px" }}>
+            <button type="button" onClick={showEarlierMessages}
+              style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg-elevated)", color: "var(--fg-subtle)", padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+              Show earlier messages
+            </button>
+          </div>
+        )}
         <ObserverConnections msgs={msgs}>
         {stackToolRuns(msgs.map((m, i) => {
+          // Keep absolute indices for retry, branching, tool groups, and
+          // observer slots, but do not construct older message bodies.
+          if (i < transcriptStart) return null;
           if (m.role === "system" && m.completion) {
             const completion = m.completion;
             // In Focus the latest result waits in the island column instead,
@@ -4525,6 +4589,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                       role="assistant"
                       copied={copiedIdx === i}
                       disabled={streaming}
+                      onAddToSharedNotes={workspaceRoot ? () => setSharedNotesSeed({ text: m.content, sourceConversationId: currentId }) : undefined}
                       onCopy={() => { void navigator.clipboard?.writeText(m.content); setCopiedIdx(i); window.setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1400); }}
                       onRetry={() => retryFromMessage(i)}
                       onBranch={() => branchFromMessage(i)}
@@ -4743,6 +4808,11 @@ This user request requires workspace inspection. Before answering, you MUST call
         )}
       </div>
 
+      {variant !== "focus" && workspaceRoot && <div className="sn-workbench-island">
+        <SharedNotesControl key={workspaceRoot} workspaceRoot={workspaceRoot} conversationId={currentId}
+          terminal={delegateSession} seed={sharedNotesSeed} onSeedConsumed={() => setSharedNotesSeed(null)} />
+      </div>}
+
       {/* The side column. Focus keeps its windows here — the plan, under
           it the run's result, and under that a question the run is parked
           on — one absolutely positioned column so they stack with a gap
@@ -4799,7 +4869,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                 tabIndex={column.showClose ? undefined : -1}
                 aria-hidden={column.showClose ? undefined : true}
                 type="button"
-                onClick={() => setSidePanelHidden(true)}
+                onClick={() => { setSidePanelHidden(true); setSharedNotesOpen(false); }}
                 aria-label="Close the side panel"
                 title="Close the side panel"
                 style={{
@@ -4823,6 +4893,8 @@ This user request requires workspace inspection. Before answering, you MUST call
               </button>
             </div>
           </div>
+          {workspaceRoot && <SharedNotesControl key={workspaceRoot} workspaceRoot={workspaceRoot} conversationId={currentId}
+            terminal={delegateSession} seed={sharedNotesSeed} expanded={sharedNotesOpen} folded={column.planFolded} onUnfold={() => setSidePanelHidden(false)} onOpenChange={setSharedNotesOpen} onSeedConsumed={() => setSharedNotesSeed(null)} />}
           {(
           <TodoStrip
             workspaceRoot={workspaceRoot}
