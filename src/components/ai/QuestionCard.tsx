@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { AskIcon, SendIcon } from "../../icons";
+import { AskIcon } from "../../icons";
 import type { QuestionChoices } from "../../agent/types";
 import { isDelegateProvider, isKnownProvider, providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
@@ -34,35 +34,44 @@ export function choiceLabel(option: string, choices: QuestionChoices): { label: 
   return { label: option };
 }
 
-/** The mark a row wears in place of a number: a worker's own logo when the
- *  option is a provider, the model's maker when it is a model, the Delegate's
- *  house for `default`. Falls back to the row's index when nothing is known. */
+/** The letter a row answers to — `A` for the first. The same letter is its
+ *  key: pressed while the card has focus, it picks the row. */
+export function choiceLetter(index: number): string {
+  return String.fromCharCode(65 + index);
+}
+
+/** A row's letter, drawn as the keycap it is. */
+function LetterKey({ index }: { index: number }) {
+  return <kbd aria-hidden className="klide-kbd klide-choice-key">{choiceLetter(index)}</kbd>;
+}
+
+/** The mark a row wears in place of a letter: a worker's own logo when the
+ *  option is a provider, the model's maker when it is a model. Falls back to
+ *  the row's letter when nothing is known. */
 function ChoiceMark({ option, index, choices }: { option: string; index: number; choices: QuestionChoices }) {
   if (isKnownProvider(option)) return <ProviderLogo id={option} size={14} />;
   const mark = makerMark(option, choices.moreModelsFrom, 14);
   if (mark) return mark;
-  return (
-    <span
-      aria-hidden
-      style={{
-        width: 16,
-        height: 16,
-        borderRadius: "50%",
-        border: "1px solid var(--border-strong)",
-        display: "grid",
-        placeItems: "center",
-        fontFamily: "var(--font-mono)",
-        fontSize: 9,
-        color: "var(--fg-dim)",
-        fontVariantNumeric: "tabular-nums",
-      }}
-    >
-      {index + 1}
-    </span>
-  );
+  return <LetterKey index={index} />;
 }
 
-const DIGIT_CODES = ["Digit1", "Digit2", "Digit3", "Digit4"];
+/** Which row a key picks: its letter (by the character, so AZERTY's A is A),
+ *  or `1`…`9` by key code, so an AZERTY top row works without Shift. */
+export function choiceIndexForKey(e: { key: string; code: string; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean }): number {
+  if (e.metaKey || e.ctrlKey || e.altKey) return -1;
+  if (/^[a-z]$/i.test(e.key)) return e.key.toUpperCase().charCodeAt(0) - 65;
+  const digit = /^Digit([1-9])$/.exec(e.code);
+  return digit ? Number(digit[1]) - 1 : -1;
+}
+
+/** The question's first line is its title; whatever follows is the reason
+ *  behind it, set under it in the quieter face. */
+export function splitQuestion(question: string): { title: string; detail: string } {
+  const text = question.trim();
+  const at = text.indexOf("\n");
+  if (at < 0) return { title: text, detail: "" };
+  return { title: text.slice(0, at).trim(), detail: text.slice(at + 1).trim() };
+}
 
 /** A model that writes its answers into the question and offers only their
  *  letters as choices (`A`…`D`, `1`…`4`) gets the answers moved onto the rows:
@@ -170,8 +179,20 @@ function isPlainList(choices: QuestionChoices): boolean {
   return !choices.moreModelsFrom && choices.kind !== "dispatch";
 }
 
-function ChoiceRows({ choices, onChoose, current, flush, labels }: { choices: QuestionChoices; onChoose: (answer: string) => void; current?: string; flush?: boolean; labels?: readonly string[] }) {
+function ChoiceRows({ choices, onChoose, current, flush, labels, other, onOther, autoFocus }: {
+  choices: QuestionChoices;
+  onChoose: (answer: string) => void;
+  current?: string;
+  flush?: boolean;
+  labels?: readonly string[];
+  /** A last row after the answers — the "Something else…" box — that the
+   *  next letter moves into. */
+  other?: ReactNode;
+  onOther?: () => void;
+  autoFocus?: boolean;
+}) {
   const [models, setModels] = useState<string[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
   const provider = choices.moreModelsFrom;
   const plain = isPlainList(choices);
   useEffect(() => {
@@ -182,22 +203,37 @@ function ChoiceRows({ choices, onChoose, current, flush, labels }: { choices: Qu
       .catch(() => { if (!cancelled) setModels([]); });
     return () => { cancelled = true; };
   }, [provider]);
+  // The letters only answer once the list has focus, so it takes focus when
+  // the question arrives — unless someone is typing elsewhere, whose next
+  // letter must not become an answer.
+  useEffect(() => {
+    if (!autoFocus) return;
+    const active = document.activeElement as HTMLElement | null;
+    const typing = !!active && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
+    if (!typing) listRef.current?.focus({ preventScroll: true });
+  }, [autoFocus]);
   return (
     <div
+      ref={listRef}
       role="listbox"
       aria-label="Answers"
       tabIndex={-1}
       onKeyDown={(e) => {
-        const at = DIGIT_CODES.indexOf(e.code);
+        // The "Something else…" box takes its own keys; a letter there is text.
+        if ((e.target as HTMLElement).tagName === "TEXTAREA") return;
+        const at = choiceIndexForKey(e);
         if (at >= 0 && at < choices.options.length) {
           e.preventDefault();
           onChoose(choices.options[at]);
+        } else if (at === choices.options.length && onOther) {
+          e.preventDefault();
+          onOther();
         }
       }}
       // The rows sit 6px in from the card's edge so their hover fill is a
       // rounded row, not a stripe — and their marks still land on the
       // question's column (6 + 8 = the header's 14).
-      style={{ display: "grid", gap: 1, padding: flush ? "2px 0 4px" : "6px 6px 6px", outline: "none" }}
+      style={{ display: "grid", gap: 2, padding: flush ? "2px 0 4px" : "8px 6px 2px", outline: "none" }}
     >
       {choices.options.map((option, index) => {
         const { label: own, note } = choiceLabel(option, choices);
@@ -228,7 +264,7 @@ function ChoiceRows({ choices, onChoose, current, flush, labels }: { choices: Qu
               minWidth: 0,
             }}
           >
-            <span aria-hidden style={{ width: 16, height: plain ? 19.5 : 16, flexShrink: 0, display: "grid", placeItems: "center" }}>
+            <span aria-hidden style={{ width: 18, height: plain ? 19.5 : 18, flexShrink: 0, display: "grid", placeItems: "center" }}>
               <ChoiceMark option={option} index={index} choices={choices} />
             </span>
             <span
@@ -254,13 +290,43 @@ function ChoiceRows({ choices, onChoose, current, flush, labels }: { choices: Qu
         // the row's width with the row's words as its placeholder, so the
         // menu opens from where the eye already is.
         <div className="klide-choice-picker" style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", minWidth: 0 }}>
-          <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, borderRadius: "50%", border: "1px dashed var(--border-strong)" }} />
+          <span aria-hidden style={{ width: 16, height: 16, margin: "0 1px", flexShrink: 0, borderRadius: "50%", border: "1px dashed var(--border-strong)" }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <ModelPicker provider={provider} model="" availableModels={models} onChange={onChoose} direction="up" fluid bareHover catalogOnly={choices.kind === "dispatch"} placeholder={choices.kind === "dispatch" ? "Browse all models…" : "Another model…"} />
           </div>
         </div>
       )}
+      {other}
     </div>
+  );
+}
+
+/** Keycaps drawn on the primary button: its own ink, thinned, so the chord
+ *  reads as part of the button rather than a chip stuck to it. */
+function ButtonKeys({ keys }: { keys: string[] }) {
+  return (
+    <span aria-hidden style={{ display: "inline-flex", gap: 2 }}>
+      {keys.map((k) => (
+        <kbd
+          key={k}
+          style={{
+            minWidth: 16,
+            height: 16,
+            padding: "0 3px",
+            display: "grid",
+            placeItems: "center",
+            borderRadius: "var(--radius-xs)",
+            background: "color-mix(in srgb, var(--control-primary-fg) 14%, transparent)",
+            color: "color-mix(in srgb, var(--control-primary-fg) 82%, transparent)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            lineHeight: 1,
+          }}
+        >
+          {k}
+        </kbd>
+      ))}
+    </span>
   );
 }
 
@@ -271,10 +337,12 @@ function ChoiceRows({ choices, onChoose, current, flush, labels }: { choices: Qu
  *  it used to be a window in the side column, which put the one thing that
  *  holds the run as far from the reading column as the screen allows.)
  *
- *  The question, then either the answers to pick from or a borderless box to
- *  type in. A list of answers still takes a typed one: the foot is a one-line
- *  "Something else…" box beside Skip, so a pick is one click and a better
- *  answer is never refused. */
+ *  A quiet "Question" head, the question as a title with whatever follows its
+ *  first line set under it as the reason, then the answers as rows lettered
+ *  like keycaps — the letter is the key. A list of answers still takes a
+ *  typed one: its last lettered row is a "Something else…" box, so a pick is
+ *  one click (or one key) and a better answer is never refused. Skip and Send
+ *  sit at the foot. */
 export function QuestionCard({
   question,
   choices,
@@ -292,6 +360,8 @@ export function QuestionCard({
   // already ends in a picker, so a free-typed answer belongs to plain lists.
   const typing = !picking || isPlainList(choices!);
   const lifted = picking && !dispatching ? liftLetteredChoices(question, choices!.options) : null;
+  const { title, detail } = splitQuestion(lifted ? lifted.question : question);
+  const options = lifted ? lifted.options : choices?.options ?? [];
 
   // The answer box grows with its text the way the composer does, with the
   // same guards: an empty box falls back to its one-row min-height, and a box
@@ -308,10 +378,58 @@ export function QuestionCard({
     ta.style.height = `${Math.min(ta.scrollHeight, 168)}px`;
   }, [answer]);
 
+  const answerBox = typing && (
+    <textarea
+      ref={answerRef}
+      className="klide-composer-textarea"
+      autoFocus={!picking}
+      value={answer}
+      onChange={(e) => onAnswerChange(e.target.value)}
+      onKeyDown={(e) => {
+        // A one-line "something else" sends on Enter like a search box;
+        // a full answer is prose and sends on ⌘↩ like the composer.
+        const send = picking ? e.key === "Enter" && !e.shiftKey : (e.metaKey || e.ctrlKey) && e.key === "Enter";
+        if (send) {
+          e.preventDefault();
+          if (canSend) onSubmit();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onSkip();
+        }
+      }}
+      placeholder={picking ? "Something else…" : "Answer…"}
+      aria-label={picking ? "Answer something else" : "Answer"}
+      rows={1}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: picking ? 19.5 : 32,
+        maxHeight: 168,
+        resize: "none",
+        background: "transparent",
+        border: "none",
+        color: "var(--fg-strong)",
+        font: "inherit",
+        fontSize: 13,
+        lineHeight: 1.5,
+        padding: picking ? 0 : "6px 0 5px",
+        outline: "none",
+        display: "block",
+      }}
+    />
+  );
+
   return (
     <section
       className="ai-qa-card"
       aria-label="Question from the assistant"
+      onKeyDown={(e) => {
+        // Esc skips from anywhere in the card; the answer box handles its own.
+        if (e.key === "Escape" && !e.defaultPrevented) {
+          e.preventDefault();
+          onSkip();
+        }
+      }}
       style={{
         // The accent-tinted hairline every "waiting on you" card carries.
         background: "color-mix(in srgb, var(--bg-elevated) 90%, transparent)",
@@ -323,127 +441,73 @@ export function QuestionCard({
         flexDirection: "column",
       }}
     >
-      {/* The mark says who is asking; the rows below put their numbers in the
-          same column, so question and answers read as one exchange. */}
-      <div style={{ display: "flex", gap: 10, padding: "12px 14px 0" }}>
-        <span aria-hidden="true" style={{ flexShrink: 0, width: 16, height: 21, display: "grid", placeItems: "center", color: "var(--accent)" }}>
+      {/* Who is asking, said once and quietly; the question below it is the
+          title, and the rows' keycaps land on the same column. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px 0", color: "var(--fg-subtle)", fontSize: 12, fontWeight: 500 }}>
+        <span aria-hidden="true" style={{ display: "grid", placeItems: "center", color: "var(--accent)" }}>
           <AskIcon size={14} />
         </span>
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            color: "var(--fg-strong)",
-            fontSize: 14,
-            lineHeight: 1.5,
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-            maxHeight: "min(240px, 30dvh)",
-            overflowY: "auto",
-            overscrollBehavior: "contain",
-          }}
-        >
-          {lifted ? lifted.question : question}
-        </div>
+        <span>Question</span>
       </div>
-      {dispatching && <div style={{ paddingTop: 6 }}><DispatchPicker choices={choices!} onChoose={onChoose!} /></div>}
+      <div style={{ padding: "8px 14px 0", maxHeight: "min(240px, 30dvh)", overflowY: "auto", overscrollBehavior: "contain" }}>
+        <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 500, lineHeight: 1.45, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+          {title}
+        </div>
+        {detail && (
+          <div style={{ marginTop: 3, color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+            {detail}
+          </div>
+        )}
+      </div>
+      {dispatching && <div style={{ paddingTop: 8 }}><DispatchPicker choices={choices!} onChoose={onChoose!} /></div>}
       {picking && !dispatching && (
-        <ChoiceRows choices={lifted ? { ...choices!, options: lifted.options } : choices!} labels={lifted?.labels} onChoose={onChoose!} />
+        <ChoiceRows
+          choices={{ ...choices!, options }}
+          labels={lifted?.labels}
+          onChoose={onChoose!}
+          autoFocus
+          onOther={typing ? () => answerRef.current?.focus() : undefined}
+          other={typing ? (
+            // The last lettered row is the box itself: a click anywhere on it
+            // puts the caret in, and its letter moves there from the list.
+            <div
+              className="klide-choice-row klide-choice-other"
+              onClick={() => answerRef.current?.focus()}
+              style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "6px 8px", cursor: "text", minWidth: 0 }}
+            >
+              <span aria-hidden style={{ width: 18, height: 19.5, flexShrink: 0, display: "grid", placeItems: "center" }}>
+                <LetterKey index={options.length} />
+              </span>
+              {answerBox}
+            </div>
+          ) : undefined}
+        />
       )}
-      {!picking && <div style={{ height: 4 }} />}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          gap: 4,
-          padding: "4px 8px 6px 0",
-          borderTop: picking ? "1px solid color-mix(in srgb, var(--border) 45%, transparent)" : undefined,
-        }}
-      >
-        {typing ? (
-          <textarea
-            ref={answerRef}
-            className="klide-composer-textarea"
-            autoFocus={!picking}
-            value={answer}
-            onChange={(e) => onAnswerChange(e.target.value)}
-            onKeyDown={(e) => {
-              // A one-line "something else" sends on Enter like a search box;
-              // a full answer is prose and sends on ⌘↩ like the composer.
-              const send = picking ? e.key === "Enter" && !e.shiftKey : (e.metaKey || e.ctrlKey) && e.key === "Enter";
-              if (send) {
-                e.preventDefault();
-                if (canSend) onSubmit();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                onSkip();
-              }
-            }}
-            placeholder={picking ? "Something else…" : "Answer…"}
-            aria-label={picking ? "Answer something else" : "Answer"}
-            rows={1}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              minHeight: 32,
-              maxHeight: 168,
-              resize: "none",
-              background: "transparent",
-              border: "none",
-              color: "var(--fg-strong)",
-              font: "inherit",
-              fontSize: 13,
-              lineHeight: 1.55,
-              // Lines up under the question text, past the mark's column.
-              padding: "6px 0 5px 40px",
-              outline: "none",
-              display: "block",
-            }}
-          />
-        ) : <span style={{ flex: 1 }} />}
+      {!picking && <div style={{ display: "flex", padding: "4px 14px 0" }}>{answerBox}</div>}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6, padding: "8px 12px 12px" }}>
         <button
           type="button"
           onClick={onSkip}
           title="Answer nothing and let the run carry on (Esc)"
-          className="klide-choice-row"
-          style={{
-            height: 28,
-            padding: "0 10px",
-            border: "none",
-            background: "transparent",
-            color: "var(--fg-subtle)",
-            font: "inherit",
-            fontSize: 12,
-            cursor: "pointer",
-            flexShrink: 0,
-          }}
+          className="klide-button klide-button-subtle"
+          style={{ minHeight: 28, padding: "0 10px", fontSize: 12.5, fontWeight: 400 }}
         >
           Skip
         </button>
-        {typing && (!picking || canSend) && <button
-          type="button"
-          onClick={onSubmit}
-          disabled={!canSend}
-          aria-label="Send answer"
-          title={picking ? "Send answer (↩)" : "Send answer (⌘↩)"}
-          style={{
-            width: 28,
-            height: 28,
-            flexShrink: 0,
-            display: "grid",
-            placeItems: "center",
-            borderRadius: "50%",
-            color: canSend ? "var(--control-primary-fg)" : "var(--fg-dim)",
-            background: canSend ? "var(--accent)" : "var(--bg-elevated)",
-            border: canSend ? "none" : "1px solid var(--border)",
-            cursor: canSend ? "pointer" : "default",
-            transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)",
-          }}
-          onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}
-        >
-          <SendIcon size={13} />
-        </button>}
+        {typing && (
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!canSend}
+            aria-label="Send answer"
+            title={picking ? "Send answer (↩)" : "Send answer (⌘↩)"}
+            className="klide-button klide-button-primary klide-question-send"
+            style={{ minHeight: 28, padding: "0 6px 0 12px", gap: 8, fontSize: 12.5 }}
+          >
+            Send
+            <ButtonKeys keys={picking ? ["↩"] : ["⌘", "↩"]} />
+          </button>
+        )}
       </div>
     </section>
   );
