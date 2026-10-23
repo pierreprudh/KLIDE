@@ -76,6 +76,8 @@ nothing can be required yet.
 
 ### Next tasks, one at a time
 
+Planned as klide-bot in [KLIDE_BOT.md](KLIDE_BOT.md).
+
 Each waits until the brake before it has earned trust: a **rework task**
 (fixes only what the review named, capped at two tries before `needs Pierre`),
 then a **ratchet task** for the open review findings, then a **retro task**
