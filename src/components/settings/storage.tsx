@@ -3,11 +3,11 @@
 //
 // Klide keeps a conversation twice, and the two copies are not equals:
 //
-//  · the **local cache** — the browser's localStorage index the Focus rail and
-//    the AI panel's history read from. It shares one ~5 MB quota with every
-//    other Klide key, and when a write no longer fits, the oldest snapshots are
-//    evicted to make room. That is the number this section makes visible,
-//    because it used to be invisible until a toast said 33 threads were gone.
+//  · the **local cache** — the index the Focus rail and the AI panel's history
+//    read from. In the app it is one file per thread under app data, capped at
+//    the newest `MAX_CONVERSATIONS`; without a backend it falls back to
+//    localStorage and its ~5 MB quota, where the oldest snapshots are evicted
+//    to make room. This section shows its size either way.
 //  · the **Run transcripts** on disk — the durable record Mission Control
 //    reads. Saved conversations can be explicitly deleted after confirmation.
 //
@@ -25,7 +25,9 @@ import {
   clearStoredConversations,
   dropCachedImages,
   forgetStoredConversation,
+  conversationsOnDisk,
   localCacheUsage,
+  MAX_CONVERSATIONS,
   type CachedConversationSize,
 } from "../ai/storedConversations";
 import { deleteKlideConvo } from "../../klideConvos";
@@ -113,8 +115,13 @@ export function StorageSection() {
   const [movingRuns, setMovingRuns] = useState(false);
 
   const refreshCache = useCallback(() => {
-    setSizes(cachedConversationSizes());
-    setUsed(localCacheUsage().bytes);
+    const next = cachedConversationSizes();
+    setSizes(next);
+    setUsed(
+      conversationsOnDisk()
+        ? next.reduce((sum, row) => sum + row.bytes, 0)
+        : localCacheUsage().bytes,
+    );
   }, []);
 
   // One fetch path for the folder rows, used on mount and after every move, so
@@ -320,9 +327,19 @@ export function StorageSection() {
                     withPhotos > 0
                       ? `, ${withPhotos} carrying ${formatBytes(photoBytes)} of photos`
                       : ""
-                  }. Shared with every other Klide key in this webview.`
+                  }. ${
+                    conversationsOnDisk()
+                      ? `Kept on disk; the newest ${MAX_CONVERSATIONS} stay in the list.`
+                      : "Shared with every other Klide key in this webview."
+                  }`
             }
-            control={<CacheMeter used={used} quota={CACHE_QUOTA_BYTES} />}
+            control={
+              conversationsOnDisk() ? (
+                <div style={{ fontSize: 11.5, color: "var(--fg-subtle)" }}>{formatBytes(used)} on disk</div>
+              ) : (
+                <CacheMeter used={used} quota={CACHE_QUOTA_BYTES} />
+              )
+            }
           />
           <Row
             title="Drop cached photos"

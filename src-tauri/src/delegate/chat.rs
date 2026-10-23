@@ -367,6 +367,7 @@ pub async fn run_subscription_chat(
         tool_calls: Vec::new(),
         usage: reported_usage,
         stop_reason: None,
+        answered_model: None,
     })
 }
 

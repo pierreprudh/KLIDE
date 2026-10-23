@@ -242,7 +242,7 @@ Klide/
 │   │       ├── conversationOriginHeal.ts Repair Stored conversations whose Provider metadata was overwritten
 │   │       ├── sidePanelInset.ts  How much room the canvas column takes from the conversation
 │   │       ├── summarizePrompts.ts The pure half of summarize-and-hand-off — prompts + parsing, no IPC
-│   │       ├── storedConversations.ts Durable localStorage conversation index + panel binding + title rule
+│   │       ├── storedConversations.ts The conversation index (on disk via conversation_store.rs, hydrated before first render; localStorage off-Tauri) + panel binding + title rule
 │   │       ├── ConversationHistory.tsx / DelegateTerminal.tsx / RaceFollowUpBar.tsx
 │   └── agent/
 │       ├── types.ts             Agent protocol types (events, diffs, permissions)
@@ -297,6 +297,7 @@ Klide/
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
     │   ├── gateway.rs            opencodex proxy process — install check, start/stop, Codex un-inject
+    │   ├── conversation_store.rs The Stored conversation index on disk — one JSON file per thread (sha256 of the id) under app data; the renderer holds it in memory
     │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config + `${VAR}` resolution + the GitHub preset
     │   ├── connector_pool.rs     Live connector sessions shared by every Run — lazy connect, reconnect on break, killed at exit
     │   ├── search.rs             Find-in-files over a Workspace with ignore policy

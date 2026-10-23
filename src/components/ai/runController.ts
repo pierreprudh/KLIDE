@@ -583,7 +583,9 @@ export function createRunController(deps: () => RunControllerDeps): RunControlle
       // Transcript events (deltas, finalized messages, tool cards) belong to
       // the turn driver; everything below is panel behaviour.
       if (event.type === "assistant_message") answered = true;
-      if (event.type === "run_started") deps().session.originResolved({ provider: event.provider, model: event.model });
+      if (event.type === "run_started" || event.type === "route_locked") {
+        deps().session.originResolved({ provider: event.provider, model: event.model });
+      }
       if (driver.handleEvent(event)) return;
       switch (event.type) {
         case "context_compacted": {

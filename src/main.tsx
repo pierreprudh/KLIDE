@@ -13,33 +13,11 @@ import {
   healStoredConversationTitles,
   healStoredConversationsFromTranscripts,
 } from "./components/ai/conversationOriginHeal";
+import { hydrateConversationStore } from "./components/ai/storedConversations";
 import { fetchRunOrigins } from "./runs";
 import { verifyProviderCatalog } from "./agent/providerCatalog";
 import { listProviders } from "./ipc/aiProviders";
 import { notify } from "./toast";
-
-// Repair conversations whose Provider label an older build overwrote (a Claude
-// Code thread showing as OpenRouter). Runs before the first surface reads the
-// index — Mission Control re-derives its rows from it on the same boot.
-try {
-  healStoredConversationOrigins();
-  // And threads that kept another Provider's model when they were carried
-  // onto a CLI (a Claude Code session showing DeepSeek in its composer).
-  healStoredConversationModels();
-  // And threads a reasoning model named "<think>".
-  healStoredConversationTitles();
-} catch {
-  /* a broken conversation index must never block the app from starting */
-}
-
-// The same repair against the stronger evidence: what each Run's Transcript
-// says it was dispatched with. This one needs the backend, so it lands just
-// after the first render and republishes the index for the surfaces already
-// showing it. Deliberately not awaited — the app must start whether or not the
-// runs directory can be read.
-void healStoredConversationsFromTranscripts(fetchRunOrigins).catch(() => {
-  /* no transcripts readable (or not running under Tauri) — labels stand */
-});
 
 // Dev only: the picker reads the generated Provider catalog mirror at first
 // paint; `cargo test` fails when it is stale, but a `tauri dev` that skipped
@@ -70,8 +48,44 @@ const syncMotion = () =>
 syncMotion();
 document.addEventListener("visibilitychange", syncMotion);
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+// The conversation index lives on disk and every surface reads it
+// synchronously, so it is loaded before anything renders. A short local read;
+// off-Tauri (or if it fails) the index stays in localStorage.
+async function boot() {
+  try {
+    await hydrateConversationStore();
+  } catch {
+    /* no backend — the localStorage index is used */
+  }
+
+  // Repair conversations whose Provider label an older build overwrote (a Claude
+  // Code thread showing as OpenRouter). Runs before the first surface reads the
+  // index — Mission Control re-derives its rows from it on the same boot.
+  try {
+    healStoredConversationOrigins();
+    // And threads that kept another Provider's model when they were carried
+    // onto a CLI (a Claude Code session showing DeepSeek in its composer).
+    healStoredConversationModels();
+    // And threads a reasoning model named "<think>".
+    healStoredConversationTitles();
+  } catch {
+    /* a broken conversation index must never block the app from starting */
+  }
+
+  // The same repair against the stronger evidence: what each Run's Transcript
+  // says it was dispatched with. This one needs the backend, so it lands just
+  // after the first render and republishes the index for the surfaces already
+  // showing it. Deliberately not awaited — the app must start whether or not the
+  // runs directory can be read.
+  void healStoredConversationsFromTranscripts(fetchRunOrigins).catch(() => {
+    /* no transcripts readable (or not running under Tauri) — labels stand */
+  });
+
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  );
+}
+
+void boot();

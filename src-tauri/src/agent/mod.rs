@@ -194,6 +194,8 @@ fn delegate_allowed_commands(
 struct ProviderTurnRequest {
     provider: String,
     model: String,
+    /// OpenRouter's router only: the models it may pick from (`routing`).
+    allowed_models: Vec<String>,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     workspace_root: Option<String>,
@@ -238,6 +240,7 @@ impl AgentProviderCaller for RealProviderCaller {
                 crate::providers::ProviderTurn {
                     provider: request.provider,
                     model: request.model,
+                    allowed_models: request.allowed_models,
                     messages: request.messages,
                     tools: request.tools,
                     workspace_root: request.workspace_root,
@@ -1819,7 +1822,10 @@ async fn route_auto(runs_dir: &Path, id: &str, request: &mut StartRunRequest) ->
     if !routing::is_auto(&request.provider) {
         return Ok(());
     }
-    match read_run_origin(runs_dir, id)? {
+    // An origin still naming OpenRouter's router never got an answer to lock
+    // to (the first request failed): route again rather than send the router
+    // unrestricted.
+    match read_run_origin(runs_dir, id)?.filter(|origin| origin.model != routing::OPENROUTER_ROUTER) {
         Some(origin) => {
             request.provider = origin.provider;
             request.model = origin.model;
@@ -1831,6 +1837,7 @@ async fn route_auto(runs_dir: &Path, id: &str, request: &mut StartRunRequest) ->
             request.routed = Some(RouteDecision {
                 reason: resolved.reason,
                 skipped: resolved.skipped,
+                pool: resolved.pool,
             });
         }
     }
@@ -1838,6 +1845,15 @@ async fn route_auto(runs_dir: &Path, id: &str, request: &mut StartRunRequest) ->
         *prompt = prompt.replace(routing::ROUTED_MODEL_TOKEN, &request.model);
     }
     Ok(())
+}
+
+/// The models OpenRouter's router may choose from on this request: the
+/// routed pool while the Run is still on the router, nothing once it locked.
+fn router_pool(request: &StartRunRequest) -> Vec<String> {
+    if request.model != routing::OPENROUTER_ROUTER {
+        return Vec::new();
+    }
+    request.routed.as_ref().map(|routed| routed.pool.clone()).unwrap_or_default()
 }
 
 async fn start_run(
@@ -2181,6 +2197,7 @@ async fn loop_body(
             model: request.model.clone(),
             reason: routed.reason,
             skipped: routed.skipped,
+            pool: routed.pool,
             ts: now_ms(),
         })?;
     }
@@ -2469,6 +2486,7 @@ async fn loop_body(
                 let call = provider_caller.call(ProviderTurnRequest {
                     provider: request.provider.clone(),
                     model: request.model.clone(),
+                    allowed_models: router_pool(&request),
                     messages: compaction::summary_request(&messages),
                     tools: tools.clone(),
                     workspace_root: request.workspace_root.clone(),
@@ -2929,6 +2947,7 @@ async fn loop_body(
                 result = provider_caller.call(ProviderTurnRequest {
                     provider: request.provider.clone(),
                     model: request.model.clone(),
+                    allowed_models: router_pool(&request),
                     messages: messages.clone(),
                     tools: turn_tools.clone(),
                     workspace_root: request.workspace_root.clone(),
@@ -3002,7 +3021,22 @@ async fn loop_body(
             }
         }
         let response = match provider_result {
-            Ok(response) => response,
+            Ok(response) => {
+                // OpenRouter's router chose. Send the rest of this Run to that
+                // model directly and record it as the conversation's origin,
+                // so the next turn neither re-routes nor loses the cache.
+                if let Some(answered) = routing::router_answer(&request.model, response.answered_model.as_deref()) {
+                    request.model = answered.clone();
+                    summary.model = answered.clone();
+                    emit(AgentEvent::RouteLocked {
+                        run_id: id.clone(),
+                        provider: request.provider.clone(),
+                        model: answered,
+                        ts: now_ms(),
+                    })?;
+                }
+                response
+            }
             Err(err) => {
                 let error = AgentError {
                     code: error_code::PROVIDER_UNAVAILABLE.to_string(),
@@ -3770,6 +3804,7 @@ pub async fn agent_compact_conversation(
         crate::providers::ProviderTurn {
             provider: provider.clone(),
             model: model.clone(),
+            allowed_models: Vec::new(),
             messages,
             tools: None,
             workspace_root: cwd,
@@ -4807,6 +4842,7 @@ mod turn_decision_tests {
         tool_calls: Vec<serde_json::Value>,
     ) -> AiChatResponse {
         AiChatResponse {
+            answered_model: None,
             content: content.to_string(),
             thinking: thinking.map(String::from),
             tool_calls,
@@ -5308,6 +5344,7 @@ mod provider_caller_tests {
                     request.tools.is_some(),
                 ));
                 Ok(AiChatResponse {
+                    answered_model: None,
                     content: "synthetic provider response".to_string(),
                     thinking: None,
                     tool_calls: Vec::new(),
@@ -5323,6 +5360,7 @@ mod provider_caller_tests {
         let caller = MockProviderCaller::default();
         let response = caller
             .call(ProviderTurnRequest {
+                allowed_models: Vec::new(),
                 provider: "mock-provider".to_string(),
                 model: "mock-model".to_string(),
                 messages: vec![serde_json::json!({ "role": "user", "content": "hello" })],
@@ -5565,6 +5603,8 @@ pub(crate) mod test_support {
         /// Whether each turn was offered tool schemas. The turn-cap endgame
         /// withholds them on the final turn, and that is only observable here.
         pub(super) seen_tools: Arc<Mutex<Vec<bool>>>,
+        /// The model each call was sent to, and the router pool it carried.
+        pub(super) seen_models: Arc<Mutex<Vec<(String, Vec<String>)>>>,
     }
 
     impl ScriptedProviderCaller {
@@ -5574,6 +5614,7 @@ pub(crate) mod test_support {
                 seen_roles: Arc::new(Mutex::new(Vec::new())),
                 seen_messages: Arc::new(Mutex::new(Vec::new())),
                 seen_tools: Arc::new(Mutex::new(Vec::new())),
+                seen_models: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -5587,7 +5628,9 @@ pub(crate) mod test_support {
             let seen = self.seen_roles.clone();
             let seen_messages = self.seen_messages.clone();
             let seen_tools = self.seen_tools.clone();
+            let seen_models = self.seen_models.clone();
             Box::pin(async move {
+                seen_models.lock().unwrap().push((request.model.clone(), request.allowed_models.clone()));
                 seen_messages.lock().unwrap().push(request.messages.clone());
                 seen_tools.lock().unwrap().push(request.tools.is_some());
                 seen.lock().unwrap().push(
@@ -5619,6 +5662,7 @@ pub(crate) mod test_support {
         tool_calls: Vec<serde_json::Value>,
     ) -> Result<AiChatResponse, String> {
         Ok(AiChatResponse {
+            answered_model: None,
             content: content.to_string(),
             thinking: None,
             tool_calls,
@@ -5631,6 +5675,7 @@ pub(crate) mod test_support {
     /// the whole budget went into the reasoning channel.
     pub(super) fn scripted_runaway() -> Result<AiChatResponse, String> {
         Ok(AiChatResponse {
+            answered_model: None,
             content: String::new(),
             thinking: Some("let me think about this at length".into()),
             tool_calls: vec![],
@@ -6438,7 +6483,74 @@ mod run_loop_tests {
         assert_eq!(request.system_prompt.as_deref(), Some("You are Kit, running on the `mock-model` model."));
     }
 
-    /// A follow-up turn records the pair it ran on. The Transcript's first
+    /// A Run sent to OpenRouter's router carries the pool on its first
+    /// request, then goes straight to the model that answered — the rest of
+    /// the Run and the conversation's origin, so the next turn neither
+    /// re-routes nor loses its cache.
+    #[tokio::test]
+    async fn a_run_on_openrouters_router_locks_to_the_model_that_answered() {
+        let (runs_dir, root) = sandbox("router-lock");
+        std::fs::write(Path::new(&root).join("a.txt"), "alpha").unwrap();
+        let mut first = scripted_turn(
+            "Reading.",
+            vec![scripted_tool_call("call_a", "read_file", serde_json::json!({ "path": "a.txt" }))],
+        );
+        first.as_mut().unwrap().answered_model = Some("deepseek/deepseek-v4-flash".into());
+        let caller = ScriptedProviderCaller::new(vec![first, scripted_turn("Done.", vec![])]);
+        let pool = vec!["deepseek/deepseek-v4-flash".to_string(), "anthropic/claude-opus-4.8".to_string()];
+        let mut request = test_request(&root, &[]);
+        request.provider = "openrouter".into();
+        request.model = routing::OPENROUTER_ROUTER.into();
+        request.routed = Some(RouteDecision { reason: "router".into(), skipped: vec![], pool: pool.clone() });
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        drive_loop(sup, &runs_dir, "thread", request, caller.clone()).await;
+
+        let seen = caller.seen_models.lock().unwrap().clone();
+        assert_eq!(seen[0], (routing::OPENROUTER_ROUTER.to_string(), pool));
+        assert_eq!(seen[1], ("deepseek/deepseek-v4-flash".to_string(), Vec::new()));
+        let events = read_events(&runs_dir, "thread").unwrap();
+        let locks = events.iter().filter(|e| matches!(e, AgentEvent::RouteLocked { .. })).count();
+        assert_eq!(locks, 1);
+        let origin = crate::agent::transcripts::read_run_origin(&runs_dir, "thread").unwrap().unwrap();
+        assert_eq!((origin.provider.as_str(), origin.model.as_str()), ("openrouter", "deepseek/deepseek-v4-flash"));
+    }
+
+    /// Live: the real loop on OpenRouter's router, restricted to two models,
+    /// with a Tool call. Proves the pool reaches OpenRouter, the answer locks
+    /// the Run, and the origin is the model that answered. Costs a fraction
+    /// of a cent on the key in `~/.klide/.env`.
+    /// `cargo test --lib -- --ignored --nocapture a_live_run_on_openrouters_router_locks`
+    #[tokio::test]
+    #[ignore = "live: calls OpenRouter"]
+    async fn a_live_run_on_openrouters_router_locks() {
+        let (runs_dir, root) = sandbox("live-router");
+        std::fs::write(Path::new(&root).join("a.txt"), "alpha").unwrap();
+        let pool = vec!["deepseek/deepseek-v4-flash".to_string(), "z-ai/glm-5.2".to_string()];
+        let mut request = test_request(&root, &[]);
+        request.provider = "openrouter".into();
+        request.model = routing::OPENROUTER_ROUTER.into();
+        request.initial_text = "Read a.txt with read_file and tell me its one word.".into();
+        request.routed = Some(RouteDecision { reason: "router".into(), skipped: vec![], pool: pool.clone() });
+        let sup = Arc::new(FakeSupervisor::with_run("thread"));
+        run_agent_loop(sup, runs_dir.clone(), "thread".to_string(), request, Channel::new(|_| Ok(())), CancellationToken::new(), RealProviderCaller)
+            .await
+            .expect("the live run settles");
+        let events = read_events(&runs_dir, "thread").unwrap();
+        for e in &events {
+            match e {
+                AgentEvent::RouteLocked { model, .. } => println!("locked → {model}"),
+                AgentEvent::ToolCallStarted { name, .. } => println!("tool → {name}"),
+                AgentEvent::AssistantMessage { content, .. } => println!("said → {:?}", content.iter().filter_map(|c| match c { AgentContentBlock::Text { text } => Some(text.as_str()), _ => None }).collect::<String>()),
+                AgentEvent::RunError { error, .. } => println!("error → {}", error.message),
+                _ => {}
+            }
+        }
+        let origin = crate::agent::transcripts::read_run_origin(&runs_dir, "thread").unwrap().unwrap();
+        println!("origin → {} {}", origin.provider, origin.model);
+        assert!(pool.contains(&origin.model), "locked to a pool model, got {}", origin.model);
+    }
+
+    /// A follow-up turn records the pair it ran on.    /// A follow-up turn records the pair it ran on. The Transcript's first
     /// `RunStarted` stays the thread's origin, but the fold stamps each
     /// response with the `RunStarted` in effect when its row opened — so a
     /// continuation on another model has to write its own line, or every

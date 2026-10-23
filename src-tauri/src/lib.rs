@@ -19,6 +19,7 @@ mod cli_update;
 mod agent;
 mod coordination;
 mod connectors;
+mod conversation_store;
 mod connector_pool;
 mod coordination_bridge;
 mod custom_cli;
@@ -438,6 +439,7 @@ async fn ai_chat(
         providers::ProviderTurn {
             provider,
             model,
+            allowed_models: Vec::new(),
             messages,
             tools,
             workspace_root,
@@ -1143,6 +1145,8 @@ pub fn run() {
             open_entry,
             preview_file,
             reveal_entry,
+            conversation_store::conversations_load,
+            conversation_store::conversations_write,
             storage::app_storage_dirs,
             storage::app_storage_conversations,
             storage::app_storage_delete_conversation,
@@ -1478,6 +1482,7 @@ mod blocking_door_tests {
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),
         ("connectors.rs", include_str!("connectors.rs")),
+        ("conversation_store.rs", include_str!("conversation_store.rs")),
         ("deep_link.rs", include_str!("deep_link.rs")),
         ("services_menu.rs", include_str!("services_menu.rs")),
         ("models.rs", include_str!("models.rs")),

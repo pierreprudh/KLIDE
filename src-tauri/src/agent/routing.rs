@@ -254,6 +254,68 @@ pub struct Resolved {
     /// Candidates that ranked above the pick and what ruled each one out,
     /// as `provider model: why`. Empty when the top of the ranking won.
     pub skipped: Vec<String>,
+    /// When the pick is OpenRouter's router, the models it may choose from —
+    /// the user's OpenRouter stars that passed the gate. Empty otherwise.
+    pub pool: Vec<String>,
+}
+
+/// OpenRouter's own router: a classifier trained on their traffic, run inside
+/// the request. Restricted to a list (`plugins: auto-router.allowed_models`)
+/// it decides per prompt whether a job needs Opus or DeepSeek Flash will do —
+/// the one judgement of quality Klide cannot make on a bench of one.
+pub const OPENROUTER_ROUTER: &str = "openrouter/auto";
+
+/// A tool job with at least this many gate-passing OpenRouter stars goes to
+/// OpenRouter's router restricted to them. Below it there is no choice to
+/// delegate, and the ordinary walk picks.
+pub const ROUTER_MIN_CHOICES: usize = 2;
+
+/// Hand the choice to OpenRouter's router when the user's OpenRouter stars
+/// give it one. Price and names are poor stand-ins for how good a model is
+/// (DeepSeek V4 Flash costs a hundredth of Opus); a trained router reads the
+/// prompt instead. Chat keeps the walk — it goes local and free — and the
+/// conversation locks to whichever model answers first (`run_agent_loop`).
+pub async fn router_among<F, Fut>(ranked: &[Candidate], needs: Needs, mut facts_of: F) -> Option<Resolved>
+where
+    F: FnMut(&Candidate) -> Fut,
+    Fut: std::future::Future<Output = Result<Facts, Rejection>>,
+{
+    if !needs.tools {
+        return None;
+    }
+    let mut pool = Vec::new();
+    let mut skipped = Vec::new();
+    for candidate in ranked
+        .iter()
+        .filter(|c| c.starred && c.provider == "openrouter" && c.model != OPENROUTER_ROUTER)
+    {
+        // A `~vendor/model-latest` alias is a pointer the router refuses to
+        // match ("No models match"), so it would sit in the list doing
+        // nothing. Say so instead.
+        if candidate.model.starts_with('~') {
+            skipped.push(format!("{} {}: an alias, which OpenRouter's router can't choose", candidate.provider, candidate.model));
+            continue;
+        }
+        match judge(candidate, facts_of(candidate).await, needs) {
+            Ok(_) => pool.push(candidate.model.clone()),
+            Err(rejection) => skipped.push(skip_line(candidate, &rejection)),
+        }
+    }
+    (pool.len() >= ROUTER_MIN_CHOICES).then(|| Resolved {
+        provider: "openrouter".to_string(),
+        model: OPENROUTER_ROUTER.to_string(),
+        reason: format!("starred · OpenRouter's router among {} of your models · tools", pool.len()),
+        skipped,
+        pool,
+    })
+}
+
+/// The model OpenRouter's router answered with, when this turn asked it to
+/// choose: what the rest of the Run, and the conversation, lock to.
+pub fn router_answer(model: &str, answered: Option<&str>) -> Option<String> {
+    let answered = answered?.trim();
+    (model == OPENROUTER_ROUTER && !answered.is_empty() && answered != OPENROUTER_ROUTER)
+        .then(|| answered.to_string())
 }
 
 /// Order the pool so the first Candidate that passes `judge` is the one to
@@ -359,6 +421,7 @@ where
                     model: candidate.model.clone(),
                     reason,
                     skipped,
+                    pool: Vec::new(),
                 })
             }
             Err(rejection) => skipped.push(skip_line(candidate, &rejection)),
@@ -557,6 +620,11 @@ pub async fn resolve(request: &StartRunRequest) -> Result<Resolved, String> {
     let needs = needs_for(request);
     let pool = gather_candidates(&request.preferred_models).await;
     let ranked = rank(pool, providers::OLLAMA_DEFAULT_MODEL, needs.rung);
+    if has_key("openrouter") {
+        if let Some(routed) = router_among(&ranked, needs, |c| inspect(c.clone())).await {
+            return Ok(routed);
+        }
+    }
     pick(&ranked, needs, |c| inspect(c.clone())).await
 }
 
@@ -856,6 +924,51 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
     }
 
     #[test]
+    fn a_tool_job_with_two_openrouter_stars_goes_to_openrouters_router() {
+        let pool = vec![
+            starred("openrouter", "deepseek/deepseek-v4-flash", Some(0.11)),
+            starred("anthropic", "claude-opus-4-8", Some(10.0)),
+            starred("openrouter", "anthropic/claude-opus-4.8", Some(10.0)),
+            starred("openrouter", "tiny/no-tools", Some(0.05)),
+            starred("openrouter", "~deepseek/deepseek-v4-flash-latest", Some(0.11)),
+            rung("openrouter", OPENROUTER_ROUTER, 0.0, Rung::Standard),
+        ];
+        let facts = |c: &Candidate| -> Result<Facts, Rejection> { ok(c.model != "tiny/no-tools", 200_000) };
+        let routed = |needs| {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(router_among(&pool, needs, |c| std::future::ready(facts(c))))
+        };
+        let goal = routed(GOAL).expect("two stars pass, so the router chooses");
+        assert_eq!((goal.provider.as_str(), goal.model.as_str()), ("openrouter", OPENROUTER_ROUTER));
+        // Only OpenRouter stars, only the ones that fit the job, in rank order.
+        assert_eq!(goal.pool, vec!["deepseek/deepseek-v4-flash", "anthropic/claude-opus-4.8"]);
+        assert_eq!(goal.skipped, vec![
+            "openrouter tiny/no-tools: cannot use tools",
+            "openrouter ~deepseek/deepseek-v4-flash-latest: an alias, which OpenRouter's router can't choose",
+        ]);
+        assert!(goal.reason.contains("OpenRouter's router among 2"), "{}", goal.reason);
+        // Chat keeps the walk: it goes local and free.
+        assert!(routed(CHAT).is_none());
+        // One star is no choice to hand over.
+        let one = vec![pool[0].clone(), pool[1].clone()];
+        let single = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(router_among(&one, GOAL, |c| std::future::ready(facts(c))));
+        assert!(single.is_none());
+    }
+
+    #[test]
+    fn the_router_answer_is_the_model_it_named_and_only_on_the_router() {
+        assert_eq!(router_answer(OPENROUTER_ROUTER, Some("deepseek/deepseek-v4-flash")).as_deref(), Some("deepseek/deepseek-v4-flash"));
+        assert_eq!(router_answer(OPENROUTER_ROUTER, Some(OPENROUTER_ROUTER)), None);
+        assert_eq!(router_answer(OPENROUTER_ROUTER, None), None);
+        assert_eq!(router_answer("z-ai/glm-5.2", Some("z-ai/glm-5.2-0715")), None);
+    }
+
+    #[test]
     fn a_price_places_a_star_the_ladders_dont_name() {
         assert_eq!(rung_for_price(0.11), Rung::Light);
         assert_eq!(rung_for_price(LIGHT_BELOW), Rung::Standard);
@@ -950,6 +1063,14 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             line.contains(&format!("\"{ROUTED_MODEL_TOKEN}\"")),
             "ROUTED_MODEL_TOKEN drifted: rust={ROUTED_MODEL_TOKEN:?} ts={line}"
         );
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const OPENROUTER_ROUTER ="))
+            .expect("OPENROUTER_ROUTER in providers.ts");
+        assert!(
+            line.contains(&format!("\"{OPENROUTER_ROUTER}\"")),
+            "OPENROUTER_ROUTER drifted: rust={OPENROUTER_ROUTER:?} ts={line}"
+        );
     }
 
     /// Live: what Auto picks on this machine, for each task shape. Reads the
@@ -1003,6 +1124,9 @@ anthropic claude-sonnet-4-6: no API key; ollama llama3.1:8b: server not running.
             match rt.block_on(resolve(&request)) {
                 Ok(r) => {
                     println!("{label} [{}] → {} {}\n  why: {}", needs.rung.word(), r.provider, r.model, r.reason);
+                    if !r.pool.is_empty() {
+                        println!("  pool: {}", r.pool.join(", "));
+                    }
                     for s in &r.skipped {
                         println!("  above it: {s}");
                     }

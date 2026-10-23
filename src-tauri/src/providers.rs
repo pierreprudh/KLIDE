@@ -1617,6 +1617,10 @@ pub(crate) struct AiChatResponse {
     /// reply is truncated rather than silently showing a half-answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stop_reason: Option<String>,
+    /// The model that answered, when the provider names one other than the
+    /// one asked for — OpenRouter's router says which model it chose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) answered_model: Option<String>,
 }
 
 // One streamed delta pushed to the frontend through the per-request Channel.
@@ -1733,6 +1737,9 @@ pub(crate) fn text_from_message(message: &serde_json::Value) -> String {
 pub(crate) struct ProviderTurn {
     pub provider: String,
     pub model: String,
+    /// When `model` is OpenRouter's router: the models it may choose from
+    /// (`plugins: auto-router.allowed_models`). Empty everywhere else.
+    pub allowed_models: Vec<String>,
     pub messages: Vec<serde_json::Value>,
     pub tools: Option<Vec<serde_json::Value>>,
     pub workspace_root: Option<String>,
@@ -1820,6 +1827,7 @@ pub(crate) async fn dispatch(
     let ProviderTurn {
         provider,
         model,
+        allowed_models,
         messages,
         tools,
         workspace_root,
@@ -1853,6 +1861,7 @@ pub(crate) async fn dispatch(
                 None,
                 crate::adapters::OpenAiCache::default(),
                 model,
+                Vec::new(),
                 messages,
                 tools,
                 on_chunk,
@@ -1923,6 +1932,7 @@ pub(crate) async fn dispatch(
                 },
                 crate::adapters::OpenAiCache::for_turn(provider_id, &model, run_id.as_deref()),
                 model,
+                allowed_models,
                 messages,
                 tools,
                 on_chunk,

@@ -1,6 +1,6 @@
 // The Stored conversation index — the durable record of AI-panel
 // Conversations (CONTEXT.md: "Stored conversation"). This module owns the
-// localStorage conversation index (load / save / upsert / persist), the
+// conversation index (load / save / upsert / persist), the
 // change event Focus listens to, the per-panel Conversation binding
 // (PanelSession), and the one title rule every surface derives from a
 // message list. Live-session navigation lives in `conversationSession.ts`;
@@ -12,6 +12,7 @@ import type { Conversation, Msg } from "./types";
 import { notify as notifyUser } from "../../toast";
 import { releaseConversation } from "../../agent/observers";
 import { canOpenSettings, openSettingsSection } from "../../settingsNavigation";
+import { invoke } from "@tauri-apps/api/core";
 
 const CONVOS_KEY = "klide-conversations";
 export const CONVERSATIONS_CHANGED_EVENT = "klide:conversations-changed";
@@ -26,7 +27,11 @@ export type ConversationChangedDetail = {
  *  thread to let go of before the next persist quietly brings it back. */
 export const CONVERSATION_DELETED_EVENT = "klide:conversation-deleted";
 export type ConversationDeletedDetail = { conversationId: string };
-const MAX_CONVERSATIONS = 100;
+/** How many threads the index keeps. On disk this is the only limit; the
+ *  browser fallback still stops earlier, at its ~5 MB quota. A thread averages
+ *  ~200 KB (tool output is most of it) and the whole index is held in memory,
+ *  so this is a few tens of MB, not unbounded. */
+export const MAX_CONVERSATIONS = 300;
 let conversationStorageFailureNotified = false;
 let conversationStoragePressureNotified = false;
 
@@ -68,37 +73,43 @@ function isQuotaExceeded(error: unknown): boolean {
   );
 }
 
+// Heal malformed records on read. Every consumer assumes `msgs` is an array of
+// message objects and dereferences `m.role` (e.g. deriveTitle's
+// `msgs.find((m) => m.role === "user")`). A partially-written record — a
+// missing `msgs`, or a `null`/non-object slot inside it — would throw at the
+// call site, and since these run during render/mount, blank the whole app
+// (white screen). So we drop entries without a `msgs` array and strip any
+// null/non-object messages from the arrays we keep.
+function isRecord(c: unknown): boolean {
+  return !!c && typeof c === "object" && Array.isArray((c as { msgs?: unknown }).msgs);
+}
+
+function healRecord<T>(c: unknown): T {
+  const msgs = ((c as { msgs: unknown[] }).msgs).filter(
+    (m) => m && typeof m === "object"
+  ) as Msg[];
+  // A thread is filed under the pair that produced its FIRST answer, and
+  // nothing later moves it: the rail mark, the group and the reopen target
+  // stay what the thread began as, while each later turn keeps its own stamp.
+  // (0.6.9 refiled a thread under its *latest* answer, so a Claude Code thread
+  // that tried a local model for one turn moved under Ollama. Those records
+  // are healed here from the same evidence, read from the other end.)
+  const first = msgs.find((m) => m.role === "assistant" && !m.subagent && m.provider && m.model);
+  return {
+    ...(c as object), msgs,
+    ...(first?.role === "assistant" ? { provider: first.provider, model: first.model } : {}),
+  } as T;
+}
+
+function healRecords<T>(parsed: unknown): T[] {
+  return Array.isArray(parsed) ? parsed.filter(isRecord).map((c) => healRecord<T>(c)) : [];
+}
+
 export function loadConversations<T>(key?: string): T[] {
+  if (disk && (key ?? CONVOS_KEY) === CONVOS_KEY) return disk.records.slice() as T[];
   try {
     const raw = localStorage.getItem(key ?? CONVOS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    // Heal malformed records on read. Every consumer assumes `msgs` is an
-    // array of message objects and dereferences `m.role` (e.g. deriveTitle's
-    // `msgs.find((m) => m.role === "user")`). A partially-written record — a
-    // missing `msgs`, or a `null`/non-object slot inside it — would throw at
-    // the call site, and since these run during render/mount, blank the whole
-    // app (white screen). So we drop entries without a `msgs` array and strip
-    // any null/non-object messages from the arrays we keep.
-    return parsed
-      .filter((c) => c && typeof c === "object" && Array.isArray((c as { msgs?: unknown }).msgs))
-      .map((c) => {
-        const msgs = ((c as { msgs: unknown[] }).msgs).filter(
-          (m) => m && typeof m === "object"
-        ) as Msg[];
-        // A thread is filed under the pair that produced its FIRST answer,
-        // and nothing later moves it: the rail mark, the group and the
-        // reopen target stay what the thread began as, while each later turn
-        // keeps its own stamp. (0.6.9 refiled a thread under its *latest*
-        // answer, so a Claude Code thread that tried a local model for one
-        // turn moved under Ollama. Those records are healed here from the
-        // same evidence, read from the other end.)
-        const first = msgs.find((m) => m.role === "assistant" && !m.subagent && m.provider && m.model);
-        return {
-          ...(c as object), msgs,
-          ...(first?.role === "assistant" ? { provider: first.provider, model: first.model } : {}),
-        };
-      }) as T[];
+    return healRecords<T>(raw ? JSON.parse(raw) : []);
   } catch {
     return [];
   }
@@ -111,6 +122,13 @@ export function saveConversations<T>(
   detail?: ConversationChangedDetail,
 ): T[] {
   const storageKey = key ?? CONVOS_KEY;
+  if (disk && storageKey === CONVOS_KEY) {
+    const stored = storeOnDisk(disk, list as Conversation[]);
+    if (notify && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CONVERSATIONS_CHANGED_EVENT, { detail }));
+    }
+    return stored as T[];
+  }
   let candidate = list;
   while (true) {
     try {
@@ -162,6 +180,176 @@ export function saveConversations<T>(
       return loadConversations<T>(storageKey);
     }
   }
+}
+
+// ── The index on disk ─────────────────────────────────────────────────────
+//
+// In the app the index lives in `<app data>/conversations/`, one file per
+// thread (`conversation_store.rs`), not in localStorage: WebKit gives the whole
+// origin ~5 MB, and at ~200 KB a thread that held eight conversations. Every
+// surface still reads the index synchronously, so it is loaded into memory
+// once at boot (`hydrateConversationStore`, before the first render) and
+// written back behind a short batch — a streamed token rewrites only its own
+// thread's file, at most every `FLUSH_DELAY_MS`. Off-Tauri (tests, preview
+// harnesses) nothing hydrates and the localStorage path below stays in use.
+
+/** Where the disk index reads and writes; injectable so tests can stand in. */
+export type ConversationSink = {
+  load(): Promise<{ json: string; skipped: number }>;
+  write(records: { id: string; json: string }[], removed: string[]): Promise<void>;
+};
+
+const tauriSink: ConversationSink = {
+  load: () => invoke<{ json: string; skipped: number }>("conversations_load"),
+  write: (records, removed) => invoke<void>("conversations_write", { records, removed }),
+};
+
+const FLUSH_DELAY_MS = 400;
+
+type DiskIndex = {
+  sink: ConversationSink;
+  /** Newest first. A record's identity changes exactly when it is re-saved,
+   *  which is how a save tells which threads need writing. */
+  records: Conversation[];
+  dirty: Set<string>;
+  removed: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
+  flushing: Promise<boolean>;
+};
+
+let disk: DiskIndex | null = null;
+
+function storeOnDisk(index: DiskIndex, list: Conversation[]): Conversation[] {
+  const previous = new Map(index.records.map((r) => [r.id, r]));
+  const next = list.map((r) => {
+    if (previous.get(r.id) === r) return r;
+    index.dirty.add(r.id);
+    index.removed.delete(r.id);
+    return healRecord<Conversation>(r);
+  });
+  const kept = new Set(next.map((r) => r.id));
+  for (const id of previous.keys()) {
+    if (kept.has(id)) continue;
+    index.removed.add(id);
+    index.dirty.delete(id);
+  }
+  index.records = next;
+  scheduleFlush(index);
+  return next.slice();
+}
+
+function scheduleFlush(index: DiskIndex): void {
+  if (index.timer || (index.dirty.size === 0 && index.removed.size === 0)) return;
+  index.timer = setTimeout(() => {
+    index.timer = null;
+    void flushIndex(index);
+  }, FLUSH_DELAY_MS);
+}
+
+function flushIndex(index: DiskIndex): Promise<boolean> {
+  if (index.timer) {
+    clearTimeout(index.timer);
+    index.timer = null;
+  }
+  // Chained, so two flushes never race each other's files.
+  index.flushing = index.flushing.then(async () => {
+    if (index.dirty.size === 0 && index.removed.size === 0) return true;
+    const byId = new Map(index.records.map((r) => [r.id, r]));
+    const ids = [...index.dirty];
+    const removed = [...index.removed];
+    index.dirty.clear();
+    index.removed.clear();
+    const records = ids.flatMap((id) => {
+      const record = byId.get(id);
+      return record ? [{ id, json: JSON.stringify(record) }] : [];
+    });
+    try {
+      await index.sink.write(records, removed);
+      conversationStorageFailureNotified = false;
+      return true;
+    } catch {
+      // Put the work back for the next save, unless that save already
+      // superseded it (written again, or forgotten).
+      for (const { id } of records) if (!index.removed.has(id)) index.dirty.add(id);
+      for (const id of removed) if (!index.dirty.has(id)) index.removed.add(id);
+      if (!conversationStorageFailureNotified) {
+        notifyUser(
+          "Klide could not save the local conversation index. The durable Run transcript is still on disk.",
+          { tone: "error" },
+        );
+        conversationStorageFailureNotified = true;
+      }
+      return false;
+    }
+  });
+  return index.flushing;
+}
+
+/** Write whatever is pending now. Resolves false when the write failed. */
+export function flushConversations(): Promise<boolean> {
+  return disk ? flushIndex(disk) : Promise.resolve(true);
+}
+
+/** Whether the index is on disk (the app) or in localStorage (no backend). */
+export function conversationsOnDisk(): boolean {
+  return disk !== null;
+}
+
+/**
+ * Load the disk index into memory. Call once, before anything reads the
+ * index. The first time, the old localStorage index is carried across and —
+ * once it is safely written — removed, which also gives its share of the
+ * quota back to every other Klide key. Rejects when there is no backend; the
+ * caller then simply stays on localStorage.
+ */
+export async function hydrateConversationStore(sink: ConversationSink = tauriSink): Promise<void> {
+  if (disk) return;
+  const loaded = await sink.load();
+  const onDisk = healRecords<Conversation>(JSON.parse(loaded.json));
+  const legacy = loadConversations<Conversation>();
+  // Per thread, the newer copy wins: a record written to disk by this build
+  // is never overwritten by a stale browser copy.
+  const byId = new Map(onDisk.map((r) => [r.id, r]));
+  const carried: string[] = [];
+  for (const record of legacy) {
+    const existing = byId.get(record.id);
+    if (existing && existing.updatedAt >= record.updatedAt) continue;
+    byId.set(record.id, record);
+    carried.push(record.id);
+  }
+  const all = [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  const records = all.slice(0, MAX_CONVERSATIONS);
+  const kept = new Set(records.map((r) => r.id));
+  disk = {
+    sink,
+    records,
+    dirty: new Set(carried.filter((id) => kept.has(id))),
+    removed: new Set(onDisk.filter((r) => !kept.has(r.id)).map((r) => r.id)),
+    timer: null,
+    flushing: Promise.resolve(true),
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", () => void flushConversations());
+  }
+  if (loaded.skipped > 0) {
+    notifyUser(
+      `${loaded.skipped} saved conversation${loaded.skipped === 1 ? "" : "s"} could not be read and ${loaded.skipped === 1 ? "is" : "are"} hidden. Their Run transcripts remain in Mission Control.`,
+      { tone: "warn" },
+    );
+  }
+  if (legacy.length > 0 && (await flushConversations())) {
+    try {
+      localStorage.removeItem(CONVOS_KEY);
+    } catch {
+      /* the copy on disk is what is read from now on */
+    }
+  }
+}
+
+/** Tests only: drop the disk index and go back to localStorage. */
+export function resetConversationStoreForTests(): void {
+  if (disk?.timer) clearTimeout(disk.timer);
+  disk = null;
 }
 
 /** Do these two records hold the same conversation, message for message? */

@@ -338,7 +338,10 @@ export type AgentEvent =
   /** An `auto` request settled on this pair. Follows `run_started` (which
    *  already carries the resolved provider/model); `skipped` names each
    *  candidate ranked above the pick and why it was ruled out. */
-  | { type: "route_resolved"; runId: string; provider: ProviderId; model: string; reason: string; skipped: string[]; ts: number }
+  | { type: "route_resolved"; runId: string; provider: ProviderId; model: string; reason: string; skipped: string[]; pool?: string[]; ts: number }
+  /** OpenRouter's router (`pool` above) answered with this model: the rest of
+   *  the Run, and the conversation's origin, are this pair. */
+  | { type: "route_locked"; runId: string; provider: ProviderId; model: string; ts: number }
   /** The turn carries photos the run's own model cannot see, and this pair is
    *  about to describe them (Rust `agent::sight`). The fold draws a running
    *  `look_at_image` step per path until `sight_resolved` lands. */
