@@ -7775,6 +7775,46 @@ button:focus-visible .menu-leadout {
   transform: translateY(-2px) scale(1.002);
 }
 
+/* The same surface on the conversation's composer (AiPanel variant="focus"),
+   so the box doesn't change colour once a conversation starts. The glass and
+   its blur live on ::before, not the box: backdrop-filter or transform on the
+   box would become the containing block for the composer's position:fixed
+   menus and pin them inside it. Same reason the focused state doesn't lift. */
+.klide-conversation-composer {
+  position: relative;
+  isolation: isolate;
+  border: 1px solid var(--composer-border);
+  border-radius: 15px;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 92%, transparent),
+    0 1px 2px rgba(28, 28, 28, 0.025),
+    0 18px 48px rgba(28, 28, 28, 0.065);
+  transition:
+    border-color 240ms var(--ease-out),
+    box-shadow 340ms var(--ease-soft);
+}
+
+.klide-conversation-composer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-highlight) 20%, transparent), transparent 52%),
+    var(--composer-glass);
+  backdrop-filter: blur(28px) saturate(1.18);
+  -webkit-backdrop-filter: blur(28px) saturate(1.18);
+}
+
+.klide-conversation-composer[data-focused="true"] {
+  border-color: var(--border-strong);
+  box-shadow:
+    inset 0 1px 0 var(--panel-highlight),
+    0 22px 54px rgba(28, 28, 28, 0.085);
+}
+
 /* Dragging a photo or document over the start stage. A drag IS an event — it
    asks "will you take this?" — so here the accent hairline earns its place.
    Still a hairline: no ring, no dashed outline, no overlay. The named landing
