@@ -11,7 +11,11 @@ import {
   conversationBytes,
   conversationImageBytes,
   dropCachedImages,
+  flushConversations,
   forgetStoredConversation,
+  hydrateConversationStore,
+  resetConversationStoreForTests,
+  type ConversationSink,
   localCacheUsage,
   conversationDuration,
   conversationStartedAt,
@@ -592,5 +596,112 @@ describe("a thread is filed under its first answer's pair", () => {
     const [loaded] = loadConversations<Conversation>();
     expect(loaded.provider).toBe("openai");
     expect(loaded.model).toBe("gpt-5.6");
+  });
+});
+
+describe("the conversation index on disk", () => {
+  type Write = { records: { id: string; json: string }[]; removed: string[] };
+
+  function fakeSink(initial: Conversation[] = [], skipped = 0) {
+    const files = new Map(initial.map((c) => [c.id, JSON.stringify(c)]));
+    const writes: Write[] = [];
+    const sink: ConversationSink = {
+      load: async () => ({ json: `[${[...files.values()].join(",")}]`, skipped }),
+      write: async (records, removed) => {
+        writes.push({ records, removed });
+        for (const r of records) files.set(r.id, r.json);
+        for (const id of removed) files.delete(id);
+      },
+    };
+    return { sink, files, writes };
+  }
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    resetConversationStoreForTests();
+    vi.useRealTimers();
+  });
+
+  it("carries the localStorage index to disk once, then frees the browser key", async () => {
+    saveConversations([conversation({ id: "old", updatedAt: 5 })]);
+    const { sink, files } = fakeSink();
+
+    await hydrateConversationStore(sink);
+
+    expect([...files.keys()]).toEqual(["old"]);
+    expect(localStorage.getItem("klide-conversations")).toBeNull();
+    expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["old"]);
+  });
+
+  it("keeps the newer copy of a thread when both stores hold it", async () => {
+    saveConversations([conversation({ id: "a", title: "stale", updatedAt: 1 })]);
+    const { sink, writes } = fakeSink([conversation({ id: "a", title: "fresh", updatedAt: 9 })]);
+
+    await hydrateConversationStore(sink);
+
+    expect(loadConversations<Conversation>()[0].title).toBe("fresh");
+    expect(writes).toEqual([]);
+  });
+
+  it("holds far more than the browser quota allowed", async () => {
+    const { sink } = fakeSink();
+    await hydrateConversationStore(sink);
+    const big = "x".repeat(200_000);
+    for (let i = 0; i < 40; i++) {
+      persistConversation(conversation({ id: `c${i}`, updatedAt: i, msgs: [{ role: "user", content: big }] }));
+    }
+    expect(loadConversations<Conversation>()).toHaveLength(40);
+  });
+
+  it("writes only the thread that changed, batched across a stream of saves", async () => {
+    const { sink, writes } = fakeSink([
+      conversation({ id: "a", updatedAt: 1 }),
+      conversation({ id: "b", updatedAt: 2 }),
+    ]);
+    await hydrateConversationStore(sink);
+
+    for (let i = 0; i < 20; i++) {
+      persistConversation(conversation({
+        id: "b",
+        updatedAt: 10 + i,
+        msgs: [{ role: "user", content: "hi" }, { role: "assistant", content: "x".repeat(i + 1) }],
+      }));
+    }
+    expect(writes).toHaveLength(0);
+    await vi.runAllTimersAsync();
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0].records.map((r) => r.id)).toEqual(["b"]);
+    expect(JSON.parse(writes[0].records[0].json).msgs[1].content).toBe("x".repeat(20));
+  });
+
+  it("deletes a forgotten thread's file", async () => {
+    const { sink, files } = fakeSink([conversation({ id: "a" }), conversation({ id: "b", updatedAt: 2 })]);
+    await hydrateConversationStore(sink);
+
+    forgetStoredConversation("a");
+    await flushConversations();
+
+    expect([...files.keys()]).toEqual(["b"]);
+    expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["b"]);
+  });
+
+  it("retries a failed write on the next save", async () => {
+    const { sink, files } = fakeSink();
+    const write = sink.write;
+    let fail = true;
+    sink.write = async (records, removed) => {
+      if (fail) throw new Error("disk full");
+      return write(records, removed);
+    };
+    await hydrateConversationStore(sink);
+
+    persistConversation(conversation({ id: "a" }));
+    expect(await flushConversations()).toBe(false);
+    fail = false;
+    persistConversation(conversation({ id: "b", updatedAt: 2 }));
+    expect(await flushConversations()).toBe(true);
+
+    expect([...files.keys()].sort()).toEqual(["a", "b"]);
   });
 });

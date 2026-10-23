@@ -1,10 +1,9 @@
 // Typed frontend Adapter for the `app_storage_*` command family — the folders
 // Klide writes for itself, measured.
 //
-// This is the disk half of the story Settings tells. The other half — the
-// browser cache the conversation list reads — needs no IPC: it lives in
-// localStorage, and `components/ai/storedConversations.ts` owns measuring and
-// managing it.
+// This is the transcript half of the story Settings tells. The other half —
+// the index the conversation list reads — is owned, measured and managed by
+// `components/ai/storedConversations.ts` over its own `conversations_*` pair.
 
 import { invoke } from "@tauri-apps/api/core";
 
