@@ -31,5 +31,7 @@ createRoot(document.getElementById("root")!).render(<Preview />);
 
 // `?hover` — show the first card the way a pointer over it does.
 if (q.has("hover")) setTimeout(() => {
+  // Headless capture can land mid-fade; show the settled state.
+  document.head.append(Object.assign(document.createElement("style"), { textContent: "* { transition: none !important }" }));
   document.querySelector("main [title]")?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
 }, 200);
