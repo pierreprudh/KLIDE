@@ -17,6 +17,10 @@ import { eyesName, type Eyes } from "./sight";
 
 const CARD = 56;
 const TILE = 40;
+// Tints of the text colour over the composer's surface: darker on the light
+// themes, lighter on the dark ones, without a token per theme.
+const CARD_FILL = "color-mix(in srgb, var(--fg-strong) 4%, var(--bg-elevated))";
+const TILE_FILL = "color-mix(in srgb, var(--fg-strong) 7%, var(--bg-elevated))";
 
 export function AttachmentTray({
   attachments,
@@ -98,7 +102,9 @@ function AttachmentTile({
         boxSizing: "border-box",
         borderRadius: 16,
         border: "1px solid var(--border)",
-        background: "var(--bg-elevated)",
+        // A step off the composer it sits in (which is --bg-elevated), so
+        // the card reads as a thing laid on the box, not printed into it.
+        background: CARD_FILL,
         flexShrink: 0,
       }}
     >
@@ -112,7 +118,7 @@ function AttachmentTile({
           placeItems: "center",
           borderRadius: 10,
           overflow: "hidden",
-          background: "var(--bg-hover)",
+          background: TILE_FILL,
           cursor: onOpen ? "zoom-in" : "default",
         }}
       >
@@ -167,7 +173,7 @@ function AttachmentTile({
           padding: 0,
           border: "none",
           borderRadius: "50%",
-          background: "color-mix(in srgb, var(--fg) 4%, var(--bg-elevated))",
+          background: "var(--bg-elevated)",
           // A soft lift and a whisper of a ring — it floats over the card
           // rather than being drawn onto it.
           boxShadow: "var(--shadow-raised), 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent)",
