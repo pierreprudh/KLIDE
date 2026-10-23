@@ -552,8 +552,8 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                       } else {
                         setInstallOk(r.stdout.trim() || "Installed.");
                         setInstallPkg("");
+                        // The reload announces each skill it finds new.
                         await onReloadFilesystemSkills();
-                        notify(`Installed ${trimmed}`, { tone: "success" });
                       }
                     } catch (e) {
                       const msg = interpretInstallError(String(e));
