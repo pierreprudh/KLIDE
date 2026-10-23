@@ -33,8 +33,10 @@ import {
   readModelPricing,
   readLocalProviderStatus,
   readProviderKeyStatus,
+  resolveEyes,
   startLocalProvider,
 } from "../ipc/aiProviders";
+import { eyesSettingOf, photoGate as photoGateOf, type Eyes } from "./ai/sight";
 import {
   reflectionBarLevel,
   reflectionCaption,
@@ -353,6 +355,8 @@ type AiHarnessSettings = {
   autoMemoryOnRunDone?: boolean;
   advisorProvider?: string;
   advisorModel?: string;
+  eyesProvider?: string;
+  eyesModel?: string;
   nameConversations?: boolean;
   namingProvider?: string;
   namingModel?: string;
@@ -1910,7 +1914,7 @@ export function AiPanel({
   async function addFiles(files: File[]) {
     if (!canAttachFiles || files.length === 0) return;
     const { attachments, notices } = await stageFiles(files, {
-      allowPhotos: modelSupportsVision,
+      allowPhotos: photoGate.allowPhotos,
       alreadyStaged: pendingAttachments.length,
       alreadyImageBytes: stagedImageBytes(pendingAttachments),
     });
@@ -1922,6 +1926,37 @@ export function AiPanel({
   // off there entirely. Everywhere else the composer accepts files and lets
   // the staging rules decide what each one becomes.
   const canAttachFiles = !providerDelegatesWork;
+
+  // Vision is a per-model fact, but a blind model no longer refuses a photo
+  // on its own: ask Rust who would describe it (the same question Focus's
+  // start stage asks), and drop staged photos only when nobody can.
+  const [eyes, setEyes] = useState<Eyes | null>(null);
+  const eyesSetting = eyesSettingOf(harnessSettings);
+  const eyesSettingKey = eyesSetting ? `${eyesSetting.provider}/${eyesSetting.model}` : "";
+  useEffect(() => {
+    if (modelSupportsVision || !canAttachFiles) {
+      setEyes(null);
+      return;
+    }
+    let cancelled = false;
+    const blind = () => {
+      if (cancelled) return;
+      setEyes(null);
+      setPendingAttachments((prev) => prev.filter((a) => !isPhotoAttachment(a)));
+    };
+    resolveEyes(provider, model, eyesSetting, workspaceRoot)
+      .then((found) => {
+        if (cancelled) return;
+        if (found) setEyes(found);
+        else blind();
+      })
+      .catch(blind);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, model, modelSupportsVision, canAttachFiles, eyesSettingKey, workspaceRoot]);
+  const photoGate = photoGateOf(modelSupportsVision, eyes);
 
   function onComposerPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(e.clipboardData?.files ?? []);
@@ -2997,11 +3032,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     setModelSupportsVision(inspection.supportsVision);
     setContextLimit(inspection.contextLimit);
     setMaxOutputTokens(inspection.maxOutputTokens ?? null);
-    // Losing vision (a model switch) invalidates staged photos only. The
-    // documents alongside them are text, and every model still reads those.
-    if (!inspection.supportsVision) {
-      setPendingAttachments((prev) => prev.filter((a) => !isPhotoAttachment(a)));
-    }
+    // Losing vision (a model switch) no longer drops staged photos here: the
+    // eyes effect drops them only when nobody can describe them for this model.
   }
 
   async function activateModelInspectionForSend(): Promise<ModelInspection> {
@@ -3286,6 +3318,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       // on its first headless turn; the Rust side ignores it once the CLI has
       // reported a newer id of its own.
       delegateSession: conversationSession.delegateSession ?? undefined,
+      // The Settings pair for describing photos this model can't see; absent,
+      // Rust picks automatically (`agent::sight`).
+      eyes: eyesSettingOf(harnessSettings),
       // A name for a new thread, asked beside its first turn
       // (`conversationNaming.ts` says when; Rust `agent::naming` says who).
       naming: namingRequestFor({
@@ -3907,7 +3942,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       }}>
       {fileDragOver && canAttachFiles && (
         <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 45, pointerEvents: "none", display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--accent-soft) 55%, transparent)", border: "2px dashed var(--accent)", borderRadius: "inherit" }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", background: "var(--bg-elevated)", padding: "6px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>{modelSupportsVision ? "Drop an image or document to attach" : "Drop a document to attach"}</div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", background: "var(--bg-elevated)", padding: "6px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>{photoGate.dropHint}</div>
         </div>
       )}
       {variant !== "focus" ? (
@@ -4921,6 +4956,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             attachments={pendingAttachments}
             onRemove={(i) => setPendingAttachments((prev) => prev.filter((_, j) => j !== i))}
             onOpenPhoto={(dataUri) => setLightboxImage(dataUri)}
+            eyes={modelSupportsVision ? null : eyes}
           />
           <div style={{ position: "relative" }}>
           {skillToken && (
@@ -5044,15 +5080,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                           photo or document from anywhere on disk. */}
                       <button type="button" role="menuitem" disabled={!canAttachFiles}
                         onClick={() => { closeModeMenu(); filePickerRef.current?.click(); }}
-                        title={canAttachFiles
-                          ? modelSupportsVision
-                            ? "Attach a photo or a text document"
-                            : `${model} can't see images — attach a text document`
-                          : "This CLI takes text only"}
+                        title={canAttachFiles ? photoGate.menuTitle : "This CLI takes text only"}
                         style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", color: canAttachFiles ? "var(--fg)" : "var(--fg-dim)", font: "inherit", fontSize: 13, cursor: canAttachFiles ? "pointer" : "default" }}
                         onMouseEnter={(e) => { if (canAttachFiles) e.currentTarget.style.background = "var(--bg-hover)"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                        <span style={{ flex: 1, textAlign: "left" }}>{modelSupportsVision ? "Photo or document" : "Document"}</span>
+                        <span style={{ flex: 1, textAlign: "left" }}>{photoGate.menuLabel}</span>
                         <AttachIcon size={14} />
                       </button>
                       <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />
