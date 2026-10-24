@@ -904,6 +904,7 @@ mod tests {
             mime: Some(mime.to_string()),
             data_uri: Some(format!("data:{mime};base64,{}", "A".repeat(chars))),
             seen_by: None,
+            stored: None,
         }
     }
 
@@ -914,6 +915,7 @@ mod tests {
             mime: None,
             data_uri: None,
             seen_by: None,
+            stored: None,
         }
     }
 

@@ -75,6 +75,7 @@ Klide/
 │   ├── shortcuts.ts             Keyboard shortcut registry (names + displayed keycaps)
 │   ├── settingsStore.ts         Declarative persisted-settings catalog + useSetting
 │   ├── settingsNavigation.ts    Registered-opener seam — a data module can request a Settings section
+│   ├── attachmentNavigation.ts  Registered-opener seam — a kept PDF's card opens the document viewer
 │   ├── conversationNavigation.ts Registered-opener seam — a toast can open a conversation (or reattach a live Delegate PTY)
 │   ├── persistedStore.ts        The one persisted-store contract (get/subscribe/mutate) under the run-data stores
 │   ├── toast.ts                 Global notification bus (surface: components/ToastHost.tsx)
@@ -136,6 +137,7 @@ Klide/
 │   │   ├── aiProviders.ts         Provider key status, model metadata, local-server start
 │   │   ├── delegates.ts           delegate_catalog — the adapters' facts over the wire (src/delegates.ts is the pinned mirror)
 │   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
+│   │   ├── pdf.ts                 pdf_extract_text (raw-body bytes, name header) + attachments_root
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
 │   │   ├── hermes.ts             Hermes settings + `harness_source_support` / `harness_source_models` / Nous login wire + `.env` override scan/align + Hermes's own setup (read, set model)
 │   ├── hooks/
@@ -222,7 +224,7 @@ Klide/
 │   │       ├── panelHost.ts       App↔AiPanel contract — identity, handoffs, resume policy
 │   │       ├── workspaceFiles.ts  Bounded file walk for @mentions
 │   │       ├── summarize.ts       Summarize-and-handoff + auto-skill detect
-│   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, refuse binaries (AttachmentTray.tsx: staged strip)
+│   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, PDF → its text per page (Rust), refuse binaries (AttachmentTray.tsx: staged strip)
 │   │       ├── sight.ts           The composer's half of eyes for a blind model — may a photo be dropped, what the hint says, who looked
 │   │       ├── conversationNaming.ts When a run asks for a name — first turn, nobody named it, not a subagent — and the pinned pair
 │   │       ├── toolRuns.ts        Everything before the answer folds to one line — "Worked for 19s ›" over a hairline, opened for the rows
@@ -306,6 +308,8 @@ Klide/
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
     │   ├── memory.rs             Project Memory schema, Markdown I/O, and local retrieval
     │   ├── spreadsheet.rs        File persistence for the sheet surface — containment, size, conflict checks
+    │   ├── pdf_text.rs           A dropped PDF's text, page by page — refuses scans and passwords by name
+    │   ├── attachment_store.rs   Where a dropped PDF is kept — app data `attachments/<sha256>/<name>.pdf`, opened as a document root
     │   ├── documents.rs          Open / Reveal / Refuse — what may leave the app, by kind, mode bits and header
     │   ├── run_documents.rs      Recover read-only document references from older transcripts
     │   ├── preview.rs            A picture of what Klide can't render (deck, PDF) via macOS `qlmanage`

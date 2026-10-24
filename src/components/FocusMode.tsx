@@ -67,6 +67,7 @@ import type { Conversation } from "./ai/types";
 import type { AgentAttachment as Attachment, AgentMode, ProviderId } from "../agent/types";
 import type { Skill } from "../skills";
 import { stageFiles, stagedImageBytes } from "./ai/attachments";
+import { extractPdfText } from "../ipc/pdf";
 import { eyesSettingOf, photoGate as photoGateOf, type Eyes } from "./ai/sight";
 import { SETTINGS, useSetting } from "../settingsStore";
 import { AttachmentTray } from "./ai/AttachmentTray";
@@ -1891,6 +1892,7 @@ function FocusComposer({
       allowPhotos: gate.allowPhotos,
       alreadyStaged: attachments.length,
       alreadyImageBytes: stagedImageBytes(attachments),
+      readPdf: extractPdfText,
     });
     for (const notice of staged.notices) notify(notice.text, { tone: notice.tone });
     if (staged.attachments.length) setAttachments((prev) => [...prev, ...staged.attachments]);

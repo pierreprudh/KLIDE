@@ -14,6 +14,7 @@ import type { ProviderId } from "../../agent/types";
 import { attachmentSize, isPhotoAttachment, markupPreviewUri } from "./attachments";
 import { DocumentAppMark, documentApp } from "../../documentAppLogo";
 import { eyesName, type Eyes } from "./sight";
+import { canOpenStoredAttachment, openStoredAttachment } from "../../attachmentNavigation";
 
 const CARD = 56;
 const TILE = 40;
@@ -82,7 +83,13 @@ function AttachmentTile({
   const isPhoto = isPhotoAttachment(attachment);
   // An SVG is sent as text but staged as the drawing it is.
   const preview = isPhoto ? (attachment.dataUri as string) : markupPreviewUri(attachment);
-  const onOpen = preview && onOpenPhoto ? () => onOpenPhoto(preview) : undefined;
+  // A kept PDF opens in the document viewer; a picture in the lightbox.
+  const stored = attachment.stored;
+  const onOpen = preview && onOpenPhoto
+    ? () => onOpenPhoto(preview)
+    : stored && canOpenStoredAttachment()
+      ? () => void openStoredAttachment(stored)
+      : undefined;
   const name = attachment.path.split("/").pop() || attachment.path;
   return (
     <div
@@ -120,7 +127,7 @@ function AttachmentTile({
           borderRadius: 10,
           overflow: "hidden",
           background: TILE_FILL,
-          cursor: onOpen ? "zoom-in" : "default",
+          cursor: onOpen ? (stored ? "pointer" : "zoom-in") : "default",
         }}
       >
         {preview ? (

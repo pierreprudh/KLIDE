@@ -45,6 +45,12 @@ pub struct AgentAttachment {
     /// thread can still draw the picture the person attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_by: Option<String>,
+    /// For a dropped PDF: where Klide kept the original, as
+    /// `<sha256>/<name>.pdf` under the app's `attachments/` folder
+    /// (`attachment_store.rs`). `content` is its extracted text and is what
+    /// the model reads; this only lets the thread reopen the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

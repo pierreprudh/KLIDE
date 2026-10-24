@@ -135,6 +135,8 @@ import {
 } from "./worktrees";
 import { createListenerScope } from "./tauriEvents";
 import { registerSettingsOpener } from "./settingsNavigation";
+import { registerAttachmentOpener } from "./attachmentNavigation";
+import { attachmentsRoot } from "./ipc/pdf";
 import { registerConversationOpener, registerSessionReattacher } from "./conversationNavigation";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
@@ -1524,6 +1526,22 @@ function App() {
     { path: string; documents: { path: string; bytes: number }[] } | null
   >(null);
   const [spreadsheet, setSpreadsheet] = useState<{ path: string; root: string } | null>(null);
+
+  // A PDF someone dropped on a conversation opens in the same viewer as a
+  // Run's documents: the folder Klide kept it in (`attachment_store.rs`) is
+  // registered as its root, so preview and "Open in app" go through the same
+  // checked commands and the rail names it by the name it was dropped under.
+  useEffect(() => {
+    registerAttachmentOpener((stored) => {
+      void attachmentsRoot()
+        .then((root) => {
+          referencedDocumentRoots.current.set(stored, root);
+          setDocumentViewer({ path: stored, documents: [{ path: stored, bytes: 0 }] });
+        })
+        .catch((err) => notify(`Unable to open ${stored.split("/").pop()}: ${errMessage(err)}`, { tone: "error" }));
+    });
+    return () => registerAttachmentOpener(null);
+  }, []);
   const [spreadsheetContext, setSpreadsheetContext] = useState<{ panelId: string; id: number; text: string } | null>(null);
 
   function openSpreadsheet(path: string, root = workspaceRoot) {

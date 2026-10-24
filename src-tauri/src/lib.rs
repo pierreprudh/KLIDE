@@ -38,6 +38,8 @@ mod shared_notes;
 mod missions;
 mod model_capabilities;
 mod models;
+mod attachment_store;
+mod pdf_text;
 mod preview;
 mod spreadsheet;
 mod run_documents;
@@ -619,6 +621,55 @@ async fn preview_file(workspace_root: String, path: String, size: Option<u32>) -
     .await
 }
 
+/// What a dropped PDF became: its text, one string per page, and where the
+/// original was kept (`None` when keeping it failed — the text still stages).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PdfText {
+    pages: Vec<String>,
+    stored: Option<String>,
+}
+
+/// The text of a PDF dropped on a composer (see `pdf_text.rs`), and the file
+/// kept under `attachments/` so the conversation can open it again
+/// (`attachment_store.rs`). The bytes arrive as the raw invoke body — a
+/// dropped `File` has no path, and a JSON array of a few million numbers is
+/// no way to carry them — so the name rides a header, percent-encoded.
+#[tauri::command]
+async fn pdf_extract_text(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<PdfText, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected the PDF's bytes.".to_string());
+    };
+    let bytes = bytes.clone();
+    let name = request
+        .headers()
+        .get("x-klide-name")
+        .and_then(|v| v.to_str().ok())
+        .map(attachment_store::percent_decode)
+        .unwrap_or_default();
+    let root = attachment_store::root(&app)?;
+    blocking::run(move || {
+        let pages = pdf_text::extract_pages(&bytes)?;
+        // A refused scan is never kept; a kept file that fails to write
+        // costs only the way back to it, not the text.
+        let stored = attachment_store::store(&root, &name, &bytes)
+            .map_err(|e| eprintln!("[attachments] keeping {name} failed: {e}"))
+            .ok();
+        Ok(PdfText { pages, stored })
+    })
+    .await
+}
+
+/// The folder dropped PDFs are kept in. The renderer opens a kept file as a
+/// document under this root, through the same checked commands as any other.
+#[tauri::command]
+async fn attachments_root(app: tauri::AppHandle) -> Result<String, String> {
+    attachment_store::root(&app).map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Hand a file to the application the machine already opens it with — when
 /// `documents.rs` says it is a document. A folder or an unknown kind is shown
 /// in Finder instead, and anything macOS would execute is refused: the click
@@ -1145,6 +1196,8 @@ pub fn run() {
             delete_entry,
             open_entry,
             preview_file,
+            pdf_extract_text,
+            attachments_root,
             reveal_entry,
             conversation_store::conversations_load,
             conversation_store::conversations_write,

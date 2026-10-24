@@ -4,11 +4,14 @@ import {
   attachmentSize,
   MAX_DOC_CHARS,
   MAX_IMAGE_BYTES,
+  MAX_PDF_BYTES,
+  MAX_PDF_CHARS,
   MAX_STAGED,
   MAX_TOTAL_IMAGE_BYTES,
   classifyFile,
   isPhotoAttachment,
   markupPreviewUri,
+  pdfContent,
   stageFiles,
   type StageableFile,
 } from "./attachments";
@@ -47,8 +50,12 @@ describe("classifyFile", () => {
     expect(classifyFile({ name: "shot.webp", type: "image/webp" })).toBe("photo");
   });
 
+  it("knows a PDF by its MIME type or, with none, its extension", () => {
+    expect(classifyFile({ name: "spec.pdf", type: "application/pdf" })).toBe("pdf");
+    expect(classifyFile({ name: "Spec.PDF", type: "" })).toBe("pdf");
+  });
+
   it("refuses what Klide has no wire for", () => {
-    expect(classifyFile({ name: "spec.pdf", type: "application/pdf" })).toBe("other");
     expect(classifyFile({ name: "bundle.zip", type: "application/zip" })).toBe("other");
   });
 });
@@ -61,8 +68,8 @@ describe("ATTACH_ACCEPT", () => {
     expect(accept).toContain(".md");
     expect(accept).toContain(".rs");
     // The formats no wire forwards must not be offered in the first place.
+    expect(accept).toContain("application/pdf");
     expect(ATTACH_ACCEPT).not.toContain("image/heic");
-    expect(ATTACH_ACCEPT).not.toContain("application/pdf");
   });
 });
 
@@ -106,11 +113,66 @@ describe("stageFiles", () => {
   });
 
   it("refuses an unreadable kind by name", async () => {
+    const { attachments, notices } = await stageFiles([fake("bundle.zip", "application/zip", "PK")], {
+      allowPhotos: true,
+    });
+    expect(attachments).toEqual([]);
+    expect(notices[0].text).toContain("bundle.zip");
+  });
+
+  it("stages a PDF as its text, page by page, on every model", async () => {
+    const seen: string[] = [];
+    const { attachments, notices } = await stageFiles([fake("spec.pdf", "application/pdf", "%PDF-1.4")], {
+      allowPhotos: false,
+      readPdf: async (bytes, name) => {
+        seen.push(`${name}:${bytes.byteLength}`);
+        return { pages: ["Goals", "Non-goals"], stored: "ab12/spec.pdf" };
+      },
+    });
+    expect(notices).toEqual([]);
+    expect(seen).toEqual(["spec.pdf:8"]);
+    expect(attachments).toEqual([
+      { path: "spec.pdf", content: "[page 1]\nGoals\n\n[page 2]\nNon-goals", stored: "ab12/spec.pdf" },
+    ]);
+    expect(isPhotoAttachment(attachments[0])).toBe(false);
+  });
+
+  it("still stages the text when the original couldn't be kept", async () => {
+    const { attachments } = await stageFiles([fake("spec.pdf", "application/pdf", "%PDF")], {
+      allowPhotos: true,
+      readPdf: async () => ({ pages: ["Goals"], stored: null }),
+    });
+    expect(attachments).toEqual([{ path: "spec.pdf", content: "[page 1]\nGoals" }]);
+  });
+
+  it("says why a PDF couldn't be read, in the reader's words", async () => {
+    const { attachments, notices } = await stageFiles([fake("scan.pdf", "application/pdf", "%PDF")], {
+      allowPhotos: true,
+      readPdf: async () => {
+        throw "This PDF has no text to read — it looks like a scan.";
+      },
+    });
+    expect(attachments).toEqual([]);
+    expect(notices).toEqual([{ text: "scan.pdf: This PDF has no text to read — it looks like a scan.", tone: "warn" }]);
+  });
+
+  it("refuses a PDF when there is no reader to hand it to", async () => {
     const { attachments, notices } = await stageFiles([fake("spec.pdf", "application/pdf", "%PDF")], {
       allowPhotos: true,
     });
     expect(attachments).toEqual([]);
     expect(notices[0].text).toContain("spec.pdf");
+  });
+
+  it("refuses an over-limit PDF before reading it", async () => {
+    let read = false;
+    const { attachments, notices } = await stageFiles(
+      [fake("atlas.pdf", "application/pdf", "%PDF", MAX_PDF_BYTES + 1)],
+      { allowPhotos: true, readPdf: async () => ((read = true), { pages: ["x"] }) },
+    );
+    expect(read).toBe(false);
+    expect(attachments).toEqual([]);
+    expect(notices[0].text).toContain("too large");
   });
 
   it("refuses an over-limit photo rather than sending a truncated one", async () => {
@@ -198,5 +260,26 @@ describe("attachmentSize", () => {
     expect(attachmentSize({ path: "n.txt", content: "two\nlines" })).toBe("9 B");
     expect(attachmentSize({ path: "é.txt", content: "é".repeat(600) })).toBe("1 KB");
     expect(attachmentSize({ path: "big.csv", content: "x".repeat(2_400_000) })).toBe("2.4 MB");
+  });
+});
+
+describe("pdfContent", () => {
+  it("cuts at a page boundary and says where", () => {
+    const page = "w".repeat(400);
+    const out = pdfContent([page, page, page], 900);
+    expect(out).toContain("[page 2]");
+    expect(out).not.toContain("[page 3]");
+    expect(out.endsWith("…(truncated after page 2 of 3)")).toBe(true);
+  });
+
+  it("slices a first page longer than the whole budget rather than sending nothing", () => {
+    const out = pdfContent(["w".repeat(MAX_PDF_CHARS * 2), "next"]);
+    expect(out.startsWith("[page 1]\nw")).toBe(true);
+    expect(out).not.toContain("[page 2]");
+    expect(out.endsWith("…(truncated after page 1 of 2)")).toBe(true);
+  });
+
+  it("leaves a PDF that fits whole", () => {
+    expect(pdfContent(["only page"])).toBe("[page 1]\nonly page");
   });
 });
