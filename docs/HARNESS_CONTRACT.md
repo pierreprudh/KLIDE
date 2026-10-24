@@ -420,7 +420,7 @@ Project Memory recall uses the same evidence path. `memory_search` and
 and source references. A reader never has to infer that boundary from the Tool
 name.
 
-Shared notes are explicit working context, separate from reviewed Memory.
+Foundations are explicit working context, separate from reviewed Memory.
 The Harness reads the Conversation's active note set from the Rust-owned
 Workspace store before a turn, records a changed snapshot as `context_injected`,
 and passes that same snapshot to every Provider. Unlinking, archiving, or

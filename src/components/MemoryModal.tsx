@@ -61,7 +61,7 @@ export function MemoryModal({
   const [sharedDirty, setSharedDirty] = useState(false);
   useEffect(() => { if (open) { setSection(initialSection); setSharedDirty(false); } }, [open, initialSection]);
   function close() {
-    if (sharedDirty && !window.confirm("Close Memory without saving your shared-notes draft?")) return;
+    if (sharedDirty && !window.confirm("Close Memory without saving your Foundations draft?")) return;
     onClose();
   }
   useEffect(() => {
@@ -138,7 +138,7 @@ export function MemoryModal({
             event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[next === "memory" ? 0 : 1]?.focus();
           }}>
             <button type="button" role="tab" aria-selected={section === "memory"} tabIndex={section === "memory" ? 0 : -1} onClick={() => setSection("memory")}>Project Memory</button>
-            <button type="button" role="tab" aria-selected={section === "shared"} tabIndex={section === "shared" ? 0 : -1} onClick={() => setSection("shared")}>Shared notes</button>
+            <button type="button" role="tab" aria-selected={section === "shared"} tabIndex={section === "shared" ? 0 : -1} onClick={() => setSection("shared")}>Foundations</button>
           </div>
           <div style={{ flex: 1 }} />
           <button
@@ -189,7 +189,7 @@ export function MemoryModal({
           />
           </div>
           {workspaceRoot && <div hidden={section !== "shared"} style={{ flex: 1, minHeight: 0, display: section === "shared" ? "flex" : "none" }}>
-            {section === "shared" || sharedDirty ? <Suspense fallback={<p>Loading shared notes…</p>}>
+            {section === "shared" || sharedDirty ? <Suspense fallback={<p>Loading foundations…</p>}>
               <SharedNotesEditor embedded workspaceRoot={workspaceRoot} conversationId={conversationId} seed={sharedNotesSeed}
                 onDirtyChange={setSharedDirty} onChanged={() => {}} onClose={close} />
             </Suspense> : null}

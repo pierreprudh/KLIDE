@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { createListenerScope } from "../../tauriEvents";
-import { readSharedNotes, sharedNotesForConversation, type SharedNotesStore } from "../../sharedNotes";
+import { readSharedNotes, sharedNotesForConversation, sharedNotesSlot, type SharedNotesStore } from "../../sharedNotes";
 import "../sharedNotes.css";
 import "./completionCard.css";
 
@@ -12,16 +12,18 @@ const MemoryModal = lazy(() => import("../MemoryModal").then(module => ({ defaul
 export type SharedNotesSeed = { text: string; sourceConversationId: string };
 
 /** One control in both Focus and workbench. No per-token subscription. */
-export function SharedNotesControl({ workspaceRoot, conversationId, terminal, seed, expanded, folded = false, onUnfold, onOpenChange, onSeedConsumed }: {
+export function SharedNotesControl({ workspaceRoot, conversationId, terminal, seed, expanded, variant = "island", folded = false, onUnfold, onOpenChange, onPresenceChange, onSeedConsumed }: {
   workspaceRoot: string;
   conversationId: string;
   terminal: boolean;
   seed: SharedNotesSeed | null;
   onSeedConsumed: () => void;
   expanded?: boolean;
+  variant?: "island" | "launcher";
   folded?: boolean;
   onUnfold?: () => void;
   onOpenChange?: (open: boolean) => void;
+  onPresenceChange?: (slot: "none" | "mark" | "card") => void;
 }) {
   const previewId = useId();
   const [store, setStore] = useState<SharedNotesStore | null>(null);
@@ -46,14 +48,18 @@ export function SharedNotesControl({ workspaceRoot, conversationId, terminal, se
     return () => { alive = false; scope.dispose(); window.removeEventListener("focus", refresh); };
   }, [workspaceRoot]);
   const set = store ? sharedNotesForConversation(store, conversationId) : undefined;
+  const slot = sharedNotesSlot(store, conversationId, open);
+  useEffect(() => { onPresenceChange?.(slot); }, [slot, onPresenceChange]);
+  useEffect(() => () => onPresenceChange?.("none"), [onPresenceChange]);
   const hasSeed = seed?.sourceConversationId === conversationId;
   useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
-  return <div className="klide-result-entry sn-shared-entry" data-variant="island" data-open={!folded && open ? "1" : undefined}>
-    {folded ? <button type="button" className="klide-result-mark" aria-label="Open the side panel — shared notes" title="Shared notes" onClick={() => { onUnfold?.(); setOpen(true); }}><DocumentIcon size={18} /></button> :
-      <section className="klide-result-island" data-open={open ? "1" : undefined} aria-label="Shared notes">
-        <div className="klide-result-island-header" role="button" tabIndex={0} aria-label={`${open ? "Collapse" : "Expand"} shared notes`} aria-expanded={open} aria-controls={previewId}
+  return <>
+    {slot !== "none" && <div className="klide-result-entry sn-shared-entry" data-variant="island" data-open={!folded && open ? "1" : undefined}>
+    {variant === "launcher" || folded ? <button type="button" className="klide-result-mark" aria-label="Open the side panel — foundations" title="Foundations" onClick={() => { if (variant === "launcher") setMemoryOpen(true); else { onUnfold?.(); setOpen(true); } }}><DocumentIcon size={18} /></button> :
+      <section className="klide-result-island" data-open={open ? "1" : undefined} aria-label="Foundations">
+        <div className="klide-result-island-header" role="button" tabIndex={0} aria-label={`${open ? "Collapse" : "Expand"} foundations`} aria-expanded={open} aria-controls={previewId}
           onClick={() => setOpen(!open)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen(!open); } }}>
-          <DocumentIcon size={17} /><span className="klide-result-island-title">Shared notes</span><span className="klide-result-island-chevron" aria-hidden="true"><ChevronIcon open={open} /></span>
+          <DocumentIcon size={17} /><span className="klide-result-island-title">Foundations</span><span className="klide-result-island-chevron" aria-hidden="true"><ChevronIcon open={open} /></span>
         </div>
         <div className="klide-result-island-rule" data-shown={open ? "1" : undefined} aria-hidden="true" />
         {open && <div className="sn-island-preview" id={previewId}>
@@ -61,9 +67,10 @@ export function SharedNotesControl({ workspaceRoot, conversationId, terminal, se
           <button type="button" className="sn-island-manage" onClick={() => setMemoryOpen(true)}><MemoryIcon size={14} />{set ? "Manage in Memory" : "Set up in Memory"}</button>
         </div>}
       </section>}
+    </div>}
     {(memoryOpen || hasSeed) && createPortal(<Suspense fallback={<div role="status" className="shared-notes-loading">Opening Memory…</div>}>
       <MemoryModal open workspaceRoot={workspaceRoot} conversationId={conversationId} initialSection="shared" sharedNotesSeed={hasSeed ? seed : null}
         onClose={() => { setMemoryOpen(false); onSeedConsumed(); }} />
     </Suspense>, document.body)}
-  </div>;
+  </>;
 }

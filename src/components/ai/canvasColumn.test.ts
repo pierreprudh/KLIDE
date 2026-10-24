@@ -112,3 +112,24 @@ describe("canvas column geometry", () => {
     expect(showsVisuals(560 + 36 + COLUMN_MAX - 1)).toBe(false);
   });
 });
+
+// Foundations must participate in the same geometry as every visible island.
+describe("Foundations in the side column", () => {
+  it("reserves a lane for its resting icon, even without other cards", () => {
+    const g = columnGeometry({ ...roomy, notesSlot: "mark" });
+    expect(g.marksUp).toBe(true);
+    expect(g.inset).toBe(76);
+    expect(g.showClose).toBe(false);
+  });
+  it("reserves full width only after the user opens its preview", () => {
+    const g = columnGeometry({ ...roomy, notesSlot: "card" });
+    expect(g.cardsUp).toBe(true);
+    expect(g.inset).toBe(COLUMN_MAX + 36);
+    expect(g.showClose).toBe(true);
+  });
+  it("does not promote another card when only its icon is present", () => {
+    const g = columnGeometry({ ...roomy, notesSlot: "mark", resultUp: true, hidden: true });
+    expect(g.planFolded).toBe(true);
+    expect(g.inset).toBe(76);
+  });
+});

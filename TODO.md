@@ -198,6 +198,28 @@ version picks the contract, nothing is migrated in place.
 
 Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/build/client>.
 
+## klide-bot — PR review + fix on any model (plan: docs/KLIDE_BOT.md, drafted 2026-10-23)
+
+- [x] Reviewer: read-only OpenCode on `REVIEW_MODEL` sets the `review` status
+  and one sticky comment (PR #267). Inert until configured.
+- [ ] Pierre: decide D1–D5 in `docs/KLIDE_BOT.md`.
+- [ ] S0 — Pierre: secret `OPENROUTER_API_KEY`, variable `REVIEW_MODEL`, spend
+  limit, `review-override` label. Done when three real PRs carry a review.
+- [ ] S0 — after a week of reviews that hold up: branch protection requires
+  `review` on `main`.
+- [ ] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
+  Issues, Statuses: write) and add `KLIDE_BOT_APP_ID` / `KLIDE_BOT_PRIVATE_KEY`.
+- [ ] S1 — workflows mint an App token and act as `klide-bot[bot]`, so its
+  pushes trigger CI and the reviewer.
+- [ ] S2 — `/fix`, `/fix <instruction>`, `/fix model=…`: OpenCode on
+  `FIX_MODEL` fixes only the blocking findings, runs `tsc` + `vitest`, pushes
+  one commit to the PR branch. Done when a planted break goes red → `/fix` →
+  green.
+- [ ] S3 (optional) — `AGENTS.md` review guidelines pointing to `REVIEW.md`;
+  Pierre turns on Codex automatic reviews.
+- [ ] S4 (later) — automatic rework on a failed review, 2 tries, then
+  `needs-pierre`. Waits until S2 has earned trust.
+
 ## Stabilize v0.2
 
 - [x] Reconcile README with real delegate PTYs, Mission Control handoff, Project Memory, and Context Lens status.
