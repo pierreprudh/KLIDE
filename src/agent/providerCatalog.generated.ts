@@ -25,7 +25,7 @@ export const PROVIDER_ROWS = [
     "isLocalServer": true,
     "hasNumCtx": true,
     "caps": {
-      "structuredReplay": false,
+      "structuredReplay": true,
       "minimalChatContext": true
     },
     "contextWindow": null

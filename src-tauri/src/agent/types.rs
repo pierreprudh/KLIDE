@@ -848,6 +848,11 @@ pub enum AgentEvent {
         run_id: String,
         role: String,
         content: String,
+        /// Turn-boundary deliveries are recorded after the operator's event
+        /// but shown immediately before its message. Replay preserves that
+        /// position without rewriting the append-only transcript.
+        #[serde(default)]
+        before_user: bool,
         ts: i64,
     },
     /// The loop monitor detected the run repeating a tool call without progress
@@ -859,6 +864,10 @@ pub enum AgentEvent {
         run_id: String,
         shell_id: String,
         text: String,
+        /// The exact fenced delivery is already a ContextInjected event.
+        /// Old transcripts lack it and still replay this raw completion.
+        #[serde(default)]
+        context_recorded: bool,
         ts: i64,
     },
     SteeringInjected {
