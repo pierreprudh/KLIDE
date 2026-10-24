@@ -1,14 +1,16 @@
-# Shared notes
+# Foundations
 
-Shared notes carry the current state of an initiative across related
+Foundations carry the current state of an initiative across related
 Conversations. They hold working decisions, open questions, and next steps.
 Project Memory holds reviewed lessons for future work throughout the Workspace.
 
 ## User flow
 
-1. Open the **Shared notes** icon on the right of a conversation for a compact summary, then choose **Manage in Memory**. The full editor is in **Memory → Shared notes**, also accessible directly from the sidebar.
+Foundations appears beside a conversation only when it is linked to an active foundation. It starts as an icon and opens a preview only when clicked. Unlinked conversations have no Foundations card; setup is always available in Memory.
+
+1. Open the **Foundations** icon on the right of a conversation for a compact summary, then choose **Manage in Memory**. The full editor is in **Memory → Foundations**, also accessible directly from the sidebar.
 2. Name a note set and choose **Create set**.
-3. Write the notes, or use an answer's **Add to shared notes** action to stage
+3. Write the notes, or use an answer's **Add to Foundations** action to stage
    its text. Edit the draft, then **Save notes**.
 4. In the **Conversations** tab, select other conversations in the Workspace.
    Provider selection does not affect membership. A conversation can belong to
@@ -61,7 +63,7 @@ and therefore does not free its storage allowance.
 
 Promotion creates an operator-selected Memory draft using the existing inbox.
 It records the note set and update time as its source and preserves the source
-notes in the draft's review details. Shared notes establish where a lesson came
+notes in the draft's review details. Foundations establish where a lesson came
 from; they are not independent proof. Include supporting file paths or test
 results when extracting a lesson, and verify it during review.
 

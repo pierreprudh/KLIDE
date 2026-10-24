@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build && node scripts/check-bundle-split.mjs",
     "preview": "vite preview",
+    "preview:memory-animation": "vite --port 1424 --strictPort --open /preview/memory-animation.html",
     "tauri": "tauri",
     "test": "vitest run",
     "verify:bundle": "bash scripts/verify-bundle.sh",

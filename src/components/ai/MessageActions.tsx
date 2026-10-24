@@ -174,7 +174,7 @@ export function MessageActions({
       <Chip title={copied ? "Copied" : "Copy message"} onClick={onCopy}>
         {copied ? <CheckIcon /> : <CopyIcon />}
       </Chip>
-      {onAddToSharedNotes && <Chip title="Add to shared notes" onClick={onAddToSharedNotes} disabled={disabled}><EditIcon /></Chip>}
+      {onAddToSharedNotes && <Chip title="Add to foundations" onClick={onAddToSharedNotes} disabled={disabled}><EditIcon /></Chip>}
       <Chip title="Retry from here" onClick={onRetry} disabled={disabled}>
         <RetryIcon />
       </Chip>

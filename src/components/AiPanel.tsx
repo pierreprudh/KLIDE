@@ -1041,7 +1041,11 @@ export function AiPanel({
   // Index of the assistant message whose Copy button just fired, for a brief
   // "Copied" confirmation. Reset on the next copy or render of a new message.
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [notesPresence, setNotesPresence] = useState<{ conversationId: string; slot: TodoStripSlot } | null>(null);
+  const onNotesPresence = useCallback((slot: TodoStripSlot) => setNotesPresence({ conversationId: currentId, slot }), [currentId]);
+  const notesSlot = notesPresence?.conversationId === currentId ? notesPresence.slot : "none";
   const [sharedNotesOpen, setSharedNotesOpen] = useState(false);
+  useEffect(() => { setSharedNotesOpen(false); }, [currentId]);
   const [sharedNotesSeed, setSharedNotesSeed] = useState<SharedNotesSeed | null>(null);
   const terminalSendPending = useRef(false);
   // Inline editing of a user message: index being edited + draft text.
@@ -3258,11 +3262,12 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   const column = columnGeometry({
     planSlot,
-    resultUp: latestCompletion !== undefined || sharedNotesOpen,
+    resultUp: latestCompletion !== undefined,
+    notesSlot,
     visualUp: latestVisuals !== null,
     observerUp: githubPresence.runId === currentId && githubPresence.present,
     missionUp: missionPresent,
-    hidden: sidePanelHidden && !sharedNotesOpen,
+    hidden: sidePanelHidden && notesSlot !== "card",
     canvasWidth,
   });
 
@@ -4808,8 +4813,8 @@ This user request requires workspace inspection. Before answering, you MUST call
       </div>
 
       {variant !== "focus" && workspaceRoot && <div className="sn-workbench-island">
-        <SharedNotesControl key={workspaceRoot} workspaceRoot={workspaceRoot} conversationId={currentId}
-          terminal={delegateSession} seed={sharedNotesSeed} onSeedConsumed={() => setSharedNotesSeed(null)} />
+        <SharedNotesControl key={`${workspaceRoot}:${currentId}`} workspaceRoot={workspaceRoot} conversationId={currentId}
+          variant="launcher" terminal={delegateSession} seed={sharedNotesSeed} onSeedConsumed={() => setSharedNotesSeed(null)} />
       </div>}
 
       {/* The side column. Focus keeps its windows here — the plan, under
@@ -4892,8 +4897,8 @@ This user request requires workspace inspection. Before answering, you MUST call
               </button>
             </div>
           </div>
-          {workspaceRoot && <SharedNotesControl key={workspaceRoot} workspaceRoot={workspaceRoot} conversationId={currentId}
-            terminal={delegateSession} seed={sharedNotesSeed} expanded={sharedNotesOpen} folded={column.planFolded} onUnfold={() => setSidePanelHidden(false)} onOpenChange={setSharedNotesOpen} onSeedConsumed={() => setSharedNotesSeed(null)} />}
+          {workspaceRoot && <SharedNotesControl key={`${workspaceRoot}:${currentId}`} workspaceRoot={workspaceRoot} conversationId={currentId}
+            terminal={delegateSession} seed={sharedNotesSeed} expanded={sharedNotesOpen} folded={column.planFolded || !column.cardsUp} onUnfold={() => { setSidePanelHidden(false); }} onOpenChange={setSharedNotesOpen} onPresenceChange={onNotesPresence} onSeedConsumed={() => setSharedNotesSeed(null)} />}
           {(
           <TodoStrip
             workspaceRoot={workspaceRoot}

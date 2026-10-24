@@ -76,7 +76,7 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
 
   function close() {
     if (busy) return;
-    if ((dirty || lesson.trim() || lessonTitle.trim() || (seed && !seedAdded)) && !window.confirm("Close without saving this shared-notes draft?")) return;
+    if ((dirty || lesson.trim() || lessonTitle.trim() || (seed && !seedAdded)) && !window.confirm("Close without saving this Foundations draft?")) return;
     onClose();
   }
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -139,19 +139,19 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
       <div className="shared-notes-dialog" role="complementary" aria-labelledby="shared-notes-title" tabIndex={-1} ref={root} onKeyDown={keyDown}>
         <header className="shared-notes-header">
           <div className="shared-notes-app-icon"><Icon name="note" size={18} /></div>
-          <h2 id="shared-notes-title">Shared notes</h2><span className="shared-notes-header-caption">Workspace</span>
+          <h2 id="shared-notes-title">Foundations</h2><span className="shared-notes-header-caption">Workspace</span>
           <div className="shared-notes-header-actions">
-            <button className="sn-icon-button" type="button" onClick={() => void reload()} disabled={busy} aria-label="Reload shared notes" title="Reload shared notes"><Icon name="refresh" /></button>
+            <button className="sn-icon-button" type="button" onClick={() => void reload()} disabled={busy} aria-label="Reload foundations" title="Reload foundations"><Icon name="refresh" /></button>
             <span className="sn-header-divider" />
-            <button className="sn-icon-button sn-close" type="button" onClick={close} aria-label="Close shared notes" title="Close" disabled={busy}><Icon name="close" /></button>
+            <button className="sn-icon-button sn-close" type="button" onClick={close} aria-label="Close foundations" title="Close" disabled={busy}><Icon name="close" /></button>
           </div>
         </header>
         <div className="shared-notes-layout">
           <nav className="shared-notes-list" aria-label="Shared note sets">
-            <div className="sn-sidebar-heading"><span>Your note sets</span><button className="sn-icon-button" type="button" aria-label="Create a note set" title="Create a note set" onClick={() => setCreating(!creating)} disabled={busy || dirty || hasLessonDraft}><Icon name="plus" size={15} /></button></div>
-            <label className="sn-search"><Icon name="search" size={14} /><input aria-label="Find note sets" placeholder="Find a note set…" value={query} onChange={event => setQuery(event.target.value)} /></label>
+            <div className="sn-sidebar-heading"><span>Your foundations</span><button className="sn-icon-button" type="button" aria-label="Create a foundation" title="Create a foundation" onClick={() => setCreating(!creating)} disabled={busy || dirty || hasLessonDraft}><Icon name="plus" size={15} /></button></div>
+            <label className="sn-search"><Icon name="search" size={14} /><input aria-label="Find foundations" placeholder="Find a foundation…" value={query} onChange={event => setQuery(event.target.value)} /></label>
             {creating && <form className="sn-create-form" onSubmit={event => { event.preventDefault(); if (newTitle.trim() && !dirty && !busy) void mutate({ type: "create", title: newTitle, conversationId }); }}>
-              <input aria-label="New note set name" autoFocus value={newTitle} maxLength={160} onChange={event => setNewTitle(event.target.value)} placeholder="Name your initiative" />
+              <input aria-label="Foundation name" autoFocus value={newTitle} maxLength={160} onChange={event => setNewTitle(event.target.value)} placeholder="Name your initiative" />
               <div className="shared-notes-actions"><button type="button" className="sn-button sn-ghost" onClick={() => setCreating(false)}>Cancel</button><button type="submit" className="sn-button sn-primary" disabled={!store || busy || dirty || hasLessonDraft || !newTitle.trim()}>Create set</button></div>
             </form>}
             <div className="sn-set-scroll">
@@ -161,7 +161,7 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
                   <span className="sn-set-mark"><Icon name="note" size={16} /></span><span className="sn-set-copy"><span>{item.title}</span><small>{item.conversationIds.length} conversation{item.conversationIds.length === 1 ? "" : "s"}</small></span>{item.id === selectedId && <span className="sn-selection-dot" />}
                 </button>)}</div> : null;
               })}
-              {store && !filteredSets.length && <p className="sn-list-empty">{query ? "No matching note sets." : "A little context for your next conversation."}</p>}
+              {store && !filteredSets.length && <p className="sn-list-empty">{query ? "No matching foundations." : "A little context for your next conversation."}</p>}
             </div>
             <div className="sn-sidebar-footer"><Icon name="people" size={15} /><span>One context.<br />Any provider.</span></div>
           </nav>
@@ -173,15 +173,15 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
             {selectedId ? <>
               <div className="sn-document-heading">
                 <div className="sn-document-meta"><span className="sn-eyebrow">Working context</span><span className={`sn-badge${set?.archived ? " sn-badge-muted" : ""}`}><span />{set?.archived ? "Archived" : "Shared"}</span>
-                  {set && <div className="sn-settings"><button type="button" className="sn-icon-button" aria-label="Note set options" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}><Icon name="more" /></button>{settingsOpen && <div className="sn-settings-menu">
-                    <button type="button" disabled={busy || dirty} onClick={() => void mutate({ type: "archive", id: set.id, archived: !set.archived })}>{set.archived ? "Restore note set" : "Archive note set"}</button>
-                    <button type="button" className="sn-danger" disabled={busy || dirty} onClick={() => { if (deleteArmed) void mutate({ type: "delete", id: set.id }); else setDeleteArmed(true); }}>{deleteArmed ? "Confirm delete notes and links" : "Delete note set"}</button>
+                  {set && <div className="sn-settings"><button type="button" className="sn-icon-button" aria-label="Foundation options" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}><Icon name="more" /></button>{settingsOpen && <div className="sn-settings-menu">
+                    <button type="button" disabled={busy || dirty} onClick={() => void mutate({ type: "archive", id: set.id, archived: !set.archived })}>{set.archived ? "Restore foundation" : "Archive foundation"}</button>
+                    <button type="button" className="sn-danger" disabled={busy || dirty} onClick={() => { if (deleteArmed) void mutate({ type: "delete", id: set.id }); else setDeleteArmed(true); }}>{deleteArmed ? "Confirm delete notes and links" : "Delete foundation"}</button>
                     {deleteArmed && <button type="button" onClick={() => setDeleteArmed(false)}>Cancel delete</button>}
                   </div>}</div>}
                 </div>
                 <label className="sn-document-title"><span className="sn-sr-only">Title</span><input value={draft.title} maxLength={160} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={busy || !set} placeholder="Untitled notes" /></label>
                 <p>The decisions, questions, and next steps your conversations share.</p>
-                <div className="sn-tabs" role="tablist" aria-label="Shared notes sections">{TABS.map(item => <button type="button" role="tab" key={item} id={`shared-tab-${item}`} aria-selected={tab === item} aria-controls={`shared-panel-${item}`} tabIndex={tab === item ? 0 : -1} onKeyDown={event => tabKeyDown(event, item)} onClick={() => { setTab(item); setSettingsOpen(false); }}>
+                <div className="sn-tabs" role="tablist" aria-label="Foundations sections">{TABS.map(item => <button type="button" role="tab" key={item} id={`shared-tab-${item}`} aria-selected={tab === item} aria-controls={`shared-panel-${item}`} tabIndex={tab === item ? 0 : -1} onKeyDown={event => tabKeyDown(event, item)} onClick={() => { setTab(item); setSettingsOpen(false); }}>
                   <Icon name={item === "notes" ? "note" : item === "conversations" ? "people" : "memory"} size={14} />{item === "notes" ? "Notes" : item === "conversations" ? "Conversations" : "Project Memory"}{item === "conversations" && <span className="sn-count">{set?.conversationIds.length ?? 0}</span>}
                 </button>)}</div>
               </div>
@@ -210,14 +210,14 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
                   <div className="sn-section-intro"><span className="sn-feature-icon"><Icon name="memory" size={22} /></span><h3>Make a useful lesson last</h3><p>Turn a working decision into knowledge for the whole Workspace. You’ll review it before it becomes Project Memory.</p></div>
                   <div className="sn-promotion-form"><label>Lesson title<input value={lessonTitle} maxLength={160} onChange={event => setLessonTitle(event.target.value)} placeholder="A clear, reusable takeaway" /></label><label>What to remember<textarea value={lesson} maxLength={4000} onChange={event => setLesson(event.target.value)} placeholder="Describe the lesson and include supporting file paths or test results…" /></label><div className="sn-promotion-footer"><span><Icon name="check" size={14} />Always reviewed by you</span>{hasLessonDraft && <button type="button" className="sn-button sn-ghost" onClick={() => { setLesson(""); setLessonTitle(""); }}>Discard lesson</button>}<button className="sn-button sn-primary" type="button" disabled={!set || !lessonTitle.trim() || !lesson.trim() || busy || dirty} onClick={() => {
                     if (!set) return;
-                    const proposed = addMemoryDraft(sharedNoteLesson(set, lessonTitle, lesson), workspaceRoot, { why: `Selected by the user from shared notes: ${set.title}`, evidence: set.body });
+                    const proposed = addMemoryDraft(sharedNoteLesson(set, lessonTitle, lesson), workspaceRoot, { why: `Selected by the user from foundations: ${set.title}`, evidence: set.body });
                     setReviewDraftId(proposed?.draftId ?? null); setLesson(""); setLessonTitle(""); setReviewOpen(true);
                   }}>Review lesson<Icon name="arrow" size={14} /></button></div></div>
                   <button type="button" className="sn-text-button" onClick={() => { setReviewDraftId(null); setReviewOpen(true); }}>Open Project Memory<Icon name="arrow" size={14} /></button>
                 </section>
               </div>
               <footer className="sn-document-footer"><span className="sn-save-state"><span className={dirty ? "sn-unsaved-dot" : "sn-saved-dot"} />{busy ? "Saving…" : dirty ? "Unsaved changes" : "All changes saved"}</span><div className="shared-notes-actions"><button className="sn-button sn-ghost" type="button" disabled={busy || !dirty} onClick={() => { setDraft({ title: set?.title ?? "", body: set?.body ?? "" }); selection.current = ""; }}>Discard</button><button className="sn-button sn-primary" type="button" disabled={busy || !set || !dirty || !draft.title.trim() || bytes > 12000} onClick={() => void mutate({ type: "edit", id: selectedId, ...draft })}>Save notes<Icon name="check" size={14} /></button></div></footer>
-            </> : <div className="sn-empty-state"><span className="sn-empty-icon"><Icon name="note" size={28} /></span><h3>A shared place to pick up the thread.</h3><p>Keep decisions and open questions together, so your next conversation starts with the context it needs.</p><button type="button" className="sn-button sn-primary" disabled={!store || busy} onClick={() => setCreating(true)}><Icon name="plus" size={15} />{store?.sets.length ? "Create a note set" : "Create your first note set"}</button></div>}
+            </> : <div className="sn-empty-state"><span className="sn-empty-icon"><Icon name="note" size={28} /></span><h3>A shared place to pick up the thread.</h3><p>Keep decisions and open questions together, so your next conversation starts with the context it needs.</p><button type="button" className="sn-button sn-primary" disabled={!store || busy} onClick={() => setCreating(true)}><Icon name="plus" size={15} />{store?.sets.length ? "Create a foundation" : "Create your first foundation"}</button></div>}
           </div>
         </div>
       </div>

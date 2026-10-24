@@ -66,14 +66,14 @@ Coding agents work well in terminals, but their sessions, diffs, and evidence sp
 
 ## How work moves through Klide
 
-The **Shared notes** icon in the conversation’s right-side panel opens a compact
-summary. Use **Memory → Shared notes** to create a named set, select the
+The **Foundations** icon in the conversation’s right-side panel opens a compact
+summary. Use **Memory → Foundations** to create a named set, select the
 conversations that should share it, and save decisions, open
-questions, and next steps. An answer's **Add to shared notes** action stages its
+questions, and next steps. An answer's **Add to Foundations** action stages its
 text for editing before you save. Linked chats read the saved notes on their
 next turn, whichever provider they use. **Review lesson** extracts a
 lesson into the existing review inbox; it becomes Project Memory only when you
-keep it. See [Shared notes](docs/shared-notes.md) for scope and storage details.
+keep it. See [Foundations](docs/shared-notes.md) for scope and storage details.
 
 ```mermaid
 flowchart LR

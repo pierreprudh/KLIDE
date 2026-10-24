@@ -317,17 +317,18 @@ does not build a turn's request or decide what follows a turn — the panel
 supplies those as functions the controller calls at the moment it acts.
 _Avoid_: queue refs, panel globals, run loop (that is the Harness)
 
-**Shared notes**:
+**Foundations**:
 Editable working context attached to an explicit set of Conversations in one
 Workspace, independent of Provider. A Conversation belongs to at most one note
-set. A compact card in the conversation’s right-side panel shows the notes.
+set. Linked, active Foundations rest as an icon in the conversation’s right-side
+panel; an explicit click opens a compact preview with reserved space.
 The full editor in Memory lets the user add an answer as a draft and choose
 which Conversations share them. The Rust-owned store under
 `.klide/shared-notes/` is local/private and shared by linked worktrees through
 the main checkout. Active notes enter the Harness Transcript as context
 updates; changes, unlinking, and archiving take effect on the next turn.
 A selected lesson can become a Memory draft, but it is not Project Memory
-until the user reviews and keeps it. Shared notes are not Run coordination.
+until the user reviews and keeps it. Foundations are not Run coordination.
 _Avoid_: provider memory, accepted knowledge, agent messaging
 
 **Project Memory**:

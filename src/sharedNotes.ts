@@ -33,13 +33,19 @@ export function sharedNotesForConversation(store: SharedNotesStore, conversation
   return store.sets.find(set => set.conversationIds.includes(conversationId));
 }
 
+/** Only explicitly linked, active Foundations have a place beside a chat. */
+export function sharedNotesSlot(store: SharedNotesStore | null, conversationId: string, expanded: boolean): "none" | "mark" | "card" {
+  const set = store ? sharedNotesForConversation(store, conversationId) : undefined;
+  return !set || set.archived ? "none" : expanded ? "card" : "mark";
+}
+
 /** An operator-selected lesson is still a draft. The existing Memory review
  * surface decides whether it becomes knowledge; this helper never publishes. */
 export function sharedNoteLesson(set: SharedNoteSet, title: string, lesson: string): MemoryInput {
   return {
     title: title.trim(), kind: "decision", notes: lesson.trim(),
     tags: ["shared-notes"], supersedes: null,
-    sourceRefs: [{ sourceType: "file", id: set.id, path: ".klide/shared-notes/state.json", label: `Shared notes: ${set.title}, updated ${set.updatedAtMs} (working context, not independently verified evidence)` }],
+    sourceRefs: [{ sourceType: "file", id: set.id, path: ".klide/shared-notes/state.json", label: `Foundations: ${set.title}, updated ${set.updatedAtMs} (working context, not independently verified evidence)` }],
     goal: "", plan: [], decisions: [], filesTouched: [], nextSteps: [],
     runId: null, provider: null, model: null, mode: null, status: null,
   };

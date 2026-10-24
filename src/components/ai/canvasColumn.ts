@@ -31,6 +31,8 @@ export type ColumnInput = {
    *  *looks* like is the column's business, not its own: open, every entry is
    *  a full-width window; closed, every entry is its mark. */
   resultUp: boolean;
+  /** Foundations is absent, a folded mark, or an explicitly opened preview. */
+  notesSlot?: "none" | "mark" | "card";
   /** The latest answer drew something — a diagram, a page — shown here again
    *  beside the prose that holds it. Absent in older callers: nothing drawn.
    *  The caller gates it on `showsVisuals`: a narrow canvas keeps the drawing
@@ -70,9 +72,9 @@ export function showsVisuals(canvasWidth: number): boolean {
   return canvasWidth === 0 || canvasWidth - PROSE_MIN - COLUMN_MARGINS >= COLUMN_MAX;
 }
 
-export function columnGeometry({ planSlot, resultUp, visualUp = false, observerUp = false, missionUp = false, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
+export function columnGeometry({ planSlot, resultUp, notesSlot = "none", visualUp = false, observerUp = false, missionUp = false, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
   const closed = hidden;
-  const maxWidth = missionUp && planSlot === "none" && !resultUp && !visualUp && !observerUp ? 280 : COLUMN_MAX;
+  const maxWidth = missionUp && planSlot === "none" && !resultUp && notesSlot !== "card" && !visualUp && !observerUp ? 280 : COLUMN_MAX;
   const width = canvasWidth === 0
     ? maxWidth
     : Math.max(COLUMN_MIN, Math.min(maxWidth, canvasWidth - PROSE_MIN - COLUMN_MARGINS));
@@ -81,8 +83,8 @@ export function columnGeometry({ planSlot, resultUp, visualUp = false, observerU
   // is its mark. So the column is "open" whenever it holds anything the reader
   // has not folded away, and the corner keeps the marks either way — a
   // finished run never vanishes from the top right.
-  const cardsUp = !closed && (planSlot === "card" || resultUp || visualUp || observerUp || missionUp);
-  const marksUp = !cardsUp && (planSlot !== "none" || resultUp || visualUp || observerUp || missionUp);
+  const cardsUp = !closed && (planSlot === "card" || notesSlot === "card" || resultUp || visualUp || observerUp || missionUp);
+  const marksUp = !cardsUp && (planSlot !== "none" || notesSlot !== "none" || resultUp || visualUp || observerUp || missionUp);
 
   return {
     width,

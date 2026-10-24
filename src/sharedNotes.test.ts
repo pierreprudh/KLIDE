@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sharedNoteLesson, sharedNotesForConversation, type SharedNoteSet } from "./sharedNotes";
+import { sharedNoteLesson, sharedNotesForConversation, sharedNotesSlot, type SharedNoteSet } from "./sharedNotes";
 
 const set: SharedNoteSet = { id: "initiative", title: "Remote execution", body: "Use event cursors. Verify restart behavior.", conversationIds: ["claude", "ollama"], archived: false, updatedAtMs: 1 };
 
@@ -21,5 +21,21 @@ describe("shared notes", () => {
     expect(input.notes).not.toContain("Verify restart");
     expect(input.sourceRefs[0]).toMatchObject({ sourceType: "file", id: "initiative", path: ".klide/shared-notes/state.json" });
     expect(input.provider).toBeNull();
+  });
+});
+
+describe("Foundations visibility", () => {
+  const store = { revision: 1, sets: [set] };
+  it("stays absent during loading and on unrelated conversations, even if previously expanded", () => {
+    expect(sharedNotesSlot(null, "claude", true)).toBe("none");
+    expect(sharedNotesSlot(store, "unrelated", true)).toBe("none");
+  });
+  it("leaves linked Foundations folded until explicitly opened", () => {
+    expect(sharedNotesSlot(store, "claude", false)).toBe("mark");
+    expect(sharedNotesSlot(store, "claude", true)).toBe("card");
+  });
+  it("removes the card when its foundation is archived or unlinked", () => {
+    expect(sharedNotesSlot({ revision: 2, sets: [{ ...set, archived: true }] }, "claude", true)).toBe("none");
+    expect(sharedNotesSlot({ revision: 2, sets: [{ ...set, conversationIds: [] }] }, "claude", true)).toBe("none");
   });
 });
