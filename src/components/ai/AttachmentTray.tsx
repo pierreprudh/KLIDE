@@ -6,6 +6,9 @@
 // tile is what tells kinds apart — a photo (or a staged SVG) is its own
 // thumbnail, a document wears its app's mark or its file-type icon. Removal
 // is a hover reveal — the tray is a quiet strip until you reach for it.
+//
+// A sent message shows the same card (`AttachmentCard`, no remove button), so
+// a file looks the same before and after it went.
 import { useState } from "react";
 import type { AgentAttachment as Attachment } from "../../agent/types";
 import { FileTypeIcon } from "../fileMarks";
@@ -67,6 +70,12 @@ export function AttachmentTray({
   );
 }
 
+/** One attachment as its card, read-only — a sent message's file. The whole
+ *  card opens it when it can be opened. */
+export function AttachmentCard({ attachment, onOpenPhoto }: { attachment: Attachment; onOpenPhoto?: (uri: string) => void }) {
+  return <AttachmentTile attachment={attachment} onOpenPhoto={onOpenPhoto} />;
+}
+
 function AttachmentTile({
   attachment,
   onRemove,
@@ -74,7 +83,8 @@ function AttachmentTile({
   title,
 }: {
   attachment: Attachment;
-  onRemove: () => void;
+  /** Absent on a sent card: nothing to take back, and the card opens. */
+  onRemove?: () => void;
   onOpenPhoto?: (uri: string) => void;
   /** Overrides the tile's tooltip — the tray's note on a photo. */
   title?: string;
@@ -91,13 +101,20 @@ function AttachmentTile({
       ? () => void openStoredAttachment(stored)
       : undefined;
   const name = attachment.path.split("/").pop() || attachment.path;
+  const sent = !onRemove;
+  // History may hold a document without its text; no size beats "0 B".
+  const size = attachment.dataUri || attachment.content ? attachmentSize(attachment) : null;
   return (
     <div
+      role={sent && onOpen ? "button" : undefined}
+      tabIndex={sent && onOpen ? 0 : undefined}
+      onClick={sent ? onOpen : undefined}
+      onKeyDown={sent && onOpen ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } } : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onFocus={() => setHover(true)}
       onBlur={() => setHover(false)}
-      title={title ? `${name} — ${title}` : isPhoto ? name : `${name} — sent as text`}
+      title={title ? `${name} — ${title}` : isPhoto ? name : sent && stored ? `Open ${name} — sent as its text` : `${name} — sent as text`}
       style={{
         position: "relative",
         display: "flex",
@@ -105,8 +122,9 @@ function AttachmentTile({
         gap: 11,
         height: CARD,
         minWidth: 176,
-        maxWidth: 240,
-        padding: `0 32px 0 ${(CARD - TILE) / 2}px`,
+        // A sent card has no ✕ to make room for, and a sent name is worth reading.
+        maxWidth: sent ? 320 : 240,
+        padding: `0 ${sent ? 16 : 32}px 0 ${(CARD - TILE) / 2}px`,
         boxSizing: "border-box",
         borderRadius: 16,
         border: "1px solid var(--border)",
@@ -114,10 +132,12 @@ function AttachmentTile({
         // laid on the box, not printed into it.
         background: CARD_FILL,
         flexShrink: 0,
+        cursor: sent && onOpen ? "pointer" : undefined,
+        textAlign: "left",
       }}
     >
       <div
-        onClick={onOpen}
+        onClick={sent ? undefined : onOpen}
         style={{
           width: TILE,
           height: TILE,
@@ -163,9 +183,9 @@ function AttachmentTile({
         >
           {name}
         </span>
-        <span style={{ fontSize: 12, lineHeight: 1.25, color: "var(--fg-subtle)" }}>{attachmentSize(attachment)}</span>
+        {size && <span style={{ fontSize: 12, lineHeight: 1.25, color: "var(--fg-subtle)" }}>{size}</span>}
       </div>
-      <button
+      {onRemove && <button
         type="button"
         aria-label={`Remove ${name}`}
         title="Remove"
@@ -201,7 +221,7 @@ function AttachmentTile({
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
           <path d="M6 6l12 12M18 6L6 18" />
         </svg>
-      </button>
+      </button>}
     </div>
   );
 }

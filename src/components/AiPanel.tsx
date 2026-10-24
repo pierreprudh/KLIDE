@@ -159,8 +159,7 @@ import { conversationMark } from "../modelIdentity";
 import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { extractPdfText } from "../ipc/pdf";
-import { canOpenStoredAttachment, openStoredAttachment } from "../attachmentNavigation";
-import { AttachmentTray } from "./ai/AttachmentTray";
+import { AttachmentCard, AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
 import { parseConfigUsage } from "./ai/cliConfig";
@@ -4346,23 +4345,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                 ))}
               </div>
             );
+            // The composer's card, read-only: a dropped file looks the same
+            // after it was sent as it did staged, and a kept PDF opens again.
             const docsBlock = docAtts.length > 0 && (
-              <div
-                style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-end", maxWidth: hasText ? "88%" : "100%", paddingRight: hasText ? askerGutter : 0, marginBottom: hasText ? 6 : 0, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-subtle)" }}>
-                {docAtts.map((a, gi) => {
-                  const name = a.path.split("/").pop() || a.path;
-                  const stored = a.stored;
-                  // A dropped PDF was kept, so its name opens it again.
-                  return stored && canOpenStoredAttachment() ? (
-                    <button key={gi} type="button" title={`Open ${name} — sent as its text`}
-                      onClick={() => openStoredAttachment(stored)}
-                      style={{ padding: 0, border: "none", background: "none", font: "inherit", color: "inherit", cursor: "pointer", textDecoration: "underline", textDecorationColor: "var(--border)", textUnderlineOffset: 3 }}>
-                      {name}
-                    </button>
-                  ) : (
-                    <span key={gi} title={`${a.path} — sent as text`}>{name}</span>
-                  );
-                })}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-end", maxWidth: hasText ? "88%" : "100%", paddingRight: hasText ? askerGutter : 0, marginBottom: hasText ? 6 : 0 }}>
+                {docAtts.map((a, gi) => <AttachmentCard key={gi} attachment={a} />)}
               </div>
             );
             // A turn that reopens the thread after a silence says when — the

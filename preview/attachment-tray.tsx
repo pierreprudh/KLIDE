@@ -1,11 +1,12 @@
 // Browser-only fixture for the composer's staged-attachment cards: a photo,
-// a Markdown note, code, and a long name. Hover a card for its ✕.
+// a Markdown note, code, and a long name. Hover a card for its ✕. Below it,
+// the same card on a sent message (read-only), above the asker's bubble.
 // `?theme=light|dark`.
 import { createRoot } from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
 import "../src/styles/tokens.css";
-import { AttachmentTray } from "../src/components/ai/AttachmentTray";
+import { AttachmentCard, AttachmentTray } from "../src/components/ai/AttachmentTray";
 
 const q = new URLSearchParams(location.search);
 const photo = `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#9fb8c8"/><path d="M0 55 L25 25 L45 45 L80 15 L80 80 L0 80Z" fill="#4d6b4f"/><rect y="62" width="80" height="18" fill="#5c7f93"/></svg>`)}`;
@@ -25,6 +26,14 @@ function Preview() {
           against the surface it actually sits on. */}
       <div className="klide-composer-surface" style={{ paddingBottom: 40 }}>
         <AttachmentTray attachments={attachments} onRemove={() => {}} />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", marginTop: 32, paddingRight: 32 }}>
+        <div style={{ marginBottom: 6 }}>
+          <AttachmentCard attachment={{ path: "Evolution of Open-source AI.pdf", content: "[page 1]\n".repeat(4_000), stored: "/tmp/x.pdf" }} />
+        </div>
+        <div style={{ background: "var(--accent-soft)", color: "var(--fg-strong)", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 14, lineHeight: 1.58 }}>
+          what this file about ?
+        </div>
       </div>
     </main>
   );
