@@ -27,11 +27,6 @@ export type ConversationChangedDetail = {
  *  thread to let go of before the next persist quietly brings it back. */
 export const CONVERSATION_DELETED_EVENT = "klide:conversation-deleted";
 export type ConversationDeletedDetail = { conversationId: string };
-/** How many threads the index keeps. On disk this is the only limit; the
- *  browser fallback still stops earlier, at its ~5 MB quota. A thread averages
- *  ~200 KB (tool output is most of it) and the whole index is held in memory,
- *  so this is a few tens of MB, not unbounded. */
-export const MAX_CONVERSATIONS = 300;
 let conversationStorageFailureNotified = false;
 let conversationStoragePressureNotified = false;
 
@@ -184,13 +179,13 @@ export function saveConversations<T>(
 
 // ── The index on disk ─────────────────────────────────────────────────────
 //
-// In the app the index lives in `<app data>/conversations/`, one file per
-// thread (`conversation_store.rs`), not in localStorage: WebKit gives the whole
+// In the app the index lives in `<app data>/conversations/conversations.sqlite3`
+// (`conversation_store.rs`), not in localStorage: WebKit gives the whole
 // origin ~5 MB, and at ~200 KB a thread that held eight conversations. Every
 // surface still reads the index synchronously, so it is loaded into memory
 // once at boot (`hydrateConversationStore`, before the first render) and
 // written back behind a short batch — a streamed token rewrites only its own
-// thread's file, at most every `FLUSH_DELAY_MS`. Off-Tauri (tests, preview
+// thread's SQLite rows, at most every `FLUSH_DELAY_MS`. Off-Tauri (tests, preview
 // harnesses) nothing hydrates and the localStorage path below stays in use.
 
 /** Where the disk index reads and writes; injectable so tests can stand in. */
@@ -251,7 +246,7 @@ function flushIndex(index: DiskIndex): Promise<boolean> {
     clearTimeout(index.timer);
     index.timer = null;
   }
-  // Chained, so two flushes never race each other's files.
+  // Chained, so two flushes never race each other's writes.
   index.flushing = index.flushing.then(async () => {
     if (index.dirty.size === 0 && index.removed.size === 0) return true;
     const byId = new Map(index.records.map((r) => [r.id, r]));
@@ -318,13 +313,11 @@ export async function hydrateConversationStore(sink: ConversationSink = tauriSin
     carried.push(record.id);
   }
   const all = [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
-  const records = all.slice(0, MAX_CONVERSATIONS);
-  const kept = new Set(records.map((r) => r.id));
   disk = {
     sink,
-    records,
-    dirty: new Set(carried.filter((id) => kept.has(id))),
-    removed: new Set(onDisk.filter((r) => !kept.has(r.id)).map((r) => r.id)),
+    records: all,
+    dirty: new Set(carried),
+    removed: new Set(),
     timer: null,
     flushing: Promise.resolve(true),
   };
@@ -413,12 +406,11 @@ export function upsertConversation(
     previous?.renamed && !conv.renamed ? { title: previous.title, renamed: true } : {};
   // The index is ordered by recency, not by write order — a record that was
   // re-saved without gaining a turn keeps its place instead of jumping the
-  // queue. Sorting rather than unshifting also means the prune below drops the
-  // genuinely oldest thread. The upserted record leads among equal times, and
+  // queue. The upserted record leads among equal times, and
   // Array#sort is stable, so it keeps that lead.
   const next = [{ ...conv, createdAt, ...named }, ...existing.filter((c) => c.id !== conv.id)];
   next.sort((a, b) => b.updatedAt - a.updatedAt);
-  return next.slice(0, MAX_CONVERSATIONS);
+  return next;
 }
 
 export function persistConversation(

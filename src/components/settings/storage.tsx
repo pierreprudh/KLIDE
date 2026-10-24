@@ -4,8 +4,8 @@
 // Klide keeps a conversation twice, and the two copies are not equals:
 //
 //  · the **local cache** — the index the Focus rail and the AI panel's history
-//    read from. In the app it is one file per thread under app data, capped at
-//    the newest `MAX_CONVERSATIONS`; without a backend it falls back to
+//    read from. In the app it is SQLite under app data, without a conversation
+//    count limit; without a backend it falls back to
 //    localStorage and its ~5 MB quota, where the oldest snapshots are evicted
 //    to make room. This section shows its size either way.
 //  · the **Run transcripts** on disk — the durable record Mission Control
@@ -27,7 +27,6 @@ import {
   forgetStoredConversation,
   conversationsOnDisk,
   localCacheUsage,
-  MAX_CONVERSATIONS,
   type CachedConversationSize,
 } from "../ai/storedConversations";
 import { deleteKlideConvo } from "../../klideConvos";
@@ -329,7 +328,7 @@ export function StorageSection() {
                       : ""
                   }. ${
                     conversationsOnDisk()
-                      ? `Kept on disk; the newest ${MAX_CONVERSATIONS} stay in the list.`
+                      ? "Kept in SQLite without a conversation count limit."
                       : "Shared with every other Klide key in this webview."
                   }`
             }

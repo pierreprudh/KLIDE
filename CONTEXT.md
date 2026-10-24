@@ -287,7 +287,11 @@ _Avoid_: chat log, message list, thread
 The persisted record of one AI-panel Conversation — `Conversation` in
 `src/components/ai/types.ts`: an id, a title, its `Msg[]`, and the Provider,
 model, Workspace, Git metadata and lineage it was worked in. This is what the
-conversation index holds and what resume and fork pass around. It is a
+conversation index holds and what resume and fork pass around. The desktop index
+and message snapshots live in `conversations/conversations.sqlite3` under app
+data, with no conversation count cap. Legacy per-thread JSON files and the
+localStorage index migrate automatically; Run JSONL Transcripts remain the
+durable event record. It is a
 *different shape* from the Conversation fold above, and the two share a name in
 code; when it matters, say which.
 _Avoid_: chat, session, history entry

@@ -60,6 +60,7 @@ Klide/
 │   ├── MISSION_ORCHESTRATION.md   Agent dispatch of approved tasks, exact-attempt inspection, and limits
 │   ├── MEMORY_ENGINE.md           All-in-one memory architecture + PR sequence
 │   ├── MODEL_ROUTING.md           Auto model routing — the rule, the wire, what it deliberately is not
+│   ├── CONVERSATION_STORE.md      The conversation index: localStorage → JSON files → SQLite, migrations, failure behaviour
 │   ├── SOFTWARE_FACTORY.md        The factory that builds Klide (PR reviewer) + Klide as its control panel
 │   └── (local only)               adr/, delegate replay, competitors, website plans
 ├── preview/                   Throwaway browser harnesses for single surfaces (vite, no Tauri)
@@ -300,7 +301,7 @@ Klide/
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
     │   ├── gateway.rs            opencodex proxy process — install check, start/stop, Codex un-inject
-    │   ├── conversation_store.rs The Stored conversation index on disk — one JSON file per thread (sha256 of the id) under app data; the renderer holds it in memory
+    │   ├── conversation_store.rs The Stored conversation index in SQLite under app data — metadata + ordered messages, one-time JSON import; the renderer holds it in memory
     │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config + `${VAR}` resolution + the GitHub preset
     │   ├── connector_pool.rs     Live connector sessions shared by every Run — lazy connect, reconnect on break, killed at exit
     │   ├── search.rs             Find-in-files over a Workspace with ignore policy
