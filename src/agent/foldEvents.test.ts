@@ -720,6 +720,22 @@ describe("foldAgentEvents", () => {
       expect(marker.role === "system" && marker.compaction && (marker.compaction as {contextTokens?: number}).contextTokens).toBeGreaterThan(200);
     });
 
+    it("counts a delivered observer completion once, on its fenced context", () => {
+      const output = "build output ".repeat(800);
+      const tokensWith = (contextRecorded: boolean) => {
+        const rows = foldAgentEvents([
+          { type: "context_injected", runId: RUN, role: "user", content: `[fence]\n${output}\n[/fence]`, ts: 1 },
+          { type: "observer_completed", runId: RUN, shellId: "sh1", text: output, contextRecorded, ts: 2 },
+          { ...compacted("notes"), kept: 2 },
+        ]);
+        const marker = foldedRowToMsgs(rows[rows.length - 1])[0];
+        if (marker.role !== "system" || !marker.compaction) return 0;
+        return (marker.compaction as { contextTokens?: number }).contextTokens ?? 0;
+      };
+      // Rust's `event_tokens` skips the recorded completion; the mirror must too.
+      expect(tokensWith(false) - tokensWith(true)).toBeGreaterThan(1000);
+    });
+
     // Regression: this variant existed in Rust (emitted, persisted to the
     // Transcript, honoured on replay) but had no TypeScript counterpart, so the
     // fold silently dropped it and a reloaded conversation looked like an

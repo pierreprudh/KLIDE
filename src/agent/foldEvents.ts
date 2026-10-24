@@ -341,7 +341,8 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     else if (event.type === "assistant_message") tokens = event.content.reduce((sum, block) => sum + (block.type === "text" ? estimateTokens(block.text) : block.type === "tool_call" ? estimateTokens(block.name + JSON.stringify(block.input)) : 0), 0);
     else if (event.type === "tool_call_finished") tokens = estimateTokens(event.result.content);
     else if (event.type === "context_injected") tokens = estimateTokens(event.content);
-    else if (event.type === "observer_completed") tokens = estimateTokens(event.text);
+    // A delivered completion is already counted on its fenced context_injected.
+    else if (event.type === "observer_completed" && !event.contextRecorded) tokens = estimateTokens(event.text);
     else if (event.type === "context_compacted") tokens = estimateTokens(event.summary);
     eventTokenTotals.push(eventTokenTotals[before] + tokens);
     if (event.type === "run_result" || event.type === "run_error" || event.type === "assistant_message") turnOpen = false;

@@ -1094,6 +1094,10 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
 /// Add a message nobody typed to the live prompt and record it, in that
 /// order of truth: the transcript is what the next turn's prompt is rebuilt
 /// from, so whatever the provider reads must be in it.
+/// A wake turn's input when the mail it was woken for is already gone.
+const NOTHING_WAITING: &str =
+    "[Agent messages] Nothing is waiting for you after all. Reply in one short sentence.";
+
 fn inject_context(
     messages: &mut Vec<serde_json::Value>,
     emit: &mut impl FnMut(AgentEvent) -> Result<(), String>,
@@ -2876,14 +2880,12 @@ async fn loop_body(
                     ts: now_ms(),
                 })?;
             }
-        } else if wake && message_count == 0 {
+        } else if wake && turn == 0 {
             // Woken for a message that is no longer there (declined, or read
             // by a turn that got in first). The provider still needs a user
-            // turn to answer; keep the answer short.
-            messages.push(user_provider_message(
-                "[Agent messages] Nothing is waiting for you after all. Reply in one short sentence.",
-                &[],
-            ));
+            // turn to answer; keep the answer short. Recorded, so a later
+            // turn's replay sends these same bytes and the cache holds.
+            inject_context(&mut messages, &mut emit, &id, user_provider_message(NOTHING_WAITING, &[]))?;
         }
 
         // Check after all last-minute context additions and compaction. A
@@ -7288,7 +7290,9 @@ mod run_loop_tests {
         drop(seen);
         for structured in [false, true] {
             let replay = reconstruct_prior_messages(&events, structured, None);
-            assert_eq!(&replay[..delivered.len()], delivered.as_slice(), "observer delivery must replay its original fence, exactly once");
+            assert_eq!(&replay[..delivered.len()], delivered.as_slice(), "observer delivery must replay its original fence");
+            assert_eq!(replay.len(), delivered.len() + 1, "…exactly once, followed only by the answer: {replay:#?}");
+            assert_eq!(replay.iter().filter(|m| m.to_string().contains("preview.example.test")).count(), 1);
         }
         // A later user send sees durable history, without delivering the event twice.
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
@@ -7339,10 +7343,42 @@ mod run_loop_tests {
         drop(seen);
         let replay = reconstruct_prior_messages(&events, true, None);
         assert_eq!(&replay[..delivered.len()], delivered.as_slice(), "background report must remain in the cached history");
+        assert_eq!(replay.len(), delivered.len() + 1, "…exactly once, followed only by the answer: {replay:#?}");
+        assert_eq!(replay.iter().filter(|m| m.to_string().contains("Added slugify with tests.")).count(), 1);
         // A later user send sees durable history, without delivering the report twice.
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller).await;
         assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|e| matches!(e, AgentEvent::SubagentResolved { .. })).count(), 1);
+    }
+
+    /// Woken for mail another turn already read: the model still gets a user
+    /// turn to answer, and that turn is recorded so the next request opens
+    /// with the same bytes.
+    #[tokio::test]
+    async fn a_wake_with_nothing_waiting_sends_and_records_one_short_nudge() {
+        let (runs_dir, root) = sandbox("wake-nothing");
+        let id = "wake-nothing";
+        let request = test_request(&root, &[]);
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("First answer.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request.clone(), caller).await;
+
+        let mut wake = request.clone();
+        wake.initial_text.clear();
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Nothing new.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, wake, caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap();
+        let last = seen[0].last().unwrap();
+        assert_eq!(last["role"], "user", "a wake must not end its request on the assistant's turn");
+        assert_eq!(last["content"], NOTHING_WAITING);
+        let sent = seen[0][1..].to_vec();
+        drop(seen);
+        let events = read_events(&runs_dir, id).unwrap();
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::UserMessage { .. })).count(), 1);
+        for structured in [false, true] {
+            let replay = reconstruct_prior_messages(&events, structured, None);
+            assert_eq!(&replay[..sent.len()], sent.as_slice(), "the nudge must replay where it was sent");
+            assert_eq!(replay.len(), sent.len() + 1);
+        }
     }
 
     #[tokio::test]
