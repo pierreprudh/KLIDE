@@ -23,6 +23,7 @@
 import type { CSSProperties } from "react";
 import type { Icon as PhosphorGlyph } from "@phosphor-icons/react";
 
+import { ArrowCounterClockwise } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { Code } from "@phosphor-icons/react/dist/csr/Code";
 import { DotsThree } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PushPinSimple } from "@phosphor-icons/react/dist/csr/PushPinSimple";
@@ -350,3 +351,6 @@ export function VisualExpandIcon({ expanded = false, size = 18, ...props }: Glyp
     </g>)}
   </svg>;
 }
+
+/** Refresh, or play again from the start. */
+export function ReplayIcon(p: GlyphProps) { return <Icon as={ArrowCounterClockwise} {...p} />; }

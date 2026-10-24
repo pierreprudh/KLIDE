@@ -16,6 +16,63 @@ under the runs folder; nothing here replaces or rewrites a Transcript.
 
 `<app data>` on macOS is `~/Library/Application Support/com.pierre.klide/`.
 
+## Infrastructure
+
+```mermaid
+flowchart LR
+    subgraph Webview["Webview — React"]
+        Boot["main.tsx boot"]
+        Surfaces["Rail · AI panel · Focus · Settings → Storage"]
+        Mem[("In-memory index — storedConversations.ts")]
+        Flush["flushIndex — changed ids, 400 ms batch"]
+        LS[("localStorage klide-conversations — legacy source + fallback")]
+    end
+    subgraph Rust["Tauri backend — Rust"]
+        Cmd["conversations_load / conversations_write — blocking::run"]
+        Store["conversation_store.rs — one cached Connection"]
+        Harness["Harness + ptyd background runs"]
+    end
+    subgraph Disk["App data folder"]
+        DB[("conversations/conversations.sqlite3 — WAL, synchronous=FULL")]
+        JSON[("conversations/*.json — legacy recovery copy")]
+        Runs[("runs/*.jsonl — Run transcripts, the durable record")]
+    end
+
+    Boot -- "hydrate before first render" --> Cmd
+    Surfaces -- "read synchronously" --> Mem
+    Surfaces -- "persistConversation" --> Mem
+    Mem --> Flush
+    Flush -- "invoke" --> Cmd
+    Cmd --> Store
+    Store -- "IMMEDIATE transaction" --> DB
+    Store -. "import once (json-files-v1)" .-> JSON
+    Store -. "delete with its conversation" .-> JSON
+    LS -. "merged once, removed after SQLite accepts it" .-> Mem
+    Harness -- "append" --> Runs
+```
+
+The index is a cache in front of the transcripts. Losing `conversations.sqlite3`
+loses the list and its snapshots, but no record of a Run: Mission Control still
+reads `runs/`.
+
+```mermaid
+erDiagram
+    conversations ||--o{ conversation_messages : "holds (ON DELETE CASCADE)"
+    conversations {
+        TEXT id PK "the conversation id, == Run id"
+        INTEGER updated_at "indexed, newest first"
+        TEXT metadata "the record minus msgs"
+    }
+    conversation_messages {
+        TEXT conversation_id PK "FK conversations.id"
+        INTEGER position PK "0-based message order"
+        TEXT body "one Msg as JSON"
+    }
+    conversation_migrations {
+        TEXT name PK "json-files-v1"
+    }
+```
+
 ## Shape
 
 ```sql
