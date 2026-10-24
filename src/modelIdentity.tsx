@@ -8,7 +8,7 @@ import {
   QwenLogo,
   modelBrand,
 } from "./modelBrand";
-import { BrandImage, ProviderLogo, TwoToneMark } from "./components/ai/icons";
+import { BrandImage, ProviderLogo, TwoToneMark, providerChartColor } from "./components/ai/icons";
 import { isDelegateProvider, providerDefinition, providerName } from "./agent/providers";
 import type { ProviderId } from "./agent/types";
 
@@ -154,6 +154,21 @@ export function modelIdentity(model: string | null | undefined): ModelIdentity |
   // Llama, not an unknown.
   const vendor = vendorSegment(normalized);
   return (vendor ? MAKER_BY_VENDOR[vendor] : undefined) ?? null;
+}
+
+/** Resolve the hue through the same model identity as its logo. Routing a
+ * DeepSeek model through OpenRouter must not repaint it OpenRouter purple. */
+export function modelBrandColor(model: string | null | undefined, provider?: string | null): string {
+  const identity = modelIdentity(model);
+  const brandByMaker: Record<string, string> = {
+    Anthropic: "anthropic", OpenAI: "openai", Codex: "codex", Google: "gemini",
+    xAI: "xai", DeepSeek: "deepseek", Qwen: "qwen", "Mistral AI": "mistral",
+    Llama: "llama", Kimi: "kimi", MiniMax: "minimax", "Sakana AI": "sakana",
+    "Hugging Face": "huggingface",
+  };
+  if (identity) return providerChartColor(brandByMaker[identity.name] ?? "") ?? "var(--fg-strong)";
+  const routed = routedSelection(model);
+  return providerChartColor(routed?.provider ?? (provider === "claude-code" ? "anthropic" : provider ?? "")) ?? "var(--fg-strong)";
 }
 
 /** On-device families with no maker mark of their own. They still ran locally,

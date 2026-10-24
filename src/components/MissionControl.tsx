@@ -1,3 +1,5 @@
+import { RunActivityTabs, type RunActivityView } from "./missionControl/RunActivityTabs";
+import { RunTimeline } from "./missionControl/RunTimeline";
 import { MissionLibrary } from "./missionControl/MissionLibrary";
 import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -2817,6 +2819,7 @@ function RunDetail({
   // The full set of CLI sources we can offer as "Open in {source}". Klide
   // runs hand off to one of these with compact task state as the prompt.
   const cliSources: DelegateId[] = handoffTargetsFor(run);
+  const [activityTab, setActivityTab] = useState<RunActivityView>("conversation");
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(run.title);
   const [exportState, setExportState] = useState<"idle" | "copying" | "copied" | "error">("idle");
@@ -3583,8 +3586,10 @@ function RunDetail({
         </>
       )}
 
-      <DetailLabel>Conversation</DetailLabel>
-      <ConversationView run={run} preloaded={messages} />
+      <RunActivityTabs idPrefix={`run-${run.id}`} value={activityTab} onChange={setActivityTab} />
+      <div role="tabpanel" id={`run-${run.id}-activity`} aria-labelledby={`run-${run.id}-${activityTab}-tab`} tabIndex={0}>
+        {activityTab === "conversation" ? <ConversationView run={run} preloaded={messages} /> : <RunTimeline key={`${run.source}:${run.id}`} run={run} view={activityTab} />}
+      </div>
     </div>
   );
 }

@@ -124,7 +124,8 @@ export const BRAND_LOGO_PATHS: Partial<Record<BrandKey, string>> = {
 // (`PROVIDER_BRAND_COLOR`); a row's accent depended on which surface drew it.
 // Claude Code and Codex are distinct *products*, not just the Anthropic /
 // OpenAI providers — they wear their own marks (see PROVIDER_LOGO_IMAGE).
-const BRAND_COLOR: Partial<Record<BrandKey, { mark?: string; chart?: string }>> = {
+type ModelColorBrand = "qwen" | "llama" | "kimi" | "minimax" | "sakana" | "huggingface";
+const BRAND_COLOR: Partial<Record<BrandKey | ModelColorBrand, { mark?: string; chart?: string }>> = {
   anthropic: { mark: "#D97757", chart: "#D97757" },
   "claude-code": { mark: "#D97757", chart: "#D97757" },
   openai: { mark: "var(--fg-strong)" },
@@ -138,10 +139,17 @@ const BRAND_COLOR: Partial<Record<BrandKey, { mark?: string; chart?: string }>> 
   openrouter: { mark: "#4A6CF7", chart: "#6467F2" },
   deepseek: { mark: "#4D6BFE", chart: "#4D6BFE" },
   omp: { mark: "#7C6BAE", chart: "#7C6BAE" },
+  // Model-only makers use the hues of the logo assets shipped in /public.
+  qwen: { chart: "#082DFF" },
+  llama: { chart: "#0081FB" },
+  kimi: { chart: "#1783FF" },
+  minimax: { chart: "#F44454" },
+  sakana: { chart: "#E10600" },
+  huggingface: { chart: "#FFD21E" },
 };
 
 function brandColor(id: string): { mark?: string; chart?: string } | undefined {
-  return BRAND_COLOR[providerBrand(id) as BrandKey];
+  return BRAND_COLOR[providerBrand(id) as BrandKey | ModelColorBrand];
 }
 
 /** A provider's brand colour, or `undefined` for one with no mark of its own. */
@@ -627,6 +635,9 @@ const TOOL_ICON_PATHS: Record<string, ReactElement> = {
     <path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z" />
   ),
 };
+
+// Starting and reading a command use the same terminal mark.
+TOOL_ICON_PATHS.run_command = TOOL_ICON_PATHS.read_command_output;
 
 // The connector tools draw the Settings plug, so a call reads as "through a
 // connector" at a glance. A call to GitHub itself wears GitHub's mark instead

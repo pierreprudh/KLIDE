@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
-  makerMark, conversationMark, modelIdentity } from "./modelIdentity";
+  makerMark, conversationMark, modelIdentity, modelBrandColor } from "./modelIdentity";
 import type { ProviderId } from "./agent/types";
 
 /** What a mark actually draws, as markup — the only way to tell a mark that
@@ -251,5 +251,19 @@ describe("product marks", () => {
 
   it("leaves Gemini on Google's own mark", () => {
     expect(markup("gemini-3-pro")).not.toContain("/gemma-logo.svg");
+  });
+});
+
+
+describe("model brand colors", () => {
+  it("uses the model maker's color ahead of the serving provider", () => {
+    expect(modelBrandColor("deepseek/deepseek-v4", "openrouter")).toBe("#4D6BFE");
+    expect(modelBrandColor("claude-sonnet-4", "opencode")).toBe("#D97757");
+    expect(modelBrandColor("qwen/qwq-32b", "ollama")).toBe("#082DFF");
+  });
+  it("keeps monochrome and unknown makers neutral", () => {
+    expect(modelBrandColor("gpt-5", "openrouter")).toBe("var(--fg-strong)");
+    expect(modelBrandColor("grok-4", "openrouter")).toBe("var(--fg-strong)");
+    expect(modelBrandColor("unknown", "custom:local")).toBe("var(--fg-strong)");
   });
 });
