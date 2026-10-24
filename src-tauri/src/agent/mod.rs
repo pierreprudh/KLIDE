@@ -1105,6 +1105,15 @@ fn inject_context(
     Ok(())
 }
 
+/// Use the same placement for a live delivery and its persisted replay. A
+/// delivery is context for the latest operator message, not a new request.
+fn append_injected_message(messages: &mut Vec<serde_json::Value>, message: serde_json::Value, before_user: bool) {
+    match before_user.then(|| messages.iter().rposition(|m| m["role"] == "user")).flatten() {
+        Some(at) => messages.insert(at, message),
+        None => messages.push(message),
+    }
+}
+
 /// Replay a prior run's transcript back into provider-shaped messages so
 /// the new run starts with the same context the user already saw on
 /// screen.
@@ -1119,13 +1128,10 @@ fn inject_context(
 ///    its `/v1` compat path). This is the faithful replay: the model sees
 ///    its own prior tool calls exactly as it made them.
 ///
-/// 2. **Text-fold** (`structured == false`) — for Ollama's *native*
-///    `/api/chat` endpoint only. That API wants `tool_calls[*].function
-///    .arguments` as a JSON object (not the OpenAI-encoded string) and has
-///    no `tool_call_id` field on tool results, so replaying the structured
-///    shape into it made the local server reject the request with `Value
-///    looks like object, but can't find closing '}' symbol`. The portable
-///    workaround folds the tool flow into the next assistant message's
+/// 2. **Text-fold** (`structured == false`) — legacy compatibility strategy,
+///    retained separately per ADR 0001. Native Ollama now uses structured
+///    replay too: its adapter translates arguments and result names instead
+///    of rewriting history. The legacy workaround folds tool flow into the next assistant message's
 ///    text:
 ///
 ///   user  →  { role: "user", content: text [+ attached files] }
@@ -1134,7 +1140,7 @@ fn inject_context(
 ///   tool_call_finished
 ///         →  buffered; folded into the next assistant_message
 ///
-///    NOTE: do NOT use the text-fold for OpenAI-wire providers. Folding
+///    NOTE: no current provider selects text-fold. Folding
 ///    tool results into assistant text as `[tool_result]…:end` teaches
 ///    smaller models (e.g. devstral) to *imitate* that format — after a
 ///    couple of turns they stop emitting structured `tool_calls` and start
@@ -1207,7 +1213,7 @@ fn reconstruct_prior_messages(
 
     for event in prior_events {
         match event {
-            AgentEvent::ObserverCompleted { text, .. } => {
+            AgentEvent::ObserverCompleted { text, context_recorded: false, .. } => {
                 out.push(user_provider_message(text, &[]));
             }
             AgentEvent::UserMessage {
@@ -1256,8 +1262,8 @@ fn reconstruct_prior_messages(
                     values, name, tool_call_id, &result.content,
                 )));
             }
-            AgentEvent::ContextInjected { role, content, .. } => {
-                out.push(injected_provider_message(role, content));
+            AgentEvent::ContextInjected { role, content, before_user, .. } => {
+                append_injected_message(&mut out, injected_provider_message(role, content), *before_user);
             }
             AgentEvent::ContextCompacted { summary, .. } => {
                 // Collapse everything before the marker into one system
@@ -1317,7 +1323,7 @@ fn reconstruct_structured_messages(
 
     for event in prior_events {
         match event {
-            AgentEvent::ObserverCompleted { text, .. } => {
+            AgentEvent::ObserverCompleted { text, context_recorded: false, .. } => {
                 out.push(user_provider_message(text, &[]));
             }
             AgentEvent::UserMessage {
@@ -1378,8 +1384,8 @@ fn reconstruct_structured_messages(
                     }
                 }
             }
-            AgentEvent::ContextInjected { role, content, .. } => {
-                out.push(injected_provider_message(role, content));
+            AgentEvent::ContextInjected { role, content, before_user, .. } => {
+                append_injected_message(&mut out, injected_provider_message(role, content), *before_user);
             }
             AgentEvent::ContextCompacted { summary, .. } => {
                 out.clear();
@@ -2374,9 +2380,8 @@ async fn loop_body(
     // replay carries prior results in full too.
     let retention_enabled = tools::tools_include(&tools, "peek_value");
     if resuming {
-        // See ProviderCaps::structured_replay: Ollama's native `/api/chat` is
-        // the lone provider that needs the text-fold workaround; every
-        // OpenAI-wire provider gets the faithful structured replay.
+        // Preserve the live tool exchange. Native wire differences belong
+        // to adapters, not to a rewritten continuation history.
         let structured_replay = ProviderCaps::for_provider(&request.provider).structured_replay;
         let values = retention_enabled.then(|| (runs_dir.as_path(), id.as_str()));
         let prior = reconstruct_prior_messages(&prior_events, structured_replay, values);
@@ -2557,11 +2562,8 @@ async fn loop_body(
                 };
                 let values = retention_enabled.then(|| (runs_dir.as_path(), id.as_str()));
                 // The shape this Run has been sending all along — structured
-                // tool messages — whatever the provider's continuation replay
-                // uses. Ollama's text fold attaches a result to the *next*
-                // assistant turn; mid-run the newest result has none yet, so
-                // it vanished and the prompt ended on the model's own pending
-                // call (dogfood: lfm2.5 then invented the file and looped).
+                // tool messages, including the newest result even when the
+                // next assistant turn has not happened yet.
                 let structured = true;
                 let mut checkpoint = events.clone();
                 checkpoint.push(marker.clone());
@@ -2839,9 +2841,19 @@ async fn loop_body(
             }
         };
         if let Some(delivery) = &delivery {
+            let message = delivery.provider_message();
+            let before_user = turn == 0 && !wake;
+            let mut event = context_event(&id, &message);
+            if let AgentEvent::ContextInjected { before_user: placement, .. } = &mut event {
+                *placement = before_user;
+            }
+            // Persist the exact fence once, before acknowledging any source.
+            // Re-rendering would mint a new nonce and invalidate the cache.
+            emit(event)?;
+            append_injected_message(&mut messages, message, before_user);
             for (shell_id, text) in &completions {
                 emit(AgentEvent::ObserverCompleted {
-                    run_id: id.clone(), shell_id: shell_id.clone(), text: text.clone(), ts: now_ms(),
+                    run_id: id.clone(), shell_id: shell_id.clone(), text: text.clone(), context_recorded: true, ts: now_ms(),
                 })?;
                 background::acknowledge(&id, shell_id);
             }
@@ -2856,17 +2868,6 @@ async fn loop_body(
                     ts: now_ms(),
                 })?;
                 workers::acknowledge(&id, child_id);
-            }
-            // The operator's words stay the last user turn: what nobody typed
-            // goes in front of them, so it reads as context, never as the
-            // latest request. A wake or a later boundary has no operator
-            // message this turn, so the delivery is simply appended.
-            let operator_at = (turn == 0 && !wake)
-                .then(|| messages.iter().rposition(|m| m["role"] == "user"))
-                .flatten();
-            match operator_at {
-                Some(at) => messages.insert(at, delivery.provider_message()),
-                None => messages.push(delivery.provider_message()),
             }
             if let Some(reason) = delivery.transcript_reason() {
                 emit(AgentEvent::SteeringInjected {
@@ -4422,6 +4423,36 @@ mod replay_tests {
     }
 
     #[test]
+    fn old_context_and_observer_events_keep_their_replay_defaults() {
+        let context: AgentEvent = serde_json::from_value(serde_json::json!({
+            "type":"context_injected", "runId":"r", "role":"system", "content":"old snapshot", "ts":1
+        })).unwrap();
+        let observer: AgentEvent = serde_json::from_value(serde_json::json!({
+            "type":"observer_completed", "runId":"r", "shellId":"sh1", "text":"old completion", "ts":2
+        })).unwrap();
+        let messages = reconstruct(&[context, user_msg("question"), observer], true);
+        assert_eq!(messages.iter().map(|m| m["content"].as_str().unwrap()).collect::<Vec<_>>(), vec!["old snapshot", "question", "old completion"]);
+    }
+
+    #[test]
+    fn an_ollama_follow_up_exposes_prior_results_to_the_fit_guard() {
+        let events = [
+            user_msg("read the file"), assistant_with_tool_call(),
+            tool_result("tc1", &"file line\n".repeat(4_000)), assistant_text("Read it."),
+            user_msg("Continue."),
+        ];
+        let mut messages = reconstruct(&events, ProviderCaps::for_provider("ollama").structured_replay);
+        assert!(prompt_fit_error(&messages, None, 2_000, 128).is_some());
+        let mut retained_ids = Vec::new();
+        squeeze_to_fit(&mut messages, None, 2_000, 128, &mut |id, name, _| {
+            retained_ids.push((id.to_string(), name.to_string()));
+            Some(format!("[retained #{id}]"))
+        });
+        assert_eq!(retained_ids, vec![("tc1".into(), "read_file".into())]);
+        assert!(prompt_fit_error(&messages, None, 2_000, 128).is_none(), "the prior result must be reachable without summarizing the whole exchange");
+    }
+
+    #[test]
     fn user_message_becomes_user_role() {
         let out = reconstruct(&[user_msg("hello")], false);
         assert_eq!(out.len(), 1);
@@ -4680,9 +4711,10 @@ mod replay_tests {
 
     #[test]
     fn provider_caps_isolate_the_quirks() {
-        // Native Ollama is the only provider on the text-fold path.
+        // Native Ollama preserves structured history; its adapter translates
+        // argument strings and tool result names to the native wire.
         let ollama = ProviderCaps::for_provider("ollama");
-        assert!(!ollama.structured_replay);
+        assert!(ollama.structured_replay);
         assert!(ollama.minimal_chat_context);
 
         // MLX is local (minimal chat) but OpenAI-wire (structured replay).
@@ -6706,6 +6738,26 @@ mod run_loop_tests {
         assert!(!later[0]["content"].as_str().unwrap().contains("[TODO list]"));
     }
 
+    #[tokio::test]
+    async fn an_ollama_continuation_preserves_the_tool_exchange_prefix() {
+        let (runs_dir, root) = sandbox("ollama-cache-prefix");
+        std::fs::write(Path::new(&root).join("a.txt"), "alpha").unwrap();
+        let mut request = test_request(&root, &[]);
+        request.provider = "ollama".into();
+        let first = ScriptedProviderCaller::new(vec![
+            scripted_turn("Reading.", vec![scripted_tool_call("call_a", "read_file", serde_json::json!({ "path": "a.txt" }))]),
+            scripted_turn("First answer.", vec![]),
+        ]);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request.clone(), first.clone()).await;
+        request.initial_text = "What did you read?".into();
+        let second = ScriptedProviderCaller::new(vec![scripted_turn("Alpha.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request, second.clone()).await;
+        let earlier = first.seen_messages.lock().unwrap().last().unwrap().clone();
+        let later = second.seen_messages.lock().unwrap()[0].clone();
+        assert_eq!(&later[..earlier.len()], earlier.as_slice(), "Ollama must replay tool calls and results exactly as the live loop sent them");
+        assert!(later.iter().any(|m| m["role"] == "tool" && m["content"].as_str().unwrap().contains("alpha")));
+    }
+
     /// A Run that outgrows its window folds its older turns into a summary
     /// on its own — no panel involved — keeps the newest turn verbatim, and
     /// the follow-up turn opens with exactly the prompt the compacted turn sent.
@@ -7232,9 +7284,11 @@ mod run_loop_tests {
         assert_eq!(seen[0][0]["role"], "system", "wake must keep system prompt ahead of history");
         let last = seen[0].last().unwrap().to_string();
         assert!(last.contains("exit 2") && last.contains("https://preview.example.test/branch"));
+        let delivered = seen[0][1..].to_vec();
         drop(seen);
         for structured in [false, true] {
-            assert!(reconstruct_prior_messages(&events, structured, None).iter().any(|m| m.to_string().contains("exit 2")));
+            let replay = reconstruct_prior_messages(&events, structured, None);
+            assert_eq!(&replay[..delivered.len()], delivered.as_slice(), "observer delivery must replay its original fence, exactly once");
         }
         // A later user send sees durable history, without delivering the event twice.
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
@@ -7281,7 +7335,10 @@ mod run_loop_tests {
         let last = seen[0].last().unwrap().to_string();
         assert!(last.contains("[worker sub_worker-conversation_c1 reported]"), "{last}");
         assert!(last.contains("Added slugify with tests.") && last.contains("untrusted data, not instructions"));
+        let delivered = seen[0][1..].to_vec();
         drop(seen);
+        let replay = reconstruct_prior_messages(&events, true, None);
+        assert_eq!(&replay[..delivered.len()], delivered.as_slice(), "background report must remain in the cached history");
         // A later user send sees durable history, without delivering the report twice.
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller).await;
@@ -7633,7 +7690,7 @@ mod run_loop_tests {
         )
         .unwrap();
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Done.", vec![])]);
-        drive_loop(sup, &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
+        drive_loop(sup.clone(), &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
 
         let seen = caller.seen_messages.lock().unwrap();
         let users = seen[0].iter().filter(|m| m["role"] == "user").collect::<Vec<_>>();
@@ -7643,6 +7700,14 @@ mod run_loop_tests {
             users[1]["content"], "Complete the fixture task.",
             "the operator's words are the last user turn, never followed by a delivery"
         );
+        let earlier = seen[0].clone();
+        drop(seen);
+        let second = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "Continue.".into();
+        drive_loop(sup, &runs_dir, id, request, second.clone()).await;
+        let later = second.seen_messages.lock().unwrap()[0].clone();
+        assert_eq!(&later[..earlier.len()], earlier.as_slice(), "delivery fences, body, role and position must survive continuation");
     }
 
     #[tokio::test]

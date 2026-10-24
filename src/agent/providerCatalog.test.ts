@@ -50,7 +50,7 @@ describe("Provider catalog — the one TS door onto the Rust registry", () => {
 
   it("carries the run-loop quirks the Rust row declares", () => {
     expect(providerCaps("ollama")).toEqual({
-      structuredReplay: false,
+      structuredReplay: true,
       minimalChatContext: true,
     });
     expect(providerCaps("mlx")).toMatchObject({ minimalChatContext: true });

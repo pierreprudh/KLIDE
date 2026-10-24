@@ -138,10 +138,9 @@ pub enum CreditsSource {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCaps {
     /// Replay continuation history as structured tool messages (assistant
-    /// `tool_calls` + `role:"tool"`). Ollama's native `/api/chat` is the lone
-    /// exception: the structured shape makes those models imitate fake tool
-    /// text, so it gets the text-fold workaround instead. Every OpenAI-wire
-    /// provider (including Ollama over `/v1`) gets the faithful structured replay.
+    /// `tool_calls` + `role:"tool"`). The native Ollama adapter translates
+    /// argument strings and result names at the wire boundary, so its replay
+    /// can preserve the same structured history as the live loop too.
     pub structured_replay: bool,
     /// Keep Chat-mode context minimal — skip injecting the project TODO list,
     /// and let the renderer send its bare chat prompt. Small local backends
@@ -312,9 +311,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         is_local_server: true,
         has_num_ctx: true,
         caps: ProviderCaps {
-            // Native `/api/chat` imitates fake tool text under a structured
-            // replay — the one text-fold provider.
-            structured_replay: false,
+            structured_replay: true,
             minimal_chat_context: true,
         },
         context_window: None,

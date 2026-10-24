@@ -658,6 +658,14 @@ on one lifetime — hour for a person's conversation, five minutes headless).
 `a_continuation_opens_with_the_prompt_the_last_turn_sent` guard it; usage's
 `cacheReadTokens` is the live signal.
 
+Turn-boundary deliveries also ride `ContextInjected`: the exact random fence
+is saved once, with `beforeUser` when it preceded the operator's message.
+`ObserverCompleted.contextRecorded` keeps the visible completion from replaying
+a second raw copy; older transcripts default to the original raw replay.
+Native Ollama selects structured replay too. Its adapter converts argument
+strings to objects and tool result names to `tool_name`, leaving neutral
+history untouched, and reads `prompt_eval_cached_count` when supplied.
+
 Compaction is Rust's, for every Run (`agent/compaction.rs`): trim old tool
 results first, then — still over — fold the turns before a turn boundary into
 notes the model writes from the cached prompt, and rebuild the prompt through

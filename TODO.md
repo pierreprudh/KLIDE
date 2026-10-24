@@ -329,12 +329,15 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
   - [ ] a headless Run (worker or Mission attempt) compacts with no panel open
 - [ ] Dogfood the cache: reply after 10+ min on Anthropic and check "N% cached".
 - [ ] Stop a degenerate reply: a small model looping on one line streamed for minutes until the window filled (lfm2.5 after a bad prompt). A repetition guard on the stream, or a reply cap for local models.
-- [ ] Record peer-mail delivery in the transcript (it still breaks the cached
-  prefix on the next turn).
-- [ ] Ollama replays continuations as text folds, so its KV prefix breaks at the
-  first prior tool call — and trimming / squeeze-to-fit can't see the folded
-  results (only the summary can fold them). Structured replay for Ollama would
-  fix both.
+- [x] Record the exact fenced delivery in the transcript, with its position
+  before the operator's message (2026-10-24). Peer mail, observer completions
+  and background worker reports replay without changing the cached prefix;
+  older observer transcripts still replay their original completion text.
+- [x] Ollama continuations preserve structured tool calls and results
+  (2026-10-24). The native adapter translates argument objects and `tool_name`;
+  trimming and squeeze-to-fit can reach prior results. Live lfm2.5 check:
+  the second request reused 221 of 242 prompt tokens. Cache-read counts are
+  reported when the Ollama server supplies them.
 - [ ] Upgrade ironcalc to 0.9 (zip ≥ 9) and drop the three ignores in
   `.cargo/audit.toml`.
 - [ ] Refresh base list prices in `pricing.rs`. The GPT-5 family is current

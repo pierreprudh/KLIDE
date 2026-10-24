@@ -57,7 +57,7 @@ fn event_tokens(event: &AgentEvent) -> usize {
             .sum(),
         AgentEvent::ToolCallFinished { result, .. } => result.content.len(),
         AgentEvent::ContextInjected { content, .. } => content.len(),
-        AgentEvent::ObserverCompleted { text, .. } => text.len(),
+        AgentEvent::ObserverCompleted { text, context_recorded: false, .. } => text.len(),
         AgentEvent::ContextCompacted { summary, .. } => summary.len(),
         _ => 0,
     };
@@ -395,7 +395,7 @@ mod tests {
         }
     }
     fn injected(content: &str) -> AgentEvent {
-        AgentEvent::ContextInjected { run_id: "r".into(), role: "system".into(), content: content.into(), ts: 0 }
+        AgentEvent::ContextInjected { run_id: "r".into(), role: "system".into(), content: content.into(), before_user: false, ts: 0 }
     }
     fn marker(kept: Option<usize>) -> AgentEvent {
         AgentEvent::ContextCompacted { run_id: "r".into(), summary: "notes".into(), kept, context_tokens: None, cost_usd: None, manual: false, ts: 0 }

@@ -324,6 +324,7 @@ pub(super) fn context_event(run_id: &str, message: &serde_json::Value) -> AgentE
         run_id: run_id.to_string(),
         role: message["role"].as_str().unwrap_or("system").to_string(),
         content: message["content"].as_str().unwrap_or_default().to_string(),
+        before_user: false,
         ts: now_ms(),
     }
 }
@@ -1047,6 +1048,7 @@ mod tests {
             run_id: "r".into(),
             role: "system".into(),
             content: content.into(),
+            before_user: false,
             ts: 0,
         };
         let prior = vec![injected("[TODO list]\n- [ ] a"), injected("[STEERING] nudge"), injected("[TODO list]\n- [x] a")];
@@ -1060,7 +1062,7 @@ mod tests {
     #[test]
     fn provider_caps_isolate_the_quirks() {
         let ollama = ProviderCaps::for_provider("ollama");
-        assert!(!ollama.structured_replay);
+        assert!(ollama.structured_replay);
         assert!(ollama.minimal_chat_context);
 
         let mlx = ProviderCaps::for_provider("mlx");

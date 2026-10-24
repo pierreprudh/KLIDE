@@ -202,6 +202,15 @@ fn normalize_ollama_messages(messages: &[serde_json::Value]) -> Vec<serde_json::
         .iter()
         .map(|m| {
             let mut m = m.clone();
+            if m["role"] == "tool" {
+                if let Some(name) = m.get("name").cloned() {
+                    m["tool_name"] = name;
+                }
+                if let Some(object) = m.as_object_mut() {
+                    object.remove("name");
+                    object.remove("tool_call_id");
+                }
+            }
             if let Some(calls) = m.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
                 for call in calls {
                     let arguments = &mut call["function"]["arguments"];
@@ -336,7 +345,10 @@ impl StreamingProvider for OllamaAdapter {
                 // Local models are free — no billed cost to report.
                 cost_usd: None,
                 // The window this request ran in — what `build_request` sent.
-                context_window: self.num_ctx.map(|n| n as u64),cache_read_tokens: None, cache_write_tokens: None, cache_write_long_tokens: None,
+                context_window: self.num_ctx.map(|n| n as u64),
+                cache_read_tokens: count("prompt_eval_cached_count"),
+                cache_write_tokens: None,
+                cache_write_long_tokens: None,
             };
             self.stop_reason = value
                 .get("done_reason")
@@ -1930,6 +1942,27 @@ mod tests {
     }
 
     #[test]
+    fn ollama_translates_structured_tool_history_to_its_native_wire() {
+        let messages = vec![
+            serde_json::json!({"role":"assistant", "content":"Reading.", "tool_calls":[
+                {"id":"a", "type":"function", "function":{"name":"read_file", "arguments":"{\"path\":\"a.txt\"}"}},
+                {"id":"b", "type":"function", "function":{"name":"read_file", "arguments":{"path":"b.txt"}}}
+            ]}),
+            serde_json::json!({"role":"tool", "name":"read_file", "tool_call_id":"a", "content":"alpha"}),
+            serde_json::json!({"role":"tool", "name":"read_file", "tool_call_id":"b", "content":"beta"}),
+        ];
+        let out = normalize_ollama_messages(&messages);
+        assert_eq!(out[0]["tool_calls"][0]["function"]["arguments"], serde_json::json!({"path":"a.txt"}));
+        assert_eq!(out[0]["tool_calls"][1]["function"]["arguments"], serde_json::json!({"path":"b.txt"}));
+        assert_eq!(out[1]["tool_name"], "read_file");
+        assert_eq!(out[2]["tool_name"], "read_file");
+        assert_eq!(out[1]["content"], "alpha");
+        assert_eq!(out[2]["content"], "beta");
+        assert!(out[1].get("tool_call_id").is_none());
+        assert!(messages[0]["tool_calls"][0]["function"]["arguments"].is_string(), "translation must not mutate the cached neutral history");
+    }
+
+    #[test]
     fn ollama_strips_the_data_uri_prefix_to_raw_base64() {
         let messages = vec![serde_json::json!({
             "role": "user",
@@ -1977,7 +2010,7 @@ mod tests {
         let mut tools = Vec::new();
         adapter
             .parse_line(
-                r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":900,"eval_count":40}"#,
+                r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":900,"prompt_eval_cached_count":800,"eval_count":40}"#,
                 &mut content,
                 &mut thinking,
                 &mut tools,
@@ -1987,6 +2020,7 @@ mod tests {
         let usage = adapter.finalize_response(content, thinking, tools).usage.expect("usage");
         assert_eq!(usage.context_window, Some(32_768));
         assert_eq!(usage.prompt_tokens, Some(900));
+        assert_eq!(usage.cache_read_tokens, Some(800));
     }
 
     #[test]
@@ -3221,6 +3255,37 @@ mod tests {
         assert_eq!(messages[1]["content"], "hi", "only the newest turn is marked");
     }
 
+
+    /// Opt-in: exercise the real native adapter with a structured tool
+    /// exchange, then continue it without rewriting that history. Uses an
+    /// installed model only; no tool is executed and no model is downloaded.
+    #[tokio::test]
+    #[ignore = "calls a local Ollama server with an installed tool-capable model"]
+    async fn live_ollama_structured_continuation() {
+        let model = std::env::var("KLIDE_LIVE_OLLAMA_MODEL").unwrap_or_else(|_| "pierreprudh/klide-8b".into());
+        let tools = Some(vec![serde_json::json!({"type":"function", "function":{
+            "name":"read_file", "description":"Read a file", "parameters":{
+                "type":"object", "properties":{"path":{"type":"string"}}, "required":["path"]
+            }
+        }})]);
+        let mut messages = vec![
+            serde_json::json!({"role":"system", "content":"Answer briefly using the tool result already provided. Do not call a tool again."}),
+            serde_json::json!({"role":"user", "content":"Read token.txt and tell me its exact contents."}),
+            serde_json::json!({"role":"assistant", "content":"", "tool_calls":[
+                {"id":"read_token", "type":"function", "function":{"name":"read_file", "arguments":"{\"path\":\"token.txt\"}"}}
+            ]}),
+            serde_json::json!({"role":"tool", "name":"read_file", "tool_call_id":"read_token", "content":"cache-proof-alpha"}),
+        ];
+        let channel = Channel::new(|_| Ok(()));
+        for turn in 0..2 {
+            let response = ollama_chat(model.clone(), messages.clone(), tools.clone(), Some(8192), Some(96), Some("off".into()), &channel).await.expect("native tool history accepted");
+            assert!(response.tool_calls.is_empty(), "the existing result should be reused");
+            assert!(response.content.contains("cache-proof-alpha"), "turn {turn}: {}", response.content);
+            eprintln!("Ollama turn {turn}: prompt={}, cached={:?}", response.usage.as_ref().and_then(|u| u.prompt_tokens).unwrap_or(0), response.usage.as_ref().and_then(|u| u.cache_read_tokens));
+            messages.push(serde_json::json!({"role":"assistant", "content":response.content}));
+            messages.push(serde_json::json!({"role":"user", "content":"Repeat the exact token from that same result."}));
+        }
+    }
 
     /// Live: the request shape Anthropic accepts, and the cache it builds.
     /// Opt-in and billed (three short requests on a small model, well under a

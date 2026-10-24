@@ -91,8 +91,8 @@ impl Delivery {
     }
 
     /// The transcript line for the mail in a delivery: which envelopes, from
-    /// whom. Bodies are durable in the journal under these ids, so the Run's
-    /// record says what the model was shown without copying the text twice.
+    /// whom. Bodies are durable in the journal under these ids; the loop also
+    /// saves the exact rendered delivery as ContextInjected for faithful replay.
     /// Observer items have their own `ObserverCompleted` event and worker
     /// reports their `SubagentResolved`; `None` when there is no mail. The shape is parsed by `coordinationPeers.ts`.
     pub(crate) fn transcript_reason(&self) -> Option<String> {

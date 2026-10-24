@@ -337,8 +337,8 @@ export type AgentEvent =
   | { type: "context_compacted"; runId: string; summary: string; kept?: number; contextTokens?: number; costUsd?: number; manual?: boolean; ts: number }
   /** What the Harness put in front of the model that nobody typed, recorded
    *  so replay rebuilds the cached prompt. Rust reads it; no surface draws it. */
-  | { type: "context_injected"; runId: string; role: string; content: string; ts: number }
-  | { type: "observer_completed"; runId: string; shellId: string; text: string; ts: number }
+  | { type: "context_injected"; runId: string; role: string; content: string; beforeUser?: boolean; ts: number }
+  | { type: "observer_completed"; runId: string; shellId: string; text: string; contextRecorded?: boolean; ts: number }
   | { type: "steering_injected"; runId: string; reason: string; ts: number }
   /** An `auto` request settled on this pair. Follows `run_started` (which
    *  already carries the resolved provider/model); `skipped` names each
