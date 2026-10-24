@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import React from "react";
 import ReactDOM from "react-dom/client";
 // Bundle the design-system fonts locally (offline-first). The family names
@@ -55,7 +56,9 @@ async function boot() {
   try {
     await hydrateConversationStore();
   } catch {
-    /* no backend — the localStorage index is used */
+    if (isTauri()) {
+      notify("Saved conversation history could not be opened. Your SQLite history and Run transcripts remain on disk; this window is using browser storage.", { tone: "error" });
+    }
   }
 
   // Repair conversations whose Provider label an older build overwrote (a Claude

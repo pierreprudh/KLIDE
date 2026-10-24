@@ -311,11 +311,13 @@ Klide separates the interface from the durable execution layer:
 | **React and TypeScript** | Editor, panels, review surfaces, layouts, and run projections |
 | **Tauri and Rust** | Agent harness, provider streaming, tools, permissions, PTYs, Git, keychain, and filesystem access |
 | **JSON Lines (JSONL) transcripts** | Append-only run events used by Mission Control, validation, memory, and replay |
+| **SQLite conversation index** | The conversation list and its message snapshots, under app data, with no count cap; migrated automatically from earlier builds |
 
 The Rust harness checks capabilities when it advertises tools and again before execution. Writes pause for diff review. Commands and network access pause for permission.
 
 Read the [Harness contract](./docs/HARNESS_CONTRACT.md) for the trust model and [Harness schema](./docs/KLIDE_HARNESS_SCHEMA.md) for the tool interface.
 The [Memory Engine](./docs/MEMORY_ENGINE.md) and [Project Memory schema](./docs/KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its authenticated MCP search/read boundary for supported Delegates.
+The [Conversation store](./docs/CONVERSATION_STORE.md) records how the conversation index moved from localStorage to SQLite, how earlier history migrates, and what happens when a row cannot be read.
 The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordination schemas](./docs/KLIDE_COORDINATION_SCHEMA.md) define stable Run addressing, durable envelopes, replay, and the shared adapter boundary for native agents and Delegates.
 
 ## Project status

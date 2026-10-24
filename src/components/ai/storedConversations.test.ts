@@ -653,6 +653,32 @@ describe("the conversation index on disk", () => {
     expect(loadConversations<Conversation>()).toHaveLength(40);
   });
 
+  it("migrates and retains more than 300 conversations without pruning", async () => {
+    const history = Array.from({ length: 450 }, (_, i) => conversation({ id: `old-${i}`, updatedAt: i }));
+    saveConversations(history);
+    const { sink, files } = fakeSink([conversation({ id: "on-disk", updatedAt: 500 })]);
+    await hydrateConversationStore(sink);
+    expect(loadConversations()).toHaveLength(451);
+    expect(files.size).toBe(451);
+    expect(localStorage.getItem("klide-conversations")).toBeNull();
+    persistConversation(conversation({ id: "new", updatedAt: 501 }));
+    expect(await flushConversations()).toBe(true);
+    expect(loadConversations()).toHaveLength(452);
+    expect(files.has("old-0")).toBe(true);
+    resetConversationStoreForTests();
+    await hydrateConversationStore(sink);
+    expect(loadConversations()).toHaveLength(452);
+  });
+
+  it("keeps the localStorage migration source until SQLite accepts the write", async () => {
+    saveConversations([conversation({ id: "legacy", updatedAt: 5 })]);
+    const { sink } = fakeSink();
+    sink.write = async () => { throw new Error("database full"); };
+    await hydrateConversationStore(sink);
+    expect(localStorage.getItem("klide-conversations")).not.toBeNull();
+    expect(loadConversations<Conversation>()[0].id).toBe("legacy");
+  });
+
   it("writes only the thread that changed, batched across a stream of saves", async () => {
     const { sink, writes } = fakeSink([
       conversation({ id: "a", updatedAt: 1 }),
