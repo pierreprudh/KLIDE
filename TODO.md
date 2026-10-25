@@ -350,7 +350,13 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
   what can't fit. Fixed along the way: PRs #219–#240.
   - [ ] a headless Run (worker or Mission attempt) compacts with no panel open
 - [ ] Dogfood the cache: reply after 10+ min on Anthropic and check "N% cached".
-- [ ] Stop a degenerate reply: a small model looping on one line streamed for minutes until the window filled (lfm2.5 after a bad prompt). A repetition guard on the stream, or a reply cap for local models.
+- [ ] Background-shells review leftovers (re-checked 2026-10-25): the observer
+  list polls at 1 Hz in every mounted panel whether or not an observer exists
+  (`ConversationObservers.tsx`); a failed wake turn still emits
+  `agent-observer-finished` and toasts success (`observers.rs` drops the
+  `done_rx` result); the "Background observers" guidance is in every Mode's
+  system prompt, Chat and Plan included, which have no `run_command`.
+- [x] Stop a degenerate reply: a small model looping on one line streamed for minutes until the window filled (lfm2.5 after a bad prompt). The shared stream loop now closes a reply whose tail is one unit repeated (≥ 2000 bytes, ≥ 10 copies), keeps it up to the first repeat and says so (2026-10-25). Live check on a looping local model owed.
 - [x] Record the exact fenced delivery in the transcript, with its position
   before the operator's message (2026-10-24). Peer mail, observer completions
   and background worker reports replay without changing the cached prefix;
@@ -362,9 +368,14 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
   reported when the Ollama server supplies them.
 - [x] Upgrade ironcalc to 0.9 (zip ≥ 9) and drop the three ignores in
   `.cargo/audit.toml` (2026-10-25 — ironcalc 0.9.1, zip 9.1; the file is gone).
-- [ ] Refresh base list prices in `pricing.rs`. The GPT-5 family is current
-  (2026-10-22, per version from OpenRouter's pass-through listing); the
-  Mistral, xAI and DeepSeek rows are unchecked, and Auto ranks on them.
+- [x] Refresh base list prices in `pricing.rs`. The GPT-5 family is current
+  (2026-10-22); Mistral and xAI per model from their own endpoints on
+  OpenRouter, DeepSeek from its pricing page (peak rates), 2026-10-25.
+- [ ] DeepSeek's docs now name only `deepseek-flash` and `deepseek-v4-pro`;
+  the provider row still defaults to `deepseek-chat` / `deepseek-reasoner`.
+  Probe with a key whether the old names are still served, then move the row.
+- [ ] xAI's row defaults to bare `grok-4`; check it still resolves, and
+  whether the ladder should name `grok-4.7`.
 - [ ] Dogfood Auto in the app (the Rust side was probed live 2026-10-21,
   `auto_on_this_bench`): picker row, the meta line names the routed model, a
   follow-up stays on it, stars reorder the pick, reopen restores the thread,

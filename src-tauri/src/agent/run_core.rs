@@ -488,6 +488,11 @@ briefly, or switch to a model that gets to the point sooner._",
 mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
 conversation, then ask again._",
             );
+        } else if response.stop_reason.as_deref() == Some("repetition") {
+            answer_text.push_str(
+                "\n\n---\n_⚠ Stopped — the model started repeating itself, so Klide ended the \
+reply and kept it up to the first repeat. Ask again, or try a larger model._",
+            );
         }
         content.push(AgentContentBlock::Text { text: answer_text });
         TurnStep {
