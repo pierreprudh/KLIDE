@@ -55,8 +55,8 @@ syn = { version = "2", features = ["full"] }
 # lifecycle hooks curl a tiny POST at Klide instead of Klide scraping TUI
 # output. Small sync server — one thread, no framework.
 tiny_http = "0.12"
-ironcalc = "=0.8.3"
-zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
+ironcalc = "=0.9.1"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 pdf-extract = "0.12.1"
 
 # Process-group signals for commands a Run starts (`agent/process.rs`): a

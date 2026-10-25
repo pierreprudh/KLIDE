@@ -536,7 +536,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
-        default_model: Some("mistral-large-latest"),
+        default_model: Some("mistral-medium-latest"),
         presets: NO_PRESETS,
         auto: AutoLadder {
             light: Some("mistral-small-latest"),

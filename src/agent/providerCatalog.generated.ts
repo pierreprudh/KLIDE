@@ -171,7 +171,7 @@ export const PROVIDER_ROWS = [
     "keyEnv": "MISTRAL_API_KEY",
     "keyEnvLegacy": null,
     "keyPlaceholder": "...",
-    "defaultModel": "mistral-large-latest",
+    "defaultModel": "mistral-medium-latest",
     "presets": [],
     "brand": "mistral",
     "hasCredits": false,
