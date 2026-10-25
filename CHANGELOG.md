@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A reply that loops is stopped. A small local model could repeat one line for minutes until the window filled; the stream loop now notices a reply whose tail is one unit repeated — a line, a few lines, or a phrase with no newline — over at least 2000 bytes and ten copies, closes the connection (which stops a local server generating), keeps the reply up to the first repeat, and ends it with a note saying so. Short refrains, table rules and whitespace never trip it.
+- Mistral, xAI and DeepSeek prices are current. Mistral is priced per model (Large 4, Large 2512, Medium 3.5 against the dated Medium 3 / 3.1, Small, Ministral, Devstral, Codestral) with its cache reads; xAI per Grok 4.x release; DeepSeek as its two models, Flash and V4 Pro, at peak rates. Auto ranks on these.
 - A new Mistral conversation starts on Mistral Medium. The row defaulted to `mistral-large-latest`, which a key without Large access refuses with a 403 on the first message. Auto still reaches for Large on a strong task, and still skips it when the key doesn't list it.
 - The spreadsheet engine is ironcalc 0.9.1 on zip 9. The three zip advisories `cargo audit` was told to ignore no longer apply, so `.cargo/audit.toml` is gone and the audit runs with no exceptions.
 - Follow-ups preserve the prompt cache across agent deliveries and native Ollama tool calls. The Transcript saves each delivery's exact fence, text and position, including observer completions and background worker reports. Ollama replays the same structured tool history as the live Run; its adapter translates argument objects and tool result names at the wire boundary, so prior results also remain available to trimming and retention. Ollama cache-read counts now reach usage when supplied by the server. Verified with continuation regressions and a live lfm2.5 follow-up (221 of 242 prompt tokens cached).
@@ -442,20 +444,20 @@ on the v0.6 line, not that milestone.
   Distribution is GitHub Releases only; notarization is deferred, recorded
   in TODO.md with what taking it on would cost.
 
-### Known findings, open
+### Known findings
 
 A review over the background-shells diff raised eleven findings, none fixed
-in this cut. The three that matter: the AiPanel retry on "run already active"
-has no attempt cap, so a send behind a Run parked on an unanswered card can
-spin without an error; the observer guard admits race members, so a race run
-can register an observer that wakes a Run whose worktree a merge may already
-have torn down; and a background command admitted by an allowlist entry or the
-full-auto rung starts without the disclosure the permission card carries. The
-rest are smaller: a possibly-recycled process-group pid killed after reap, a
-1 Hz observer poll per mounted panel whether or not an observer exists, a
-failed follow-up that still toasts success, observer guidance injected into
-Chat and Plan prompts that have no `run_command`, and an `observer_completed`
-that does not mark an interrupted turn.
+in this cut; eight were written down here. Re-checked 2026-10-25, five of
+those eight are fixed since: the AiPanel retry on "run already active" has a
+cap (`runBusyRetry.ts`); race worktrees can't register an observer (bf16b6e);
+a background command gets the permission card's disclosure, since an
+allowlist rule only admits foreground commands and full auto records the
+request (0ae2eb3); a reaped process group is only signalled once a probe says
+it still exists (03e6f97); and a wake turn writes `RunStarted`, so an
+unsettled earlier turn is marked interrupted (4ecd4d2). Three are still open
+and tracked in TODO.md: the 1 Hz observer poll per mounted panel, a failed
+follow-up that still toasts success, and observer guidance in Chat and Plan
+prompts that have no `run_command`. The other three were never written down.
 
 ## v0.6.4 — Workers, Connectors, Visuals (2026-09-20)
 

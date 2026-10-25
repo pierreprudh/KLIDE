@@ -1612,6 +1612,8 @@ pub(crate) struct AiChatResponse {
     /// it hit `num_ctx` and was cut off mid-answer. `None` when the provider
     /// doesn't report it. The harness uses `"length"` to warn the user the
     /// reply is truncated rather than silently showing a half-answer.
+    /// `"repetition"` is Klide's own: the stream loop closed a reply that was
+    /// repeating one unit over and over (`adapters::repetition_cut`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stop_reason: Option<String>,
     /// The model that answered, when the provider names one other than the

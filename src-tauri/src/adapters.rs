@@ -141,13 +141,33 @@ async fn stream_provider<S: StreamingProvider>(
 
     let mut stream = res;
     let mut provider = provider;
-    while let Some(bytes) = stream.chunk().await.map_err(|e| stream_error(provider.name(), STREAM_IDLE, &e))? {
+    let mut guard = RepetitionGuard::default();
+    let mut looped = false;
+    'read: while let Some(bytes) = stream.chunk().await.map_err(|e| stream_error(provider.name(), STREAM_IDLE, &e))? {
         buf.extend_from_slice(&bytes);
         while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
             let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
             let line = String::from_utf8_lossy(&line_bytes);
             provider.parse_line(&line, &mut content, &mut thinking, &mut tools, &send)?;
+            if guard.looping(&content, &thinking) {
+                looped = true;
+                break 'read;
+            }
         }
+    }
+    if looped {
+        // Dropping the response closes the connection, which is what makes a
+        // local server stop generating. Keep the text up to the loop's first
+        // copy; the panel reconciles its streamed view against this return.
+        drop(stream);
+        for text in [&mut content, &mut thinking] {
+            if let Some(cut) = repetition_cut(text) {
+                text.truncate(cut);
+            }
+        }
+        let mut response = provider.finalize_response(content, thinking, tools);
+        response.stop_reason = Some("repetition".to_string());
+        return Ok(response);
     }
     if buf.iter().any(|b| !b.is_ascii_whitespace()) {
         let line = String::from_utf8_lossy(&buf).to_string();
@@ -155,6 +175,74 @@ async fn stream_provider<S: StreamingProvider>(
     }
 
     Ok(provider.finalize_response(content, thinking, tools))
+}
+
+/// Watches a streaming reply for a model stuck repeating itself — a small
+/// local model can loop on one line until the window fills, minutes of
+/// output nobody reads. Rechecks only every `CHECK_EVERY` new bytes.
+#[derive(Default)]
+struct RepetitionGuard {
+    content_checked: usize,
+    thinking_checked: usize,
+}
+
+impl RepetitionGuard {
+    const CHECK_EVERY: usize = 256;
+
+    fn looping(&mut self, content: &str, thinking: &str) -> bool {
+        let mut looping = false;
+        for (text, checked) in [(content, &mut self.content_checked), (thinking, &mut self.thinking_checked)] {
+            if text.len() >= *checked + Self::CHECK_EVERY {
+                *checked = text.len();
+                looping |= repetition_cut(text).is_some();
+            }
+        }
+        looping
+    }
+}
+
+/// Where to cut a reply whose tail is one unit repeated: the byte after the
+/// unit's first copy. A unit is up to `MAX_PERIOD` bytes (one line, a few
+/// lines, or a phrase with no newline at all), and only a long run counts —
+/// at least `MIN_RUN` bytes and `MIN_REPEATS` copies — so a table rule, a
+/// run of closing braces or a short refrain never trips it. A whitespace-only
+/// unit never does either.
+fn repetition_cut(text: &str) -> Option<usize> {
+    const MAX_PERIOD: usize = 400;
+    const MIN_RUN: usize = 2000;
+    const MIN_REPEATS: usize = 10;
+    let s = text.as_bytes();
+    let len = s.len();
+    for period in 1..=MAX_PERIOD {
+        let need = MIN_RUN.max(period * MIN_REPEATS);
+        if need > len {
+            break;
+        }
+        if !(len - need + period..len).all(|i| s[i] == s[i - period]) {
+            continue;
+        }
+        if s[len - period..].iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let mut start = len - need;
+        while start > 0 && s[start - 1] == s[start - 1 + period] {
+            start -= 1;
+        }
+        // The run can begin inside the text before the loop when that text
+        // ends the way the unit does (`plan.\n` before `…main.rs.\n`), which
+        // puts `start + period` mid-line. Finish the line rather than cut it.
+        let mut cut = start + period;
+        if s[cut - 1] != b'\n' {
+            if let Some(nl) = s[cut..cut + period].iter().position(|b| *b == b'\n') {
+                cut += nl + 1;
+            }
+        }
+        while !text.is_char_boundary(cut) {
+            cut += 1;
+        }
+        return Some(cut);
+    }
+    None
 }
 
 /// Parse a `Retry-After` response header. Per HTTP it's either a number of
@@ -1175,6 +1263,105 @@ mod stream_idle_tests {
         let url = trickle(Duration::ZERO, 1, Duration::from_secs(5)).await;
         let err = drain(&client_with_idle(idle), &url, idle).await.unwrap_err();
         assert!(err.starts_with("Test stopped sending"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod repetition_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn a_line_repeated_until_the_window_fills_is_cut_after_its_first_copy() {
+        let answer = "Here is the plan.\n";
+        let line = "I will now read the file src/main.rs.\n";
+        let text = format!("{answer}{}", line.repeat(80));
+        assert_eq!(repetition_cut(&text), Some(answer.len() + line.len()));
+    }
+
+    #[test]
+    fn a_loop_with_no_newline_or_over_several_lines_is_caught() {
+        let phrase = format!("Hello{}", " the".repeat(600));
+        let cut = repetition_cut(&phrase).unwrap();
+        assert!(cut <= "Hello the the".len(), "{cut}");
+        let block = "fn a() {}\nfn b() {}\nfn c() {}\n".repeat(80);
+        assert_eq!(repetition_cut(&block), Some(30));
+    }
+
+    #[test]
+    fn ordinary_replies_are_left_alone() {
+        // Short refrains, a markdown table, a whitespace run and a long answer
+        // with no repeating tail never trip it.
+        assert_eq!(repetition_cut(&"ok\n".repeat(20)), None);
+        let table = format!("| a | b |\n{}", "|---|---|\n".repeat(30));
+        assert_eq!(repetition_cut(&table), None);
+        assert_eq!(repetition_cut(&format!("done{}", " ".repeat(5000))), None);
+        let prose: String = (0..400).map(|i| format!("Line {i} says something new.\n")).collect();
+        assert_eq!(repetition_cut(&prose), None);
+    }
+
+    #[test]
+    fn the_cut_lands_on_a_character_boundary() {
+        let text = format!("Résumé:\n{}", "é répété\n".repeat(400));
+        let cut = repetition_cut(&text).unwrap();
+        assert!(text.is_char_boundary(cut));
+    }
+
+    /// Appends each streamed line to the reply, as a provider's text deltas.
+    struct LinesProvider {
+        url: String,
+    }
+
+    impl StreamingProvider for LinesProvider {
+        type ToolAccumulator = ();
+        fn name(&self) -> &str {
+            "Test"
+        }
+        fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
+            Ok(client.get(&self.url))
+        }
+        fn parse_line(&mut self, line: &str, content: &mut String, _: &mut String, _: &mut (), _: &dyn Fn(StreamChunk)) -> Result<(), String> {
+            content.push_str(line);
+            Ok(())
+        }
+        fn finalize_response(self, content: String, thinking: String, _: ()) -> AiChatResponse {
+            AiChatResponse {
+                content,
+                thinking: (!thinking.is_empty()).then_some(thinking),
+                tool_calls: vec![],
+                usage: None,
+                stop_reason: Some("stop".into()),
+                answered_model: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_looping_stream_is_closed_early_and_reported() {
+        // A server that would repeat one line forever.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut req = [0u8; 1024];
+            let _ = sock.read(&mut req).await;
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n").await;
+            let _ = sock.write_all(b"6\r\nIntro\n\r\n").await;
+            let line = b"the same line again\n";
+            loop {
+                let chunk = format!("{:x}\r\n{}\r\n", line.len(), std::str::from_utf8(line).unwrap());
+                if sock.write_all(chunk.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let channel = Channel::new(|_| Ok(()));
+        let response = tokio::time::timeout(Duration::from_secs(10), stream_provider(LinesProvider { url }, &channel))
+            .await
+            .expect("the guard ends the stream")
+            .unwrap();
+        assert_eq!(response.stop_reason.as_deref(), Some("repetition"));
+        assert_eq!(response.content, "Intro\nthe same line again\n");
     }
 }
 

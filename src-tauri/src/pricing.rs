@@ -170,26 +170,62 @@ pub fn list_price_for_model(model: &str) -> Option<ModelPricing> {
     if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") {
         return Some(ModelPricing::new(10.0, 40.0, Some(2.5)));
     }
-    // Mistral (direct). No prompt cache.
-    if m.contains("mistral-large") {
-        return Some(ModelPricing::new(2.0, 6.0, None));
+    // Mistral (direct). Checked 2026-10-25 against Mistral's own endpoints
+    // on OpenRouter's pass-through listing. A cache read bills at a tenth,
+    // except on Medium 3.5, which has no cache. Most specific first: the
+    // dated Medium 3 / 3.1 ids before the Medium 3.5 the `-latest` alias
+    // serves, and Large 2512 before the Large 4 that `-latest` serves.
+    // An unlisted Mistral model falls to Medium's price.
+    const MISTRAL: &[(&str, ModelPricing)] = &[
+        ("mistral-large-2512", ModelPricing::new(0.50, 1.50, Some(0.05))),
+        ("mistral-large-2411", ModelPricing::new(2.0, 6.0, Some(0.20))),
+        ("mistral-large-2407", ModelPricing::new(2.0, 6.0, Some(0.20))),
+        ("mistral-large", ModelPricing::new(1.36, 4.18, Some(0.14))),
+        ("mistral-medium-2505", ModelPricing::new(0.40, 2.0, Some(0.04))),
+        ("mistral-medium-2508", ModelPricing::new(0.40, 2.0, Some(0.04))),
+        ("mistral-medium-3.1", ModelPricing::new(0.40, 2.0, Some(0.04))),
+        ("mistral-medium-3-5", ModelPricing::new(1.50, 7.50, None)),
+        ("mistral-medium-3.5", ModelPricing::new(1.50, 7.50, None)),
+        ("mistral-medium-3", ModelPricing::new(0.40, 2.0, Some(0.04))),
+        ("mistral-medium", ModelPricing::new(1.50, 7.50, None)),
+        ("mistral-small", ModelPricing::new(0.15, 0.60, Some(0.015))),
+        ("ministral-14b", ModelPricing::new(0.20, 0.20, Some(0.02))),
+        ("ministral-8b", ModelPricing::new(0.15, 0.15, Some(0.015))),
+        ("ministral-3b", ModelPricing::new(0.10, 0.10, Some(0.01))),
+        ("devstral", ModelPricing::new(0.40, 2.0, Some(0.04))),
+        ("codestral", ModelPricing::new(0.30, 0.90, Some(0.03))),
+    ];
+    if let Some((_, price)) = MISTRAL.iter().find(|(prefix, _)| m.contains(prefix)) {
+        return Some(*price);
     }
-    if m.contains("mistral") {
-        return Some(ModelPricing::new(0.4, 2.0, None));
+    if m.contains("mistral") || m.contains("magistral") {
+        return Some(ModelPricing::new(1.50, 7.50, None));
     }
-    // DeepSeek (direct). One price for `deepseek-chat` and `deepseek-reasoner`
-    // — the platform charges both the same per-token rate and differs only in
-    // how much output the reasoner generates. Its disk cache is automatic and
-    // a hit bills at a tenth.
+    // DeepSeek (direct), from its own pricing page (2026-10-25). Two models:
+    // `deepseek-v4-pro` and `deepseek-flash`, which every older name
+    // (`deepseek-v4-flash`, `deepseek-chat`, `deepseek-reasoner`) is now
+    // billed as. These are the peak rates; off-peak hours (most of the week)
+    // bill half, which a list price can't know about.
+    if m.starts_with("deepseek") && m.contains("pro") {
+        return Some(ModelPricing::new(1.32, 3.96, Some(0.044)));
+    }
     if m.starts_with("deepseek") {
-        return Some(ModelPricing::new(0.28, 0.42, Some(0.028)));
+        return Some(ModelPricing::new(0.30, 1.20, Some(0.006)));
     }
-    // xAI. Cached prompt tokens bill at a quarter.
-    if m.starts_with("grok-4") || m.starts_with("grok-4-") {
-        return Some(ModelPricing::new(5.0, 15.0, Some(1.25)));
-    }
-    if m.starts_with("grok") {
-        return Some(ModelPricing::new(3.0, 15.0, Some(0.75)));
+    // xAI, base tier (a long prompt bills a higher tier we don't model).
+    // Checked 2026-10-25 against xAI's own endpoints on OpenRouter. Newest
+    // first; bare `grok-4` keeps its launch price.
+    const XAI: &[(&str, ModelPricing)] = &[
+        ("grok-4.7", ModelPricing::new(2.0, 6.0, Some(0.50))),
+        ("grok-4.6", ModelPricing::new(2.0, 6.0, Some(0.50))),
+        ("grok-4.5", ModelPricing::new(2.0, 6.0, Some(0.30))),
+        ("grok-4.3", ModelPricing::new(1.25, 2.50, Some(0.20))),
+        ("grok-4.20", ModelPricing::new(1.25, 2.50, Some(0.20))),
+        ("grok-build", ModelPricing::new(1.0, 2.0, Some(0.20))),
+        ("grok", ModelPricing::new(3.0, 15.0, Some(0.75))),
+    ];
+    if let Some((_, price)) = XAI.iter().find(|(prefix, _)| m.starts_with(prefix)) {
+        return Some(*price);
     }
     None
 }
@@ -218,7 +254,7 @@ mod tests {
         }
         // The two DeepSeek spellings are told apart by the `:tag` an Ollama
         // pull carries — an untagged id is the hosted API.
-        let hosted = Some(ModelPricing::new(0.28, 0.42, Some(0.028)));
+        let hosted = Some(ModelPricing::new(0.30, 1.20, Some(0.006)));
         assert_eq!(list_price_for_model("deepseek-chat"), hosted);
         assert_eq!(list_price_for_model("deepseek-reasoner"), hosted);
         assert_eq!(list_price_for_model("deepseek-r1:8b"), None);
@@ -275,9 +311,27 @@ mod tests {
 
     #[test]
     fn a_provider_without_a_cache_bills_reads_as_input() {
-        let price = list_price_for_model("mistral-large-latest").unwrap();
+        let price = list_price_for_model("mistral-medium-latest").unwrap();
         let prompt = PromptTokens { prompt: 1_000_000, read: 900_000, ..PromptTokens::default() };
-        assert!((price.cost_with_cache(prompt, 0) - 2.0).abs() < 1e-9);
+        assert!((price.cost_with_cache(prompt, 0) - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hosted_mistral_deepseek_and_xai_match_published_prices() {
+        let price = |m: &str| list_price_for_model(m).unwrap();
+        // Dated ids win over the family row the `-latest` alias reads.
+        assert_eq!(price("mistral-large-latest"), ModelPricing::new(1.36, 4.18, Some(0.14)));
+        assert_eq!(price("mistral-large-2512"), ModelPricing::new(0.50, 1.50, Some(0.05)));
+        assert_eq!(price("mistral-medium-2604"), ModelPricing::new(1.50, 7.50, None));
+        assert_eq!(price("mistral-medium-2508"), ModelPricing::new(0.40, 2.0, Some(0.04)));
+        assert_eq!(price("mistralai/mistral-medium-3-5"), ModelPricing::new(1.50, 7.50, None));
+        assert_eq!(price("mistralai/mistral-medium-3.1"), ModelPricing::new(0.40, 2.0, Some(0.04)));
+        assert_eq!(price("mistral-small-2603"), ModelPricing::new(0.15, 0.60, Some(0.015)));
+        assert_eq!(price("deepseek-v4-pro"), ModelPricing::new(1.32, 3.96, Some(0.044)));
+        assert_eq!(price("deepseek-flash"), ModelPricing::new(0.30, 1.20, Some(0.006)));
+        assert_eq!(price("grok-4.7"), ModelPricing::new(2.0, 6.0, Some(0.50)));
+        assert_eq!(price("grok-4.20-multi-agent"), ModelPricing::new(1.25, 2.50, Some(0.20)));
+        assert_eq!(price("grok-4"), ModelPricing::new(3.0, 15.0, Some(0.75)));
     }
 
     #[test]

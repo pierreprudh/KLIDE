@@ -5031,6 +5031,22 @@ mod turn_decision_tests {
     }
 
     #[test]
+    fn repetition_stop_reason_says_the_reply_was_ended() {
+        let mut resp = response("answer up to the loop", None, vec![]);
+        resp.stop_reason = Some("repetition".to_string());
+        match decide_turn(&resp, 0, 0).decision {
+            TurnDecision::Final { content } => match &content[0] {
+                AgentContentBlock::Text { text } => {
+                    assert!(text.starts_with("answer up to the loop"));
+                    assert!(text.contains("started repeating itself"));
+                }
+                _ => panic!("expected Text"),
+            },
+            _ => panic!("expected Final"),
+        }
+    }
+
+    #[test]
     fn structured_tool_call_continues_with_a_toolcall_block() {
         let resp = response(
             "",
