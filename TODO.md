@@ -350,12 +350,13 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
   what can't fit. Fixed along the way: PRs #219–#240.
   - [ ] a headless Run (worker or Mission attempt) compacts with no panel open
 - [ ] Dogfood the cache: reply after 10+ min on Anthropic and check "N% cached".
-- [ ] Background-shells review leftovers (re-checked 2026-10-25): the observer
-  list polls at 1 Hz in every mounted panel whether or not an observer exists
-  (`ConversationObservers.tsx`); a failed wake turn still emits
-  `agent-observer-finished` and toasts success (`observers.rs` drops the
-  `done_rx` result); the "Background observers" guidance is in every Mode's
-  system prompt, Chat and Plan included, which have no `run_command`.
+- [x] Background-shells review leftovers (2026-10-26): the observer list polls
+  only while an observer runs or a follow-up waits (`agent/observerPoll.ts`),
+  and a wake turn that fails toasts an error with Open, not "updated".
+- [ ] The "Background observers" guidance is in every Mode's system prompt,
+  Chat and Plan included, which have no `run_command`. Making the prompt
+  depend on the Mode would break the frozen-prefix cache on a Mode switch —
+  decide whether that is worth it, or word the block so it reads as inert.
 - [x] Stop a degenerate reply: a small model looping on one line streamed for minutes until the window filled (lfm2.5 after a bad prompt). The shared stream loop now closes a reply whose tail is one unit repeated (≥ 2000 bytes, ≥ 10 copies), keeps it up to the first repeat and says so (2026-10-25). Live check on a looping local model owed.
 - [x] Record the exact fenced delivery in the transcript, with its position
   before the operator's message (2026-10-24). Peer mail, observer completions

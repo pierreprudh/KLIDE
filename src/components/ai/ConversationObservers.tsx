@@ -1,5 +1,5 @@
 import { GithubObserverCard, type ObserverSidebar } from "./GithubObserverCard";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { createListenerScope } from "../../tauriEvents";
 import { listObservers, stopObserver, observerLabel, type Observer } from "../../agent/observers";
@@ -9,6 +9,7 @@ import { useElapsed } from "./WorkingRow";
 import { createPortal } from "react-dom";
 import type { Msg } from "./types";
 import { mergeObserverCards } from "../../agent/observerCards";
+import { startObserverPoll } from "../../agent/observerPoll";
 import { LinkMark } from "../linkMark";
 
 export function observerMessageIndex(msgs: Msg[], id: string): number | null {
@@ -38,32 +39,29 @@ export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPres
   follow.current = onFollowup;
   const hasGithub = observers.some(observer => observer.githubWatch);
   useEffect(() => { onGithubPresence?.(runId, hasGithub); }, [runId, hasGithub, onGithubPresence]);
+  const poll = useRef<ReturnType<typeof startObserverPoll> | null>(null);
   useEffect(() => {
     setObservers(mergeObserverCards(runId, []));
-    let alive = true;
-    let pending = false;
-    let timer: ReturnType<typeof setTimeout>;
     const scope = createListenerScope();
+    const current = startObserverPoll({
+      list: () => listObservers(runId),
+      onRows: rows => setObservers(mergeObserverCards(runId, rows)),
+      followup: () => follow.current(),
+    });
+    poll.current = current;
     scope.add(listen<string>("agent-observer-wake", ({ payload }) => {
-      if (payload === runId) pending = true;
+      if (payload === runId) current.wake();
     }));
     // Completion is a second signal in case a very short follow-up finished
     // before this view could attach. The transcript remains the authority.
     scope.add(listen<string>("agent-observer-finished", ({ payload }) => {
-      if (payload === runId) pending = true;
+      if (payload === runId) current.wake();
     }));
-    const refresh = async () => {
-      try {
-        const rows = await listObservers(runId);
-        if (!alive) return;
-        setObservers(mergeObserverCards(runId, rows));
-        if (pending && follow.current()) pending = false;
-      } catch { /* Browser previews have no native observer registry. */ }
-      if (alive) timer = setTimeout(() => void refresh(), 1000);
-    };
-    void refresh();
-    return () => { alive = false; clearTimeout(timer); scope.dispose(); };
+    return () => { current.stop(); poll.current = null; scope.dispose(); };
   }, [runId]);
+  const watching = useMemo(() => msgs.filter(msg => msg.role === "tool" && msg.toolName === "run_command" && msg.content.startsWith("Watching `")).length, [msgs]);
+  // A watcher started in this conversation: the list has something to follow.
+  useEffect(() => { if (watching) poll.current?.kick(); }, [watching]);
 
   if (!observers.length) return null;
   return <div aria-label="Background observers" style={{ margin: "12px 0", color: "var(--fg-subtle)", fontSize: 12 }}>

@@ -58,6 +58,16 @@ impl Followup {
     pub(super) fn pending(&self, run_id: &str) -> bool {
         self.state(run_id).is_some()
     }
+
+    fn emit_error(&self, app: &tauri::AppHandle, run_id: &str, what_went_wrong: &str) {
+        let what = match self {
+            Followup::Observer(_) => "Observer finished",
+            Followup::Worker(_) => "Worker reported",
+        };
+        let _ = app.emit("agent-observer-error", serde_json::json!({
+            "runId": run_id, "message": format!("{what}, but {what_went_wrong}")
+        }));
+    }
 }
 
 pub(super) fn watch(app: tauri::AppHandle, run_id: String, followup: Followup, request: StartRunRequest) {
@@ -76,8 +86,12 @@ pub(super) fn watch(app: tauri::AppHandle, run_id: String, followup: Followup, r
             let channel = tauri::ipc::Channel::new(|_| Ok(()));
             match start_run(app.clone(), request.clone(), channel, Some(done_tx), Some(&followup)).await {
                 Ok(_) => {
-                    let _ = done_rx.await;
-                    let _ = app.emit("agent-observer-finished", &run_id);
+                    // A stopped turn settles Ok; only a turn that broke is an
+                    // Err, and it must not be announced as an update.
+                    match done_rx.await {
+                        Ok(Err(error)) => followup.emit_error(&app, &run_id, &format!("its follow-up failed: {error}")),
+                        _ => { let _ = app.emit("agent-observer-finished", &run_id); }
+                    }
                     return;
                 }
                 Err(_) if !followup.pending(&run_id) => return,
@@ -85,13 +99,7 @@ pub(super) fn watch(app: tauri::AppHandle, run_id: String, followup: Followup, r
                 // or the next iteration can wake after that turn finishes.
                 Err(error) if error.starts_with("A run is already active for this conversation") => continue,
                 Err(error) => {
-                    let what = match &followup {
-                        Followup::Observer(_) => "Observer finished",
-                        Followup::Worker(_) => "Worker reported",
-                    };
-                    let _ = app.emit("agent-observer-error", serde_json::json!({
-                        "runId": run_id, "message": format!("{what}, but its follow-up could not start: {error}")
-                    }));
+                    followup.emit_error(&app, &run_id, &format!("its follow-up could not start: {error}"));
                     // Keep the completion for the next user turn, without a
                     // retry loop hammering a missing provider or failing setup.
                     return;
