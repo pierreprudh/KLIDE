@@ -201,10 +201,13 @@ async fn warm_mlx_model(model: &str) -> bool {
 
 async fn local_server_ready(provider: &str) -> bool {
     match provider {
-        "ollama" => reqwest::get(format!("{OLLAMA_URL}/api/tags"))
-            .await
-            .map(|res| res.status().is_success())
-            .unwrap_or(false),
+        // `/api/version` is a constant answer; `/api/tags` reads every model's
+        // manifest from disk, which a panel polling it every few seconds made
+        // the daemon do all day — slowest exactly when a big model has the
+        // machine short of memory.
+        "ollama" => reqwest::Client::new().get(format!("{OLLAMA_URL}/api/version"))
+            .timeout(Duration::from_secs(2)).send().await
+            .map(|res| res.status().is_success()).unwrap_or(false),
         "llamacpp" => reqwest::Client::new().get("http://127.0.0.1:8081/health")
             .timeout(Duration::from_secs(2)).send().await
             .map(|res| res.status().is_success()).unwrap_or(false),

@@ -5031,6 +5031,30 @@ mod turn_decision_tests {
     }
 
     #[test]
+    fn a_reply_that_only_thought_says_there_is_no_answer() {
+        let resp = response("<think>\nI should call write_file with 400 lines.\n</think>", None, vec![]);
+        match decide_turn(&resp, 0, 0).decision {
+            TurnDecision::Final { content } => match &content[0] {
+                AgentContentBlock::Text { text } => {
+                    assert!(text.starts_with("<think>"));
+                    assert!(text.contains("wrote no answer"), "{text}");
+                }
+                _ => panic!("expected Text"),
+            },
+            _ => panic!("expected Final"),
+        }
+        // A thought followed by an answer is an ordinary reply.
+        let resp = response("<think>plan</think>\nHere it is.", None, vec![]);
+        match decide_turn(&resp, 0, 0).decision {
+            TurnDecision::Final { content } => match &content[0] {
+                AgentContentBlock::Text { text } => assert!(!text.contains("wrote no answer")),
+                _ => panic!("expected Text"),
+            },
+            _ => panic!("expected Final"),
+        }
+    }
+
+    #[test]
     fn repetition_stop_reason_says_the_reply_was_ended() {
         let mut resp = response("answer up to the loop", None, vec![]);
         resp.stop_reason = Some("repetition".to_string());
