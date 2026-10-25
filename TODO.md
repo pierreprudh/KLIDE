@@ -360,8 +360,8 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
   trimming and squeeze-to-fit can reach prior results. Live lfm2.5 check:
   the second request reused 221 of 242 prompt tokens. Cache-read counts are
   reported when the Ollama server supplies them.
-- [ ] Upgrade ironcalc to 0.9 (zip ≥ 9) and drop the three ignores in
-  `.cargo/audit.toml`.
+- [x] Upgrade ironcalc to 0.9 (zip ≥ 9) and drop the three ignores in
+  `.cargo/audit.toml` (2026-10-25 — ironcalc 0.9.1, zip 9.1; the file is gone).
 - [ ] Refresh base list prices in `pricing.rs`. The GPT-5 family is current
   (2026-10-22, per version from OpenRouter's pass-through listing); the
   Mistral, xAI and DeepSeek rows are unchecked, and Auto ranks on them.
