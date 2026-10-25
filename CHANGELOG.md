@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A background follow-up that fails says so. When a watcher's or worker's wake turn broke (a provider error, a failed setup), the toast still read "Background observer updated …"; it is now an error toast with the failure and **Open**. A turn you stopped still counts as an update.
+- An idle conversation no longer polls for observers. Every mounted panel asked Rust for its observer list once a second, observer or not; it now asks while one is running or a follow-up is waiting, and rests otherwise until a new watcher row or a wake event.
 - A reply that loops is stopped. A small local model could repeat one line for minutes until the window filled; the stream loop now notices a reply whose tail is one unit repeated — a line, a few lines, or a phrase with no newline — over at least 2000 bytes and ten copies, closes the connection (which stops a local server generating), keeps the reply up to the first repeat, and ends it with a note saying so. Short refrains, table rules and whitespace never trip it.
 - Mistral, xAI and DeepSeek prices are current. Mistral is priced per model (Large 4, Large 2512, Medium 3.5 against the dated Medium 3 / 3.1, Small, Ministral, Devstral, Codestral) with its cache reads; xAI per Grok 4.x release; DeepSeek as its two models, Flash and V4 Pro, at peak rates. Auto ranks on these.
 - A new Mistral conversation starts on Mistral Medium. The row defaulted to `mistral-large-latest`, which a key without Large access refuses with a 403 on the first message. Auto still reaches for Large on a strong task, and still skips it when the key doesn't list it.

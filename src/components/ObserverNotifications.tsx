@@ -9,17 +9,18 @@ import { canOpenConversation, openConversation } from "../conversationNavigation
 export function ObserverNotifications() {
   useEffect(() => {
     const scope = createListenerScope();
+    const open = (runId: string) => canOpenConversation()
+      ? { label: "Open", run: () => void openConversation(runId) }
+      : undefined;
     scope.add(listen<string>("agent-observer-finished", ({ payload: runId }) => {
       const conversation = getKlideConvos().find((c) => c.id === runId);
       notify(`Background observer updated ${conversation?.title || "its conversation"}.`, {
         tone: "info",
-        action: canOpenConversation()
-          ? { label: "Open", run: () => void openConversation(runId) }
-          : undefined,
+        action: open(runId),
       });
     }));
     scope.add(listen<{ runId: string; message: string }>("agent-observer-error", ({ payload }) => {
-      notify(payload.message, { tone: "error" });
+      notify(payload.message, { tone: "error", action: open(payload.runId) });
     }));
     return scope.dispose;
   }, []);
