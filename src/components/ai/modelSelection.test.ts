@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  forgetsRememberedModel,
   hostModelAdoption,
   offlineModelFallback,
   providerSwitchModel,
@@ -187,5 +188,17 @@ describe("providerSwitchModel", () => {
     expect(
       providerSwitchModel({ remembered: null, favourites: [], providerDefault: "openai/gpt-4o" }),
     ).toBe("openai/gpt-4o");
+  });
+});
+
+describe("forgetsRememberedModel", () => {
+  it("forgets a pick the key's listing does not serve", () => {
+    expect(forgetsRememberedModel({ listed: ["mistral-medium-latest", "mistral-small-latest"], remembered: "mistral-large-latest", delegate: false })).toBe(true);
+  });
+  it("keeps a served pick, and judges nothing from an empty listing or a Delegate's", () => {
+    expect(forgetsRememberedModel({ listed: ["mistral-large-latest"], remembered: "mistral-large-latest", delegate: false })).toBe(false);
+    expect(forgetsRememberedModel({ listed: [], remembered: "mistral-large-latest", delegate: false })).toBe(false);
+    expect(forgetsRememberedModel({ listed: ["default", "sonnet"], remembered: "opus", delegate: true })).toBe(false);
+    expect(forgetsRememberedModel({ listed: ["a"], remembered: null, delegate: false })).toBe(false);
   });
 });

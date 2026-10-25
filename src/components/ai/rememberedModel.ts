@@ -19,6 +19,11 @@ export function rememberModelForProvider(id: ProviderId, model: string): void {
   localStorage.setItem(`klide.model.${id}`, model);
 }
 
+/** Drop the remembered pick — the Provider said it does not serve it. */
+export function forgetModelForProvider(id: ProviderId): void {
+  localStorage.removeItem(`klide.model.${id}`);
+}
+
 /** `klide.model.<provider>`, or the Provider's default when unset — with the
  *  guards that reject another Provider's id that leaked in. */
 /** Whether `model` plainly belongs to some other Provider than `id`. Claude

@@ -101,6 +101,20 @@ export function unavailableModelFallback({
   return newestStar ?? available[0];
 }
 
+/** Whether the remembered pick should be forgotten: the Provider listed what
+ *  this key serves and the pick is not in it. Kept, it seeds every fresh
+ *  session on a model the send can reach before the list retires it (Mistral
+ *  Large on a plan without it: a 403 on the first message, every time). Only
+ *  a real listing judges — an empty or failed one says nothing, and a
+ *  Delegate's list is partial by design. */
+export function forgetsRememberedModel({ listed, remembered, delegate }: {
+  listed: string[];
+  remembered: string | null;
+  delegate: boolean;
+}): boolean {
+  return !delegate && listed.length > 0 && !!remembered && !listed.includes(remembered);
+}
+
 /**
  * The model a Provider *switch* lands on.
  *

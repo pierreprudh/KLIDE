@@ -389,6 +389,15 @@ fn is_reasoning_runaway(response: &AiChatResponse, content_text: &str) -> bool {
     content_text.trim().is_empty() && response.stop_reason.as_deref() == Some("length")
 }
 
+/// A reply that is all inline `<think>` and nothing after it. The panel folds
+/// the thought away, so without a word the turn would end on an empty answer.
+/// Thinking on its own channel is handled above (promoted to the answer), and
+/// an unclosed `<think>` is a cut-off reply, which `stop_reason` speaks for.
+fn thought_without_answering(content_text: &str) -> bool {
+    let (answer, thinking) = crate::adapters::split_thinking_tags(content_text);
+    answer.trim().is_empty() && !thinking.trim().is_empty() && content_text.contains("</think>")
+}
+
 /// Interpret one assistant turn purely: normalize tool calls (including the
 /// text-embedded recovery path for local models that narrate calls instead of
 /// emitting the structured field), stamp fallback ids unique across the run,
@@ -487,6 +496,11 @@ briefly, or switch to a model that gets to the point sooner._",
                 "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
 mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
 conversation, then ask again._",
+            );
+        } else if thought_without_answering(&content_text) {
+            answer_text.push_str(
+                "\n\n---\n_⚠ The model finished thinking but wrote no answer. Ask again, \
+or try a larger model._",
             );
         } else if response.stop_reason.as_deref() == Some("repetition") {
             answer_text.push_str(

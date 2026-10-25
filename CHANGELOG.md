@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A reply that only thought says so. A small model (lfm2.5) could end a turn on a closed `<think>` block and nothing after it; the panel folded the thought away and the answer was blank. The turn now ends with "The model finished thinking but wrote no answer."
+- A remembered model the key can't use is forgotten. `klide.model.<provider>` kept a pick the Provider's listing no longer served — Mistral Large on a plan without it — so every fresh session seeded on it and the first message could reach Mistral before the list retired it: a 403 each time. A real listing that leaves the pick out now clears it; an empty or failed listing, or a Delegate's partial one, judges nothing.
+- Klide asks a local server less often. An AI panel on Ollama checked the server every 4 s through `/api/tags`, which reads every model's manifest; it now asks `/api/version` (2 s timeout), every 4 s only while the server is down and every 20 s once it is up.
 - A background follow-up that fails says so. When a watcher's or worker's wake turn broke (a provider error, a failed setup), the toast still read "Background observer updated …"; it is now an error toast with the failure and **Open**. A turn you stopped still counts as an update.
 - An idle conversation no longer polls for observers. Every mounted panel asked Rust for its observer list once a second, observer or not; it now asks while one is running or a follow-up is waiting, and rests otherwise until a new watcher row or a wake event.
 - A reply that loops is stopped. A small local model could repeat one line for minutes until the window filled; the stream loop now notices a reply whose tail is one unit repeated — a line, a few lines, or a phrase with no newline — over at least 2000 bytes and ten copies, closes the connection (which stops a local server generating), keeps the reply up to the first repeat, and ends it with a note saying so. Short refrains, table rules and whitespace never trip it.

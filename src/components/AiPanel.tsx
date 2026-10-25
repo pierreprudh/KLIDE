@@ -142,6 +142,7 @@ import { MessageActions } from "./ai/MessageActions";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { mayActivateModel } from "./ai/modelActivationPolicy";
 import {
+  forgetsRememberedModel,
   hostModelAdoption,
   offlineModelFallback,
   unavailableModelFallback,
@@ -152,7 +153,7 @@ import { inboxSenders, coordinationPeersOf, parseDeliveryReason, peerName, useCo
 import { AgentActivity } from "./ai/AgentActivity";
 import { reviewEnvelope } from "../agent/coordination";
 import { allFavModels, favModelsFor } from "../favModels";
-import { storedModelForProvider, switchModelForProvider } from "./ai/rememberedModel";
+import { forgetModelForProvider, rememberedModelForProvider, storedModelForProvider, switchModelForProvider } from "./ai/rememberedModel";
 import { agentPickForConversation, routedModelString } from "../agent/harnessSource";
 import { readHarnessSourceSupport } from "../ipc/hermes";
 import { conversationMark } from "../modelIdentity";
@@ -3033,6 +3034,9 @@ This user request requires workspace inspection. Before answering, you MUST call
           favourites: favModelsFor(provider),
         });
         if (retired) retireModel(retired);
+        if (forgetsRememberedModel({ listed: names, remembered: rememberedModelForProvider(provider), delegate: isDelegateId(provider) })) {
+          forgetModelForProvider(provider);
+        }
       } catch {
         if (cancelled) return;
         setConnected(false);
@@ -3056,21 +3060,27 @@ This user request requires workspace inspection. Before answering, you MUST call
       setServerRunning(false);
       return;
     }
-    let timer: ReturnType<typeof setInterval>;
+    // Quick while the server is down (it may be starting), slow once it is
+    // up: a send to a server that died since says so on its own.
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
     async function check() {
+      let running = false;
       try {
-        const running = await readLocalProviderStatus(provider);
+        running = await readLocalProviderStatus(provider);
+        if (!alive) return;
         setServerRunning(running);
         setConnected(running);
         if (running) setServerError(null);
       } catch {
+        if (!alive) return;
         setServerRunning(false);
         setConnected(false);
       }
+      timer = setTimeout(() => void check(), running ? 20_000 : 4_000);
     }
-    check();
-    timer = setInterval(check, 4000);
-    return () => clearInterval(timer);
+    void check();
+    return () => { alive = false; clearTimeout(timer); };
   }, [provider]);
 
   function applyModelInspection(inspection: ModelInspection) {
