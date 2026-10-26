@@ -392,11 +392,14 @@ mod tests {
             )]
         );
         let json: serde_json::Value = serde_json::from_str(&files[0].1).unwrap();
+        // v2 nests servers under `mcp.servers`, v1 names them directly; the
+        // shape follows whichever CLI this machine has installed.
+        let server = json["mcp"].get("servers").unwrap_or(&json["mcp"]);
         assert_eq!(
-            json["mcp"]["klide"]["command"],
+            server["klide"]["command"],
             serde_json::json!(["/Applications/Klide.app/Contents/MacOS/klide", "mcp", "coordination"])
         );
-        assert_eq!(json["mcp"]["klide"]["type"], "local");
+        assert_eq!(server["klide"]["type"], "local");
     }
 
     #[test]

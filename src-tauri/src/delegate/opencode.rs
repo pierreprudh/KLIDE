@@ -135,19 +135,7 @@ impl Delegate for OpenCode {
     /// per-session file and the env var, not in `~/.config/opencode`.
     fn mcp_wiring(&self, spec: &McpServerSpec) -> Option<McpWiring> {
         let path = format!("{}/{}.opencode.json", spec.config_dir, spec.file_stem);
-        let mut command = vec![spec.command.clone()];
-        command.extend(spec.args.iter().cloned());
-        let content = serde_json::json!({
-            "$schema": "https://opencode.ai/config.json",
-            "mcp": {
-                "klide": {
-                    "type": "local",
-                    "command": command,
-                    "environment": spec.env_json(),
-                    "enabled": true,
-                }
-            }
-        });
+        let content = mcp_config(spec, installed_v2());
         Some(McpWiring {
             args: vec![],
             env: vec![("OPENCODE_CONFIG".to_string(), path.clone())],
@@ -1098,6 +1086,34 @@ fn parse_command_list(body: &str) -> Option<CliCommands> {
 
 /// PTY/mission launches also need a private V2 service: their MCP bridge and
 /// status callback belong to this launch's environment, never a shared host.
+/// The per-session config file that names Klide's MCP server. v2 still reads
+/// the v1 `mcp.<name>` + `enabled` shape (it migrates it on load), but its own
+/// shape is `mcp.servers.<name>` + `disabled`, so a v2 install gets that one
+/// rather than leaning on the migration. Both were seen to connect on 2.0.27.
+fn mcp_config(spec: &McpServerSpec, v2: bool) -> serde_json::Value {
+    let mut command = vec![spec.command.clone()];
+    command.extend(spec.args.iter().cloned());
+    if v2 {
+        return serde_json::json!({
+            "mcp": { "servers": { "klide": {
+                "type": "local",
+                "command": command,
+                "environment": spec.env_json(),
+                "disabled": false,
+            } } }
+        });
+    }
+    serde_json::json!({
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": { "klide": {
+            "type": "local",
+            "command": command,
+            "environment": spec.env_json(),
+            "enabled": true,
+        } }
+    })
+}
+
 fn installed_v2() -> bool {
     crate::cli_update::version_of(&OpenCode).version
         .is_some_and(|version| version.starts_with("2."))
@@ -1172,6 +1188,27 @@ mod tests {
         assert_eq!(server.events_url("http://127.0.0.1:1234"),"http://127.0.0.1:1234/event");
         assert!(!server.native_commands());
         assert!(server.history_path().is_none());
+    }
+
+    #[test]
+    fn the_mcp_config_file_speaks_the_installed_versions_shape() {
+        let spec = McpServerSpec {
+            command: "/k/klide".into(),
+            args: vec!["mcp".into(), "coordination".into()],
+            endpoint_path: "/data/endpoint.json".into(),
+            session_id: "c:opencode".into(),
+            secret_path: "/tmp/c.secret".into(),
+            config_dir: "/tmp".into(),
+            file_stem: "c".into(),
+        };
+        let v1 = mcp_config(&spec, false);
+        assert_eq!(v1["mcp"]["klide"]["command"], serde_json::json!(["/k/klide", "mcp", "coordination"]));
+        assert_eq!(v1["mcp"]["klide"]["enabled"], true);
+        let v2 = mcp_config(&spec, true);
+        assert!(v2["mcp"].get("klide").is_none(), "v2 has no top-level server names");
+        assert_eq!(v2["mcp"]["servers"]["klide"]["command"], v1["mcp"]["klide"]["command"]);
+        assert_eq!(v2["mcp"]["servers"]["klide"]["disabled"], false);
+        assert_eq!(v2["mcp"]["servers"]["klide"]["environment"], v1["mcp"]["klide"]["environment"]);
     }
 
     #[test]
