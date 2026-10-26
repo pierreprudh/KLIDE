@@ -296,6 +296,19 @@ describe("foldAgentEvents", () => {
       });
     });
 
+    it("writes a running call's progress onto its input as its stage", () => {
+      const rows = foldAgentEvents([
+        userMessage("implement it"),
+        assistantMessage("dispatching", { toolCalls: [{ toolCallId: "c1", name: "spawn_subagent", input: { subagent: "implementer", task: "Do it", worker: "codex" } }] }),
+        toolStarted("c1", "spawn_subagent", { subagent: "implementer", task: "Do it", worker: "codex" }),
+        { type: "tool_progress", runId: RUN, toolCallId: "c1", message: "Running setup…", ts: at() },
+      ]);
+      const assistant = rows[1];
+      if (assistant.kind !== "assistant") throw new Error("expected assistant");
+      expect(assistant.toolCalls[0].input).toMatchObject({ worker: "codex", stage: "Running setup…" });
+      expect(assistant.toolCalls[0].status).toBe("started");
+    });
+
     it("marks a background dispatch on the call, and its later report opens a response of its own", () => {
       // The parent did not wait: the call settled with a receipt, the child
       // kept working, and the report was delivered at a later boundary. The

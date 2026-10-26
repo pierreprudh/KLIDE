@@ -270,6 +270,23 @@ describe("a delegation row while the child works", () => {
     expect(html).not.toContain("subagent working…");
   });
 
+  it("says the setup stage while the worker's worktree is being prepared, and that it failed", () => {
+    const row = (stage: string, result: AttachedResult) => renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "codex", task: "Do it.", stage } }] },
+        false,
+        { results: new Map([["c0", result]]) },
+      ),
+    );
+    const running = row("Running setup…", { msg: { role: "tool", content: "Running spawn_subagent...", toolName: "spawn_subagent" }, active: true });
+    expect(running).toContain("Running setup…");
+    expect(running).not.toContain("Starting…");
+    const failed = row("Running setup…", { msg: { role: "tool", content: "The worktree setup failed, so Codex was not started and no model tokens were spent.\n\nnpm ERR! missing script", toolName: "spawn_subagent" }, active: false });
+    expect(failed).toContain("Setup failed");
+    expect(failed).toContain("npm ERR! missing script");
+    expect(failed).not.toContain("Completed");
+  });
+
   it("keeps a background dispatch receipt behind the activity disclosure", () => {
     const receipt: AttachedResult = { msg: { role: "tool", content: "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", toolName: "spawn_subagent" }, active: false };
     const html = delegation(receipt);

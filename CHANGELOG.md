@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A worker runs the project's worktree setup before it starts. The recipe's `setupScript` (`.klide/worktree.json`) used to be skipped for workers, so a worker's worktree had no `npm ci` behind it. The dispatch card now names the script; approving the card approves it. It runs in the worker's worktree to completion, and the dispatch row reads "Running setup…" meanwhile. If it fails, the worker is not started, no model tokens are spent, the row says "Setup failed" with the script's output, and the worktree is kept for a look. A recipe changed between the card and the run is refused, not run.
+
 ## 0.6.11 (2026-10-26) — Any Intelligence, Caching, Copilot
 
 - **Any agent, any intelligence.** Claude Code, Codex and OpenCode run on Klide's API keys, local and self-hosted endpoints and Nous Portal through a loopback bridge, without changing the agent; a conversation keeps the agent and model it began on.

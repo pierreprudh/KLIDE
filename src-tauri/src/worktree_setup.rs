@@ -5,10 +5,12 @@
 //! (`node_modules`), a free dev-server port. That gap is the #1 reason a
 //! fresh worktree won't run. This module owns the whole answer: a declarative
 //! recipe per workspace (`<workspace>/.klide/worktree.json`), and the code
-//! that applies it. `git::git_worktree_add` is the only caller — it applies
-//! the fast parts (copy / link / port) inline and runs the setup script on a
-//! background thread, reporting completion over the `worktree-setup:done`
-//! event.
+//! that applies it. `git::git_worktree_add` applies the fast parts (copy /
+//! link / port) inline and runs the setup script on a background thread,
+//! reporting completion over the `worktree-setup:done` event. A worker
+//! dispatch (`spawn_subagent`) instead shows the script on its card and runs
+//! it to completion before the worker starts, so a broken setup costs no
+//! model tokens.
 //!
 //! Recipe example:
 //! ```json
@@ -89,6 +91,28 @@ pub fn load(workspace_root: &str) -> WorktreeSetup {
             WorktreeSetup::default()
         }
     }
+}
+
+/// The recipe's setup script as a person can review it, or `None` when there
+/// is none. Refused rather than shown when it is too long to read on a card or
+/// carries characters that would make the text on screen differ from what
+/// runs (controls other than newline/tab, bidirectional overrides). Both
+/// approval doors — the native dialog and a worker's dispatch card — read it
+/// here, so they show and run the same thing.
+pub fn reviewable_script(workspace_root: &str) -> Result<Option<String>, String> {
+    let script = load(workspace_root).setup_script.filter(|s| !s.trim().is_empty());
+    if script.as_ref().is_some_and(|s| s.len() > 4096) {
+        return Err("Worktree setupScript is too large to review safely (max 4096 bytes)".into());
+    }
+    if script.as_ref().is_some_and(|script| {
+        script.chars().any(|character| {
+            (character.is_control() && !matches!(character, '\n' | '\t'))
+                || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+    }) {
+        return Err("Worktree setupScript contains hidden control or bidirectional text".into());
+    }
+    Ok(script)
 }
 
 /// One top-level name, with no path tricks — the shared guard for everything

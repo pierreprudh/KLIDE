@@ -107,6 +107,7 @@ function stepVerb(name: string): string {
 function settledWord(error: string | undefined): string {
   if (error?.startsWith("Interrupted:")) return "Interrupted";
   if (error?.startsWith("Cancelled")) return "Cancelled";
+  if (error?.startsWith("Setup failed")) return "Setup failed";
   return "Stopped";
 }
 
@@ -115,12 +116,15 @@ export function SubagentWatchLine({
   open,
   onToggle,
   hasRows,
+  stage,
 }: {
   activity: SubagentActivity;
   open: boolean;
   onToggle: () => void;
   /** Whether opening would show anything yet. */
   hasRows: boolean;
+  /** What the dispatch is doing before the child exists ("Running setup…"). */
+  stage?: string;
 }) {
   const elapsed = useElapsed(activity.status === "starting" || activity.status === "working" ? activity.startedMs : undefined);
   const working = activity.status === "starting" || activity.status === "working";
@@ -130,7 +134,7 @@ export function SubagentWatchLine({
   const step = asking ? { name: "", detail: asking.summary } : activity.current;
   // Between steps the child is thinking; before its first event it is starting.
   const label = !open
-    ? asking ? "Needs approval" : working ? (activity.status === "starting" ? "Starting…" : "Running") : activity.status === "done" ? "Completed" : settledWord(activity.error)
+    ? asking ? "Needs approval" : working ? (activity.status === "starting" ? stage ?? "Starting…" : "Running") : activity.status === "done" ? "Completed" : settledWord(activity.error)
     : asking
     ? "asking"
     : step

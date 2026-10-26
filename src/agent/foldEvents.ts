@@ -574,6 +574,20 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       return { changed: [idx] };
     }
 
+    // A step of a call that is still running — a worker's setup script runs
+    // between its card and its Run. Written onto the call's input like the
+    // dispatch facts below, so the row that reads the call can say it.
+    if (event.type === "tool_progress") {
+      const idx = upsertTool(event.toolCallId, (t) => {
+        const input = t.input && typeof t.input === "object" && !Array.isArray(t.input)
+          ? { ...(t.input as Record<string, unknown>) }
+          : {};
+        input.stage = event.message;
+        t.input = input;
+      });
+      return { changed: [idx] };
+    }
+
     // The worker a dispatch actually went to is decided on the card, not in
     // the call: Kit may name Claude Code and the user pick OpenRouter. The
     // event carries what was decided — worker, branch, model — so it is

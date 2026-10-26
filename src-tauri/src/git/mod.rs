@@ -1252,25 +1252,7 @@ pub(crate) async fn git_worktree_add(
         let toplevel = git_output(&prompt_root, &["rev-parse", "--show-toplevel"])?
             .trim()
             .to_string();
-        let script = crate::worktree_setup::load(&toplevel)
-            .setup_script
-            .filter(|s| !s.trim().is_empty());
-        if script.as_ref().is_some_and(|s| s.len() > 4096) {
-            return Err(
-                "Worktree setupScript is too large to review safely (max 4096 bytes)".into(),
-            );
-        }
-        if script.as_ref().is_some_and(|script| {
-            script.chars().any(|character| {
-                (character.is_control() && !matches!(character, '\n' | '\t'))
-                    || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-            })
-        }) {
-            return Err(
-                "Worktree setupScript contains hidden control or bidirectional text".into(),
-            );
-        }
-        Ok(script)
+        crate::worktree_setup::reviewable_script(&toplevel)
     })
     .await?;
 
