@@ -6,6 +6,46 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Orb follow-ups — remote work and continuity
+
+- [x] `/btw` read-only side questions: reuse the conversation panel, transcript
+  and Run controller; keep a saved child conversation with a bounded public
+  parent-context snapshot on each send. Closing hides it; Stop targets only
+  the child. Rust retains the read-only policy on resume and refuses delegate
+  runtimes that cannot enforce it. Real-model in-app acceptance passed
+  2026-10-26 with Anthropic Claude Opus 4.8: canary unchanged, writes/commands
+  unavailable, side answered during a 90-second main command, and history plus
+  read-only mode survived closing/reopening and a full panel remount.
+  Evidence: `docs/btw-live-acceptance-2026-10-26.md` (local notes).
+- [ ] VPS execution, first vertical slice: one SSH-connected Linux host, one
+  supported CLI and an existing checkout. Launch, stream, stop and reattach
+  after desktop disconnection; retrieve remote files/diffs and validation
+  evidence without treating remote paths as local. Keep destination credentials
+  on that host and reuse Run host admission/control semantics. Extract the
+  headless host as needed; `agent/remote.rs` currently means the local daemon.
+- [ ] Unified launch readiness: combine existing adapter, CLI, authentication,
+  model-capability and reachability checks into ready / unsupported / needs
+  login / offline / unknown, with reasons and observation times. Include the
+  minimal remote checks in the VPS slice and recheck before dispatch.
+- [ ] Local ↔ VPS transfer, after VPS execution: settle the source, show the
+  inventory/exclusions, checkpoint, verify the destination, then activate with
+  a durable receipt and one execution ownership generation. Preserve the
+  Conversation and historical Runs/evidence; subsequent execution gets a new
+  Run and normally a fresh native session with portable history. Reconcile lost
+  acknowledgements before retry; use destination credentials. Cover dirty files,
+  duplicate activation, interrupted copy and stale source events. Preserve
+  ADR-0002's explicit retry for interrupted Mission attempts.
+- [ ] Durable one-shot wake-ups: persisted due time/reason, occurrence identity,
+  cancellation, restart recovery and deduplicated admission through the Run
+  host. Show waiting-for-client/permission/error states. Existing process-local
+  shell/worker follow-ups are not a durable scheduler.
+- [ ] Cross-machine project-context replication, after real multi-machine use:
+  explicit scope, revisions, conflicts, exclusions and offline reconciliation.
+  Keep working Foundations separate from reviewed Project Memory; a transfer
+  checkpoint does not require continuously synchronized workspace files.
+
+Research and implementation audit: `docs/competitors-orb.md` (local notes).
+
 ## v0.5 — Agent Operations (feature-complete 2026-07-21)
 
 - [x] Add direct race-flow regression coverage: persistence, malformed state,

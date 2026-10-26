@@ -3,6 +3,7 @@ pub(crate) mod skill_resources;
 pub(crate) mod daemon;
 mod remote;
 mod run_host;
+mod side_questions;
 mod stream_log;
 mod artifacts;
 mod background;
@@ -766,6 +767,7 @@ async fn run_subagent_to_completion(
         // command, and its parent with it.
         auto_approve_commands: spec.auto_approve_commands,
         parent_id: Some(spec.parent_id.clone()),
+        side_question_of: None,
         mission_id: None,
         mission_task_id: None,
     };
@@ -1922,6 +1924,7 @@ async fn start_run(
         .unwrap_or_else(run_id);
     // The id names the transcript file — refuse anything path-shaped.
     validate_run_id(&id)?;
+    side_questions::enforce(&runs_dir, &id, &mut request)?;
     route_auto(&runs_dir, &id, &mut request).await?;
     let mission_link = match (
         request.workspace_root.clone(),

@@ -594,6 +594,7 @@ mod tests {
 
     fn request(attachments: Vec<AgentAttachment>) -> StartRunRequest {
         StartRunRequest {
+            side_question_of: None,
             run_id: None,
             workspace_root: Some("/tmp/ws".into()),
             mode: AgentMode::Chat,

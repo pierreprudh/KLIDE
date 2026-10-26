@@ -34,6 +34,7 @@ type StartRunRequest = {
   goal?: { objective: string; maxRounds?: number };
   delegateSession?: string;
   parentId?: string;
+  sideQuestionOf?: string;
   missionId?: string;
   missionTaskId?: string;
   preferredModels?: { provider: string; model: string }[];
@@ -98,6 +99,7 @@ export async function startAgentRun(
       goal: input.goal,
       delegateSession: input.delegateSession,
       parentId: input.parentId,
+      sideQuestionOf: input.sideQuestionOf,
       missionId: input.missionId,
       missionTaskId: input.missionTaskId,
       preferredModels: input.preferredModels,

@@ -2,6 +2,7 @@ import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
 import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from "../hooks/useLlamaSetupMode";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
+import { sideQuestionDirective } from "./ai/sideQuestions";
 // FocusMode — Klide's chat-first workspace, blending the project/thread
 // command-centre pattern with an artifact-first agent home. A quiet left rail
 // groups conversations by project; the main canvas pairs a centered start /
@@ -1926,6 +1927,11 @@ function FocusComposer({
     requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
   };
   const SLASH_COMMANDS: SlashCommand[] = [
+    { name: "btw", desc: "Ask on the side without interrupting this agent", run: () => {
+      const text = draft.trim();
+      clearDraft();
+      onSubmit(sideQuestionDirective(text) !== null ? text : "/btw", []);
+    } },
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectAgentMode("plan"); clearDraft(); } },
     { name: "work", desc: SLASH_DESC.work, run: () => { selectAgentMode(goalOrPlan()); clearDraft(); } },
     { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },

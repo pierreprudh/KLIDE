@@ -708,3 +708,26 @@ describe("createRunController — view", () => {
     expect(h.controller.getState()).toBe(settled);
   });
 });
+
+
+describe("independent side conversations", () => {
+  it("keeps the main Run streaming when a side conversation is stopped", async () => {
+    const main = harness();
+    const side = harness();
+    side.moveTo("side-conversation");
+    main.controller.send(turn("main-question"));
+    side.controller.send(turn("side-question", "explain the approach", { mode: "plan", modelSupportsTools: true }));
+    await flush();
+    expect(main.backend.last().input.runId).toBe(CONVO);
+    expect(side.backend.last().input.runId).toBe("side-conversation");
+    side.controller.stop();
+    await flush();
+    expect(side.backend.client.stopAgentRun).toHaveBeenCalledWith("side-conversation");
+    expect(main.backend.client.stopAgentRun).not.toHaveBeenCalled();
+    main.backend.last().emit(message("main continues"));
+    main.backend.last().emit(finished());
+    await flush();
+    expect(JSON.stringify(main.msgs())).toContain("main continues");
+    expect(JSON.stringify(side.msgs())).not.toContain("main continues");
+  });
+});

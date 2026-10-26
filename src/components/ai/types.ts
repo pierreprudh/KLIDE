@@ -165,6 +165,7 @@ export type QueuedTurn = {
 };
 
 export type Conversation = {
+  sideQuestionOf?: string;
   id: string;
   title: string;
   /** Set once the person named this thread themselves. A derived title is

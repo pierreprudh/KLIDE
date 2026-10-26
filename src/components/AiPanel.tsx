@@ -1,3 +1,8 @@
+import { SideQuestionToggle } from "./ai/SideQuestionToggle";
+import { SideQuestionText } from "./ai/SideQuestionText";
+import { SideQuestionResize } from "./ai/SideQuestionResize";
+import "./ai/sideQuestions.css";
+import { sideQuestionDirective, sideQuestionModel, sideQuestionContext } from "./ai/sideQuestions";
 import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
 import { appendMissionReports } from "./ai/missionReports";
 import { MissionLibrary } from "./missionControl/MissionLibrary";
@@ -376,6 +381,7 @@ type ReflectionOption = {
 };
 
 type Props = {
+  sideQuestion?: { parentId: string; getContext: () => Msg[]; onActivityChange?: (activity: { parentId: string; active: boolean; hasContent: boolean }) => void };
   workspaceRoot: string | null;
   /** Set when this panel is pinned to a git worktree (its runs work an
    *  isolated branch, not the main checkout). Shown under the composer so the
@@ -699,6 +705,7 @@ export function AiPanel({
   workspaceRoot,
   worktreeName,
   workspaceBranch,
+  sideQuestion,
   onFileWritten,
   onWorkspaceChanged,
   onReviewChanges,
@@ -768,6 +775,7 @@ export function AiPanel({
     undefined,
     () =>
       restoreConversationSession({
+        sideQuestionOf: sideQuestion?.parentId,
         panelId,
         initialConversationId,
         provider: requestedProviderRef.current,
@@ -825,6 +833,19 @@ export function AiPanel({
     transitionConversation({ type: "run-settled" });
   }
   const currentId = conversationSession.conversationId;
+  const sideQuestionParent = sideQuestion?.parentId ?? conversationSession.sideQuestionOf;
+  const [btw, setBtw] = useState<{ parentId: string; open: boolean; provider: ProviderId; model: string; question: { text: string; nonce: number } | null } | null>(null);
+  const [btwModels, setBtwModels] = useState<string[]>([]);
+  const [btwActivity, setBtwActivity] = useState<{ parentId: string; active: boolean; hasContent: boolean } | null>(null);
+  function openSideQuestion(question = "") {
+    if (sideQuestionParent) return;
+    const saved = loadConversations<Conversation>().find(conversation => conversation.sideQuestionOf === currentId);
+    const selection = sideQuestionModel(saved?.provider ?? provider, saved?.model ?? model);
+    setBtw(previous => ({
+      ...(previous?.parentId === currentId ? previous : { ...selection, parentId: currentId }),
+      open: true, question: question ? { text: question, nonce: Date.now() } : null,
+    }));
+  }
   const msgs = conversationSession.messages;
   const provider = conversationSession.provider;
   const model = conversationSession.model;
@@ -951,6 +972,10 @@ export function AiPanel({
     return -1;
   }, [msgs]);
   const streaming = conversationSession.run.active;
+  const hasSideMessages = msgs.length > 0;
+  useEffect(() => {
+    sideQuestion?.onActivityChange?.({ parentId: sideQuestion.parentId, active: streaming, hasContent: hasSideMessages });
+  }, [sideQuestion?.parentId, sideQuestion?.onActivityChange, streaming, hasSideMessages]);
   const activity = conversationSession.run.activity;
   void activity;
   function changeModel(nextModel: string) {
@@ -1256,6 +1281,7 @@ export function AiPanel({
   }, [holdContextPanel, closeContextTooltip]);
   useEffect(() => holdContextPanel, [holdContextPanel]);
   const toggleMode = () => {
+    if (sideQuestionParent) return;
     setNextSendMode(null);
     setAgentMode((m) => {
       // Two rows to walk: Plan and Work. A model with no tools has only Plan.
@@ -1267,6 +1293,7 @@ export function AiPanel({
     });
   };
   function selectMode(mode: AgentMode, closeMenu = true) {
+    if (sideQuestionParent) return;
     setNextSendMode(null);
     agentModeRef.current = mode;
     setAgentMode(mode);
@@ -1569,9 +1596,9 @@ export function AiPanel({
   const llamaSetupMode = useLlamaSetupMode();
   const providerGroups = useMemo(
     () => providerGroupsWithCustom(customProviders, customCli).map(group => ({
-      ...group, items: group.items.filter(item => isSelectedLlamaProvider(item.id, llamaSetupMode)),
+      ...group, items: group.items.filter(item => isSelectedLlamaProvider(item.id, llamaSetupMode) && (!sideQuestionParent || !isDelegateProvider(item.id))),
     })),
-    [customProviders, customCli, llamaSetupMode]
+    [customProviders, customCli, llamaSetupMode, sideQuestionParent]
   );
   // Focus offers the same stacks the workbench does, delegates included: the
   // canvas hosts their session the same way a panel does, and they are the one
@@ -1618,6 +1645,7 @@ export function AiPanel({
     setExpandedGroups(new Set(activeGroup ? [activeGroup.label] : []));
   }, [providerOpen]);
   function selectProvider(id: ProviderId) {
+    if (sideQuestionParent && isDelegateProvider(id)) return;
     // A Conversation that began in a Delegate stays in it. Picking an API,
     // local or self-hosted Provider here changes where that CLI's tokens come
     // from (a routed model string), not which CLI the thread is; picking
@@ -1691,6 +1719,7 @@ export function AiPanel({
   };
 
   const SLASH_COMMANDS: SlashCommand[] = [
+    ...(!sideQuestionParent ? [{ name: "btw", desc: "Ask on the side without interrupting this agent", run: () => { openSideQuestion(sideQuestionDirective(input) ?? ""); setInput(""); setSlash(null); } }] : []),
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectMode("plan"); setInput(""); } },
     { name: "work", desc: SLASH_DESC.work, run: () => { selectMode(goalOrPlan()); setInput(""); } },
     { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
@@ -2008,7 +2037,7 @@ export function AiPanel({
     () => (providerDelegatesWork ? [] : lensItemsForPrompt(projectContext, input, contextMode)),
     [providerDelegatesWork, projectContext, input, contextMode],
   );
-  const activeMode = nextSendMode ?? agentMode;
+  const activeMode = sideQuestionParent ? "plan" : nextSendMode ?? agentMode;
   const effectiveMode = effectiveModeFor({
     mode: activeMode,
     modelSupportsTools,
@@ -2016,7 +2045,7 @@ export function AiPanel({
   });
   // + menu: Goal disabled when the model has no tools. The Goal policy
   // (review / auto-accept / full auto) lives in the foot bar, not here.
-  const goalDisabled = !modelSupportsTools && !providerDelegatesWork;
+  const goalDisabled = !!sideQuestionParent || (!modelSupportsTools && !providerDelegatesWork);
   const goalPolicy = goalPolicyOf(requireDiffReview, autoApproveCommands);
   // The gauge's denominator is the window the turn *runs in*, not the model's
   // trained max. For Ollama that is the `num_ctx` Rust sizes per request — a
@@ -2430,6 +2459,11 @@ This user request requires workspace inspection. Before answering, you MUST call
     setTranscriptWindow({ id: currentId, start: transcriptWindowStart(msgs, TRANSCRIPT_PAGE_TURNS, transcriptStart) });
   }
   const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!sideQuestion || !visible) return;
+    const frame = requestAnimationFrame(() => taRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [sideQuestion?.parentId, visible]);
   // The same element as taRef, in state: the skill lede reads the textarea's
   // own metrics, and a ref doesn't re-render when it lands.
   const [taEl, setTaEl] = useState<HTMLTextAreaElement | null>(null);
@@ -3353,10 +3387,13 @@ This user request requires workspace inspection. Before answering, you MUST call
       : harnessSettings?.maxTurns;
     const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
     const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
+    const parentContext = sideQuestion?.getContext() ?? (sideQuestionParent ? loadConversations<Conversation>().find(conversation => conversation.id === sideQuestionParent)?.msgs : undefined);
+    const attachments = parentContext ? [...turn.attachments, { path: "Parent conversation snapshot", content: sideQuestionContext(parentContext) }] : turn.attachments;
     return {
-      workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
-      text: turn.text, attachments: turn.attachments,
-      context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
+      sideQuestionOf: sideQuestionParent,
+      workspaceRoot, mode: sideQuestionParent ? "plan" : turn.mode, provider: turn.provider, model: turn.model,
+      text: turn.text, attachments,
+      context: { workspaceRoot, attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
       systemPrompt,
       skills: enabledRunSkills(skills),
       disabledTools: disabledTools.length > 0 ? disabledTools : undefined,
@@ -3545,6 +3582,12 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   async function send(opts?: { text?: string; mode?: AgentMode; attachments?: Attachment[] }) {
+    const sideText = sideQuestionDirective(opts?.text ?? input);
+    if (sideText !== null && !sideQuestionParent) {
+      openSideQuestion(sideText);
+      setInput(""); setSlash(null);
+      return;
+    }
     // The terminal is mid-turn in this session; a headless turn now would
     // drive it from two sides. The composer says so in its placeholder.
     if (terminalTurn === "running") return;
@@ -3608,7 +3651,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // A `/goal` lede rides in Work whatever the picker says — reaching an
     // objective takes edits. The text goes out as typed; the system prompt
     // names what the lede asks (`buildSystemPrompt`).
-    const requestedMode = directive
+    const requestedMode = sideQuestionParent ? "plan" : directive
       ? directive.subagent.mode
       : goal || mission
         ? "goal"
@@ -3630,7 +3673,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     controller.send({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools: supportsToolsForTurn, modelSupportsReflection: supportsReflectionForTurn, reflectionLevel: supportsReflectionForTurn ? panelReflectionLevel : undefined, attachments, subagent: directive?.subagent.id, goal: goal && !directive ? { objective: goal.objective } : undefined, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
     // A subagent named *inside* a larger message (not a leading directive) runs
     // in the background, concurrent with the main answer above.
-    if (!directive) {
+    if (!directive && !sideQuestionParent) {
       for (const call of extractInlineSubagentCalls(text)) {
         void runBackgroundSubagent(call.subagent, call.task);
       }
@@ -3879,7 +3922,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         // Auto-summarize on a clean `run_result` (no harness error, not user-
         // cancelled, not a turn the panel stopped watching, harness feature
         // flag on). Delegate providers have their own session memory on disk.
-        if (outcome === "done" && harnessSettings?.autoMemoryOnRunDone !== false && !isDelegateProvider(turn.provider)) {
+        if (!sideQuestionParent && outcome === "done" && harnessSettings?.autoMemoryOnRunDone !== false && !isDelegateProvider(turn.provider)) {
           void runAutoSummarize(turn);
         }
       },
@@ -3892,7 +3935,12 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   // ── RENDER ──
 
-  const canSend = !!(skillToken ? draftBody.trim() : input.trim()) && !serverStarting && !compacting && terminalTurn !== "running";
+  const sidePanelOpen = btw?.parentId === currentId && btw.open;
+  const sidePanelId = `btw-pane-${currentId}`;
+  const sidePanelWorking = btwActivity?.parentId === currentId && btwActivity.active;
+  const sidePanelHasHistory = (btwActivity?.parentId === currentId && btwActivity.hasContent) || conversations.some(conversation => conversation.sideQuestionOf === currentId && conversation.msgs.length > 0);
+  const sideQuestionDraft = !sideQuestionParent && sideQuestionDirective(input) !== null;
+  const canSend = sideQuestionDraft || (!!(skillToken ? draftBody.trim() : input.trim()) && !serverStarting && !compacting && terminalTurn !== "running");
   // Hover-revealed "Send to both" over the send button (race panels only).
   const [raceSendHover, setRaceSendHover] = useState(false);
   const acceptanceMode = modificationAcceptanceMode(
@@ -3981,7 +4029,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   );
 
   return (
-    <>
+    <div className={`klide-btw-layout${btw?.parentId === currentId ? " has-side" : ""}${sidePanelOpen ? " is-open" : ""}`} style={btw?.parentId === currentId ? { width: "100%", height: "100%", minWidth: 0 } : { display: "contents" }}>
     {lightboxImage && createPortal(
       <div
         role="dialog"
@@ -3998,10 +4046,11 @@ This user request requires workspace inspection. Before answering, you MUST call
       </div>,
       document.body,
     )}
+    <div className="klide-btw-columns">
     <aside
       className={`shared-notes-host ${variant === "focus" ? "klide-focus-ai-surface" : "floating-panel"}`}
       aria-label="AI conversation"
-      style={{ width: fill ? "100%" : width, height: fill ? "100%" : undefined, margin: fill ? 0 : "4px 4px 4px 0", display: fill || visible ? "flex" : "none", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}
+      style={{ minWidth: 0, width: fill ? "100%" : width, height: fill ? "100%" : undefined, margin: fill ? 0 : "4px 4px 4px 0", display: fill || visible ? "flex" : "none", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}
       onDragOver={(e) => { if (canAttachFiles && Array.from(e.dataTransfer?.types ?? []).includes("Files")) { e.preventDefault(); setFileDragOver(true); } }}
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFileDragOver(false); }}
       onDrop={(e) => {
@@ -4011,6 +4060,12 @@ This user request requires workspace inspection. Before answering, you MUST call
         const files = Array.from(e.dataTransfer?.files ?? []);
         if (files.length) void addFiles(files);
       }}>
+      {!sideQuestionParent && <SideQuestionToggle open={!!sidePanelOpen} hasHistory={sidePanelHasHistory} working={sidePanelWorking}
+        panelId={sidePanelId} onToggle={() => {
+          if (sidePanelOpen) setBtw(value => value && { ...value, open: false });
+          else openSideQuestion();
+        }} />}
+      {sideQuestionParent && !sideQuestion && <div className="klide-btw-label">Side question</div>}
       {fileDragOver && canAttachFiles && (
         <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 45, pointerEvents: "none", display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--accent-soft) 55%, transparent)", border: "2px dashed var(--accent)", borderRadius: "inherit" }}>
           <div style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", background: "var(--bg-elevated)", padding: "6px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>{photoGate.dropHint}</div>
@@ -4408,7 +4463,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                       beside(
                         <div
                           style={{ minWidth: 0, background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 14, lineHeight: 1.58, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>
-                          {m.content}
+                          {sideQuestionParent ? m.content : <SideQuestionText text={m.content} onOpen={() => openSideQuestion()} />}
                         </div>,
                       )
                     ) : (
@@ -5187,7 +5242,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                         return (
                           <button key={rung.mode} type="button" role="menuitemradio" aria-checked={active} disabled={disabled}
                             onClick={() => { if (!disabled) selectMode(rung.mode); }}
-                            title={disabled ? `${model} cannot use edit tools.` : rung.description}
+                            title={disabled ? sideQuestionParent ? "Side questions are read-only." : `${model} cannot use edit tools.` : rung.description}
                             style={{ width: "100%", display: "flex", alignItems: "center", height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", font: "inherit", fontSize: 13, cursor: disabled ? "default" : "pointer" }}
                             onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = "var(--bg-hover)"; }}
                             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
@@ -5402,7 +5457,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   document.body
                 )}
               </button>
-            {streaming || serverStarting ? (
+            {(streaming || serverStarting) && !sideQuestionDraft ? (
               <button onClick={stopCurrentStream} aria-label="Stop generation" title={serverStarting ? "Cancel (Esc)" : "Stop (Esc)"}
                 style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border)", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
@@ -5545,7 +5600,24 @@ This user request requires workspace inspection. Before answering, you MUST call
       </div>
       )}
     </aside>
-    </>
+    {btw?.parentId === currentId && <SideQuestionResize panelId={sidePanelId} open={btw.open} />}
+    {btw?.parentId === currentId && <section id={sidePanelId} className="klide-btw-pane" aria-label="Side question" inert={!btw.open} aria-hidden={!btw.open}>
+      <header className="klide-btw-heading"><span>Side question</span><button type="button" aria-label="Close side question" onClick={() => setBtw(value => value && { ...value, open: false })}><CloseIcon size={14} /></button></header>
+      <AiPanel key={`btw-${currentId}`} panelId={`btw-${currentId}`} fill visible={btw.open} width={360}
+        workspaceRoot={workspaceRoot} workspaceBranch={workspaceBranch}
+        sideQuestion={{ parentId: currentId, getContext: () => msgsRef.current, onActivityChange: setBtwActivity }}
+        initialProvider={btw.provider} provider={btw.provider} model={btw.model}
+        onProviderChange={provider => setBtw(value => value && { ...value, provider })}
+        onModelChange={model => setBtw(value => value && { ...value, model })}
+        availableModels={btwModels} onAvailableModelsChange={setBtwModels}
+        requireDiffReview stopAfterRejection={stopAfterRejection} skills={skills} harnessSettings={harnessSettings}
+        projectContext={projectContext} apiKeyVersion={apiKeyVersion} variant="focus"
+        followUpMessage={btw.question} onFollowUpConsumed={() => setBtw(value => value && { ...value, question: null })}
+        onOpenSettingsSection={onOpenSettingsSection} onOpenPeerConversation={onOpenPeerConversation}
+      />
+    </section>}
+    </div>
+    </div>
   );
 }
 
