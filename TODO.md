@@ -23,10 +23,23 @@ baseline; unchecked items below are verification or specific remaining gaps.
   Diff and validation evidence, then merge or reject and explicitly clean up.
   Exercise a native hosted model, a local model and a supported Delegate;
   record which combinations passed and any limitations.
-- [ ] Verify background Worker completion and permissions in the app, including
-  when the parent Conversation is hidden. Make waiting work discoverable. The
-  result already joins validation evidence and a Merge / Discard action, and
-  worktrees are kept until the operator chooses (PR #293); verify it in the app.
+- [x] Foreground Worker acceptance in the app (2026-10-26, sandbox repo
+  `~/Documents/Private/klide-acceptance`, DeepSeek Flash parent, Claude Code
+  worker): setup stage ran and was shown, the worker committed on its branch,
+  **Merge** landed it and removed the worktree; a broken setup said "Setup
+  failed" with its output, started no worker, and **Discard** cleaned up.
+  Fixed on the way: a Focus task sent OpenRouter's model to Anthropic (#295,
+  #296, #297), the parent redid a worker's fix in the main checkout (#300),
+  untracked `.klide/coordination/` blocked every Merge (#300), the setup
+  failure drew as a boxed report with no way to drop its worktree (#301).
+- [ ] Verify a **background** Worker in the app, including when the parent
+  Conversation is hidden: its permission prompt and its report must reach you.
+  Make waiting work discoverable.
+- [ ] Small Worker gaps seen in the pass: the check command is one global
+  Harness setting (Settings › Harness › test after edit), so the validation
+  line never appeared until it was set; it belongs to the project, beside
+  `setupScript` in `.klide/worktree.json`. A small parent (DeepSeek Flash)
+  dispatched without a word; Kit's prompt should say what it hands off and why.
 - [ ] Finish the local Worker dispatch gaps listed below. Setup before model
   work shipped (PR #291). Left: aggregate capacity enforced at admission.
   Decided 2026-10-26: a dispatch over the limit **waits in a queue** (visible
