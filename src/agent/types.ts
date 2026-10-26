@@ -456,6 +456,7 @@ export type StartAgentRunInput = {
   goal?: { objective: string; maxRounds?: number };
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
+  sideQuestionOf?: string;
   /** The user's starred models, sent when `provider` is `auto` so the Rust
    *  router can prefer them. Stars live in this renderer's storage
    *  (favModels.ts); the policy that reads them lives in Rust. */

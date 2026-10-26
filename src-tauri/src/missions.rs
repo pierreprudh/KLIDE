@@ -980,6 +980,7 @@ fn start_request_for(
     }
     let prompt = task_prompt(bundle, task);
     Ok(StartRunRequest {
+        side_question_of: None,
         run_id: Some(attempt_run_id.to_string()),
         workspace_root: Some(workspace_root.to_string()),
         mode: agent_mode(&task.mode),

@@ -717,3 +717,16 @@ describe("resumed with a foreign recorded model", () => {
     expect(carriedIn.model).toBe("default");
   });
 });
+
+
+describe("side conversation persistence", () => {
+  it("restores the read-only parent link from history and retains it through a follow-up", () => {
+    const saved: Conversation = { id: "side", title: "Side question", msgs: [userMessage], updatedAt: 1,
+      provider: "ollama", model: "local", cwd: "/workspace", sideQuestionOf: "parent" };
+    localStorage.setItem("klide-conversations", JSON.stringify([saved]));
+    const restored = restoreConversationSession({ initialConversationId: "side", provider: "ollama", model: "local", workspaceRoot: "/workspace" });
+    expect(restored.sideQuestionOf).toBe("parent");
+    const continued = conversationSessionReducer(restored, { type: "messages-replaced", messages: [...restored.messages, { role: "user", content: "another question" }] });
+    expect(snapshotConversationSession(continued)?.sideQuestionOf).toBe("parent");
+  });
+});

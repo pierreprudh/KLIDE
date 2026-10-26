@@ -147,6 +147,16 @@ it may edit. The operator approves every dispatch on a card. Its report carries
 the Git state the Harness observed, never only the worker's word.
 _Avoid_: background agent (that is a *background dispatch*), bot, instance
 
+**Side question**:
+A user-invoked `/btw` Conversation beside the main Conversation. It has its
+own Run, transcript, model selection and Stop, plus a bounded snapshot of the
+parent's public conversation text refreshed at dispatch. It shares the parent's
+Workspace for reads; Rust pins the child to read-only native Harness tools,
+including after history resume. It cannot edit, run commands, dispatch Workers,
+or message the main agent. Closing the panel hides it without stopping either
+Run. A Side question is independent of a Subagent report or advisor consultation.
+_Avoid_: second writer, advisor, Worker
+
 **Background dispatch**:
 A worker the parent does not wait for: `spawn_subagent` with `background:
 true` returns the child's Run id at once, the child keeps working as a Run of

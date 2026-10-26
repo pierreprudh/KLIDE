@@ -158,6 +158,9 @@ pub struct StartRunRequest {
     pub auto_approve_commands: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    /// Read-only side conversation, pinned durably on its first launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_question_of: Option<String>,
     /// Durable Mission linkage. A Mission Task is not this Run: each retry or
     /// race member carries the same task id with a fresh run id. The Rust
     /// harness records validation back to the Mission after it settles.

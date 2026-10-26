@@ -59,6 +59,7 @@ pub enum BlockReason {
 #[derive(Clone, Debug)]
 pub struct GateSubject {
     pub mode: AgentMode,
+    pub read_only_side_question: bool,
     /// Bare Tool names, already narrowed to this Mode.
     pub disabled: HashSet<String>,
     pub lineage: RunLineage,
@@ -70,6 +71,7 @@ impl GateSubject {
     pub fn for_mode(mode: AgentMode) -> Self {
         Self {
             mode,
+            read_only_side_question: false,
             disabled: HashSet::new(),
             lineage: RunLineage::Conversation,
             requested_full_auto: false,
@@ -107,12 +109,16 @@ impl GateSubject {
             disabled,
             lineage,
             requested_full_auto: request.auto_approve_commands == Some(true),
+            read_only_side_question: request.side_question_of.is_some(),
         }
     }
 
     /// May this Tool run in this Run at all? `kind` is `None` for a name the
     /// registry does not know; that call goes on to the unknown-tool path.
     pub fn permits(&self, name: &str, kind: Option<ToolKind>) -> Result<(), BlockReason> {
+        if self.read_only_side_question && !matches!(kind, Some(ToolKind::ReadOnly | ToolKind::ConversationHistory | ToolKind::ProjectMemory)) {
+            return Err(BlockReason::Disabled);
+        }
         if self.disabled.contains(name) {
             return Err(BlockReason::Disabled);
         }

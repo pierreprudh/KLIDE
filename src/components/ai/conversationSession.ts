@@ -25,6 +25,7 @@ export type ConversationRunActivity = "thinking" | "waiting" | null;
  * cannot adopt a new identity and forget to persist it.
  */
 export type ConversationSession = {
+  sideQuestionOf?: string;
   conversationId: string;
   messages: Msg[];
   /** Where the *next* turn goes. The picker edits this; it is the panel's
@@ -50,6 +51,7 @@ export type ConversationSession = {
 };
 
 export type RestoreConversationSessionInput = {
+  sideQuestionOf?: string;
   panelId?: string;
   initialConversationId?: string | null;
   provider: ProviderId;
@@ -104,6 +106,7 @@ function workspaceMatches(conversation: Conversation, workspaceRoot: string | nu
  * fresh identity. The entire saved Conversation is adopted in one read.
  */
 export function restoreConversationSession({
+  sideQuestionOf,
   panelId,
   initialConversationId,
   provider,
@@ -115,6 +118,7 @@ export function restoreConversationSession({
 }: RestoreConversationSessionInput): ConversationSession {
   if (startFresh) {
     return {
+      sideQuestionOf,
       conversationId: createId(),
       messages: [],
       provider,
@@ -175,6 +179,7 @@ export function restoreConversationSession({
     : saved?.model || model;
   return {
     conversationId,
+    sideQuestionOf: saved?.sideQuestionOf ?? sideQuestionOf,
     messages: saved?.msgs ?? [],
     provider: restoredProvider,
     model: restoredModel,
@@ -237,6 +242,7 @@ export function conversationSessionReducer(
       const model = recorded || (provider === session.provider ? session.model : switchModelForProvider(provider));
       return {
         ...session,
+        sideQuestionOf: conversation.sideQuestionOf,
         conversationId: conversation.id,
         messages: conversation.msgs,
         provider,
@@ -384,6 +390,7 @@ export function snapshotConversationSession(
   // on the first save.
   const firstStamped = messages.find((m) => typeof (m as { ts?: number }).ts === "number");
   return {
+    sideQuestionOf: session.sideQuestionOf,
     id: session.conversationId,
     title: deriveTitle(messages),
     msgs: messages,
