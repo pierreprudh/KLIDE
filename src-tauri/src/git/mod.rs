@@ -1511,7 +1511,11 @@ pub(crate) async fn git_worktree_merge(
     if branch.is_empty() {
         return Err("Branch to merge is required".to_string());
     }
-    let dirty = git_output(&workspace_root, &["status", "--porcelain"])?;
+    // Tracked changes only. Untracked files never entangle a merge (git
+    // refuses by itself if the branch would overwrite one), and Klide writes
+    // untracked state of its own (`.klide/coordination/`) into every project
+    // it runs in, so counting them refused every merge there.
+    let dirty = git_output(&workspace_root, &["status", "--porcelain", "--untracked-files=no"])?;
     if !dirty.trim().is_empty() {
         return Err(
             "Main checkout has uncommitted changes — commit or stash them before merging."
@@ -2113,6 +2117,32 @@ detached
                 .trim(),
             "false"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Klide's own untracked state (`.klide/coordination/`) sits in every
+    /// project it ran in; it must not read as "uncommitted changes". A
+    /// tracked edit still refuses the merge.
+    #[tokio::test]
+    async fn worktree_merge_ignores_untracked_files_but_not_tracked_edits() {
+        let (base, repo) = temp_repo("wt-merge-untracked");
+        run_git(&repo, &["checkout", "-b", "klide/worker-x"]).unwrap();
+        std::fs::write(std::path::Path::new(&repo).join("fix.txt"), "w").unwrap();
+        run_git(&repo, &["add", "."]).unwrap();
+        run_git(&repo, &["commit", "-m", "work"]).unwrap();
+        run_git(&repo, &["checkout", "main"]).unwrap();
+        std::fs::create_dir_all(std::path::Path::new(&repo).join(".klide/coordination")).unwrap();
+        std::fs::write(std::path::Path::new(&repo).join(".klide/coordination/events.jsonl"), "{}").unwrap();
+        git_worktree_merge(repo.clone(), "klide/worker-x".into()).await.expect("untracked files do not block");
+
+        run_git(&repo, &["checkout", "-b", "klide/worker-y"]).unwrap();
+        std::fs::write(std::path::Path::new(&repo).join("y.txt"), "y").unwrap();
+        run_git(&repo, &["add", "."]).unwrap();
+        run_git(&repo, &["commit", "-m", "y"]).unwrap();
+        run_git(&repo, &["checkout", "main"]).unwrap();
+        std::fs::write(std::path::Path::new(&repo).join("fix.txt"), "edited").unwrap();
+        let err = git_worktree_merge(repo.clone(), "klide/worker-y".into()).await.unwrap_err();
+        assert!(err.contains("uncommitted changes"), "{err}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -28,8 +28,13 @@ impl WorkerCheckoutEvidence {
         } else {
             "The checkout is clean. This does not establish that tests passed or the task is complete."
         };
+        // Said to the parent model, which reads "review before merging" as
+        // its own next step: a small model re-applied a worker's whole fix to
+        // the main checkout, leaving it dirty so the branch could not merge.
         format!(
-            "Observed HEAD `{}` on `{}`. {state} Review the worktree and branch before merging.",
+            "Observed HEAD `{}` on `{}`. {state} This work exists only on that branch, not in \
+             your checkout: do not re-apply or redo it here. Tell the user what the worker did; \
+             they merge or discard the branch from the dispatch row.",
             self.head_commit, self.branch
         )
     }
@@ -365,6 +370,14 @@ pub struct SubagentRunSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_report_tells_the_parent_the_work_is_on_the_branch_only() {
+        let evidence = WorkerCheckoutEvidence { head_commit: "082c78f".into(), branch: "klide/worker-x".into(), has_uncommitted_changes: false };
+        let text = evidence.description();
+        assert!(text.contains("only on that branch") && text.contains("do not re-apply or redo it here"), "{text}");
+        assert!(text.contains("merge or discard the branch from the dispatch row"), "{text}");
+    }
 
     #[test]
     fn resolves_every_builtin_by_id_case_insensitively() {
