@@ -1,5 +1,5 @@
 // WORKER BRANCH ACTIONS — apply or drop a finished worker's branch from the
-// row that dispatched it.
+// row that dispatched it — or drop the worktree a failed setup left behind.
 //
 // A worker's worktree is kept until the operator chooses: nothing removes it
 // on settle, dirty or failed. The row offers the two choices Mission Control
@@ -16,19 +16,26 @@ import { refreshGitStatus } from "../../gitStatus";
 import { pushToast } from "../../toast";
 import { errMessage } from "../../errors";
 
-export function WorkerBranchActions({ workspaceRoot, branch }: { workspaceRoot: string; branch: string }) {
-  const [path, setPath] = useState<string | null>(null);
+/** Names the worktree by its branch (a worker that ran) or its path (one
+ *  whose setup failed before the dispatch recorded a branch). `discardOnly`:
+ *  nothing was made there, so there is nothing to merge. */
+export function WorkerBranchActions({ workspaceRoot, branch: named, path: namedPath, discardOnly = false }: { workspaceRoot: string; branch?: string; path?: string; discardOnly?: boolean }) {
+  const [found, setFound] = useState<{ path: string; branch: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let live = true;
     gitWorktreeList(workspaceRoot)
-      .then((list) => { if (live) setPath(list.find((w) => w.branch === branch)?.path ?? null); })
-      .catch(() => { if (live) setPath(null); });
+      .then((list) => {
+        const hit = list.find((w) => (named ? w.branch === named : w.path === namedPath));
+        if (live) setFound(hit ? { path: hit.path, branch: hit.branch } : null);
+      })
+      .catch(() => { if (live) setFound(null); });
     return () => { live = false; };
-  }, [workspaceRoot, branch]);
+  }, [workspaceRoot, named, namedPath]);
 
-  if (!path) return null;
+  if (!found) return null;
+  const { path, branch } = found;
 
   const merge = async () => {
     if (!confirm(`Merge ${branch} into the main checkout, then remove its worktree?`)) return;
@@ -38,7 +45,7 @@ export function WorkerBranchActions({ workspaceRoot, branch }: { workspaceRoot: 
       try {
         await gitWorktreeRemove(workspaceRoot, path, { deleteBranch: branch });
         pushToast(`${merged} Worktree removed.`, { tone: "success" });
-        setPath(null);
+        setFound(null);
       } catch (e) {
         // The work is in the main checkout already; a cleanup refusal (edits
         // left uncommitted in the worktree) is reported, not forced.
@@ -58,7 +65,7 @@ export function WorkerBranchActions({ workspaceRoot, branch }: { workspaceRoot: 
     try {
       await gitWorktreeRemove(workspaceRoot, path, { force: true, deleteBranch: branch });
       pushToast(`Discarded ${branch}.`, { tone: "info" });
-      setPath(null);
+      setFound(null);
     } catch (e) {
       pushToast(errMessage(e), { tone: "error" });
     } finally {
@@ -69,9 +76,11 @@ export function WorkerBranchActions({ workspaceRoot, branch }: { workspaceRoot: 
   const action = { background: "none", border: "none", padding: 0, fontSize: 12, cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1 } as const;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 6 }}>
-      <button type="button" disabled={busy} onClick={() => void merge()} style={{ ...action, color: "var(--accent)" }} title={`Merge ${branch} into the main checkout`}>
-        Merge
-      </button>
+      {!discardOnly && (
+        <button type="button" disabled={busy} onClick={() => void merge()} style={{ ...action, color: "var(--accent)" }} title={`Merge ${branch} into the main checkout`}>
+          Merge
+        </button>
+      )}
       <button type="button" disabled={busy} onClick={() => void discard()} style={{ ...action, color: "var(--fg-subtle)" }} title={`Delete the worktree and ${branch}`}>
         Discard
       </button>
