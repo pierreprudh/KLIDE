@@ -132,7 +132,7 @@
 }
 .klide-btw-heading {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   box-sizing: border-box;
   height: 28px;

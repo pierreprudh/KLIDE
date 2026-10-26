@@ -4063,7 +4063,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           if (sidePanelOpen) setBtw(value => value && { ...value, open: false });
           else openSideQuestion();
         }} />}
-      {sideQuestionParent && !sideQuestion && <div className="klide-btw-label">Side question</div>}
+      {sideQuestionParent && !sideQuestion && <div className="klide-btw-label" aria-hidden="true" />}
       {fileDragOver && canAttachFiles && (
         <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 45, pointerEvents: "none", display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--accent-soft) 55%, transparent)", border: "2px dashed var(--accent)", borderRadius: "inherit" }}>
           <div style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", background: "var(--bg-elevated)", padding: "6px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>{photoGate.dropHint}</div>
@@ -5600,7 +5600,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     </aside>
     {btw?.parentId === currentId && <SideQuestionResize panelId={sidePanelId} open={btw.open} />}
     {btw?.parentId === currentId && <section id={sidePanelId} className="klide-btw-pane" aria-label="Side question" inert={!btw.open} aria-hidden={!btw.open}>
-      <header className="klide-btw-heading"><span>Side question</span><button type="button" aria-label="Close side question" onClick={() => setBtw(value => value && { ...value, open: false })}><CloseIcon size={14} /></button></header>
+      <header className="klide-btw-heading"><button type="button" aria-label="Close side question" onClick={() => setBtw(value => value && { ...value, open: false })}><CloseIcon size={14} /></button></header>
       <AiPanel key={`btw-${currentId}`} panelId={`btw-${currentId}`} fill visible={btw.open} width={360}
         workspaceRoot={workspaceRoot} workspaceBranch={workspaceBranch}
         sideQuestion={{ parentId: currentId, getContext: () => msgsRef.current, onActivityChange: setBtwActivity }}
