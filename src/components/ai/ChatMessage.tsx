@@ -197,8 +197,11 @@ function summarizeArgs(args: unknown): string {
 // rows. The receipt's sentence is written for the model ("You are not
 // waiting for it…") and is not drawn; the child's brief and its completion
 // are not drawn either, because the row above already says both.
-function SubagentCallRow({ args, childRunId, settled, receipt, declined }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean }) {
+function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFailed }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean; setupFailed?: boolean }) {
   const o = (args ?? {}) as Record<string, unknown>;
+  // The worktree setup runs between the card and the child's Run; its
+  // progress is the line's word until the child exists.
+  const stage = !childRunId && typeof o.stage === "string" && o.stage ? o.stage : undefined;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
   const worker = typeof o.worker === "string" && o.worker.trim() ? (o.worker.trim() as ProviderId) : null;
   // The model the worker was started on, once the card decided it — the
@@ -247,8 +250,8 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined }: { arg
       <div style={{ margin: "10px 0 0 7px", padding: "1px 0 2px 18px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
         {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
         <SubagentWatchLine
-          activity={declined ? neverStarted("Cancelled at its dispatch card.") : !watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
-          open={opened} onToggle={toggle} hasRows={started}
+          activity={declined ? neverStarted("Cancelled at its dispatch card.") : setupFailed ? neverStarted("Setup failed before the worker started.") : !watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
+          open={opened} onToggle={toggle} hasRows={started} stage={stage}
         />
         <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
           <div>
@@ -625,7 +628,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
       // "Dispatched …" and "The user declined to dispatch …" are the tool's own
       // sentences (agent/tool_handlers.rs); the declined one is the card's
       // Cancel button, and no child Run exists behind it.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} />
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} setupFailed={!!result && !result.active && /^The worktree setup failed/.test(result.msg.content)} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (

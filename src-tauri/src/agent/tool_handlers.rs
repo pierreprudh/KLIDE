@@ -363,6 +363,7 @@ where
     let mut child_root = ctx.request.workspace_root.clone();
     let mut worktree_path: Option<String> = None;
     let mut source_commit: Option<String> = None;
+    let mut setup_script: Option<String> = None;
     let worker_label = worker.map(|w| w.label());
     // Set by the dispatch card's answer, read when the worker's spec is built.
     let mut dispatch_full_auto = false;
@@ -388,6 +389,20 @@ where
                 Err(error) => return Ok(ToolOutcome::Produced(ToolResult {
                     ok: false,
                     content: format!("Could not resolve worker source `{}`: {error}. No worker was started.", source_ref.as_deref().unwrap_or("HEAD")),
+                    metadata: None,
+                })),
+            }
+            // The recipe's setup script is part of what the card approves: it
+            // is shown there and run before the worker, never skipped silently.
+            let probe_root = root.clone();
+            match crate::blocking::run(move || {
+                let toplevel = crate::git::git_output(&probe_root, &["rev-parse", "--show-toplevel"])?;
+                crate::worktree_setup::reviewable_script(toplevel.trim())
+            }).await {
+                Ok(script) => setup_script = script,
+                Err(error) => return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!("{error} (.klide/worktree.json). No worker was started."),
                     metadata: None,
                 })),
             }
@@ -446,10 +461,15 @@ where
                 "sourceRef": source_ref,
                 "sourceCommit": source_commit,
                 "background": background,
+                "setupScript": setup_script,
             }),
             summary: format!("Dispatch {who} as {} {where_it_works}", def.id),
             reason: format!(
-                "{} {how_it_edits} {}{} Dispatch approvals are never remembered.",
+                "{}{} {how_it_edits} {}{} Dispatch approvals are never remembered.",
+                setup_script.as_ref().map(|script| format!(
+                    "Runs the worktree setup `{}` first; if it fails, no worker starts. ",
+                    script.trim()
+                )).unwrap_or_default(),
                 source_commit.as_ref().map(|commit| format!(
                     "Starts at {commit} (committed files only)."
                 )).unwrap_or_default(),
@@ -478,15 +498,16 @@ where
 
         if is_repo {
             // The same door the AI panel and Mission Control use for an isolated
-            // Run, minus the setup-script review dialog — a Run has no window to
-            // put a native prompt in, so the recipe's script simply does not run
-            // for a worker. A failure here is the tool's failure, not the run's.
+            // Run, minus its background setup: the script the card showed runs
+            // below, to completion, so a broken setup costs no model tokens. A
+            // failure here is the tool's failure, not the run's.
             let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
-            match crate::git::worktree_add_from_commit_core(root.clone(), planned_branch.clone(), None, None, quiet, source_commit.clone()).await {
+            let port = match crate::git::worktree_add_from_commit_core(root.clone(), planned_branch.clone(), None, None, quiet, source_commit.clone()).await {
                 Ok(info) => {
                     branch = Some(info.branch.clone());
                     child_root = Some(info.path.clone());
                     worktree_path = Some(info.path);
+                    info.port
                 }
                 Err(err) => {
                     return Ok(ToolOutcome::Produced(ToolResult {
@@ -495,6 +516,34 @@ where
                         metadata: None,
                     }));
                 }
+            };
+            if let (Some(script), Some(dir), Some(on_branch)) = (setup_script.clone(), worktree_path.clone(), branch.clone()) {
+                emit(AgentEvent::ToolProgress {
+                    run_id: ctx.id.to_string(),
+                    tool_call_id: call.id.clone(),
+                    message: "Running setup…".into(),
+                    ts: now_ms(),
+                })?;
+                let started = std::time::Instant::now();
+                let setup_root = root.clone();
+                let outcome = crate::blocking::run(move || run_approved_setup(&setup_root, &script, &dir, &on_branch, port)).await;
+                if let Err(output) = outcome {
+                    return Ok(ToolOutcome::Produced(ToolResult {
+                        ok: false,
+                        content: format!(
+                            "The worktree setup failed, so {label} was not started and no model \
+                             tokens were spent. The worktree is kept at {} for a look.\n\n{output}",
+                            worktree_path.as_deref().unwrap_or_default()
+                        ),
+                        metadata: None,
+                    }));
+                }
+                emit(AgentEvent::ToolProgress {
+                    run_id: ctx.id.to_string(),
+                    tool_call_id: call.id.clone(),
+                    message: format!("Setup done in {}s", started.elapsed().as_secs()),
+                    ts: now_ms(),
+                })?;
             }
         }
     }
@@ -836,6 +885,23 @@ async fn available_worker_ids() -> Vec<String> {
 
 /// Whether `root` is inside a Git working tree — the one question that decides
 /// whether a worker gets a worktree or the folder itself.
+/// Run the setup script a dispatch card approved in the worker's fresh
+/// worktree, to completion. The recipe is read again first: if it changed
+/// between the card and now, the approval was for other text and nothing runs.
+/// Bounded by the recipe's `scriptTimeoutSecs`; `Err` carries the output tail.
+fn run_approved_setup(root: &str, approved: &str, worktree: &str, branch: &str, port: Option<u16>) -> Result<(), String> {
+    let toplevel = crate::git::git_output(root, &["rev-parse", "--show-toplevel"])?;
+    let toplevel = toplevel.trim();
+    if crate::worktree_setup::reviewable_script(toplevel)?.as_deref() != Some(approved) {
+        return Err("The setup script changed after the dispatch card was approved; nothing ran.".into());
+    }
+    let timeout = crate::worktree_setup::load(toplevel).script_timeout_secs;
+    let dir = std::path::Path::new(worktree);
+    let envs = crate::worktree_setup::script_env(toplevel, dir, branch, port);
+    let outcome = crate::worktree_setup::run_script(approved, dir, &envs, timeout);
+    if outcome.ok { Ok(()) } else { Err(outcome.output) }
+}
+
 fn is_git_repository(root: &str) -> bool {
     std::process::Command::new("git")
         .args(["-C", root, "rev-parse", "--is-inside-work-tree"])
@@ -2196,5 +2262,41 @@ mod race_worktree_tests {
         assert!(!is_race_worktree(root), "a worktree the user opened is not a race member");
         assert!(!is_race_worktree(base.join("repo").to_str().unwrap()));
         std::fs::remove_dir_all(base).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod worker_setup_tests {
+    use super::*;
+
+    fn repo_with_recipe(tag: &str, script: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!("klide-worker-setup-{tag}-{}-{}", std::process::id(), now_ms()));
+        let root = base.join("repo");
+        let worktree = base.join("wt");
+        std::fs::create_dir_all(root.join(".klide")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(&root).status().unwrap().success());
+        std::fs::write(root.join(".klide/worktree.json"), serde_json::json!({ "setupScript": script }).to_string()).unwrap();
+        (root.canonicalize().unwrap(), worktree.canonicalize().unwrap())
+    }
+
+    #[test]
+    fn the_approved_script_runs_in_the_worktree_with_its_env() {
+        let script = "echo \"$KLIDE_WORKTREE_BRANCH\" > made.txt";
+        let (root, wt) = repo_with_recipe("ok", script);
+        run_approved_setup(root.to_str().unwrap(), script, wt.to_str().unwrap(), "klide/worker-x", None).unwrap();
+        assert_eq!(std::fs::read_to_string(wt.join("made.txt")).unwrap().trim(), "klide/worker-x");
+    }
+
+    #[test]
+    fn a_failing_script_returns_its_output_and_a_changed_one_never_runs() {
+        let (root, wt) = repo_with_recipe("fail", "echo broken-deps >&2; exit 4");
+        let err = run_approved_setup(root.to_str().unwrap(), "echo broken-deps >&2; exit 4", wt.to_str().unwrap(), "b", None).unwrap_err();
+        assert!(err.contains("broken-deps"), "{err}");
+
+        let (root, wt) = repo_with_recipe("changed", "touch evil.txt");
+        let err = run_approved_setup(root.to_str().unwrap(), "touch fine.txt", wt.to_str().unwrap(), "b", None).unwrap_err();
+        assert!(err.contains("changed after the dispatch card"), "{err}");
+        assert!(!wt.join("evil.txt").exists() && !wt.join("fine.txt").exists());
     }
 }

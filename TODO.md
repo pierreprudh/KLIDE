@@ -144,8 +144,13 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   the Rust admission path). A child's permission prompts reach the parent's
   dispatch row since 2026-10-15; a conversation that is not on screen still
   learns of one only by opening it.
-- [ ] Make worker setup an approved, visible stage; workers currently skip the
-  configured setup script. Report setup failure before spending model tokens.
+- [x] Make worker setup an approved, visible stage (2026-10-26). The dispatch
+  card names the recipe's `setupScript`, the script runs to completion in the
+  worker's worktree before the child Run exists (`ToolProgress` → "Running
+  setup…" on the dispatch row), and a failure is the Tool's failed result: no
+  worker, no tokens, worktree kept. Re-read at run time, a changed recipe
+  voids the approval. Not cancel-aware: Stop waits for the script or its
+  `scriptTimeoutSecs` (default 600 s).
 - [ ] Join worker results to validation evidence and a review/apply action;
   preserve dirty or failed worktrees until the operator chooses cleanup.
 
