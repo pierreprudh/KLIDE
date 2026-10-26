@@ -115,7 +115,9 @@ export function ThinkingBlock({
   // goes (`.klide-tool-run-body .klide-think`, tokens.css).
   return (
     <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: 0 }}>
-      <summary style={{ ...foldLineStyle, width: "fit-content", padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+      {/* The hairline spans the conversation, as the fold row's does; only the
+          label and chevron take the click (tokens.css `.klide-think`). */}
+      <summary style={{ ...foldLineStyle, width: "100%", padding: 0, listStyle: "none", userSelect: "none" }}>
         <FoldLine expanded={false}>
           {streaming ? <LiveLabel label="Thinking" startedAt={startedAt} /> : thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}
         </FoldLine>
