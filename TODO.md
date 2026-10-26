@@ -151,8 +151,14 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   worker, no tokens, worktree kept. Re-read at run time, a changed recipe
   voids the approval. Not cancel-aware: Stop waits for the script or its
   `scriptTimeoutSecs` (default 600 s).
-- [ ] Join worker results to validation evidence and a review/apply action;
-  preserve dirty or failed worktrees until the operator chooses cleanup.
+- [x] Join worker results to validation evidence and a review/apply action
+  (2026-10-26). The parent's check command runs in the worker's worktree when
+  it reports (`WorkerOutcome::describe`; result on the report and on the Tool
+  metadata as `validation`). The dispatch row offers Merge / Discard while a
+  worktree on the branch exists (`WorkerBranchActions`, Mission Control's
+  semantics); nothing removes a worker's worktree on its own. Open: a
+  background worker's check is not cancel-aware (bounded by the command
+  timeout), and Merge has no diff preview on the row: Git Review shows it.
 
 Research and benchmark plan: `docs/workers-comparison-2026-09-21.md` (local notes).
 

@@ -139,7 +139,7 @@ fn retry_message(spec: &GoalSpec, check: &CheckOutcome, round: usize, max: usize
     )
 }
 
-fn tail(text: &str, max_chars: usize) -> String {
+pub(super) fn tail(text: &str, max_chars: usize) -> String {
     let trimmed = text.trim();
     let count = trimmed.chars().count();
     if count <= max_chars {

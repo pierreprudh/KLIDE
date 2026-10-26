@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A worker's report carries a check Klide ran, not only the worker's word. When the project has a check command (Settings › Harness › test after edit), it runs in the worker's worktree once the worker reports, and the report says "Validation: `npm test` passed", or FAILED with the output tail and "Do not merge this branch as it stands". A worker that failed, or one without a worktree, is not checked.
+- A finished worker's branch can be merged or discarded from the row that dispatched it. **Merge** brings the branch into the main checkout, then removes its worktree and branch, and says so if the worktree had to be kept. **Discard** deletes both after a confirm. The worktree is never removed on its own: the two words show for as long as a worktree on that branch exists.
 - A worker runs the project's worktree setup before it starts. The recipe's `setupScript` (`.klide/worktree.json`) used to be skipped for workers, so a worker's worktree had no `npm ci` behind it. The dispatch card now names the script; approving the card approves it. It runs in the worker's worktree to completion, and the dispatch row reads "Running setup…" meanwhile. If it fails, the worker is not started, no model tokens are spent, the row says "Setup failed" with the script's output, and the worktree is kept for a look. A recipe changed between the card and the run is refused, not run.
 
 ## 0.6.11 (2026-10-26) — Any Intelligence, Caching, Copilot
