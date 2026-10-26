@@ -8,7 +8,7 @@ A local-first coding workspace that runs local models and coding agents side by 
 
 <br/>
 
-![Version](https://img.shields.io/badge/version-0.6.10-7A9F4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.11-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
 [![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
 
@@ -325,12 +325,11 @@ The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordin
 
 Klide is under active development. Its frontend tests, production build, Rust suite, PTY socket integration, and release-bundle boot check pass. Unsigned Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs the Open Anyway step above.
 
-The current line is **0.6.10** (2026-10-13). On main since then, unreleased:
-
-- **Any agent, any intelligence** — Claude Code, Codex, and OpenCode run on Klide's API keys, local and self-hosted endpoints, and Nous Portal without changing the agent; reasoning effort follows the routed model; a conversation keeps the agent it began on and its history mark shows the model that powers it
+The current line is **0.6.11** (2026-10-26).
 
 Recent cuts, each under the name it shipped with:
 
+- **0.6.11 — Any Intelligence, Caching, Copilot** (2026-10-26) — Claude Code, Codex, and OpenCode on Klide's API keys, local and self-hosted endpoints, and Nous Portal without changing the agent; prompt caching end to end and Rust-owned compaction for every Run; GitHub Copilot as a CLI agent; background workers; Auto routing rungs; conversations in SQLite; dropped PDFs read; `/btw` side questions
 - **0.6.10** (2026-10-13) — Amp, Cursor, Factory, and Hermes as CLI providers with official marks; Hermes on any API, local, or self-hosted source; harness/model independence recorded as a product principle
 - **0.6.9 — OpenCode 2** (2026-10-12) — native answer and reasoning streaming, durable recovery, session resume, native commands, complete model discovery, provider commands first in the `/` menu
 - **0.6.8** (2026-10-07) — Sight, so a model without image support borrows another model's eyes; app and background runs share admission and crash recovery; the Memory inbox; Mistral metadata; agent commands in the login shell's environment; the Welcome film
