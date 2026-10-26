@@ -833,6 +833,11 @@ function App() {
   const [editorWordWrap, setEditorWordWrap] = useSetting(SETTINGS.editorWordWrap);
   const [editorMinimap, setEditorMinimap] = useSetting(SETTINGS.editorMinimap);
   const [aiModel, setAiModel] = useSetting(SETTINGS.aiModel);
+  // The pair the Focus home composer shows — and, once sent, the pair the
+  // task runs on (its onSubmit writes it onto the panel).
+  const focusShownProvider: ProviderId =
+    aiPanels[0]?.provider ?? ((localStorage.getItem("klide.provider") as ProviderId) || "ollama");
+  const focusShownModel = aiPanels[0]?.model ?? aiModel;
   // Global default for "require diff review" (auto-accept off). Settings edits
   // this. Each AI panel keeps its own override in the fleet — toggling
   // auto-accept in one conversation must NOT leak into the others. A panel
@@ -3604,6 +3609,14 @@ function App() {
                     // isolation is opt-in through the dedicated action/fork
                     // flows, never an invisible side effect of pressing Send.
                     setAiPanelCwd(aiPanels[0]?.id ?? "ai-main", undefined);
+                    // The task starts on the pair this composer showed. With no
+                    // layout entry the panel behind it restores from its own
+                    // key, which can name another Provider (an Anthropic thread
+                    // opened there earlier) — and the shown model then went out
+                    // to that Provider as a 404. Writing the pair onto the panel
+                    // makes the shown pair the one that runs.
+                    setAiPanelProvider(primaryPanelId, focusShownProvider);
+                    updateAiPanelModel(primaryPanelId, focusShownModel);
                     setFocusInitialMessage(text);
                     setFocusInitialAttachments(attachments);
                     setFocusInitialMode(opts?.mode ?? null);
@@ -3696,10 +3709,7 @@ function App() {
                     ) : null
                   }
                   renderChat={renderFocusChat}
-                  provider={
-                    aiPanels[0]?.provider ??
-                    ((localStorage.getItem("klide.provider") as ProviderId) || "ollama")
-                  }
+                  provider={focusShownProvider}
                   onProviderChange={(p) => {
                     const panelId = primaryPanelId;
                     setAiPanelProvider(panelId, p);
@@ -3711,7 +3721,7 @@ function App() {
                     // was left, not on the row's default every time.
                     updateAiPanelModel(panelId, switchModelForProvider(p));
                   }}
-                  model={aiPanels[0]?.model ?? aiModel}
+                  model={focusShownModel}
                   onModelChange={(m) => updateAiPanelModel(primaryPanelId, m)}
                   effort={harnessSettings?.reflectionLevels?.[aiPanels[0]?.model ?? aiModel]}
                   onEffortChange={(v) => {
