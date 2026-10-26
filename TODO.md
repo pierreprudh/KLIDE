@@ -103,15 +103,20 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   membership and a Developer ID Application certificate, then `notarytool
   submit` + `stapler staple` in the bundle step. Until then every release that
   ships a bundle repeats the Open Anyway note.
-- [ ] Validate Windows and Linux. Both known compile blockers are cleared: the
-  delegate PTY layer builds off unix (2026-08-04 — wire types in ungated
-  `pty_wire.rs`, `pty_client` stubs "no daemon here"), and the keyring backend
-  is chosen per target (2026-09-10 — `apple-native` on macOS, `windows-native`
-  on Windows, `sync-secret-service` + `crypto-rust` on Linux, via
-  `[target.'cfg(...)'.dependencies]`). What remains is a real build on each
-  OS: a Windows runner and a Linux runner with the Tauri dev packages plus
-  `libdbus-1-dev`, then a smoke test of key save/read and Quick Look's
-  "no preview here" answer.
+- [ ] Validate Windows and Linux. CI now builds both (2026-10-26, job
+  `rust-other-os`): **Linux** compiles and passes the full suite; **Windows**
+  compiles, and its test run is off until these 35 Unix-assuming tests are
+  fixed or gated (`cargo test` on `windows-latest`, run 40367830430):
+  conversation_store ×9 (all), agent ×9 (command_env venv, worker_setup ×2,
+  tools secret-paths + preflight ×2, types emit-site scan, worker_dispatch ×2),
+  delegate ×4 (claude_code ×2, copilot, list_runs), worktree_setup ×2,
+  storage ×2, deep_link ×2, search, run_documents, pty_host, providers mirror
+  (likely CRLF on checkout), memory proposals, klide_skill, coordination memo.
+  Fixed on the way: `linkDirs` symlinks per platform, the PTY title watcher is
+  Unix-only, and a stdio MCP server that dies at once now quotes its stderr
+  instead of "Broken pipe" (a race on every OS, caught on Linux). Still owed:
+  a real app build on each OS and a smoke test of key save/read and Quick
+  Look's "no preview here" answer.
 - [x] Make worktree-per-run isolation the default parallel-agent flow. Fresh
   Klide conversations and Mission Control task dispatches now create a branch
   before starting the Harness or delegate CLI; the worktree pin survives layout

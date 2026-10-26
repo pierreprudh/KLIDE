@@ -156,11 +156,23 @@ pub fn link_dirs_into(source_root: &str, worktree: &Path, dirs: &[String]) -> Ve
         };
         let src = Path::new(source_root).join(name);
         let dst = worktree.join(name);
-        if src.is_dir() && !dst.exists() && std::os::unix::fs::symlink(&src, &dst).is_ok() {
+        if src.is_dir() && !dst.exists() && symlink_dir(&src, &dst).is_ok() {
             linked.push(name.to_string());
         }
     }
     linked
+}
+
+#[cfg(unix)]
+fn symlink_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src, dst)
+}
+
+/// A Windows directory symlink needs Developer Mode or admin rights; without
+/// them it fails and the dir is simply not linked, like any failure here.
+#[cfg(windows)]
+fn symlink_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(src, dst)
 }
 
 /// Deterministic per-worktree port: same worktree name → same port, different

@@ -461,7 +461,15 @@ impl StdioPipe {
             writeln!(stdin, "{message}")?;
             stdin.flush()
         };
-        write(&mut self.stdin).map_err(|e| Failure::Transport(format!("Could not write to the server: {e}")))
+        write(&mut self.stdin).map_err(|e| {
+            // A server that exits at once (a missing package) closes its stdin
+            // before the first request lands; on Linux that is a broken pipe
+            // here, not a closed stdout later. Its stderr is the explanation.
+            Failure::Transport(match final_words(&self.stderr, Duration::from_secs(1)) {
+                Some(line) => format!("The server stopped: {line}"),
+                None => format!("Could not write to the server: {e}"),
+            })
+        })
     }
 
     fn request(&mut self, outgoing: &Value, id: i64, deadline: Instant) -> Result<Value, Failure> {
@@ -700,6 +708,22 @@ fn last_error(stderr: &mpsc::Receiver<String>) -> Option<String> {
         }
     }
     last.map(|line| line.chars().take(300).collect())
+}
+
+/// What a server that is going away said last: stderr read until the reader
+/// thread ends (the process closed it) or `wait` passes — the line may still
+/// be in flight when the failure is noticed.
+fn final_words(stderr: &mpsc::Receiver<String>, wait: Duration) -> Option<String> {
+    let deadline = Instant::now() + wait;
+    let mut last = None;
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        match stderr.recv_timeout(remaining) {
+            Ok(line) if !line.trim().is_empty() => last = Some(line.trim().chars().take(300).collect()),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    last
 }
 
 /// `tools/list` → the projection Klide keeps. A malformed entry is dropped
