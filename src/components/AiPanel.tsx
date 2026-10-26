@@ -1424,7 +1424,7 @@ export function AiPanel({
           if (m.role === "user") { turnStartedAt = m.ts; break; }
         }
       }
-      const { label, count, names } = toolRunLabel(run);
+      const { label } = toolRunLabel(run);
       // When a turn opens with tool work, the message wearing the agent's mark
       // is the one this row folds away — and a response with no mark reads as
       // nobody's. The row wears it instead, open or closed, and the message
@@ -1461,8 +1461,6 @@ export function AiPanel({
           <div style={{ flex: 1, minWidth: 0 }}>
             <ToolRunRow
               label={label}
-              count={count}
-              names={names}
               expanded={open}
               onToggle={() => toggleToolRun(run.start)}
               working={working ? { since: turnStartedAt } : undefined}

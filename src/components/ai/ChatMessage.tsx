@@ -589,12 +589,12 @@ export type AttachedResult = { msg: Extract<Msg, { role: "tool" }>; active: bool
 // prose-free stretch gets from AiPanel. The sentence is the agent explaining
 // itself; the rows are the machinery it explained. Open while the work is
 // still running, so the only thing moving on screen is never hidden.
-function InlineToolRun({ count, names, working, children }: { count: string; names: string; working: boolean; children: ReactNode }) {
+function InlineToolRun({ count, working, children }: { count: string; working: boolean; children: ReactNode }) {
   const [opened, setOpened] = useState(false);
   const open = opened || working;
   return (
     <>
-      <ToolRunRow label={count} count={count} names={names} expanded={open} onToggle={() => setOpened((was) => !was)} />
+      <ToolRunRow label={count} expanded={open} onToggle={() => setOpened((was) => !was)} />
       <div className="klide-tool-run-body" data-open={open ? "true" : "false"}>
         <div>{children}</div>
       </div>
@@ -770,13 +770,9 @@ function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
 
 /** The one line a stretch of work folds to — "Worked for 19.4s ›" over a
  *  hairline, in the conversation's own face. The time is what the reader
- *  last saw happening; the count and the tool names are the answer to a
- *  pointer resting on the row ("which tools?") and fade in at its end
- *  (`.klide-tool-run-names`), so nothing on the line is a sentence. */
+ *  last saw happening; which tools ran is in the fold, not on the line. */
 export function ToolRunRow({
   label,
-  count,
-  names,
   expanded,
   onToggle,
   working,
@@ -784,9 +780,6 @@ export function ToolRunRow({
   /** "Worked for 19.4s" / "Thought for 6.3s" — or the count, when nothing
    *  was timed. */
   label: string;
-  count: string;
-  /** Every distinct tool, comma-separated; shown on hover only. */
-  names: string;
   expanded: boolean;
   onToggle: () => void;
   /** The run is still going: the line reads "Working" with a clock that
@@ -796,14 +789,15 @@ export function ToolRunRow({
    *  label replaces it once the answer arrives. */
   working?: { since?: number };
 }) {
-  const hover = [label === count ? null : count, names || null].filter(Boolean).join(" · ");
   // The hairline spans the conversation; only the label is the control. A
   // full-width button opened the fold from a click anywhere along the line.
   return (
     <div
-      className="klide-tool-run-line"
       style={{
         ...foldLineStyle,
+        // Its host is a flex row: without this the line shrinks to its label
+        // and the hover names land beside it instead of at the far end.
+        width: "100%",
         // The row that hosts this owns its spacing and its gutter — a margin
         // here would push the text off the mark sitting beside it. The 22px
         // line matches that mark so the two centre on the same line.
@@ -823,11 +817,6 @@ export function ToolRunRow({
           {working ? <LiveLabel label="Working" startedAt={working.since} /> : label}
         </FoldLine>
       </button>
-      {hover ? (
-        <span className="klide-tool-run-names" style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-          {hover}
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -1676,7 +1665,7 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
           const label = toolRunLabel({ calls: calls.length, names });
           const working = active || [...(results?.values() ?? [])].some((r) => r.active);
           return (
-            <InlineToolRun count={label.count} names={label.names} working={working}>
+            <InlineToolRun count={label.count} working={working}>
               {rows}
             </InlineToolRun>
           );
