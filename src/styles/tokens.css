@@ -2757,6 +2757,12 @@ textarea.klide-diff-comment-input:focus-visible {
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
   transition: opacity var(--motion-fast) var(--ease-out);
+  /* The line is full width; the label and chevron are the control. */
+  pointer-events: none;
+}
+.klide-think > summary > * {
+  pointer-events: auto;
+  cursor: pointer;
 }
 .klide-tool-run-body .klide-think > summary,
 .klide-tool-run-live .klide-think > summary {
@@ -2773,7 +2779,7 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-compaction > summary:hover {
   opacity: 0.82;
 }
-.klide-think > summary:hover {
+.klide-think > summary:has(> :hover) {
   opacity: 0.82;
 }
 /* The reasoning body reads as secondary — faint by default, settling to a
