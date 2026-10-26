@@ -837,7 +837,10 @@ function App() {
   // task runs on (its onSubmit writes it onto the panel).
   const focusShownProvider: ProviderId =
     aiPanels[0]?.provider ?? ((localStorage.getItem("klide.provider") as ProviderId) || "ollama");
-  const focusShownModel = aiPanels[0]?.model ?? aiModel;
+  // With no layout entry, the global `aiModel` can belong to another Provider
+  // (it showed OpenRouter + claude-sonnet-4-6); show the model a switch to
+  // this Provider lands on, which is the one the panel will run.
+  const focusShownModel = aiPanels[0]?.model ?? switchModelForProvider(focusShownProvider);
   // Global default for "require diff review" (auto-accept off). Settings edits
   // this. Each AI panel keeps its own override in the fleet — toggling
   // auto-accept in one conversation must NOT leak into the others. A panel
