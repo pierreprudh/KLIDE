@@ -785,6 +785,7 @@ struct PtyTitle {
 /// purpose: argv for anything launched through a wrapper is a path salad
 /// (`npm run dev` really is `node .../npm-cli.js run dev`), and a tab is one
 /// word wide. Login shells report as `-zsh`, hence the leading dash trim.
+#[cfg(unix)]
 fn process_name(pid: i32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-o", "comm=", "-p", &pid.to_string()])
@@ -812,6 +813,13 @@ fn process_name(pid: i32) -> Option<String> {
 /// announce what it launched — but it's cheap here: the pgid is read straight
 /// from the tty, and `ps` only runs when that pgid actually changes. The thread
 /// retires as soon as its shell leaves the map.
+///
+/// Unix only: a Windows console has no foreground process group to read, so
+/// there the tab keeps its own name.
+#[cfg(not(unix))]
+fn watch_shell_title(_app: tauri::AppHandle, _id: String, _shell_pid: Option<u32>) {}
+
+#[cfg(unix)]
 fn watch_shell_title(app: tauri::AppHandle, id: String, shell_pid: Option<u32>) {
     std::thread::spawn(move || {
         let mut last_pgid: Option<i32> = None;
