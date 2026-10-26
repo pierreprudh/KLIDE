@@ -242,18 +242,29 @@ version picks the contract, nothing is migrated in place.
   `opencode.json`, and accepts MCP entries under `mcp.servers` or `mcp`.
 - [x] Isolated smoke test covering discovery, reasoning + answer streaming,
   resume, commands and status callbacks without paid inference.
-- [ ] Run listing and transcript reads for v2 still go through `opencode.db`
-  (`v2::discover` / `v2::read_run` take the SQLite connection); move them to
-  `/api/session` when the listing endpoint is stable enough to replace the
-  database, or keep SQLite deliberately and say so here.
-- [ ] Evaluate `GET /api/experimental/session/{id}/log?after=<seq>&follow=true`
-  (replay-then-follow) against our own replay contract — capped scrollback
-  ring + monotonic `seq` + `delegate_pty_snapshot`. Not adopted; v2 still uses
-  Klide's ring buffer and `ptyd`.
-- [ ] The MCP wiring Klide writes for a session uses the v1 `mcp.<name>` shape
-  with `OPENCODE_CONFIG`; confirm v2 still honours it or write `mcp.servers`
-  when the installed CLI is v2. The other renames (`agent`→`agents`,
-  `prompt`→`system`, `disable`→`disabled`) don't touch anything Klide writes.
+- [x] Run listing and transcript reads for v2 stay on `opencode.db`, deliberately
+  (2026-10-26). `GET /api/session` exists and is stable, but answering through
+  it means starting a server, because the background service may be down and
+  Klide must never wake it carrying a session's env. Mission Control history
+  would then cost a process spawn per scan. The read is read-only SQLite on
+  `session_v2` / `session_message`. Schema rechecked against 2.0.27. The tests
+  build their own schema, so a later release that renames these tables would
+  empty the list silently (`discover` returns nothing on a failed query):
+  recheck on each OpenCode minor bump.
+- [x] `GET /api/experimental/session/{id}/log?after=<seq>&follow=true`: not
+  adopted (2026-10-26). It replays a session *on one server*; Klide runs a
+  private `--standalone` server per turn, so there is no long-lived server to
+  re-follow. An interrupted turn is already recovered from
+  `/api/session/{id}/message`, and PTY sessions keep Klide's ring buffer + `seq`
+  + `delegate_pty_snapshot` in `ptyd`. It is also still experimental. Revisit
+  only if Klide ever attaches to the shared service.
+- [x] MCP wiring speaks the installed version's shape (2026-10-26): v2 gets
+  `mcp.servers.klide` + `disabled: false`, v1 keeps `mcp.klide` + `enabled`.
+  Probed on 2.0.27 with a stub stdio server under `--standalone`: both shapes
+  connect (v2 migrates the old one on load), so this removes a dependency on
+  the migration, not a live bug. Never probe with `OPENCODE_CONFIG` set
+  through a non-standalone command: it boots the shared background service
+  with that env.
 
 Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/build/client>.
 
