@@ -652,6 +652,8 @@ where
         branch: branch.clone(),
         worktree_path: worktree_path.clone(),
         source_commit: source_commit.clone(),
+        check: ctx.request.test_after_edit_command.clone(),
+        check_timeout_secs: ctx.request.command_timeout_secs.unwrap_or(180).clamp(1, 1800),
     };
 
     if background {
@@ -671,7 +673,9 @@ where
         let role = def.id;
         tokio::spawn(async move {
             let (ok, report) = settled_child(child.await, role);
-            let (report, checkout) = outcome.describe(report).await;
+            // The parent's Stop does not reach a background worker, so its
+            // check runs to its own timeout too.
+            let (report, checkout, _) = outcome.describe(report, ok, &CancellationToken::new()).await;
             workers::settle(&parent_id, &child_id, ok, report, observed_head(&checkout));
         });
         let where_now = match (branch.as_deref(), worktree_path.as_deref()) {
@@ -711,7 +715,7 @@ where
         result = child => settled_child(result, def.id),
     };
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
-    let (report, checkout) = outcome.describe(report).await;
+    let (report, checkout, validation) = outcome.describe(report, ok, ctx.cancel).await;
 
     emit(AgentEvent::SubagentResolved {
         run_id: ctx.id.to_string(),
@@ -732,6 +736,7 @@ where
             "sourceCommit": source_commit,
             "checkout": checkout.as_ref().and_then(|r| r.as_ref().ok()),
             "checkoutError": checkout.as_ref().and_then(|r| r.as_ref().err()),
+            "validation": validation.as_ref().map(|check| serde_json::json!({ "command": check.command, "ok": check.ok })),
             "subagent": def.id,
             "worker": worker.map(|w| w.id()),
             "branch": branch,
@@ -757,6 +762,11 @@ struct WorkerOutcome {
     branch: Option<String>,
     worktree_path: Option<String>,
     source_commit: Option<String>,
+    /// The project's check command (the parent's "test after edit"), run in
+    /// the worker's worktree once it reports, so the report carries a result
+    /// the Harness observed rather than the worker's word for it.
+    check: Option<String>,
+    check_timeout_secs: u64,
 }
 
 /// The HEAD the Harness saw in the worker's checkout, when it could look.
@@ -770,13 +780,44 @@ impl WorkerOutcome {
     /// best-effort, and a clean checkout is not proof of validation.
     async fn describe(
         &self,
-        mut report: String,
-    ) -> (String, Option<Result<subagents::WorkerCheckoutEvidence, String>>) {
+        report: String,
+        ok: bool,
+        cancel: &CancellationToken,
+    ) -> (String, Option<Result<subagents::WorkerCheckoutEvidence, String>>, Option<goal::CheckOutcome>) {
         let checkout = if let Some(path) = self.worktree_path.clone() {
             Some(crate::blocking::run(move || subagents::worker_checkout_evidence(&path)).await)
         } else {
             None
         };
+        // Only a worker that reported, in a worktree of its own: a failed
+        // child's checkout is not a result, and a check in the project folder
+        // would test the operator's tree, not the worker's.
+        let validation = match (ok, self.worktree_path.as_deref()) {
+            (true, Some(path)) => run_goal_check(path, self.check.as_deref(), self.check_timeout_secs, cancel).await,
+            _ => None,
+        };
+        let (report, checkout) = self.describe_checkout(report, checkout);
+        let report = match &validation {
+            Some(check) if check.ok => format!(
+                "{report}\n\nValidation: `{}` passed in the worker's worktree.",
+                check.command
+            ),
+            Some(check) => format!(
+                "{report}\n\nValidation: `{}` FAILED in the worker's worktree. Do not merge this \
+                 branch as it stands.\n{}",
+                check.command,
+                goal::tail(&check.output, 3_000)
+            ),
+            None => report,
+        };
+        (report, checkout, validation)
+    }
+
+    fn describe_checkout(
+        &self,
+        mut report: String,
+        checkout: Option<Result<subagents::WorkerCheckoutEvidence, String>>,
+    ) -> (String, Option<Result<subagents::WorkerCheckoutEvidence, String>>) {
         if let Some(label) = self.label.as_deref() {
             report.push_str("\n\n— ");
             match (self.branch.as_deref(), self.worktree_path.as_deref()) {
@@ -2298,5 +2339,54 @@ mod worker_setup_tests {
         let err = run_approved_setup(root.to_str().unwrap(), "touch fine.txt", wt.to_str().unwrap(), "b", None).unwrap_err();
         assert!(err.contains("changed after the dispatch card"), "{err}");
         assert!(!wt.join("evil.txt").exists() && !wt.join("fine.txt").exists());
+    }
+}
+
+#[cfg(test)]
+mod worker_validation_tests {
+    use super::*;
+
+    fn committed_repo(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("klide-worker-validation-{tag}-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(&root).status().unwrap().success());
+        git(&["init", "-q", "-b", "klide/worker-x"]);
+        std::fs::write(root.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a"]);
+        root.canonicalize().unwrap()
+    }
+
+    fn outcome(path: &std::path::Path, check: Option<&str>) -> WorkerOutcome {
+        WorkerOutcome {
+            label: Some("Codex".into()),
+            branch: Some("klide/worker-x".into()),
+            worktree_path: Some(path.to_string_lossy().into()),
+            source_commit: Some("abc".into()),
+            check: check.map(str::to_string),
+            check_timeout_secs: 30,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reported_worker_is_checked_in_its_worktree() {
+        let root = committed_repo("pass");
+        let (report, _, validation) = outcome(&root, Some("test -f a.txt")).describe("done".into(), true, &CancellationToken::new()).await;
+        assert!(validation.unwrap().ok);
+        assert!(report.contains("Validation: `test -f a.txt` passed in the worker's worktree."), "{report}");
+
+        let (report, _, validation) = outcome(&root, Some("echo missing-thing; exit 1")).describe("done".into(), true, &CancellationToken::new()).await;
+        assert!(!validation.unwrap().ok);
+        assert!(report.contains("FAILED") && report.contains("Do not merge") && report.contains("missing-thing"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn no_check_runs_for_a_failed_worker_or_without_a_command() {
+        let root = committed_repo("skip");
+        let (report, _, validation) = outcome(&root, Some("touch ran.txt")).describe("broke".into(), false, &CancellationToken::new()).await;
+        assert!(validation.is_none() && !report.contains("Validation:"));
+        assert!(!root.join("ran.txt").exists());
+        let (_, _, validation) = outcome(&root, None).describe("done".into(), true, &CancellationToken::new()).await;
+        assert!(validation.is_none());
     }
 }

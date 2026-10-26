@@ -28,6 +28,7 @@ import { liftLetteredChoices } from "./QuestionCard";
 
 import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, USER_QUESTION_TOOL, dropVerdictMark, gradeAnswer, questionArgs, toolCallKey, toolRunLabel, withoutAnswerKey, type QuestionVerdict } from "./toolRuns";
 import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
+import { WorkerBranchActions } from "./WorkerBranchActions";
 import { childTranscriptRows, isWatchable, neverStarted } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
@@ -197,7 +198,7 @@ function summarizeArgs(args: unknown): string {
 // rows. The receipt's sentence is written for the model ("You are not
 // waiting for it…") and is not drawn; the child's brief and its completion
 // are not drawn either, because the row above already says both.
-function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFailed }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean; setupFailed?: boolean }) {
+function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFailed, workspaceRoot }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean; setupFailed?: boolean; workspaceRoot?: string | null }) {
   const o = (args ?? {}) as Record<string, unknown>;
   // The worktree setup runs between the card and the child's Run; its
   // progress is the line's word until the child exists.
@@ -253,6 +254,11 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
           activity={declined ? neverStarted("Cancelled at its dispatch card.") : setupFailed ? neverStarted("Setup failed before the worker started.") : !watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
           open={opened} onToggle={toggle} hasRows={started} stage={stage}
         />
+        {/* Once the worker is done, its branch waits on the operator: merge
+            it or drop it, here, without a trip to Mission Control. */}
+        {settled && !watching && !declined && branch && workspaceRoot && (
+          <WorkerBranchActions workspaceRoot={workspaceRoot} branch={branch} />
+        )}
         <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
           <div>
             {revealed && facts.length > 0 && (
@@ -628,7 +634,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
       // "Dispatched …" and "The user declined to dispatch …" are the tool's own
       // sentences (agent/tool_handlers.rs); the declined one is the card's
       // Cancel button, and no child Run exists behind it.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} setupFailed={!!result && !result.active && /^The worktree setup failed/.test(result.msg.content)} />
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} setupFailed={!!result && !result.active && /^The worktree setup failed/.test(result.msg.content)} workspaceRoot={workspaceRoot} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (
