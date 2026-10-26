@@ -285,6 +285,10 @@ describe("a delegation row while the child works", () => {
     expect(failed).toContain("Setup failed");
     expect(failed).toContain("npm ERR! missing script");
     expect(failed).not.toContain("Completed");
+    // The failure belongs to the delegation: its output sits on the row's
+    // spine, not in a separate report row with its own box.
+    expect(failed).not.toContain("subagent report");
+    expect(failed).not.toContain("no model tokens were spent");
   });
 
   it("keeps a background dispatch receipt behind the activity disclosure", () => {

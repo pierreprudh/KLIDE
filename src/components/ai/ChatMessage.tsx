@@ -200,7 +200,12 @@ function summarizeArgs(args: unknown): string {
 // rows. The receipt's sentence is written for the model ("You are not
 // waiting for it…") and is not drawn; the child's brief and its completion
 // are not drawn either, because the row above already says both.
-function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFailed, workspaceRoot }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean; setupFailed?: boolean; workspaceRoot?: string | null }) {
+function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFailure, workspaceRoot }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean; setupFailure?: string; workspaceRoot?: string | null }) {
+  const setupFailed = setupFailure !== undefined;
+  // A failed setup keeps its worktree (agent/tool_handlers.rs says where);
+  // the script's own output is everything after that first paragraph.
+  const keptWorktree = setupFailure?.match(/kept at (\S+) for a look/)?.[1];
+  const setupOutput = setupFailure?.split("\n\n").slice(1).join("\n\n").trim();
   const o = (args ?? {}) as Record<string, unknown>;
   // The worktree setup runs between the card and the child's Run; its
   // progress is the line's word until the child exists.
@@ -258,7 +263,18 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
         />
         {/* Once the worker is done, its branch waits on the operator: merge
             it or drop it, here, without a trip to Mission Control. */}
-        {settled && !watching && !declined && branch && workspaceRoot && (
+        {/* A failed setup is part of this delegation, not a report of its
+            own: its output sits on the same spine, quiet, and the worktree
+            it left behind can be dropped from here. */}
+        {setupFailed && setupOutput && (
+          <div style={{ marginTop: 6, fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.55, color: "var(--fg-dim)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+            {setupOutput}
+          </div>
+        )}
+        {setupFailed && keptWorktree && workspaceRoot && (
+          <WorkerBranchActions workspaceRoot={workspaceRoot} path={keptWorktree} discardOnly />
+        )}
+        {settled && !watching && !declined && !setupFailed && branch && workspaceRoot && (
           <WorkerBranchActions workspaceRoot={workspaceRoot} branch={branch} />
         )}
         <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
@@ -636,7 +652,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
       // "Dispatched …" and "The user declined to dispatch …" are the tool's own
       // sentences (agent/tool_handlers.rs); the declined one is the card's
       // Cancel button, and no child Run exists behind it.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} setupFailed={!!result && !result.active && /^The worktree setup failed/.test(result.msg.content)} workspaceRoot={workspaceRoot} />
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} setupFailure={result && !result.active && /^The worktree setup failed/.test(result.msg.content) ? result.msg.content : undefined} workspaceRoot={workspaceRoot} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (
@@ -646,7 +662,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
   // child has a Run id, the child's own activity after — so the tool
   // placeholder would repeat the same running animation underneath it.
   // Keep actual reports.
-  if (!result || (name === "spawn_subagent" && /^(Running |Dispatched )/.test(result.msg.content))) return call;
+  if (!result || (name === "spawn_subagent" && /^(Running |Dispatched |The worktree setup failed)/.test(result.msg.content))) return call;
   return (
     <>
       {call}
