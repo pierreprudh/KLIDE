@@ -813,6 +813,9 @@ export function ToolRunRow({
         padding: "0 0 6px",
         border: "none",
         borderBottom: "1px solid var(--border)",
+        // Every button is rounded (tokens.css), and a radius on a box with
+        // only a bottom border bends the hairline up at both ends.
+        borderRadius: 0,
         background: "transparent",
         cursor: "pointer",
         textAlign: "left",
