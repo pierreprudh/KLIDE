@@ -1,4 +1,6 @@
 type Props = {
+  conversationId: string;
+  invokedFor: string | undefined;
   open: boolean;
   hasHistory: boolean;
   working: boolean;
@@ -6,7 +8,8 @@ type Props = {
   onToggle: () => void;
 };
 
-export function SideQuestionToggle({ open, hasHistory, working, panelId, onToggle }: Props) {
+export function SideQuestionToggle({ conversationId, invokedFor, open, hasHistory, working, panelId, onToggle }: Props) {
+  if (invokedFor !== conversationId) return null;
   const action = open ? "Close side question" : hasHistory ? "Reopen side question" : "Open side question";
   const status = working ? " · working" : !open && hasHistory ? " · saved history" : "";
   return (

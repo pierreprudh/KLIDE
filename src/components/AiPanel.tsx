@@ -4077,7 +4077,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         const files = Array.from(e.dataTransfer?.files ?? []);
         if (files.length) void addFiles(files);
       }}>
-      {!sideQuestionParent && <SideQuestionToggle open={!!sidePanelOpen} hasHistory={sidePanelHasHistory} working={sidePanelWorking}
+      {!sideQuestionParent && <SideQuestionToggle conversationId={currentId} invokedFor={btw?.parentId} open={!!sidePanelOpen} hasHistory={sidePanelHasHistory} working={sidePanelWorking}
         panelId={sidePanelId} onToggle={() => {
           if (sidePanelOpen) setBtw(value => value && { ...value, open: false });
           else openSideQuestion();
