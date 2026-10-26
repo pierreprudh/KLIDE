@@ -46,6 +46,32 @@ export function hostModelAdoption({
 }
 
 /**
+ * A model adopted from the host only makes sense with the host's Provider.
+ * The Focus hero edits App's provider+model pair; the panel re-syncs its
+ * Provider only when App's value *changes*, so when App already held another
+ * Provider than the session (the hero showed OpenRouter, the session was on
+ * Anthropic), a model pick crossed over alone and `deepseek/…` went out to
+ * Anthropic as a 404. Adopt the pair together. A Conversation that has
+ * already run keeps its Provider (its history lives there), so there a
+ * mismatched host model is not adopted at all.
+ */
+export function hostPairAdoption<P extends string>({
+  adoptedModel,
+  hostProvider,
+  sessionProvider,
+  hasMessages,
+}: {
+  adoptedModel: string;
+  hostProvider: P | undefined;
+  sessionProvider: P;
+  hasMessages: boolean;
+}): { provider?: P; model: string } | null {
+  if (!hostProvider || hostProvider === sessionProvider) return { model: adoptedModel };
+  if (hasMessages) return null;
+  return { provider: hostProvider, model: adoptedModel };
+}
+
+/**
  * Which model the picker offers when the Provider's model list can't be read.
  * The session's own model wins: the list failed, so nothing has been learned
  * about whether that model exists. The remembered value only fills a genuinely

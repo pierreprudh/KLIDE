@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   forgetsRememberedModel,
   hostModelAdoption,
+  hostPairAdoption,
   offlineModelFallback,
   providerSwitchModel,
   unavailableModelFallback,
@@ -200,5 +201,26 @@ describe("forgetsRememberedModel", () => {
     expect(forgetsRememberedModel({ listed: [], remembered: "mistral-large-latest", delegate: false })).toBe(false);
     expect(forgetsRememberedModel({ listed: ["default", "sonnet"], remembered: "opus", delegate: true })).toBe(false);
     expect(forgetsRememberedModel({ listed: ["a"], remembered: null, delegate: false })).toBe(false);
+  });
+});
+
+describe("hostPairAdoption", () => {
+  it("brings the host's Provider along when a fresh session is on another one", () => {
+    // The reported run: the hero showed OpenRouter, the session was on
+    // Anthropic, and the DeepSeek pick went out to Anthropic as a 404.
+    expect(hostPairAdoption({ adoptedModel: "deepseek/deepseek-v4.1-flash-1017", hostProvider: "openrouter", sessionProvider: "anthropic", hasMessages: false }))
+      .toEqual({ provider: "openrouter", model: "deepseek/deepseek-v4.1-flash-1017" });
+  });
+
+  it("adopts the model alone when the Providers already agree", () => {
+    expect(hostPairAdoption({ adoptedModel: "claude-sonnet-5", hostProvider: "anthropic", sessionProvider: "anthropic", hasMessages: true }))
+      .toEqual({ model: "claude-sonnet-5" });
+    expect(hostPairAdoption({ adoptedModel: "claude-sonnet-5", hostProvider: undefined, sessionProvider: "anthropic", hasMessages: true }))
+      .toEqual({ model: "claude-sonnet-5" });
+  });
+
+  it("never moves a Conversation that already ran, and never lands a foreign model on it", () => {
+    expect(hostPairAdoption({ adoptedModel: "deepseek/deepseek-v4.1-flash-1017", hostProvider: "openrouter", sessionProvider: "claude-code", hasMessages: true }))
+      .toBeNull();
   });
 });
