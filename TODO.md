@@ -6,6 +6,44 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Current priority — clean up local workflows before VPS
+
+Direction confirmed 2026-10-26: VPS execution is the next major capability.
+First finish and verify the existing local experience. This is a bounded
+stabilization pass, not a requirement to finish every item in this backlog.
+Existing recovery, approval, review and model-selection features stay the
+baseline; unchecked items below are verification or specific remaining gaps.
+
+- [x] Verify the current baseline (2026-10-26): all 1,753 frontend tests and
+  the production build/bundle-split check passed. The full Rust test command
+  passed outside the sandbox; the sandbox run denied local sockets/processes.
+  This verifies automated checks, not the real-app acceptance pass below.
+- [ ] Complete a real-app acceptance pass: start an isolated Run, answer an
+  approval, stop and resume, restart and recover the Conversation, inspect the
+  Diff and validation evidence, then merge or reject and explicitly clean up.
+  Exercise a native hosted model, a local model and a supported Delegate;
+  record which combinations passed and any limitations.
+- [ ] Verify background Worker completion and permissions in the app, including
+  when the parent Conversation is hidden. Make waiting work discoverable. The
+  result already joins validation evidence and a Merge / Discard action, and
+  worktrees are kept until the operator chooses (PR #293); verify it in the app.
+- [ ] Finish the local Worker dispatch gaps listed below. Setup before model
+  work shipped (PR #291). Left: aggregate capacity enforced at admission.
+  Decided 2026-10-26: a dispatch over the limit **waits in a queue** (visible
+  on its row) rather than being refused; defaults 2 Delegate CLI workers and
+  4 API workers running at once, app-wide.
+- [ ] Consolidate local launch readiness from the existing checks: ready /
+  unsupported / needs login / offline / unknown, with a reason and observation
+  time. Recheck before dispatch; extend the same answer for VPS later.
+- [ ] Reconcile README/TODO claims with acceptance evidence, leaving unverified
+  or unsupported behavior explicit. Link results here before closing this pass.
+
+Exit: the checks above pass for the recorded supported paths, with no unresolved
+blocker involving lost work, missed approvals, duplicate execution or misleading
+completion. Then start the narrow VPS execution slice below. Phone control,
+machine transfer, scheduling, new agent integrations and broad redesigns remain
+later work; notarization and other desktop platforms keep their own release scope.
+
 ## Orb follow-ups — remote work and continuity
 
 - [x] `/btw` read-only side questions: reuse the conversation panel, transcript
