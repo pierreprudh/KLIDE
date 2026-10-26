@@ -149,6 +149,7 @@ import { mayActivateModel } from "./ai/modelActivationPolicy";
 import {
   forgetsRememberedModel,
   hostModelAdoption,
+  hostPairAdoption,
   offlineModelFallback,
   unavailableModelFallback,
 } from "./ai/modelSelection";
@@ -1017,7 +1018,17 @@ export function AiPanel({
       }
       return;
     }
-    if (adopted) transitionConversation({ type: "configured", model: adopted });
+    if (!adopted) return;
+    const pair = hostPairAdoption({
+      adoptedModel: adopted,
+      hostProvider,
+      sessionProvider: conversationSessionRef.current.provider,
+      hasMessages: conversationSessionRef.current.messages.length > 0,
+    });
+    if (!pair) return;
+    transitionConversation({ type: "configured", ...pair });
+    if (pair.provider && panelId) localStorage.setItem(`klide.provider.${panelId}`, pair.provider);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostModel, onModelChange]);
   // The Provider follows the same rule as the model above, and for a sharper
   // reason: the Focus hero edits this panel's provider+model pair from outside
@@ -2639,6 +2650,14 @@ This user request requires workspace inspection. Before answering, you MUST call
     consumedInitialMessageRef.current = receipt;
     onInitialMessageConsumed?.();
     if (msgsRef.current.length > 0) newConversation();
+    // The hero composer showed the host's pair, so the new task starts on it —
+    // not on whatever this panel's session last held behind the hero.
+    if (hostProvider && (hostProvider !== conversationSessionRef.current.provider || (hostModel && hostModel !== conversationSessionRef.current.model))) {
+      // App moves the hero's pair together, so its model belongs to its Provider.
+      const model = hostModel || switchModelForProvider(hostProvider);
+      transitionConversation({ type: "configured", provider: hostProvider, model });
+      if (panelId) localStorage.setItem(`klide.provider.${panelId}`, hostProvider);
+    }
     setPendingHeroSend({ text, attachments: staged, mode: initialMode ?? undefined });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialMessage, initialAttachments]);
