@@ -114,7 +114,7 @@ export function ThinkingBlock({
   // goes (`.klide-tool-run-body .klide-think`, tokens.css).
   return (
     <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: 0 }}>
-      <summary style={{ ...foldLineStyle, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+      <summary style={{ ...foldLineStyle, width: "fit-content", padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
         <FoldLine expanded={false}>
           {streaming ? <LiveLabel label="Thinking" startedAt={startedAt} /> : thinkingMs !== undefined ? `Thought for ${formatElapsed(thinkingMs)}` : "Thought process"}
         </FoldLine>
@@ -797,43 +797,38 @@ export function ToolRunRow({
   working?: { since?: number };
 }) {
   const hover = [label === count ? null : count, names || null].filter(Boolean).join(" · ");
+  // The hairline spans the conversation; only the label is the control. A
+  // full-width button opened the fold from a click anywhere along the line.
   return (
-    <button
-      type="button"
-      className="klide-tool-run-row"
-      onClick={onToggle}
-      aria-expanded={expanded}
+    <div
+      className="klide-tool-run-line"
       style={{
         ...foldLineStyle,
-        width: "100%",
         // The row that hosts this owns its spacing and its gutter — a margin
         // here would push the text off the mark sitting beside it. The 22px
         // line matches that mark so the two centre on the same line.
         margin: 0,
         padding: "0 0 6px",
-        border: "none",
         borderBottom: "1px solid var(--border)",
-        // Every button is rounded (tokens.css), and a radius on a box with
-        // only a bottom border bends the hairline up at both ends.
-        borderRadius: 0,
-        background: "transparent",
-        cursor: "pointer",
-        textAlign: "left",
       }}
     >
-      <FoldLine
-        expanded={expanded}
-        trailing={
-          hover ? (
-            <span className="klide-tool-run-names" style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-              {hover}
-            </span>
-          ) : null
-        }
+      <button
+        type="button"
+        className="klide-tool-run-row"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        style={{ ...foldLineStyle, flexShrink: 0, padding: 0, background: "transparent", cursor: "pointer", textAlign: "left" }}
       >
-        {working ? <LiveLabel label="Working" startedAt={working.since} /> : label}
-      </FoldLine>
-    </button>
+        <FoldLine expanded={expanded}>
+          {working ? <LiveLabel label="Working" startedAt={working.since} /> : label}
+        </FoldLine>
+      </button>
+      {hover ? (
+        <span className="klide-tool-run-names" style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+          {hover}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -1206,7 +1201,7 @@ export function CompactionRow({
   const [open, setOpen] = useState(false);
   const line = expandable ? (
     <details className="klide-compaction" style={{ margin: 0 }} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
-      <summary style={{ ...foldLineStyle, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+      <summary style={{ ...foldLineStyle, width: "fit-content", padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
         <FoldLine expanded={open}>{text}</FoldLine>
       </summary>
       {compactSummaryCard(summary, source === "manual")}
