@@ -44,6 +44,25 @@ them.
   Keep working Foundations separate from reviewed Project Memory; a transfer
   checkpoint does not require continuously synchronized workspace files.
 
+- [ ] Phone companion — a premium app to talk to Kit while the Mac does the
+  work, on your own models, listing only the ones usable now (direction
+  confirmed 2026-10-26, scheduled for later). Plan: `docs/COMPANION.md`;
+  screens: `preview/companion.html`.
+  - [ ] Resident runs: the daemon hosts subagents and `consult_advisor`, starts
+    observer wake turns itself, drops a replaced key from its token cache, and
+    keeps its own connector pool. Then `background_eligible` widens to any
+    standalone conversation (Missions stay app-side). Parity first, widening
+    last, or API runs silently lose subagents and GitHub watches.
+  - [ ] Usable models: the model half of Unified launch readiness above, one
+    Rust answer with a reason per refused row; stars move from localStorage to
+    a file both clients read.
+  - [ ] Companion door in `klide ptyd`: HTTP + SSE over the daemon's existing
+    operations, Tailscale interface only, QR pairing, device secrets kept as
+    sha256, full auto refused from the phone.
+  - [ ] iOS app with Tauri 2 from the same React components (needs the Apple
+    developer account the signed macOS bundle also needs).
+  - Open: push for "Waiting on you" needs an APNs sender (minimal relay).
+
 Research and implementation audit: `docs/competitors-orb.md` (local notes).
 
 ## v0.5 — Agent Operations (feature-complete 2026-07-21)
