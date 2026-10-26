@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.6.11 (2026-10-26) — Any Intelligence, Caching, Copilot
+
+- **Any agent, any intelligence.** Claude Code, Codex and OpenCode run on Klide's API keys, local and self-hosted endpoints and Nous Portal through a loopback bridge, without changing the agent; a conversation keeps the agent and model it began on.
+- **Prompt caching and Rust compaction.** Every request opens with the bytes of the one before it; any Run (Mission attempt, worker, background chat) summarizes its own older turns, and Compact lives in the context gauge.
+- **GitHub Copilot** joins the CLI agents; **Hermes** Focus turns stream over ACP.
+- **Workers in the background**, answered from the conversation that dispatched them, full auto when the parent is.
+- **Auto routing rungs**: one key and no stars is enough, OpenRouter's router on every rung.
+- **Conversations in SQLite**, every thread kept; **dropped PDFs** read page by page; **side questions** with `/btw`; Memory proposes lessons; toasts stack and can be acted on.
+
+- Side questions: `/btw <question>` opens a saved, read-only conversation beside the main agent, with a bounded snapshot of its public context and enforced read-only tools; its Stop affects only the side conversation.
+- OpenCode 2 sessions get v2's own MCP config shape (`mcp.servers.klide`) instead of relying on its migration of the v1 shape; both were probed to connect on 2.0.27.
 - A reply that only thought says so. A small model (lfm2.5) could end a turn on a closed `<think>` block and nothing after it; the panel folded the thought away and the answer was blank. The turn now ends with "The model finished thinking but wrote no answer."
 - A remembered model the key can't use is forgotten. `klide.model.<provider>` kept a pick the Provider's listing no longer served — Mistral Large on a plan without it — so every fresh session seeded on it and the first message could reach Mistral before the list retired it: a 403 each time. A real listing that leaves the pick out now clears it; an empty or failed listing, or a Delegate's partial one, judges nothing.
 - Klide asks a local server less often. An AI panel on Ollama checked the server every 4 s through `/api/tags`, which reads every model's manifest; it now asks `/api/version` (2 s timeout), every 4 s only while the server is down and every 20 s once it is up.
@@ -70,6 +81,8 @@
 - Route Claude Code, OpenCode, and Codex through Klide API keys, local/self-hosted endpoints, and Nous Portal without changing the selected harness or persistent CLI configuration.
 - Translate Messages/Responses protocols, namespaced functions, and custom patch-tool inputs; classify model metadata and billing by intelligence source.
 - Keep credentials in the process host and restore routed terminal variables after shell profiles. Validate installed CLI tool loops against isolated mock APIs.
+- Auto works on day one, with one API key and no stars. Each hosted Provider row names one model per rung — light, standard, strong — and the task shape picks the rung: Chat is light, Plan and Goal are standard, a long brief or several attached files bumps one up. Stars still lead, now nearest the task's rung first; what Ollama has installed sits at light, so a chat stays local and a Goal goes to the keyed model that fits. OpenRouter's row puts its own router (`openrouter/auto`) on every rung, so an OpenRouter-only user gets a trained router for free. The reason on `RouteResolved` names the rung, and says when nothing sat at the wanted one. OpenRouter's `-1` "priced per request" is no longer read as the cheapest model on the bench.
+- A worker can be dispatched in the background. `spawn_subagent` with `background: true` returns the child's Run id at once instead of parking the conversation; the same card is asked, the same worktree is made, and the report — Git evidence included — is delivered to the conversation when the worker settles, by a follow-up turn if the conversation is idle, the way a background shell's completion arrives. The "Dispatched to" row keeps following the child live; meanwhile `agent_list` shows it, `agent_cancel` stops it, and `agent_read_result` reads what it published. Several workers can now run at once from one conversation.
 
 ## 0.6.10 (2026-10-13)
 
@@ -80,11 +93,6 @@
 - Delegate prompts identify the selected harness instead of calling every agent Kit. The chosen model remains separate from the coding agent.
 - Recorded harness/model independence as a core product principle. New CLI adapters currently support terminal launches and plain-text Focus turns; imported history and structured tool events remain future work.
 
-## Unreleased
-
-- Auto works on day one, with one API key and no stars. Each hosted Provider row names one model per rung — light, standard, strong — and the task shape picks the rung: Chat is light, Plan and Goal are standard, a long brief or several attached files bumps one up. Stars still lead, now nearest the task's rung first; what Ollama has installed sits at light, so a chat stays local and a Goal goes to the keyed model that fits. OpenRouter's row puts its own router (`openrouter/auto`) on every rung, so an OpenRouter-only user gets a trained router for free. The reason on `RouteResolved` names the rung, and says when nothing sat at the wanted one. OpenRouter's `-1` "priced per request" is no longer read as the cheapest model on the bench.
-
-- A worker can be dispatched in the background. `spawn_subagent` with `background: true` returns the child's Run id at once instead of parking the conversation; the same card is asked, the same worktree is made, and the report — Git evidence included — is delivered to the conversation when the worker settles, by a follow-up turn if the conversation is idle, the way a background shell's completion arrives. The "Dispatched to" row keeps following the child live; meanwhile `agent_list` shows it, `agent_cancel` stops it, and `agent_read_result` reads what it published. Several workers can now run at once from one conversation.
 - Threads already saved with another Provider's model (a Claude Code thread on `deepseek/…`) are healed at boot: the model is dropped so the thread opens on the CLI's own default, the same rule a resume now applies when a recorded model is plainly foreign.
 - A thread carried onto another Provider without a recorded model no longer keeps the previous Provider's model: a Claude Code session opened from a DeepSeek chat showed "deepseek-v4.1" in its composer. It now starts where a switch to that Provider would (remembered pick, star, or the CLI's own default).
 
