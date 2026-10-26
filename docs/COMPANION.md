@@ -20,8 +20,10 @@ conversation waiting on an approval, the model sheet). `?theme=dark` for dark.
   this, with the same gate `auto` uses, so the two can't disagree.
 - **The same gates.** Every edit and command a Run proposes still waits for
   an answer. The phone can answer it. Full auto stays a Mac-only choice.
-- **Not Orb.** No remote machines, no containers, no fleet. Those belong to
-  a different product; Klide stays one small app on one machine.
+- **Not a fleet.** The companion needs no remote machines and no containers:
+  it reaches the Mac you already run Klide on. VPS execution is its own track
+  (TODO.md, Orb follow-ups); when it lands, the companion lists those Runs
+  like any other.
 
 ## What exists today
 
@@ -67,6 +69,10 @@ every candidate with `usable` and a reason (`No key`, `Server stopped`,
 `Not signed in`, `No tool support`). Stars move from localStorage to a file
 under app data so both clients read the same list. The desktop picker can
 adopt the same "N not usable now" fold.
+
+This is the model half of TODO.md's *Unified launch readiness* item (ready /
+unsupported / needs login / offline / unknown, with reasons). Build it once,
+there, and let the phone read it; it is not a second check.
 
 ### 3 · The companion door
 
