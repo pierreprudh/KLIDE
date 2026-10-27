@@ -986,6 +986,17 @@ describe("a turn the app was closed on", () => {
     expect(rows.map((r) => r.kind)).toEqual(["user", "interrupted", "user", "assistant"]);
   });
 
+  it("marks a turn killed after asking for a tool, before any answer", () => {
+    const rows = foldAgentEvents([
+      userMessage("Run sh test.sh"),
+      assistantMessage("", { toolCalls: [{ toolCallId: "c1", name: "run_command", input: { command: "sh test.sh" } }] }),
+      runStarted("openrouter", "deepseek"),
+      userMessage("again"),
+      assistantMessage("done"),
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["user", "assistant", "interrupted", "user", "assistant"]);
+  });
+
   it("leaves an answered turn alone whether or not its run_result was written", () => {
     const rows = foldAgentEvents([
       userMessage("one"),
