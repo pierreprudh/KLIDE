@@ -252,7 +252,7 @@ function ToastCard({
           {stacked && (
             // More than one answer goes on its own line under the words, so
             // the words keep the card's width; the row is centred under them.
-            <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>{buttonRow}</div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 12 }}>{buttonRow}</div>
           )}
         </div>
         <button
