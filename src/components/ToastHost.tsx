@@ -214,64 +214,75 @@ function ToastCard({
         ref={content}
         style={{
           display: "flex",
-          flexDirection: "column",
-          gap: 10,
+          alignItems: "center",
+          gap: 12,
           padding: "12px 10px 12px 14px",
           opacity: tucked ? 0 : 1,
           transition: `opacity ${FADE}`,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ flexShrink: 0, display: "grid", placeItems: "center", color: TONE_COLOR[tone] }}>
-            {/* A toast about an agent wears its mark; the tone stays in the
-                wording and the buttons. */}
-            {provider ? <ProviderLogo id={provider as ProviderId} size={18} /> : <Mark size={18} />}
-          </span>
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-            <div style={{ ...CLAMP, fontSize: 13, lineHeight: "18px", color: "var(--fg-strong)" }}>
-              {title}
-            </div>
-            {detail && (
-              <div style={{ ...CLAMP, fontSize: 12, lineHeight: "17px", color: "var(--fg-subtle)" }}>
-                {detail}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ flexShrink: 0, display: "grid", placeItems: "center", color: TONE_COLOR[tone] }}>
+              {/* A toast about an agent wears its mark; the tone stays in the
+                  wording and the buttons. */}
+              {provider ? <ProviderLogo id={provider as ProviderId} size={18} /> : <Mark size={18} />}
+            </span>
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ ...CLAMP, fontSize: 13, lineHeight: "18px", color: "var(--fg-strong)" }}>
+                {title}
               </div>
-            )}
+              {detail && (
+                <div
+                  style={{
+                    ...CLAMP,
+                    fontSize: 12,
+                    lineHeight: "17px",
+                    color: "var(--fg-subtle)",
+                    // A command sits a step in from the words about it.
+                    paddingLeft: detail.startsWith("›") ? 8 : 0,
+                  }}
+                >
+                  {detail}
+                </div>
+              )}
+            </div>
+            {!stacked && buttonRow}
           </div>
-          {!stacked && buttonRow}
-          <button
-            type="button"
-            tabIndex={interactive ? 0 : -1}
-            onClick={() => dismissToast(id)}
-            aria-label={`Dismiss ${title}`}
-            style={{
-              flexShrink: 0,
-              width: 26,
-              height: 26,
-              display: "grid",
-              placeItems: "center",
-              borderRadius: 999,
-              border: "none",
-              background: "transparent",
-              color: "var(--fg-dim)",
-              transition: "background-color 160ms, color 160ms",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = WASH;
-              e.currentTarget.style.color = "var(--fg-strong)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = "var(--fg-dim)";
-            }}
-          >
-            <CloseIcon size={14} />
-          </button>
+          {stacked && (
+            // More than one answer goes on its own line under the words, so
+            // the words keep the card's width and the buttons read in order.
+            <div style={{ display: "flex", gap: 6, paddingLeft: 30 }}>{buttonRow}</div>
+          )}
         </div>
-        {stacked && (
-          // More than one answer goes on its own line under the words, so
-          // the words keep the card's width and the buttons read in order.
-          <div style={{ display: "flex", gap: 6, paddingLeft: 30 }}>{buttonRow}</div>
-        )}
+        <button
+          type="button"
+          tabIndex={interactive ? 0 : -1}
+          onClick={() => dismissToast(id)}
+          aria-label={`Dismiss ${title}`}
+          style={{
+            flexShrink: 0,
+            width: 26,
+            height: 26,
+            display: "grid",
+            placeItems: "center",
+            borderRadius: 999,
+            border: "none",
+            background: "transparent",
+            color: "var(--fg-dim)",
+            transition: "background-color 160ms, color 160ms",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = WASH;
+            e.currentTarget.style.color = "var(--fg-strong)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "var(--fg-dim)";
+          }}
+        >
+          <CloseIcon size={14} />
+        </button>
       </div>
     </div>
   );
