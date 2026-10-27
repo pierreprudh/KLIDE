@@ -1128,39 +1128,14 @@ function PRExpandedDetail({ detail, loading, nowMs }: {
  *  refresh mark and New PR. No count beside the title: the Open segment below
  *  already says how many are in flight, and there is no "GitHub" eyebrow
  *  above it any more — the pane is the pull requests, so it says that once. */
-function GitHubSummaryCard({
-  canCreate,
-  refreshing,
-  onCreate,
-  onRefresh,
-}: {
-  canCreate: boolean;
-  refreshing: boolean;
-  onCreate: () => void;
-  onRefresh: () => void;
-}) {
+/** The PR panel's title row. Refreshing lives in the top bar: Fetch runs
+ *  `git fetch` and reloads this list too, so a second, PR-only refresh here
+ *  was the same button. */
+function GitHubSummaryCard({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 12px 10px" }}>
       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 650, letterSpacing: "-0.01em" }}>Pull requests</span>
       <span style={{ flex: 1 }} />
-      <button
-        type="button"
-        onClick={onRefresh}
-        disabled={refreshing}
-        aria-busy={refreshing || undefined}
-        title="Refresh pull requests"
-        aria-label="Refresh pull requests"
-        onMouseEnter={(e) => { if (!refreshing) e.currentTarget.style.color = "var(--fg-strong)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
-        style={{ ...iconButtonStyle, width: 22, height: 22, transition: "color var(--motion-fast) var(--ease-out)" }}
-      >
-        <SyncMark busy={refreshing} motion="spin">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M20 6v5h-5" /><path d="M4 18v-5h5" />
-            <path d="M18.3 9A7 7 0 0 0 6.4 6.4L4 9" /><path d="M5.7 15A7 7 0 0 0 17.6 17.6L20 15" />
-          </svg>
-        </SyncMark>
-      </button>
       <PRActionButton title={canCreate ? "Create a pull request (⌘⇧P)" : "Stage changes before creating a pull request"} onClick={onCreate} disabled={!canCreate}>New PR</PRActionButton>
     </div>
   );
@@ -1991,7 +1966,7 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
           <span style={{ flex: 1 }} />
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-          <TopAction onClick={() => void fetch()} busy={actionLoading === "Fetched"} motion="spin" title="Fetch from all remotes" iconOnly>
+          <TopAction onClick={() => void fetch()} busy={actionLoading === "Fetched"} motion="spin" title="Fetch from all remotes and refresh pull requests" iconOnly>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M20 6v5h-5" /><path d="M4 18v-5h5" />
               <path d="M18.3 9A7 7 0 0 0 6.4 6.4L4 9" /><path d="M5.7 15A7 7 0 0 0 17.6 17.6L20 15" />
@@ -2127,12 +2102,7 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
 
         {/* Right: PRs */}
         <div style={{ ...PANE_CARD, width: rightWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <GitHubSummaryCard
-            canCreate={stagedFiles.length > 0}
-            refreshing={prsLoading}
-            onCreate={createPr}
-            onRefresh={() => void refreshPrs()}
-          />
+          <GitHubSummaryCard canCreate={stagedFiles.length > 0} onCreate={createPr} />
           <PRFilterTabs value={prFilter} counts={prCounts} onChange={setPrFilter} />
           {prError && (
             <GitHubPanelState
