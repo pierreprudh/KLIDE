@@ -26,7 +26,7 @@ const TABS = [
 function App() {
   const [active, setActive] = useState(3);
   return (
-    <div style={{ background: "var(--bg)", minHeight: "100vh" }}>
+    <div style={{ background: "var(--editor-bg)", minHeight: "100vh" }}>
       <TabBar tabs={TABS} activeIdx={active} onSelect={setActive} onClose={() => {}} workspaceRoot="/w" />
       <pre style={{ margin: 0, padding: "12px 20px", fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--fg)" }}>
         {"1 — [x] Queue system for messages\n2 — [x] Subagent gestion via Klide harness"}

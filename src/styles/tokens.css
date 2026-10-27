@@ -2,6 +2,10 @@
   /* Surfaces — bone cream foundation. See DESIGN.md for the full spec. */
   --bg:           #f7f4ed;
   --bg-elevated:  #fcfbf8;
+  /* The code editor's own surface — mirrors Monaco's editor.background in
+     theme.ts, so chrome that must merge into the editor (the active tab)
+     matches it exactly. */
+  --editor-bg:    #FCFBF8;
   /* Workbench panes on the page background (Git Review's cards): plain
      white on light themes so content sits on a clean sheet; dark themes keep
      their elevated surface. */
@@ -211,6 +215,7 @@
 :root[data-theme="sage-garden"] {
   --bg:           #F8F7F3;
   --bg-elevated:  #FFFFFF;
+  --editor-bg:    #FFFFFF;
   --bg-hover:     rgba(26, 31, 46, 0.045);
   --bg-selected:  rgba(124, 144, 130, 0.16);
 
@@ -274,6 +279,7 @@
 :root[data-theme="sage-garden-dark"] {
   --bg:           #131512;
   --bg-elevated:  #191C18;
+  --editor-bg:    #131512;
   --bg-hover:     #23261F;
   --bg-selected:  rgba(143, 170, 151, 0.16);
 
@@ -330,6 +336,7 @@
 :root[data-theme="dark"] {
   --bg:           #11110F;
   --bg-elevated:  #171715;
+  --editor-bg:    #11110F;
   --bg-hover:     #22221F;
   --bg-selected:  #202432;
 
@@ -382,6 +389,7 @@
 :root[data-theme="vscode-dark"] {
   --bg:           #1E1E1E;
   --bg-elevated:  #252526;
+  --editor-bg:    #1E1E1E;
   --bg-hover:     #2A2D2E;
   --bg-selected:  #37373D;
 
@@ -432,6 +440,7 @@
 :root[data-theme="github-light"] {
   --bg:           #FFFFFF;
   --bg-elevated:  #F6F8FA;
+  --editor-bg:    #FFFFFF;
   --bg-hover:     #EAEEF2;
   --bg-selected:  #DDF4FF;
 
@@ -477,6 +486,7 @@
 :root[data-theme="cerulean"] {
   --bg:           #FFFEFC;
   --bg-elevated:  #F7F6F2;
+  --editor-bg:    #FFFEFC;
   --bg-hover:     rgba(28, 27, 24, 0.045);
   --bg-selected:  rgba(37, 150, 190, 0.12);
 
@@ -548,6 +558,7 @@
 :root[data-theme="solarized-dark"] {
   --bg:           #002B36;
   --bg-elevated:  #073642;
+  --editor-bg:    #002B36;
   --bg-hover:     #0B3F4A;
   --bg-selected:  #164B55;
 
@@ -4084,6 +4095,27 @@ button:focus-visible .menu-leadout {
 
 .klide-flip-track[data-flip="false"] .klide-flip-indicator {
   transition: none;
+}
+
+/* The raised strip's active tab is cut out of the strip in the editor's
+   colour; these two quarter-circle flares curve the strip into it at the
+   bottom corners, so tab and code read as one surface. */
+.klide-tab-raised[data-active="true"]::before,
+.klide-tab-raised[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+}
+.klide-tab-raised[data-active="true"]::before {
+  right: 100%;
+  background: radial-gradient(circle at 0 0, transparent 7.5px, var(--editor-bg) 8px);
+}
+.klide-tab-raised[data-active="true"]::after {
+  left: 100%;
+  background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--editor-bg) 8px);
 }
 
 /* Tab close buttons reveal on hover — a resting × on every tab is noise —
