@@ -32,16 +32,27 @@ baseline; unchecked items below are verification or specific remaining gaps.
   #296, #297), the parent redid a worker's fix in the main checkout (#300),
   untracked `.klide/coordination/` blocked every Merge (#300), the setup
   failure drew as a boxed report with no way to drop its worktree (#301).
-- [ ] Verify a **background** Worker in the app, including when the parent
-  Conversation is hidden: its permission prompt and its report must reach you.
-  First pass (2026-10-27) found nothing reached a hidden parent; fixed by
-  `worker:status` → toasts + rail running marker (`src/workerStatus.ts`) and
-  outside-folder paths named on relayed cards. Re-run to close.
+- [x] Background Worker acceptance in the app (2026-10-27, same sandbox):
+  with the parent hidden, the worker's approval reached you as a toast under
+  Claude Code's mark with Deny / Allow / Open, Allow from the toast resumed it,
+  and its finish toasted; the parent's rail row showed it running. A worker
+  asking to read outside its worktree led its card with "Outside its working
+  folder (…)". Shipped on the way: `worker:status` / `run:attention` app-wide
+  (#303–#305); toast answers on their own centred row (#306, #308, #309,
+  #312); `›` for commands, not `$` (#307); a waiting conversation's name
+  shimmers and a finished, unseen one gets an accent point that the loader
+  condenses into (#315–#321); "I'm sending a worker: …" before the dispatch
+  row (#322, #324); no worker approval toast while its conversation is on
+  screen (#324).
 - [ ] Small Worker gaps seen in the pass: the check command is one global
   Harness setting (Settings › Harness › test after edit), so the validation
   line never appeared until it was set; it belongs to the project, beside
-  `setupScript` in `.klide/worktree.json`. A small parent (DeepSeek Flash)
-  dispatched without a word; Kit's prompt should say what it hands off and why.
+  `setupScript` in `.klide/worktree.json`. A shell command Kit itself runs
+  can reach outside the workspace (it edited KIDE's README from the sandbox
+  conversation) and its card does not say so; give it the same "Outside its
+  working folder" note. Background subscription chats in `klide ptyd`
+  (`agent/remote.rs`) emit no `run:attention`, so they get no toast or rail
+  shimmer.
 - [ ] Finish the local Worker dispatch gaps listed below. Setup before model
   work shipped (PR #291). Left: aggregate capacity enforced at admission.
   Decided 2026-10-26: a dispatch over the limit **waits in a queue** (visible
