@@ -317,6 +317,18 @@ describe("a delegation row while the child works", () => {
     expect(row({ background: true }, "The user declined to dispatch Claude Code.")).not.toContain("sending a worker");
   });
 
+  it("says a worker over capacity is queued until its Run starts", () => {
+    const html = renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "claude-code", task: "Add a test.", background: true, stage: "Queued behind 2 running CLI workers" }, childRunId: "sub_run_c0" }] },
+        false,
+        { results: new Map([["c0", { msg: { role: "tool", content: "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", toolName: "spawn_subagent" }, active: false }]]) },
+      ),
+    );
+    expect(html).toContain("Queued behind 2 running CLI workers");
+    expect(html).not.toContain("Starting…");
+  });
+
   it("draws a dispatch cancelled at its card as cancelled, not as a child still starting", () => {
     // Rust answers a rejected dispatch gate with this sentence and emits no
     // `subagent_requested`, so the call has no child Run id — and the model's

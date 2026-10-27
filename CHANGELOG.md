@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Workers wait their turn. At most 2 Delegate CLI workers and 4 API workers run at once, across every conversation; a dispatch over the limit is never refused — its row reads "Queued behind 2 running CLI workers" and it starts, in arrival order, when one finishes. The card, the worktree and its setup happen as before, and a background dispatch still returns at once. `agent_cancel` (or the parent's Stop, for a foreground dispatch) takes a queued worker out of the line before it starts.
 - A conversation waiting on you says so from anywhere. When a Run asks for an approval or a question while you are in another conversation, a toast names it under its Provider's mark — Deny / Allow / Open for an approval, Open for a question — and closes once it is answered anywhere. In the rail, the row's name is swept by the Working row's shimmer (dim → accent) for its own Run or for a worker it dispatched; a running row keeps the loader. The conversation on screen shows its card as before, without a toast.
 - A dispatched worker is announced in the conversation as a sentence of the answer, from the first frame: "I'm sending a worker: Claude Code will work on it in the background, and I'll tell you when it reports." A parent that dispatched without a word used to leave only the row. A worker's approval raises no toast while its conversation is on screen; the card on the row is enough.
 - A conversation that finished while you were elsewhere gets an accent point in the rail's trailing slot until you open it; the running loader condenses into it.

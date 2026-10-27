@@ -1148,6 +1148,8 @@ fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHoo
                 .ok()
                 .and_then(|runs| runs.get(run_id).map(|handle| handle.cancel.cancel()))
                 .is_some()
+                // A worker still queued for a slot has no Run handle yet.
+                || crate::agent::worker_slots::slots().cancel_queued(run_id)
         })),
         orchestrate: Some(Box::new(move |session, request| {
             tauri::async_runtime::block_on(crate::missions::orchestration::execute(
