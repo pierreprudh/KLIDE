@@ -286,7 +286,7 @@ fn card(run_id: &str, request_id: &str, workspace_root: &str, ask: &DelegatePerm
         String::new()
     } else {
         format!(
-            "Outside its working folder ({}): a yes lets it change files no branch or review holds. ",
+            "Outside its working folder ({}): a yes lets it read or change files no branch or review holds. ",
             outside.join(", ")
         )
     };
