@@ -12,6 +12,8 @@ export type ToastTone = "info" | "success" | "warn" | "error";
 export interface ToastAction {
   label: string;
   run: () => void;
+  /** The answer the toast is asking for (Allow): drawn in the accent. */
+  primary?: boolean;
 }
 
 export interface Toast {
@@ -19,6 +21,10 @@ export interface Toast {
   message: string;
   tone: ToastTone;
   action?: ToastAction;
+  /** More choices, drawn before `action` — Deny / Allow on an approval. */
+  actions?: ToastAction[];
+  /** Who it is about: the Provider's mark replaces the tone icon. */
+  provider?: string;
   /** ms before auto-dismiss; 0 keeps it until dismissed (use for errors). */
   duration: number;
 }
@@ -26,6 +32,8 @@ export interface Toast {
 export interface ToastOptions {
   tone?: ToastTone;
   action?: ToastAction;
+  actions?: ToastAction[];
+  provider?: string;
   duration?: number;
 }
 
@@ -63,7 +71,7 @@ export function pushToast(message: string, opts: ToastOptions = {}): number {
   // the bug we're fixing. Everything else clears on its own.
   const duration =
     opts.duration ?? (tone === "error" ? 0 : tone === "warn" ? 6000 : 4000);
-  const toast: Toast = { id, message, tone, action: opts.action, duration };
+  const toast: Toast = { id, message, tone, action: opts.action, actions: opts.actions, provider: opts.provider, duration };
   toasts = [...toasts, toast].slice(-MAX_VISIBLE);
   emit();
   return id;

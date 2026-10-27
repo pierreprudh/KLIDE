@@ -218,14 +218,32 @@ pub enum WorkerState {
     Failed,
 }
 
+/// One state change of a worker, as the app is told it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkerChange {
+    pub state: WorkerState,
+    /// What it asks to do, or why it failed.
+    pub detail: Option<String>,
+    /// The Provider it runs on, known from its `run_started` — its mark.
+    pub provider: Option<String>,
+    /// The permission request to answer, while it asks.
+    pub request_id: Option<String>,
+}
+
 /// The state change an event of the worker's own Run makes, if any.
-pub fn state_for(event: &super::types::AgentEvent) -> Option<(WorkerState, Option<String>)> {
+pub fn state_for(event: &super::types::AgentEvent) -> Option<WorkerChange> {
     use super::types::AgentEvent;
+    let change = |state, detail: Option<String>, provider: Option<String>, request_id: Option<String>| {
+        Some(WorkerChange { state, detail, provider, request_id })
+    };
     match event {
-        AgentEvent::RunStarted { .. } | AgentEvent::PermissionResolved { .. } => Some((WorkerState::Working, None)),
-        AgentEvent::PermissionRequested { request, .. } => Some((WorkerState::Asking, Some(request.summary.clone()))),
-        AgentEvent::RunResult { .. } => Some((WorkerState::Finished, None)),
-        AgentEvent::RunError { error, .. } => Some((WorkerState::Failed, Some(error.message.clone()))),
+        AgentEvent::RunStarted { provider, .. } => change(WorkerState::Working, None, Some(provider.clone()), None),
+        AgentEvent::PermissionResolved { .. } => change(WorkerState::Working, None, None, None),
+        AgentEvent::PermissionRequested { request, .. } => {
+            change(WorkerState::Asking, Some(request.summary.clone()), None, Some(request.id.clone()))
+        }
+        AgentEvent::RunResult { .. } => change(WorkerState::Finished, None, None, None),
+        AgentEvent::RunError { error, .. } => change(WorkerState::Failed, Some(error.message.clone()), None, None),
         _ => None,
     }
 }
@@ -323,10 +341,12 @@ mod tests {
             request: PermissionRequest { id: "p".into(), run_id: "child-s".into(), tool_call_id: "t".into(), tool_name: "Bash".into(), input: serde_json::json!({}), summary: "Run sh test.sh".into(), reason: String::new(), options: vec![] },
             ts: 0,
         };
-        assert_eq!(state_for(&ask), Some((WorkerState::Asking, Some("Run sh test.sh".into()))));
-        assert_eq!(state_for(&AgentEvent::RunResult { run_id: "child-s".into(), result: serde_json::json!({}), ts: 0 }), Some((WorkerState::Finished, None)));
+        let asking = state_for(&ask).unwrap();
+        assert_eq!((asking.state, asking.detail.as_deref(), asking.request_id.as_deref()), (WorkerState::Asking, Some("Run sh test.sh"), Some("p")));
+        assert_eq!(state_for(&AgentEvent::RunResult { run_id: "child-s".into(), result: serde_json::json!({}), ts: 0 }).unwrap().state, WorkerState::Finished);
         let failed = AgentEvent::RunError { run_id: "child-s".into(), error: AgentError { code: "provider_unavailable".into(), message: "gone".into(), detail: None, retryable: false }, ts: 0 };
-        assert_eq!(state_for(&failed), Some((WorkerState::Failed, Some("gone".into()))));
+        let failed = state_for(&failed).unwrap();
+        assert_eq!((failed.state, failed.detail.as_deref()), (WorkerState::Failed, Some("gone")));
         release("parent-s");
     }
 
