@@ -618,7 +618,14 @@ function ConvoRow({
       >
         <span className="klide-focus-convo-content">
           {markNode}
-          <span className="klide-focus-convo-title" data-swapping={swap ? true : undefined}>
+          {/* Waiting on you (an approval, a question): the name itself is
+              swept by the Working row's shimmer, so the row asks without a
+              word added to it. Running keeps the loader in the trailing slot. */}
+          <span
+            className="klide-focus-convo-title"
+            data-swapping={swap ? true : undefined}
+            data-waiting={needsYou ? true : undefined}
+          >
             {swap ? (
               <span
                 key={`out-${swap.key}`}
@@ -640,9 +647,7 @@ function ConvoRow({
               replaces the timestamp rather than sitting next to it: the row keeps
               one trailing mark, and no badge is added to a rail that deliberately
               has none. */}
-          {needsYou ? (
-            <span className="klide-focus-convo-time klide-focus-convo-needs-you">needs you</span>
-          ) : running ? (
+          {running && !needsYou ? (
             <span className="klide-focus-convo-live">
               <DotGridLoader size={11} color="var(--accent)" label="Running" />
             </span>
