@@ -8,16 +8,16 @@ type Props = {
   onSelect: (i: number) => void;
   onClose: (i: number) => void;
   workspaceRoot: string | null;
-  /** "raised" (default) — the desktop-style strip: its own shade, full-height
-   *  tabs split by short hairlines, and the active tab cut out of it in the
-   *  editor's colour (--editor-bg) so tab and code are one surface; drawn for
-   *  the full-bleed editor.
-   *  "flat" — the
-   *  docked pane's soft-segment strip: inset row, the active tab carries a
-   *  quiet rounded neutral fill (the hover token, not a saturated pill), no
-   *  underline. */
-  variant?: "raised" | "flat";
+  /** True (default) when the strip is the top-most chrome beside the rail,
+   *  so its empty run drags the window. A strip inside a pane (free mode's
+   *  editor dock) passes false: grabbing it must not move the window. */
+  dragsWindow?: boolean;
 };
+
+// One desktop-style strip for every editor: its own shade (--tab-strip-bg),
+// full-height tabs split by short hairlines, and the active tab cut out of it
+// in the editor's colour (--editor-bg), flared into the strip at its bottom
+// corners (.klide-tab-raised), so tab and code read as one surface.
 
 function displayPath(path: string, workspaceRoot: string | null): string {
   if (workspaceRoot && path.startsWith(`${workspaceRoot}/`)) {
@@ -26,8 +26,7 @@ function displayPath(path: string, workspaceRoot: string | null): string {
   return path;
 }
 
-export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, variant = "raised" }: Props) {
-  const flat = variant === "flat";
+export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, dragsWindow = true }: Props) {
   if (tabs.length === 0) {
     return null;
   }
@@ -41,29 +40,20 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
   return (
     <div
       className="chrome-enter"
-      // The raised strip is the top-most chrome beside the rail, so its empty
-      // run is the window's drag handle — like a Mac toolbar. Tabs are their
-      // own event targets and keep their clicks. The flat strip belongs to a
-      // pane, not the window: grabbing it must not move the window.
-      data-tauri-drag-region={flat ? undefined : true}
+      // Like a Mac toolbar, the strip's empty run drags the window; tabs are
+      // their own event targets and keep their clicks.
+      data-tauri-drag-region={dragsWindow ? true : undefined}
       style={{
         position: "relative",
         height: "var(--size-tab-strip)",
-        // Raised: the strip is its own shade, one step off the editor's
-        // surface (darker on light themes, lighter on dark).
-        background: flat
-          ? "transparent"
-          : "color-mix(in srgb, var(--fg-strong) 5%, var(--editor-bg))",
+        background: "var(--tab-strip-bg)",
         display: "flex",
-        alignItems: flat ? "center" : "flex-end",
+        alignItems: "flex-end",
         overflowX: "auto",
         flexShrink: 0,
-        padding: flat ? "0 8px" : "0 8px",
-        gap: flat ? 4 : 0,
+        padding: "0 8px",
       }}
     >
-      {/* One marker per variant: the active card (raised) or the active fill
-          (flat) — never an underline on top of either. */}
       {tabs.map((t, i) => {
         const isActive = i === activeIdx;
         const relative = displayPath(t.path, workspaceRoot);
@@ -72,9 +62,9 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
         const folder = relative.includes("/")
           ? relative.split("/").slice(0, -1).join("/")
           : "";
-        // Raised: a short hairline between two resting tabs; none beside the
-        // active card, whose own edges already separate it.
-        const separated = !flat && i > 0 && !isActive && i - 1 !== activeIdx;
+        // A short hairline between two resting tabs; none beside the active
+        // tab, whose own shape already separates it.
+        const separated = i > 0 && !isActive && i - 1 !== activeIdx;
         return (
           <Fragment key={t.path}>
           {separated && (
@@ -87,25 +77,22 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
             onClick={() => onSelect(i)}
             title={relative}
             data-active={isActive}
-            className={flat ? "klide-tab" : "klide-tab klide-tab-raised"}
+            className="klide-tab klide-tab-raised"
             style={{
               display: "flex",
               alignItems: "center",
-              height: flat ? 24 : 32,
-              padding: flat ? (crowded ? "0 8px" : "0 10px") : crowded ? "0 10px 0 12px" : "0 10px 0 14px",
+              height: 32,
+              padding: crowded ? "0 10px 0 12px" : "0 10px 0 14px",
               zIndex: isActive ? 1 : undefined,
               gap: 8,
               position: "relative",
-              // Flat: the active tab carries a quiet neutral fill — the hover
-              // token, not a saturated pill — and that fill is the only
-              // marker. Raised: the active tab is the editor's own surface,
-              // no outline — the strip's shade around it draws the shape, and
-              // .klide-tab-raised's flares curve the strip into it.
-              background: isActive ? (flat ? "var(--bg-hover)" : "var(--editor-bg)") : "transparent",
+              // The active tab is the editor's own surface with no outline —
+              // the strip's shade around it draws the shape.
+              background: isActive ? "var(--editor-bg)" : "transparent",
               border: "1px solid transparent",
-              borderRadius: flat ? "var(--radius-sm)" : "8px 8px 0 0",
+              borderRadius: "8px 8px 0 0",
               color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
-              fontSize: flat ? 12.5 : 13,
+              fontSize: 13,
               fontWeight: isActive ? 500 : 400,
               cursor: "pointer",
               minWidth: crowded ? 72 : 0,

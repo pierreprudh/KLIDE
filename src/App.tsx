@@ -4103,10 +4103,10 @@ function App() {
                       40px strip of line numbers and tab fragments. Content
                       stays mounted; only opacity changes. */}
                   <div className="editor-dock-content">
-                  <div style={{ display: "flex", alignItems: "stretch", minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "stretch", minWidth: 0, background: "var(--tab-strip-bg)" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <TabBar
-                        variant="flat"
+                        dragsWindow={false}
                         tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty, externalChanged: t.externalChanged }))}
                         activeIdx={activeIdx}
                         onSelect={setActiveIdx}
