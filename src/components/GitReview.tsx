@@ -135,15 +135,6 @@ function splitPath(path: string) {
   return { name, folder: parts.join("/") };
 }
 
-function StatusLetter({ status }: { status: string }) {
-  const mark = gitStatusMark(status) ?? UNNAMED_GIT_STATUS;
-  return (
-    <span className="klide-file-row-mark" title={mark.title} style={{ color: mark.color }}>
-      {mark.label}
-    </span>
-  );
-}
-
 type DiffViewerProps = {
   workspaceRoot: string | null;
   open: OpenFile | null;
@@ -240,8 +231,11 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClo
       </div>
     );
   }
-  // The pane is the file's card: its header names the file, counts the
-  // change and says which side of the index it is, over the bare rows.
+  // The pane is the file's card: its header names the file — in its status
+  // colour, as the file list does — and counts the change, over the bare
+  // rows. Staged vs working is already said by the section the file was
+  // picked from, so the tooltip carries it and the header doesn't.
+  const mark = gitStatusMark(status) ?? UNNAMED_GIT_STATUS;
   const header = (
     <div
       style={{
@@ -249,15 +243,18 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClo
         borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--fg-subtle)",
       }}
     >
-      <StatusLetter status={status} />
-      <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-strong)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.path}</span>
+      <span
+        title={`${mark.title} · ${open.staged ? "staged" : "not staged"}`}
+        style={{ fontFamily: "var(--font-mono)", color: mark.color, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+      >
+        {open.path}
+      </span>
       {diff && diff.path === open.path && (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, flexShrink: 0 }}>
           <span style={{ color: "var(--diff-add)" }}>+{diff.additions}</span>{" "}
           <span style={{ color: "var(--diff-remove)" }}>−{diff.deletions}</span>
         </span>
       )}
-      <span style={{ color: open.staged ? "var(--accent)" : "var(--fg-dim)", flexShrink: 0 }}>{open.staged ? "staged" : "working"}</span>
       <button
         onClick={onClose}
         title="Close diff — back to history"
