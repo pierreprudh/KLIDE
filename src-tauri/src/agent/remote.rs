@@ -230,6 +230,7 @@ fn ensure_watch(
         let mut reader = reader;
         let operations = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let deliver = |event: AgentEvent, seq: u64| {
+            attention::emit(&app, &id, seq, &event);
             let _ = app.emit(
                 &format!("agent-run:{id}"),
                 RunEventEnvelope {

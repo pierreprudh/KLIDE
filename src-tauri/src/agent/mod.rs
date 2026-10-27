@@ -643,35 +643,7 @@ impl RunSupervisor for TauriSupervisor {
                 event: event.clone(),
             },
         );
-        // A background worker works while its parent conversation may be off
-        // screen, where nothing listens on its `agent-run:` stream. Its
-        // asking, working and settling go out app-wide too, naming the parent,
-        // so a toast and the rail can say it (`src/workerStatus.ts`).
-        let worker = workers::identity(run_id);
-        if worker.is_none() {
-            if let Some(attention) = attention::attention_for(event) {
-                let mut payload = serde_json::to_value(&attention).unwrap_or_default();
-                payload["runId"] = serde_json::json!(run_id);
-                let _ = self.app.emit("run:attention", payload);
-            }
-        }
-        if let Some(change) = workers::state_for(event) {
-            if let Some((parent_id, label, role)) = worker {
-                let _ = self.app.emit(
-                    "worker:status",
-                    serde_json::json!({
-                        "parentId": parent_id,
-                        "runId": run_id,
-                        "label": label,
-                        "role": role,
-                        "state": change.state,
-                        "detail": change.detail,
-                        "provider": change.provider,
-                        "requestId": change.request_id,
-                    }),
-                );
-            }
-        }
+        attention::emit(&self.app, run_id, seq, event);
     }
 
     fn watch_background(&self, run_id: &str, shell_id: &str, request: &StartRunRequest) {
@@ -3775,6 +3747,13 @@ pub struct RunState {
 #[tauri::command]
 pub async fn agent_run_status(app: tauri::AppHandle, run_id: String) -> Result<RunState, String> {
     run_host::state(&app, &run_id).await
+}
+
+/// Active worker notifications for a newly loaded webview. Workers stay in
+/// the app host, including when their parent uses a subscription provider.
+#[tauri::command]
+pub async fn agent_worker_statuses() -> Vec<workers::WorkerStatus> {
+    workers::active_statuses()
 }
 
 pub(crate) fn shutdown_observers() { background::shutdown(); }

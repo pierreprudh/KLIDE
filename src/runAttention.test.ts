@@ -116,3 +116,18 @@ describe("runAttention", () => {
     stop();
   });
 });
+
+it("requires opening the full card for an outside-folder approval, including recovery", async () => {
+  live.add("convo-1");
+  rust.status = "waiting_for_permission";
+  rust.events = [{ type: "permission_requested", runId: "convo-1", request: {
+    id: "outside", summary: "Edit test.sh", input: { externalPaths: ["/other/test.sh"] },
+  }, ts: 1 }];
+  const stop = watchRunAttention();
+  try {
+    await vi.waitFor(() => expect(toasts).toHaveLength(1));
+    expect(toasts[0].message).toContain("Outside its working folder");
+    expect(toasts[0].actions?.some((a) => a.label === "Allow")).not.toBe(true);
+    expect(toasts[0].action?.label).toBe("Open");
+  } finally { stop(); }
+});

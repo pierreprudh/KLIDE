@@ -246,3 +246,8 @@ export async function revertRunCheckpoints(runId: string): Promise<{ reverted: n
 export async function acceptRunCheckpoints(runId: string): Promise<{ accepted: number }> {
   return invoke<{ accepted: number }>("agent_accept_run_checkpoints", { runId });
 }
+
+/** Current background workers, including requests raised before this page loaded. */
+export async function listWorkerStatuses(): Promise<import("../workerStatus").WorkerStatus[]> {
+  return invoke("agent_worker_statuses");
+}

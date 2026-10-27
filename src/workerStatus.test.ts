@@ -9,17 +9,25 @@ vi.mock("./toast", () => ({
   dismissToast: (id: number) => { dismissed.push(id); },
 }));
 vi.mock("./conversationNavigation", () => ({ canOpenConversation: () => true, openConversation: () => true }));
-vi.mock("./agent/client", () => ({ resolvePermission: async (input: unknown) => { answers.push(input); } }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
+const recovery = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("./agent/client", () => ({
+  resolvePermission: async (input: unknown) => { answers.push(input); },
+  listWorkerStatuses: () => recovery.read(),
+}));
+const events = vi.hoisted(() => ({ deliver: null as null | ((event: { payload: WorkerStatus }) => void) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: async (_name: string, fn: typeof events.deliver) => {
+  events.deliver = fn;
+  return () => { events.deliver = null; };
+} }));
 
-import { showConversation } from "./runAttention";
-import { applyWorkerStatus, hasLiveWorker, resetWorkerStatus, workerTransition, type WorkerStatus } from "./workerStatus";
+import { needsYouNow, resetRunAttention, showConversation } from "./runAttention";
+import { applyWorkerStatus, hasLiveWorker, resetWorkerStatus, watchWorkerStatus, workerTransition, type WorkerStatus } from "./workerStatus";
 
 const status = (state: WorkerStatus["state"], extra: Partial<WorkerStatus> = {}): WorkerStatus => ({
   parentId: "convo-1", runId: "sub_convo-1_c1", label: "Claude Code", role: "implementer", state, ...extra,
 });
 
-afterEach(() => { resetWorkerStatus(); toasts.length = 0; dismissed.length = 0; answers.length = 0; });
+afterEach(() => { resetWorkerStatus(); resetRunAttention(); recovery.read.mockReset(); recovery.read.mockResolvedValue([]); toasts.length = 0; dismissed.length = 0; answers.length = 0; });
 
 describe("workerTransition", () => {
   it("toasts when a worker asks, finishes or fails — once per transition", () => {
@@ -71,4 +79,56 @@ describe("applyWorkerStatus", () => {
     expect(toasts.map((t) => t.message)).toEqual(["Claude Code (implementer) finished"]);
     release();
   });
+});
+
+describe("worker approval recovery", () => {
+  it("requires the full card before allowing access outside the worker folder", () => {
+    applyWorkerStatus(status("asking", { requestId: "outside", externalPaths: ["/other/test.sh"] }));
+    expect(toasts[0].message).toContain("Outside its working folder");
+    expect(toasts[0].actions?.some((a) => a.label === "Allow")).not.toBe(true);
+    expect(toasts[0].action?.label).toBe("Open");
+  });
+
+  it("restores a worker already asking before this page subscribed", async () => {
+    recovery.read.mockResolvedValue([status("asking", { seq: 7, provider: "claude-code", requestId: "parked" })]);
+    const stop = watchWorkerStatus();
+    try {
+      await vi.waitFor(() => expect(hasLiveWorker("convo-1")).toBe(true));
+      expect(toasts[0].actions?.map((a) => a.label)).toEqual(["Deny", "Allow"]);
+      expect(toasts[0].provider).toBe("claude-code");
+    } finally { stop(); }
+  });
+
+  it("ignores a recovered approval older than an already delivered resolution", () => {
+    applyWorkerStatus(status("working", { seq: 8 }));
+    applyWorkerStatus(status("asking", { seq: 7, requestId: "old" }));
+    expect(toasts).toHaveLength(0);
+  });
+});
+
+it("does not resurrect an approval when its snapshot arrives after a live completion", async () => {
+  let finishRead!: (statuses: WorkerStatus[]) => void;
+  recovery.read.mockImplementation(() => new Promise<WorkerStatus[]>((resolve) => { finishRead = resolve; }));
+  const stop = watchWorkerStatus();
+  try {
+    await vi.waitFor(() => expect(recovery.read).toHaveBeenCalled());
+    events.deliver!({ payload: status("finished", { seq: 10 }) });
+    finishRead([status("asking", { seq: 7, requestId: "stale" })]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(hasLiveWorker("convo-1")).toBe(false);
+    expect(needsYouNow("convo-1")).toBe(false);
+    expect(toasts.map((t) => t.message)).toEqual(["Claude Code (implementer) finished"]);
+  } finally { stop(); }
+});
+
+it("ignores a snapshot response after the watcher was stopped", async () => {
+  let finishRead!: (statuses: WorkerStatus[]) => void;
+  recovery.read.mockImplementation(() => new Promise<WorkerStatus[]>((resolve) => { finishRead = resolve; }));
+  const stop = watchWorkerStatus();
+  await vi.waitFor(() => expect(recovery.read).toHaveBeenCalled());
+  stop();
+  finishRead([status("asking", { seq: 7, requestId: "stale" })]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(hasLiveWorker("convo-1")).toBe(false);
+  expect(toasts).toHaveLength(0);
 });

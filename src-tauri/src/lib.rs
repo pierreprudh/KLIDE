@@ -1305,6 +1305,7 @@ pub fn run() {
             agent::agent_compact_conversation,
             agent::agent_abort_run,
             agent::agent_run_status,
+            agent::agent_worker_statuses,
             agent::agent_list_observers,
             agent::agent_observer_github,
             agent::agent_stop_observer,
