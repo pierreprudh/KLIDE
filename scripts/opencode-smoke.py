@@ -103,8 +103,12 @@ def main():
                 f"v{major}_mock_streams_resumes_and_runs_a_native_command", "--", "--ignored", "--nocapture",
             ], cwd=repo, env=env, check=True, timeout=180)
             if major == "2":
+                subprocess.run([
+                    "cargo", "test", "--manifest-path", str(repo / "src-tauri" / "Cargo.toml"), "--lib",
+                    "v2_mock_interactive_terminal_starts_and_resumes", "--", "--ignored", "--nocapture",
+                ], cwd=repo, env=env, check=True, timeout=120)
                 # OpenCode may also generate a session title with the model.
-                assert len(Model.variants) >= 3 and set(Model.variants) == {"high"}, f"Effort variant lost on new/resumed/command turn: {Model.variants}"
+                assert len(Model.variants) >= 5 and set(Model.variants) == {"high"}, f"Effort variant lost on new/resumed/command turn: {Model.variants}"
         finally:
             model.shutdown()
             model.server_close()

@@ -102,7 +102,13 @@ pub fn runtime_env(
             ("KLIDE_INTELLIGENCE_KEY".into(), token),
         ]),
         "opencode" => {
-            let config = opencode_config(&source, &format!("{base}/v1"), wire, v2);
+            let mut config = opencode_config(&source, &format!("{base}/v1"), wire, v2);
+            if v2 {
+                // The bridge applies routed effort on the provider wire;
+                // the synthetic model does not declare native CLI variants.
+                let model = format!("klide-intelligence/{}", source.model);
+                merge(&mut config, opencode_model_config(&model));
+            }
             let mut merged = match std::env::var("OPENCODE_CONFIG_CONTENT") {
                 Ok(value) if !value.trim().is_empty() => serde_json::from_str::<Value>(&value)
                     .map_err(|_| "Existing OPENCODE_CONFIG_CONTENT is invalid JSON.")?,
@@ -117,6 +123,29 @@ pub fn runtime_env(
         _ => Err("Unsupported source harness.".into()),
     }
 }
+
+fn opencode_model_config(model: &str) -> Value {
+    // V2's root default drops #variant; primary-agent references retain it.
+    json!({"model":model.split('#').next().unwrap_or(model),"agents":{
+        "build":{"model":model},"plan":{"model":model}
+    }})
+}
+
+fn merge_opencode_model_config(model: &str, inherited: Option<&str>) -> Result<String, String> {
+    let mut config = match inherited.filter(|value| !value.trim().is_empty()) {
+        Some(value) => serde_json::from_str::<Value>(value)
+            .map_err(|_| "Existing OPENCODE_CONFIG_CONTENT is invalid JSON.")?,
+        None => json!({}),
+    };
+    if !config.is_object() { return Err("Existing OPENCODE_CONFIG_CONTENT must be a JSON object.".into()); }
+    merge(&mut config, opencode_model_config(model));
+    Ok(config.to_string())
+}
+
+pub(crate) fn opencode_model_env(model: &str) -> Result<Vec<(String, String)>, String> {
+    Ok(vec![("OPENCODE_CONFIG_CONTENT".into(), merge_opencode_model_config(model, std::env::var("OPENCODE_CONFIG_CONTENT").ok().as_deref())?)])
+}
+
 fn merge(target: &mut Value, source: Value) {
     match (target, source) {
         (Value::Object(target), Value::Object(source)) => {
@@ -490,6 +519,20 @@ fn handle(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opencode_classic_model_config_keeps_variants_and_existing_settings() {
+        let inherited = r#"{"mcp":{"servers":{"existing":{"disabled":false}}},"agents":{"build":{"temperature":0.3}},"providers":{"custom":{"name":"Keep me"}}}"#;
+        let config: Value = serde_json::from_str(&merge_opencode_model_config("opencode-go/glm-5.3-flash#high", Some(inherited)).unwrap()).unwrap();
+        assert_eq!(config["model"], "opencode-go/glm-5.3-flash");
+        assert_eq!(config["agents"]["build"]["model"], "opencode-go/glm-5.3-flash#high");
+        assert_eq!(config["agents"]["plan"]["model"], config["agents"]["build"]["model"]);
+        assert_eq!(config["agents"]["build"]["temperature"], 0.3);
+        assert_eq!(config["providers"]["custom"]["name"], "Keep me");
+        assert_eq!(config["mcp"]["servers"]["existing"]["disabled"], false);
+        assert!(merge_opencode_model_config("mock/mock", Some("invalid JSON")).is_err());
+        assert!(merge_opencode_model_config("mock/mock", Some("[]")).is_err());
+    }
+
     #[test]
     fn effort_reaches_each_upstream_wire_and_default_clears_cli_overrides() {
         use super::*;

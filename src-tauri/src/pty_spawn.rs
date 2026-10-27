@@ -159,6 +159,11 @@ pub fn spawn_spec_for(mut req: SpawnRequest) -> Result<SpawnSpec, String> {
     };
 
     let mut env = Vec::new();
+    if !req.one_shot {
+        if let Some(adapter) = adapter {
+            env.extend(adapter.spawn_env(req.model.as_deref(), req.effort.as_deref())?);
+        }
+    }
     if matches!(req.provider.as_str(), "claude-code" | "codex" | "opencode") {
         if let Some(source) = crate::harness_source::selection(req.model.as_deref().unwrap_or(""))? {
             if !crate::harness_source::support(&req.provider, &source.provider).supported { return Err("Unsupported intelligence source.".into()); }

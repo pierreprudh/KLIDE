@@ -12,7 +12,7 @@ const listen = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...args: unknown[]) => listen(...args) }));
 
-const { attachDelegatePty, delegateSessionId } = await import("./delegatePty");
+const { attachDelegatePty, delegateSessionId, spawnDelegatePty } = await import("./delegatePty");
 
 type Chunk = { sessionId: string; data: string; seq: number };
 
@@ -59,6 +59,24 @@ beforeEach(() => {
 describe("delegateSessionId", () => {
   it("composes the id Rust takes apart", () => {
     expect(delegateSessionId("run-7", "claude-code")).toBe("run-7:claude-code");
+  });
+});
+
+describe("spawnDelegatePty parent identity", () => {
+  it("does not register the panel's own conversation as its parent Run", async () => {
+    for (const provider of ["opencode", "codex", "claude-code"]) {
+      await spawnDelegatePty(delegateSessionId("conversation-1", provider), {
+        provider, workspaceRoot: "/workspace", parentRunId: "conversation-1",
+      });
+      expect(invoke).toHaveBeenLastCalledWith("delegate_pty_spawn", expect.objectContaining({ parentRunId: null }));
+    }
+  });
+
+  it("preserves a distinct parent for a real child Run", async () => {
+    await spawnDelegatePty(delegateSessionId("child-1", "opencode"), {
+      provider: "opencode", workspaceRoot: "/workspace", parentRunId: "parent-1",
+    });
+    expect(invoke).toHaveBeenLastCalledWith("delegate_pty_spawn", expect.objectContaining({ parentRunId: "parent-1" }));
   });
 });
 
