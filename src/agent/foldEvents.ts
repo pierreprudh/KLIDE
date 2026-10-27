@@ -345,7 +345,7 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     else if (event.type === "observer_completed" && !event.contextRecorded) tokens = estimateTokens(event.text);
     else if (event.type === "context_compacted") tokens = estimateTokens(event.summary);
     eventTokenTotals.push(eventTokenTotals[before] + tokens);
-    if (event.type === "run_result" || event.type === "run_error" || event.type === "assistant_message") turnOpen = false;
+    if (settlesTurn(event)) turnOpen = false;
     // A turn that never settled before the next one began was killed with the
     // app. Its rows stay as they were; one marker in their place says why the
     // answer is missing, and the new turn opens below it.
@@ -1082,6 +1082,18 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
  * transcript only the panel can, because only it knows Rust holds no live run
  * — `followConversationRun` appends this same line there.
  */
+/**
+ * Whether this event ends a turn. A normal finish writes no `run_result` — the
+ * answer itself is the end — but an assistant message that only asks for
+ * tools is the middle of a turn: a run killed while that call waited (on an
+ * approval, on the command) left a transcript ending there, and it must read
+ * as interrupted, not answered.
+ */
+export function settlesTurn(event: AgentEvent): boolean {
+  if (event.type === "run_result" || event.type === "run_error") return true;
+  return event.type === "assistant_message" && !event.content.some((block) => block.type === "tool_call");
+}
+
 export function interruptedMsg(): Msg {
   return { role: "system", content: "Interrupted", runInterrupted: true };
 }

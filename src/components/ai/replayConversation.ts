@@ -10,7 +10,7 @@
 // they share is `IS_SILENT_RUN_ERROR`.
 
 import type { AgentEvent, ProviderId } from "../../agent/types";
-import { foldAgentEvents, foldedToMsgs, foldedRowToMsgs } from "../../agent/foldEvents";
+import { foldAgentEvents, foldedToMsgs, foldedRowToMsgs, settlesTurn } from "../../agent/foldEvents";
 import type { RunMessage } from "../../runs";
 import type { Conversation, Msg } from "./types";
 
@@ -40,7 +40,7 @@ export function isSilentRunError(code: string): boolean {
  */
 /**
  * True when the transcript's last turn was never answered: a `user_message`
- * with no `assistant_message`, `run_result` or `run_error` after it. The
+ * with no answer, `run_result` or `run_error` after it (`settlesTurn`). The
  * Harness writes one of those on every exit it controls, so with no live run
  * in Rust this is a turn the app was closed on — the panel then appends
  * `interruptedMsg` where the answer would have been. Same rule as the fold's
@@ -48,8 +48,8 @@ export function isSilentRunError(code: string): boolean {
  */
 export function hasOpenTurn(events: AgentEvent[]): boolean {
   for (let i = events.length - 1; i >= 0; i -= 1) {
+    if (settlesTurn(events[i])) return false;
     const type = events[i].type;
-    if (type === "run_result" || type === "run_error" || type === "assistant_message") return false;
     if (type === "user_message" || type === "observer_completed") return true;
     if (type === "subagent_resolved" && events[i].type === "subagent_resolved" && (events[i] as { background?: boolean }).background) return true;
   }

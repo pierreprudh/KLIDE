@@ -487,6 +487,25 @@ describe("hasOpenTurn", () => {
     expect(hasOpenTurn([user("one", 1), assistant("first", 2), user("two", 3)])).toBe(true);
   });
 
+  it("is true for a turn killed while its tool call waited on an approval", () => {
+    const callsTool: AgentEvent = {
+      type: "assistant_message",
+      runId: "r1",
+      messageId: "a2",
+      content: [{ type: "tool_call", toolCallId: "c1", name: "run_command", input: { command: "sh test.sh" } }],
+      ts: 2,
+    };
+    const asked: AgentEvent = {
+      type: "tool_call_started",
+      runId: "r1",
+      toolCallId: "c1",
+      name: "run_command",
+      input: { command: "sh test.sh" },
+      ts: 3,
+    } as AgentEvent;
+    expect(hasOpenTurn([user("run it", 1), callsTool, asked])).toBe(true);
+  });
+
   it("is false once the turn was answered or settled", () => {
     expect(hasOpenTurn([user("one", 1), assistant("first", 2)])).toBe(false);
     expect(hasOpenTurn([user("one", 1), { type: "run_result", runId: "r1", result: { status: "done" }, ts: 2 }])).toBe(false);
