@@ -245,28 +245,34 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
     [workspaceRoot]
   );
 
-  // The pane's own row: which section, how many files, the totals, close.
-  // Each file names itself on its card below.
-  const header = (
-    <div
-      style={{
-        height: 40, flexShrink: 0, padding: "0 8px 0 14px", display: "flex", alignItems: "center", gap: 8,
-        borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--fg-subtle)",
-      }}
-    >
-      <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>{staged ? "Staged" : "Changes"}</span>
-      <span style={{ color: "var(--fg-dim)" }}>{files.length} file{files.length === 1 ? "" : "s"}</span>
-      <span style={{ flex: 1 }} />
-      {diffs && (
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, flexShrink: 0 }}>
-          <span style={{ color: "var(--diff-add)" }}>+{totals.add}</span>{" "}
-          <span style={{ color: "var(--diff-remove)" }}>−{totals.del}</span>
-        </span>
-      )}
+  // The recap island over the file islands: how many files, the totals and
+  // their share as one thin bar, and the way back to history.
+  const changed = totals.add + totals.del;
+  const recap = (
+    <div style={{ ...PANE_CARD, flexShrink: 0, padding: "12px 8px 12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, fontSize: 13 }}>
+          <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
+            {files.length} file{files.length === 1 ? "" : "s"} {staged ? "staged" : "changed"}
+          </span>
+          {diffs && (
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
+              <span style={{ color: "var(--diff-add)" }}>+{totals.add}</span>{" "}
+              <span style={{ color: "var(--diff-remove)" }}>−{totals.del}</span>
+            </span>
+          )}
+        </div>
+        {diffs && changed > 0 && (
+          <div aria-hidden style={{ height: 4, borderRadius: 2, overflow: "hidden", display: "flex", background: "var(--bg-hover)" }}>
+            <span style={{ width: `${(totals.add / changed) * 100}%`, background: "var(--diff-add)" }} />
+            <span style={{ width: `${(totals.del / changed) * 100}%`, background: "var(--diff-remove)" }} />
+          </div>
+        )}
+      </div>
       <button
         onClick={onClose}
         title="Close diff — back to history"
-        style={{ ...iconButtonStyle, width: 24, height: 24, borderRadius: "var(--radius-md)" }}
+        style={{ ...iconButtonStyle, width: 24, height: 24, borderRadius: "var(--radius-md)", alignSelf: "flex-start" }}
       >
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
@@ -274,8 +280,8 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
   );
   const centered = (content: React.ReactNode) => (
     <>
-      {header}
-      <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center", padding: 24 }}>
+      {recap}
+      <div style={{ ...PANE_CARD, flex: 1, marginTop: 12, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center", padding: 24 }}>
         {content}
       </div>
     </>
@@ -294,19 +300,20 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
   if (blocks.length === 0) return centered("No diff available.");
   return (
     <>
-      {header}
-      <div ref={scrollRef} style={{ flex: 1, overflow: "auto", padding: "0 0 4px", position: "relative" }}>
+      {recap}
+      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative" }}>
         <DiffView
           key={diffKey}
           blocks={blocks}
           limit={DIFF_RENDER_LIMIT}
           fileCounts={fileCounts}
+          inset={false}
           onOpenFile={onOpenFile}
           onLineComment={(c) => void sendLineComment(c)}
           commentActionLabel="Send to agent"
         />
         {failed.length > 0 && (
-          <div style={{ padding: "0 16px 8px", color: "var(--fg-subtle)", fontSize: 12 }}>
+          <div style={{ padding: "8px 4px", color: "var(--fg-subtle)", fontSize: 12 }}>
             Couldn't load {failed.join(", ")}.
           </div>
         )}
@@ -2121,7 +2128,14 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
         <PaneDivider width={leftWidth} setWidth={setLeftWidth} side="left" min={LEFT_MIN} max={MAX_PANE} />
 
         {/* Center: diff for the open file, commit graph otherwise */}
-        <div style={{ ...PANE_CARD, flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+        {/* History is one island; an open diff is a column of them — the
+            recap, then one per file — straight on the page background. */}
+        <div
+          style={{
+            ...(open ? { "--bg-elevated": "var(--bg-panel)" } : PANE_CARD),
+            flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0,
+          } as React.CSSProperties}
+        >
           {open ? (
             <DiffViewer
               workspaceRoot={workspaceRoot}
