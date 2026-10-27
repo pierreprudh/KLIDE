@@ -22,7 +22,7 @@ import { getKlideConvos } from "./klideConvos";
 import { errMessage } from "./errors";
 
 export type RunAttention =
-  | { runId: string; state: "asking"; kind: "permission" | "question"; requestId: string; summary: string }
+  | { runId: string; state: "asking"; kind: "permission" | "question"; requestId: string; summary: string; externalPaths?: string[] }
   | { runId: string; state: "clear" };
 
 /** conversation id → the things it waits on (its own run, or a worker's). */
@@ -128,12 +128,15 @@ export function applyRunAttention(attention: RunAttention): void {
     ? { label: "Open", run: () => openConversation(runId) }
     : undefined;
   const { requestId } = attention;
+  const outside = !!attention.externalPaths?.length;
   const answer = (decision: Parameters<typeof resolvePermission>[0]["decision"]) =>
     void resolvePermission({ runId, requestId, decision }).catch((error) =>
       notify(`Couldn't answer ${title}: ${errMessage(error)}`, { tone: "error" }),
     );
   toastFor.set(runId, notify(
-    attention.kind === "permission"
+    outside
+      ? `Outside its working folder: ${title} needs approval — Open to review ${attention.externalPaths!.join(", ")}`
+      : attention.kind === "permission"
       ? `${title} needs your approval — ${attention.summary}`
       : `${title} asks — ${attention.summary}`,
     {
@@ -142,7 +145,7 @@ export function applyRunAttention(attention: RunAttention): void {
       duration: 0,
       // A question is answered in its card (it may want words); a
       // permission is a yes or a no, so it can be given from here.
-      actions: attention.kind === "permission"
+      actions: attention.kind === "permission" && !outside
         ? [
             { label: "Deny", run: () => answer({ behavior: "deny" }) },
             { label: "Allow", run: () => answer({ behavior: "allow", scope: "once" }), primary: true },
@@ -157,7 +160,11 @@ export function applyRunAttention(attention: RunAttention): void {
  *  left out on purpose: Rust's `run:attention` doesn't carry them either. */
 export function attentionFromEvents(runId: string, events: readonly AgentEvent[]): RunAttention | null {
   const { permission, question } = pendingGatesFromEvents(events);
-  if (permission) return { runId, state: "asking", kind: "permission", requestId: permission.id, summary: permission.summary };
+  if (permission) {
+    const paths = (permission.input as { externalPaths?: unknown } | null)?.externalPaths;
+    const externalPaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [];
+    return { runId, state: "asking", kind: "permission", requestId: permission.id, summary: permission.summary, externalPaths };
+  }
   if (question) return { runId, state: "asking", kind: "question", requestId: question.requestId, summary: question.question };
   return null;
 }

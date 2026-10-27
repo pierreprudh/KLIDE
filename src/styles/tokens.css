@@ -2,6 +2,10 @@
   /* Surfaces — bone cream foundation. See DESIGN.md for the full spec. */
   --bg:           #f7f4ed;
   --bg-elevated:  #fcfbf8;
+  /* Workbench panes on the page background (Git Review's cards): plain
+     white on light themes so content sits on a clean sheet; dark themes keep
+     their elevated surface. */
+  --bg-panel:     #FFFFFF;
   --bg-hover:     rgba(28, 28, 28, 0.04);
   --bg-selected:  rgba(90, 123, 76, 0.12);
 
@@ -300,6 +304,7 @@
   --diff-remove-bg:  rgba(248, 81, 73, 0.12);
   --diff-add-word:   rgba(46, 160, 67, 0.40);
   --diff-remove-word: rgba(248, 81, 73, 0.38);
+  --bg-panel:     var(--bg-elevated);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --code-comment: #6E756F;
@@ -351,6 +356,7 @@
   --diff-remove-bg:  rgba(248, 81, 73, 0.12);
   --diff-add-word:   rgba(46, 160, 67, 0.40);
   --diff-remove-word: rgba(248, 81, 73, 0.38);
+  --bg-panel:     var(--bg-elevated);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #F0EFE9;
@@ -400,6 +406,7 @@
   --diff-remove-bg:  rgba(248, 81, 73, 0.12);
   --diff-add-word:   rgba(46, 160, 67, 0.40);
   --diff-remove-word: rgba(248, 81, 73, 0.38);
+  --bg-panel:     var(--bg-elevated);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #FFFFFF;
@@ -565,6 +572,7 @@
   --diff-remove-bg:  rgba(248, 81, 73, 0.12);
   --diff-add-word:   rgba(46, 160, 67, 0.40);
   --diff-remove-word: rgba(248, 81, 73, 0.38);
+  --bg-panel:     var(--bg-elevated);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #FDF6E3;

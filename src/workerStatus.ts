@@ -15,7 +15,7 @@ import { useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { dismissToast, notify, type ToastAction } from "./toast";
 import { canOpenConversation, openConversation } from "./conversationNavigation";
-import { resolvePermission } from "./agent/client";
+import { listWorkerStatuses, resolvePermission } from "./agent/client";
 import { errMessage } from "./errors";
 import { isOnScreen, markNeedsYou } from "./runAttention";
 
@@ -32,6 +32,9 @@ export type WorkerStatus = {
   provider?: string | null;
   /** The permission request to answer, while it asks. */
   requestId?: string | null;
+  externalPaths?: string[];
+  /** Transcript position shared by live events and the reload snapshot. */
+  seq?: number;
 };
 
 /** What one status change means: the toast to show (if any) and whether the
@@ -56,6 +59,7 @@ export function workerTransition(
 }
 
 const lastState = new Map<string, WorkerState>();
+const lastSeq = new Map<string, number>();
 /** run id → its Provider, learned from its first status. */
 const providerOf = new Map<string, string>();
 /** run id → the approval toast still up for it. */
@@ -73,6 +77,10 @@ function publish() {
 /** Apply one status from Rust. Exported for tests; the watcher calls it. */
 export function applyWorkerStatus(status: WorkerStatus): void {
   const { runId } = status;
+  if (status.seq !== undefined) {
+    if ((lastSeq.get(runId) ?? -1) >= status.seq) return;
+    lastSeq.set(runId, status.seq);
+  }
   if (status.provider) providerOf.set(runId, status.provider);
   const { toast, live } = workerTransition(lastState.get(runId), status);
   lastState.set(runId, status.state);
@@ -107,11 +115,13 @@ export function applyWorkerStatus(status: WorkerStatus): void {
       void resolvePermission({ runId, requestId, decision }).catch((error) =>
         notify(`Couldn't answer ${status.label}: ${errMessage(error)}`, { tone: "error" }),
       );
-    askingToast.set(runId, notify(toast.message, {
+    askingToast.set(runId, notify(status.externalPaths?.length
+      ? `Outside its working folder: ${status.label} needs approval — Open to review ${status.externalPaths.join(", ")}`
+      : toast.message, {
       tone: toast.tone,
       provider,
       duration: 0,
-      actions: [
+      actions: status.externalPaths?.length ? undefined : [
         { label: "Deny", run: () => answer({ behavior: "deny" }) },
         { label: "Allow", run: () => answer({ behavior: "allow", scope: "once" }), primary: true },
       ],
@@ -140,9 +150,17 @@ export function useHasLiveWorker(conversationId: string): boolean {
 export function watchWorkerStatus(): () => void {
   let unlisten: (() => void) | null = null;
   let stopped = false;
-  void listen<WorkerStatus>("worker:status", (e) => applyWorkerStatus(e.payload)).then((fn) => {
-    if (stopped) fn();
-    else unlisten = fn;
+  // Listen first, then recover. Sequence checks let a live resolution win
+  // over an older snapshot, even if the snapshot request finishes last.
+  void listen<WorkerStatus>("worker:status", (e) => {
+    if (!stopped) applyWorkerStatus(e.payload);
+  }).then(async (fn) => {
+    if (stopped) { fn(); return; }
+    unlisten = fn;
+    const statuses = await listWorkerStatuses();
+    if (!stopped) for (const status of statuses) applyWorkerStatus(status);
+  }).catch((error) => {
+    if (!stopped) notify(`Couldn't restore worker status: ${errMessage(error)}`, { tone: "error" });
   });
   return () => {
     stopped = true;
@@ -153,6 +171,7 @@ export function watchWorkerStatus(): () => void {
 /** Test seam. */
 export function resetWorkerStatus(): void {
   lastState.clear();
+  lastSeq.clear();
   providerOf.clear();
   askingToast.clear();
   liveWorkers.clear();

@@ -42,6 +42,8 @@ struct Dispatch {
     /// Set once the report was handed to the parent's model and recorded on
     /// its transcript. The entry then holds nothing a turn still needs.
     delivered: bool,
+    /// Latest UI status, retained across webview reloads.
+    status: Option<WorkerStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -119,6 +121,7 @@ pub fn register(
             started_ms: now_ms(),
             report: None,
             delivered: false,
+            status: None,
         },
     );
 }
@@ -228,24 +231,66 @@ pub struct WorkerChange {
     pub provider: Option<String>,
     /// The permission request to answer, while it asks.
     pub request_id: Option<String>,
+    pub external_paths: Vec<String>,
 }
 
 /// The state change an event of the worker's own Run makes, if any.
 pub fn state_for(event: &super::types::AgentEvent) -> Option<WorkerChange> {
     use super::types::AgentEvent;
     let change = |state, detail: Option<String>, provider: Option<String>, request_id: Option<String>| {
-        Some(WorkerChange { state, detail, provider, request_id })
+        Some(WorkerChange { state, detail, provider, request_id, external_paths: Vec::new() })
     };
     match event {
         AgentEvent::RunStarted { provider, .. } => change(WorkerState::Working, None, Some(provider.clone()), None),
         AgentEvent::PermissionResolved { .. } => change(WorkerState::Working, None, None, None),
         AgentEvent::PermissionRequested { request, .. } => {
-            change(WorkerState::Asking, Some(request.summary.clone()), None, Some(request.id.clone()))
+            let mut asking = change(WorkerState::Asking, Some(request.summary.clone()), None, Some(request.id.clone()))?;
+            asking.external_paths = super::attention::external_paths(request);
+            Some(asking)
         }
         AgentEvent::RunResult { .. } => change(WorkerState::Finished, None, None, None),
         AgentEvent::RunError { error, .. } => change(WorkerState::Failed, Some(error.message.clone()), None, None),
         _ => None,
     }
+}
+
+/// The live event and reload snapshot use the same wire shape and transcript
+/// sequence. A snapshot cannot resurrect a request a newer event resolved.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerStatus {
+    pub parent_id: String,
+    pub run_id: String,
+    pub label: String,
+    pub role: String,
+    pub state: WorkerState,
+    pub detail: Option<String>,
+    pub provider: Option<String>,
+    pub request_id: Option<String>,
+    pub external_paths: Vec<String>,
+    pub seq: u64,
+}
+
+pub fn record_status(child_id: &str, seq: u64, event: &super::types::AgentEvent) -> Option<WorkerStatus> {
+    let change = state_for(event)?;
+    let mut dispatches = registry().lock().ok()?;
+    let d = dispatches.get_mut(child_id)?;
+    if d.status.as_ref().is_some_and(|old| old.seq >= seq) { return None; }
+    let status = WorkerStatus {
+        parent_id: d.parent_id.clone(), run_id: child_id.into(), label: d.label.clone(), role: d.role.clone(),
+        state: change.state, detail: change.detail,
+        provider: change.provider.or_else(|| d.status.as_ref().and_then(|s| s.provider.clone())),
+        request_id: change.request_id, external_paths: change.external_paths, seq,
+    };
+    d.status = Some(status.clone());
+    Some(status)
+}
+
+pub fn active_statuses() -> Vec<WorkerStatus> {
+    registry().lock().map(|dispatches| dispatches.values()
+        .filter_map(|d| d.status.as_ref())
+        .filter(|s| matches!(s.state, WorkerState::Working | WorkerState::Asking))
+        .cloned().collect()).unwrap_or_default()
 }
 
 /// The dispatches a Run made, oldest first.
