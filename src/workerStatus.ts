@@ -17,6 +17,7 @@ import { dismissToast, notify, type ToastAction } from "./toast";
 import { canOpenConversation, openConversation } from "./conversationNavigation";
 import { resolvePermission } from "./agent/client";
 import { errMessage } from "./errors";
+import { markNeedsYou } from "./runAttention";
 
 export type WorkerState = "working" | "asking" | "finished" | "failed";
 
@@ -75,6 +76,8 @@ export function applyWorkerStatus(status: WorkerStatus): void {
   if (status.provider) providerOf.set(runId, status.provider);
   const { toast, live } = workerTransition(lastState.get(runId), status);
   lastState.set(runId, status.state);
+  // The conversation that dispatched it waits on you while it asks.
+  markNeedsYou(status.parentId, runId, status.state === "asking");
   // Answered — here, on the row, or by policy — the question is gone.
   if (status.state !== "asking" && askingToast.has(runId)) {
     dismissToast(askingToast.get(runId)!);

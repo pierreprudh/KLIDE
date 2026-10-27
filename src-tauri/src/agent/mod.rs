@@ -11,6 +11,7 @@ mod process;
 pub(crate) mod command_env;
 mod observers;
 pub(crate) mod workers;
+mod attention;
 mod command_allowlist;
 mod compaction;
 mod connector_tools;
@@ -646,8 +647,16 @@ impl RunSupervisor for TauriSupervisor {
         // screen, where nothing listens on its `agent-run:` stream. Its
         // asking, working and settling go out app-wide too, naming the parent,
         // so a toast and the rail can say it (`src/workerStatus.ts`).
+        let worker = workers::identity(run_id);
+        if worker.is_none() {
+            if let Some(attention) = attention::attention_for(event) {
+                let mut payload = serde_json::to_value(&attention).unwrap_or_default();
+                payload["runId"] = serde_json::json!(run_id);
+                let _ = self.app.emit("run:attention", payload);
+            }
+        }
         if let Some(change) = workers::state_for(event) {
-            if let Some((parent_id, label, role)) = workers::identity(run_id) {
+            if let Some((parent_id, label, role)) = worker {
                 let _ = self.app.emit(
                     "worker:status",
                     serde_json::json!({

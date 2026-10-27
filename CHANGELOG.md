@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A conversation waiting on you says so from anywhere. When a Run asks for an approval or a question while you are in another conversation, a toast names it under its Provider's mark — Deny / Allow / Open for an approval, Open for a question — and closes once it is answered anywhere. The rail row reads **needs you** in its trailing slot, for its own Run or for a worker it dispatched. The conversation on screen shows its card as before, without a toast.
 - A background worker is seen from anywhere. When it asks for approval, finishes or stops, a toast says so with Open to the conversation that dispatched it, and that conversation shows as running in the rail while its worker works. Before, a worker asking for approval waited on nobody unless its conversation was open, and its finish surfaced only when the parent's follow-up turn ended.
 - A worker asking to touch a path outside its own folder says so first on the card: "Outside its working folder (…): a yes lets it change files no branch or review holds." In the acceptance pass a worker in a KIDE worktree edited another project's `test.sh`, and the card did not show it was outside.
 - A Focus task runs on the Provider its composer shows. The home composer could show OpenRouter while the panel behind it sat on Anthropic, and the shown model went out to Anthropic as a 404. The composer's pair is now written onto the panel when a task is sent, a model picked there brings its Provider along, and with no saved panel the composer shows the model that Provider will actually run.

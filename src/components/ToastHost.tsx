@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Z } from "../zLayers";
 import { watchDelegateStatus } from "../delegateStatusNotify";
 import { watchWorkerStatus } from "../workerStatus";
+import { watchRunAttention } from "../runAttention";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 import { CloseIcon, ErrorIcon, InfoIcon, SuccessIcon, WarningIcon } from "../icons";
@@ -333,7 +334,8 @@ export default function ToastHost() {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const stopDelegates = watchDelegateStatus();
     const stopWorkers = watchWorkerStatus();
-    return () => { stopDelegates(); stopWorkers(); };
+    const stopAttention = watchRunAttention();
+    return () => { stopDelegates(); stopWorkers(); stopAttention(); };
   }, []);
 
   if (rows.length === 0) return null;
