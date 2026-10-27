@@ -311,7 +311,7 @@ export function InlineDiffReview({ edit, onApply, onApplyAll, onReject, onReques
                 </div>
               );
             }
-            const bg = r.kind === "add" ? "color-mix(in srgb, var(--diff-add) 13%, transparent)" : r.kind === "del" ? "color-mix(in srgb, var(--diff-remove) 13%, transparent)" : "transparent";
+            const bg = r.kind === "add" ? "var(--diff-add-bg)" : r.kind === "del" ? "var(--diff-remove-bg)" : "transparent";
             const marker = r.kind === "add" ? "+" : r.kind === "del" ? "−" : " ";
             const markerColor = r.kind === "add" ? "var(--diff-add)" : r.kind === "del" ? "var(--diff-remove)" : "var(--fg-dim)";
             return (

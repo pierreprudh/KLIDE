@@ -152,9 +152,9 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
           {changes.map((c, ci) => {
             const sign = c.added ? "+" : c.removed ? "−" : " ";
             const bg = c.added
-              ? "color-mix(in srgb, var(--diff-add) 12%, transparent)"
+              ? "var(--diff-add-bg)"
               : c.removed
-              ? "color-mix(in srgb, var(--diff-remove) 12%, transparent)"
+              ? "var(--diff-remove-bg)"
               : "transparent";
             const fg = c.added ? "var(--diff-add)" : c.removed ? "var(--diff-remove)" : "var(--fg-strong)";
             const lines = c.value.split("\n");
