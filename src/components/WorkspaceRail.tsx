@@ -72,6 +72,7 @@ import { conversationMark } from "../modelIdentity";
 import { setConversationDrag } from "../conversationDrag";
 import { useIsConversationRunning } from "../runningConversations";
 import { useHasLiveWorker } from "../workerStatus";
+import { useNeedsYou } from "../runAttention";
 import { orderProviderHistory, providerHistoryExpanded } from "../focusHistory";
 import { canonicalWorkspaceRoot, linkedProjectForPath } from "../projectPaths";
 
@@ -503,6 +504,8 @@ function ConvoRow({
   // getting work done, and may be waiting on you (src/workerStatus.ts).
   const hasLiveWorker = useHasLiveWorker(convo.id);
   const running = useIsConversationRunning(convo.id) || hasLiveWorker;
+  // Waiting on you outranks working: it is the one row state you act on.
+  const needsYou = useNeedsYou(convo.id);
   // Captured once: see `useEntranceValue`. Recomputing this from the row's
   // current index is what made the tree replay on every list update.
   const entranceDelay = useEntranceValue(revealDelay);
@@ -603,7 +606,9 @@ function ConvoRow({
            reader and a hovering pointer get what the route and the text weight
            say silently. */
         title={
-          running
+          needsYou
+            ? `${convo.title} — needs you`
+            : running
             ? `${convo.title} — running`
             : open && !selected
               ? `${convo.title} — open in a panel`
@@ -635,7 +640,9 @@ function ConvoRow({
               replaces the timestamp rather than sitting next to it: the row keeps
               one trailing mark, and no badge is added to a rail that deliberately
               has none. */}
-          {running ? (
+          {needsYou ? (
+            <span className="klide-focus-convo-time klide-focus-convo-needs-you">needs you</span>
+          ) : running ? (
             <span className="klide-focus-convo-live">
               <DotGridLoader size={11} color="var(--accent)" label="Running" />
             </span>

@@ -6036,6 +6036,13 @@ button:focus-visible .menu-leadout {
     opacity var(--motion-slow) var(--ease-soft),
     transform var(--motion-slow) var(--ease-soft);
 }
+/* A conversation waiting on you (an approval, a question) says so in the
+   same slot, in the accent and the UI face — words, not a badge. */
+.klide-focus-convo-needs-you {
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
 
 /* The row's ⋯ lives in the trailing slot too, over the timestamp: the row
    keeps one trailing mark, and it says the thing you can do right now. Hidden until the

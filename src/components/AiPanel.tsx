@@ -1,4 +1,5 @@
 import { SideQuestionToggle } from "./ai/SideQuestionToggle";
+import { showConversation } from "../runAttention";
 import { SideQuestionText } from "./ai/SideQuestionText";
 import { SideQuestionResize } from "./ai/SideQuestionResize";
 import "./ai/sideQuestions.css";
@@ -834,6 +835,12 @@ export function AiPanel({
     transitionConversation({ type: "run-settled" });
   }
   const currentId = conversationSession.conversationId;
+  // While this panel shows a conversation, that conversation's cards are on
+  // screen: an approval it raises needs no toast (src/runAttention.ts).
+  useEffect(() => {
+    if (!visible || !currentId) return;
+    return showConversation(currentId);
+  }, [visible, currentId]);
   const sideQuestionParent = sideQuestion?.parentId ?? conversationSession.sideQuestionOf;
   const [btw, setBtw] = useState<{ parentId: string; open: boolean; provider: ProviderId; model: string; question: { text: string; nonce: number } | null } | null>(null);
   const [btwModels, setBtwModels] = useState<string[]>([]);
