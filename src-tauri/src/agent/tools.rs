@@ -1224,7 +1224,7 @@ fn registry() -> Vec<ToolEntry> {
             summary: |call| call.input.get("command").and_then(|v| v.as_str())
                 .map(|c| {
                     let bg = call.input.get("background").and_then(|v| v.as_bool()).unwrap_or(false);
-                    if bg { format!("$ {c} &") } else { format!("$ {c}") }
+                    if bg { format!("› {c} &") } else { format!("› {c}") }
                 })
                 .unwrap_or_else(|| "run_command".to_string()),
         },
@@ -1669,7 +1669,7 @@ pub fn command_invocation(
         }
         return Ok(CommandInvocation {
             tool_name: RUN_COMMAND_TOOL.to_string(),
-            summary: format!("$ {command}"),
+            summary: format!("› {command}"),
             reason: "The agent wants to run a shell command in the workspace.".to_string(),
             command,
             cwd: workspace_root.to_string(),

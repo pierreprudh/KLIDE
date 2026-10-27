@@ -11,7 +11,7 @@ function permissionRequest(id: string, command: string): PermissionRequest {
     toolCallId: `call-${id}`,
     toolName: "run_command",
     input: { command, cwd: "/workspace", externalPaths: [], matchedAllowRule: null },
-    summary: `$ ${command}`,
+    summary: `› ${command}`,
     reason: "The agent wants to run a shell command in the workspace.",
     options: [],
   } as unknown as PermissionRequest;
@@ -60,7 +60,7 @@ describe("pendingGatesFromEvents", () => {
     // line of the transcript and nothing answered it.
     const gates = pendingGatesFromEvents([asked("perm-1", "git log --graph")]);
     expect(gates.permission?.id).toBe("perm-1");
-    expect(gates.permission?.summary).toBe("$ git log --graph");
+    expect(gates.permission?.summary).toBe("› git log --graph");
   });
 
   it("forgets a request once it has been answered", () => {

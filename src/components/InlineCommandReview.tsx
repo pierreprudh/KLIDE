@@ -370,7 +370,7 @@ export function InlineCommandReview({
           }}
           title={script ? undefined : command}
         >
-          {kind === "command" && !script && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
+          {kind === "command" && !script && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>› </span>}
           {kind === "connector" && connector && (
             // The mark, then — for anything but GitHub, whose mark says it — the
             // connector's name, set apart from the tool by space, not a dot.
