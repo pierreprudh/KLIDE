@@ -6037,28 +6037,24 @@ button:focus-visible .menu-leadout {
     transform var(--motion-slow) var(--ease-soft);
 }
 /* A conversation waiting on you (an approval, a question): its name is swept
-   by the Working row's shimmer — the same gradient, painted through the text —
-   instead of a word in the trailing slot. Reduced motion leaves the name in
-   the strong ink. */
-.klide-focus-convo-title[data-waiting="true"] {
+   by the Working row's shimmer, painted through the text, instead of a word in
+   the trailing slot. Marked harder than the Working label — a dim base and an
+   accent crest — because the rail is read at a glance. Painted on the layer
+   that holds the text: WebKit drops a clip-to-text through a child that
+   clips its own overflow. Reduced motion leaves the name in the accent. */
+.klide-focus-convo-title[data-waiting="true"]:not([data-swapping]) .klide-focus-convo-title-in {
   color: transparent;
   -webkit-background-clip: text;
   background-clip: text;
-  background-image: linear-gradient(90deg, var(--fg-subtle) 35%, var(--fg-strong) 50%, var(--fg-subtle) 65%);
+  background-image: linear-gradient(90deg, var(--fg-dim) 30%, var(--accent) 50%, var(--fg-dim) 70%);
   background-size: 200% 100%;
-  animation: ai-shimmer-text 1.4s linear infinite;
-}
-.klide-focus-convo-title[data-waiting="true"] .klide-focus-convo-title-in {
-  color: transparent;
+  animation: ai-shimmer-text 1.6s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .klide-focus-convo-title[data-waiting="true"] {
+  .klide-focus-convo-title[data-waiting="true"]:not([data-swapping]) .klide-focus-convo-title-in {
     animation: none;
     background-image: none;
-    color: var(--fg-strong);
-  }
-  .klide-focus-convo-title[data-waiting="true"] .klide-focus-convo-title-in {
-    color: inherit;
+    color: var(--accent);
   }
 }
 
