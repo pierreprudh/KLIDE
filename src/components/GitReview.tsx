@@ -117,12 +117,15 @@ const PANE_TRANSITION = "width var(--motion-med) var(--ease-soft)";
 /** Each pane is a card on the page background — one hairline, the card
  *  radius, no shadow — with a gutter between them that is also the resize
  *  handle. */
-const PANE_CARD: React.CSSProperties = {
+const PANE_CARD = {
   border: "1px solid var(--border)",
   borderRadius: "var(--radius-xl)",
-  background: "var(--bg-elevated)",
+  background: "var(--bg-panel)",
   overflow: "hidden",
-};
+  // Everything raised inside a pane (PR cards, the segmented thumb, avatar
+  // rings) is raised relative to the pane, so it takes the pane's surface.
+  "--bg-elevated": "var(--bg-panel)",
+} as React.CSSProperties;
 const DIFF_RENDER_LIMIT = 1600;
 
 
