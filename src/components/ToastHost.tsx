@@ -143,6 +143,40 @@ function ToastCard({
   const opacity = leaving || !entered ? 0 : place.opacity;
   const Mark = TONE_ICON[tone];
   const { title, detail } = splitMessage(message);
+  const stacked = buttons.length > 1;
+  const buttonRow = buttons.map((button) => (
+    <button
+      key={button.label}
+      type="button"
+      tabIndex={interactive ? 0 : -1}
+      onClick={() => {
+        button.run();
+        dismissToast(id);
+      }}
+      style={{
+        flexShrink: 0,
+        height: 26,
+        padding: "0 11px",
+        borderRadius: 999,
+        border: "none",
+        background: WASH,
+        color: button.primary ? "var(--accent)" : "var(--fg-strong)",
+        fontSize: 12,
+        transition: "transform 160ms var(--ease-out)",
+      }}
+      onPointerDown={(e) => {
+        e.currentTarget.style.transform = "scale(0.96)";
+      }}
+      onPointerUp={(e) => {
+        e.currentTarget.style.transform = "";
+      }}
+      onPointerLeave={(e) => {
+        e.currentTarget.style.transform = "";
+      }}
+    >
+      {button.label}
+    </button>
+  ));
 
   return (
     <div
@@ -180,89 +214,64 @@ function ToastCard({
         ref={content}
         style={{
           display: "flex",
-          alignItems: "center",
-          gap: 12,
+          flexDirection: "column",
+          gap: 10,
           padding: "12px 10px 12px 14px",
           opacity: tucked ? 0 : 1,
           transition: `opacity ${FADE}`,
         }}
       >
-        <span style={{ flexShrink: 0, display: "grid", placeItems: "center", color: TONE_COLOR[tone] }}>
-          {/* A toast about an agent wears its mark; the tone stays in the
-              wording and the buttons. */}
-          {provider ? <ProviderLogo id={provider as ProviderId} size={18} /> : <Mark size={18} />}
-        </span>
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-          <div style={{ ...CLAMP, fontSize: 13, lineHeight: "18px", color: "var(--fg-strong)" }}>
-            {title}
-          </div>
-          {detail && (
-            <div style={{ ...CLAMP, fontSize: 12, lineHeight: "17px", color: "var(--fg-subtle)" }}>
-              {detail}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ flexShrink: 0, display: "grid", placeItems: "center", color: TONE_COLOR[tone] }}>
+            {/* A toast about an agent wears its mark; the tone stays in the
+                wording and the buttons. */}
+            {provider ? <ProviderLogo id={provider as ProviderId} size={18} /> : <Mark size={18} />}
+          </span>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ ...CLAMP, fontSize: 13, lineHeight: "18px", color: "var(--fg-strong)" }}>
+              {title}
             </div>
-          )}
-        </div>
-        {buttons.map((button) => (
+            {detail && (
+              <div style={{ ...CLAMP, fontSize: 12, lineHeight: "17px", color: "var(--fg-subtle)" }}>
+                {detail}
+              </div>
+            )}
+          </div>
+          {!stacked && buttonRow}
           <button
-            key={button.label}
             type="button"
             tabIndex={interactive ? 0 : -1}
-            onClick={() => {
-              button.run();
-              dismissToast(id);
-            }}
+            onClick={() => dismissToast(id)}
+            aria-label={`Dismiss ${title}`}
             style={{
               flexShrink: 0,
+              width: 26,
               height: 26,
-              padding: "0 11px",
+              display: "grid",
+              placeItems: "center",
               borderRadius: 999,
               border: "none",
-              background: WASH,
-              color: button.primary ? "var(--accent)" : "var(--fg-strong)",
-              fontSize: 12,
-              transition: "transform 160ms var(--ease-out)",
+              background: "transparent",
+              color: "var(--fg-dim)",
+              transition: "background-color 160ms, color 160ms",
             }}
-            onPointerDown={(e) => {
-              e.currentTarget.style.transform = "scale(0.96)";
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = WASH;
+              e.currentTarget.style.color = "var(--fg-strong)";
             }}
-            onPointerUp={(e) => {
-              e.currentTarget.style.transform = "";
-            }}
-            onPointerLeave={(e) => {
-              e.currentTarget.style.transform = "";
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--fg-dim)";
             }}
           >
-            {button.label}
+            <CloseIcon size={14} />
           </button>
-        ))}
-        <button
-          type="button"
-          tabIndex={interactive ? 0 : -1}
-          onClick={() => dismissToast(id)}
-          aria-label={`Dismiss ${title}`}
-          style={{
-            flexShrink: 0,
-            width: 26,
-            height: 26,
-            display: "grid",
-            placeItems: "center",
-            borderRadius: 999,
-            border: "none",
-            background: "transparent",
-            color: "var(--fg-dim)",
-            transition: "background-color 160ms, color 160ms",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = WASH;
-            e.currentTarget.style.color = "var(--fg-strong)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "var(--fg-dim)";
-          }}
-        >
-          <CloseIcon size={14} />
-        </button>
+        </div>
+        {stacked && (
+          // More than one answer goes on its own line under the words, so
+          // the words keep the card's width and the buttons read in order.
+          <div style={{ display: "flex", gap: 6, paddingLeft: 30 }}>{buttonRow}</div>
+        )}
       </div>
     </div>
   );
