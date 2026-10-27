@@ -96,6 +96,6 @@ diff --git a/src/session.ts b/src/session.ts
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <div style={{ height: "100vh", display: "flex" }}>
-    <GitReview workspaceRoot="/fixture" gitStatus={status} onRefreshGitStatus={() => {}} theme={theme as never} onOpenFile={(path) => console.log("open", path)} />
+    <GitReview workspaceRoot="/fixture" gitStatus={status} onRefreshGitStatus={() => {}} onOpenFile={(path) => console.log("open", path)} />
   </div>
 );

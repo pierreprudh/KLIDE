@@ -6,6 +6,7 @@ import {
   checkoutPrOutcome,
   commitOutcome,
   discardFileOutcome,
+  selectionAfterDiscard,
   fetchOutcome,
   mergePrOutcome,
   mergePrTimeline,
@@ -170,14 +171,23 @@ describe("action outcomes — the refresh policy per action", () => {
     expect(actual).toEqual(expected);
   });
 
-  it("discarding the open file closes its diff; discarding another file does not", () => {
-    expect(discardFileOutcome("a.ts", "a.ts")).toEqual({
-      message: "Discarded",
-      refresh: ["status"],
-      closeDiff: true,
-    });
-    expect(discardFileOutcome("a.ts", "b.ts").closeDiff).toBe(false);
-    expect(discardFileOutcome("a.ts", null).closeDiff).toBe(false);
+  it("discard refreshes the stack without closing the entire section", () => {
+    expect(discardFileOutcome()).toEqual({ message: "Discarded", refresh: ["status"] });
+  });
+
+  it("discarding the selected file moves to another file, or closes an empty stack", () => {
+    const open = { path: "a.ts", staged: false };
+    expect(selectionAfterDiscard(open, "a.ts", [{ path: "a.ts" }, { path: "b.ts" }]))
+      .toEqual({ path: "b.ts", staged: false });
+    expect(selectionAfterDiscard(open, "a.ts", [{ path: "a.ts" }])).toBeNull();
+  });
+
+  it("discarding another file or a working copy leaves the current staged diff alone", () => {
+    const working = { path: "a.ts", staged: false };
+    const staged = { path: "a.ts", staged: true };
+    expect(selectionAfterDiscard(working, "b.ts", [{ path: "a.ts" }])).toBe(working);
+    expect(selectionAfterDiscard(staged, "a.ts", [])).toBe(staged);
+    expect(selectionAfterDiscard(null, "a.ts", [])).toBeNull();
   });
 
   it("acting on the expanded PR collapses it; acting on another leaves it open", () => {

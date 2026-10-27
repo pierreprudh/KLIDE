@@ -13,7 +13,6 @@ import type { GitDestination } from "../gitNavigation";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { relativeTimeLong } from "../time";
 import { errMessage } from "../errors";
-import type { ThemeId } from "../theme";
 import type { GitFile, GitStatus } from "../gitTypes";
 import { UNNAMED_GIT_STATUS, gitStatusMark } from "../gitStatusMark";
 import {
@@ -36,6 +35,7 @@ import {
   checkoutPrOutcome,
   commitOutcome,
   discardFileOutcome,
+  selectionAfterDiscard,
   fetchOutcome,
   mergePrOutcome,
   mergePrTimeline,
@@ -97,7 +97,6 @@ type Props = {
   workspaceRoot: string | null;
   gitStatus: GitStatus | null;
   onRefreshGitStatus: () => Promise<void> | void;
-  theme: ThemeId;
   /** Opens a project file in the editor (the diff cards' arrow). */
   onOpenFile?: (path: string) => void;
 };
@@ -1122,16 +1121,9 @@ function PRExpandedDetail({ detail, loading, nowMs }: {
   );
 }
 
-// Just the section header now — the current-branch PR lives in the list like
-// any other, marked inline. No pinned, colour-washed "main" card on top.
-/** The head of the GitHub pane: one line — the title, and at the far end the
- *  refresh mark and New PR. No count beside the title: the Open segment below
- *  already says how many are in flight, and there is no "GitHub" eyebrow
- *  above it any more — the pane is the pull requests, so it says that once. */
-/** The PR panel's title row. Refreshing lives in the top bar: Fetch runs
- *  `git fetch` and reloads this list too, so a second, PR-only refresh here
- *  was the same button. */
-function GitHubSummaryCard({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
+/** Pull-request title and creation action. The top bar's Fetch action also
+ *  refreshes the pull-request list. */
+function PullRequestHeader({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 12px 10px" }}>
       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 650, letterSpacing: "-0.01em" }}>Pull requests</span>
@@ -1477,7 +1469,7 @@ function BranchMenu({ branches, tags, defaultBranch, current, onSelect, onClose 
   );
 }
 
-export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitStatus, theme: _theme, onOpenFile }: Props) {
+export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitStatus, onOpenFile }: Props) {
   const [log, setLog] = useState<GitLog | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [localStatus, setLocalStatus] = useState<GitStatus | null>(null);
@@ -1702,7 +1694,9 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
   }
   async function discardFile(path: string) {
     if (!workspaceRoot) return;
-    await runGitAction(discardFileOutcome(path, open?.path ?? null), () => gitDiscard(workspaceRoot, path));
+    if (await runGitAction(discardFileOutcome(), () => gitDiscard(workspaceRoot, path))) {
+      setOpen((current) => selectionAfterDiscard(current, path, changedFiles));
+    }
   }
   async function stageAll() {
     if (!workspaceRoot) return;
@@ -2102,7 +2096,7 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
 
         {/* Right: PRs */}
         <div style={{ ...PANE_CARD, width: rightWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <GitHubSummaryCard canCreate={stagedFiles.length > 0} onCreate={createPr} />
+          <PullRequestHeader canCreate={stagedFiles.length > 0} onCreate={createPr} />
           <PRFilterTabs value={prFilter} counts={prCounts} onChange={setPrFilter} />
           {prError && (
             <GitHubPanelState
