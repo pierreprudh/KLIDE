@@ -1,5 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import { useFlipIndicator } from "../hooks/useFlipIndicator";
+import { Fragment } from "react";
 import { AgentMark, FileTypeIcon, isAgentFile } from "./fileMarks";
 
 type Tab = { path: string; dirty: boolean; externalChanged?: boolean };
@@ -9,8 +8,10 @@ type Props = {
   onSelect: (i: number) => void;
   onClose: (i: number) => void;
   workspaceRoot: string | null;
-  /** "raised" (default) — the desktop-style tab card that merges into the
-   *  editor surface below; drawn for the full-bleed editor. "flat" — the
+  /** "raised" (default) — the desktop-style strip: full-height tabs split by
+   *  short hairlines, the active one a card with rounded top corners that
+   *  merges into the editor surface below; drawn for the full-bleed editor.
+   *  "flat" — the
    *  docked pane's soft-segment strip: inset row, the active tab carries a
    *  quiet rounded neutral fill (the hover token, not a saturated pill), no
    *  underline. */
@@ -26,20 +27,6 @@ function displayPath(path: string, workspaceRoot: string | null): string {
 
 export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, variant = "raised" }: Props) {
   const flat = variant === "flat";
-  // The FLIP bar rides along the bottom of the active tab. The bar's
-  // width follows the active tab's measured width.
-  const activeTab = activeIdx >= 0 ? tabs[activeIdx]?.path : null;
-  const flip = useFlipIndicator(activeTab ?? null, { size: 2, active: activeTab !== null, axis: "x" });
-  const [barWidth, setBarWidth] = useState(0);
-
-  // The bar's width tracks the active tab's measured width so it
-  // spans the tab like a Linear-style underline indicator.
-  const activeItemRef = useRef<HTMLDivElement | null>(null);
-  useLayoutEffect(() => {
-    if (!activeItemRef.current) return;
-    setBarWidth(activeItemRef.current.getBoundingClientRect().width);
-  }, [activeIdx, tabs.length]);
-
   if (tabs.length === 0) {
     return null;
   }
@@ -69,39 +56,15 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
         overflowX: "auto",
         backdropFilter: flat ? undefined : "blur(12px)",
         flexShrink: 0,
-        padding: flat ? "0 8px" : "0 10px",
-        gap: flat ? 4 : 2,
+        padding: flat ? "0 8px" : "0 8px",
+        gap: flat ? 4 : 0,
+        // Raised: one hairline under the strip; the active card covers its
+        // stretch, so the tab and the editor read as one surface.
+        boxShadow: flat ? undefined : "inset 0 -1px 0 var(--border)",
       }}
     >
-      {!flat && (
-        <div
-          ref={flip.trackRef}
-          data-flip={flip.flip}
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            left: 10,
-            right: 10,
-            bottom: 0,
-            height: 2,
-            pointerEvents: "none",
-          }}
-        >
-          <span
-            className="klide-flip-indicator klide-tab-bar-indicator"
-            style={{
-              ...flip.style,
-              height: 2,
-              width: barWidth,
-              background: "var(--accent)",
-              borderRadius: "2px 2px 0 0",
-            }}
-          />
-        </div>
-      )}
-
-      {/* No underline indicator in the flat variant — the active fill is the
-          only marker (two systems was what felt strange). */}
+      {/* One marker per variant: the active card (raised) or the active fill
+          (flat) — never an underline on top of either. */}
       {tabs.map((t, i) => {
         const isActive = i === activeIdx;
         const relative = displayPath(t.path, workspaceRoot);
@@ -110,10 +73,18 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
         const folder = relative.includes("/")
           ? relative.split("/").slice(0, -1).join("/")
           : "";
+        // Raised: a short hairline between two resting tabs; none beside the
+        // active card, whose own edges already separate it.
+        const separated = !flat && i > 0 && !isActive && i - 1 !== activeIdx;
         return (
+          <Fragment key={t.path}>
+          {separated && (
+            <span
+              aria-hidden="true"
+              style={{ width: 1, height: 16, marginBottom: 8, flexShrink: 0, background: "var(--border)" }}
+            />
+          )}
           <div
-            key={t.path}
-            ref={isActive ? activeItemRef : null}
             onClick={() => onSelect(i)}
             title={relative}
             data-active={isActive}
@@ -121,9 +92,9 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
             style={{
               display: "flex",
               alignItems: "center",
-              height: flat ? 24 : isActive ? 32 : 26,
-              marginBottom: flat ? 0 : isActive ? 0 : 4,
-              padding: flat ? (crowded ? "0 8px" : "0 10px") : crowded ? "0 10px" : "0 14px",
+              height: flat ? 24 : 32,
+              padding: flat ? (crowded ? "0 8px" : "0 10px") : crowded ? "0 10px 0 12px" : "0 10px 0 14px",
+              zIndex: isActive ? 1 : undefined,
               gap: 8,
               position: "relative",
               // Flat: the active tab carries a quiet neutral fill — the hover
@@ -139,7 +110,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
               borderRight: !flat && isActive
                 ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
                 : "1px solid transparent",
-              borderRadius: flat ? "var(--radius-sm)" : isActive ? "8px 8px 0 0" : "8px",
+              borderRadius: flat ? "var(--radius-sm)" : "8px 8px 0 0",
               color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
               fontSize: flat ? 12.5 : 13,
               fontWeight: isActive ? 500 : 400,
@@ -256,6 +227,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
               ×
             </button>
           </div>
+          </Fragment>
         );
       })}
     </div>
