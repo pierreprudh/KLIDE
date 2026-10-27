@@ -103,6 +103,12 @@ describe("pendingGatesFromEvents", () => {
     });
   });
 
+  it("drops a request left by a run killed with the app once a new one starts", () => {
+    const started = { type: "run_started", runId: RUN, cwd: null, mode: "goal", provider: "openrouter", model: "m", ts } as AgentEvent;
+    expect(pendingGatesFromEvents([asked("perm-1"), started]).permission).toBeNull();
+    expect(pendingGatesFromEvents([asked("perm-1"), started, asked("perm-2")]).permission?.id).toBe("perm-2");
+  });
+
   it("keeps only the newest request when the run asks twice", () => {
     const gates = pendingGatesFromEvents([asked("perm-1"), asked("perm-2")]);
     expect(gates.permission?.id).toBe("perm-2");

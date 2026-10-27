@@ -9,15 +9,28 @@ vi.mock("./toast", () => ({
   dismissToast: (id: number) => { dismissed.push(id); },
 }));
 vi.mock("./conversationNavigation", () => ({ canOpenConversation: () => true, openConversation: () => true }));
-vi.mock("./agent/client", () => ({ resolvePermission: async (input: unknown) => { answers.push(input); } }));
+const rust: { status: string | null; events: unknown[] } = { status: null, events: [] };
+vi.mock("./agent/client", () => ({
+  resolvePermission: async (input: unknown) => { answers.push(input); },
+  getAgentRunStatus: async () => rust.status,
+  readAgentRunEvents: async () => rust.events,
+}));
 vi.mock("./klideConvos", () => ({ getKlideConvos: () => [{ id: "convo-1", title: "Fix the login", provider: "anthropic" }] }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
+const live = new Set<string>();
+vi.mock("./runningConversations", () => ({
+  getRunningConversationIds: () => live,
+  subscribeRunningConversations: () => () => {},
+}));
 
-import { applyRunAttention, markNeedsYou, needsYouNow, resetRunAttention, showConversation } from "./runAttention";
+import { applyRunAttention, markNeedsYou, needsYouNow, resetRunAttention, showConversation, watchRunAttention } from "./runAttention";
 
 const ask = { runId: "convo-1", state: "asking" as const, kind: "permission" as const, requestId: "perm_1", summary: "Run npm test" };
 
-afterEach(() => { resetRunAttention(); toasts.length = 0; dismissed.length = 0; answers.length = 0; });
+afterEach(() => {
+  resetRunAttention(); toasts.length = 0; dismissed.length = 0; answers.length = 0;
+  live.clear(); rust.status = null; rust.events = [];
+});
 
 describe("runAttention", () => {
   it("an approval in a conversation you are not looking at toasts, answerable, and marks the rail", () => {
@@ -47,6 +60,26 @@ describe("runAttention", () => {
     expect(toasts[0].message).toBe("Fix the login asks — Which model?");
     expect(toasts[0].actions).toBeUndefined();
     expect(toasts[0].action?.label).toBe("Open");
+  });
+
+  it("a run already parked when the window opened still toasts and marks the rail", async () => {
+    live.add("convo-1");
+    rust.status = "waiting_for_permission";
+    rust.events = [{ type: "permission_requested", runId: "convo-1", request: { id: "perm_9", summary: "› sh test.sh" }, ts: 1 }];
+    const stop = watchRunAttention();
+    await vi.waitFor(() => expect(needsYouNow("convo-1")).toBe(true));
+    expect(toasts[0].message).toBe("Fix the login needs your approval — › sh test.sh");
+    stop();
+  });
+
+  it("a live run that is just working raises nothing", async () => {
+    live.add("convo-1");
+    rust.status = "running";
+    const stop = watchRunAttention();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(needsYouNow("convo-1")).toBe(false);
+    expect(toasts).toHaveLength(0);
+    stop();
   });
 
   it("a worker asking marks its parent until it stops asking", () => {
