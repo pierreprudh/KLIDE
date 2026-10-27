@@ -1161,7 +1161,7 @@ function GitHubSummaryCard({
           </svg>
         </SyncMark>
       </button>
-      <PRActionButton title={canCreate ? "Create pull request" : "Stage changes before creating a pull request"} onClick={onCreate} disabled={!canCreate}>New PR</PRActionButton>
+      <PRActionButton title={canCreate ? "Create a pull request (⌘⇧P)" : "Stage changes before creating a pull request"} onClick={onCreate} disabled={!canCreate}>New PR</PRActionButton>
     </div>
   );
 }
@@ -2007,22 +2007,6 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
               <g className="klide-git-arrow"><path d="M12 21V8" /><path d="M6 13l6-6 6 6" /></g><path d="M5 3h14" />
             </svg>
           </TopAction>
-          <button
-            onClick={() => void createPr()}
-            disabled={stagedFiles.length === 0}
-            title={stagedFiles.length === 0 ? "Stage changes before opening a PR" : "Open a pull request (⌘⇧P)"}
-            style={{
-              height: 30, marginLeft: 8, padding: "0 12px", borderRadius: "var(--radius-lg)", fontWeight: 600, fontSize: 12,
-              cursor: stagedFiles.length === 0 ? "not-allowed" : "pointer",
-              background: "transparent", color: stagedFiles.length === 0 ? "var(--fg-subtle)" : "var(--fg-strong)",
-              border: "1px solid var(--border)",
-              transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
-            }}
-            onMouseEnter={(e) => { if (stagedFiles.length > 0) e.currentTarget.style.background = "var(--bg-hover)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-          >
-            Open PR
-          </button>
         </div>
       </div>
 
