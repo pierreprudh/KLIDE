@@ -43,7 +43,7 @@ function permissionRequest(id: string, runId = CONVO): PermissionRequest {
     toolCallId: `call-${id}`,
     toolName: "run_command",
     input: { command: "git log", cwd: "/w", externalPaths: [], matchedAllowRule: null },
-    summary: "$ git log",
+    summary: "› git log",
     reason: "wants to run a shell command",
     options: [],
   } as unknown as PermissionRequest;
