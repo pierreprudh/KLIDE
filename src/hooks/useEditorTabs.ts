@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { type OnMount } from "@monaco-editor/react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { isImagePath, readWorkspaceTextFile, writeWorkspaceTextFile } from "../workspaceFs";
+import { normalizeProjectPath } from "../projectPaths";
 
 // One open file in the editor. `diskCode` is the last content loaded from /
 // saved to disk — the baseline for deciding whether a watch event is a real
@@ -20,6 +21,17 @@ export type Tab = {
 
 function filename(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+// Tabs survive a project switch, but Rust only reads inside the current
+// Workspace — a tab from another project can't be watched from here.
+function insideWorkspace(path: string, workspaceRoot: string): boolean {
+  const isAbsolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+  if (!isAbsolute) return true;
+  const file = normalizeProjectPath(path);
+  const root = normalizeProjectPath(workspaceRoot);
+  if (!file || !root) return false;
+  return file === root || file.startsWith(root.endsWith("/") ? root : `${root}/`);
 }
 
 /**
@@ -238,6 +250,9 @@ export function useEditorTabs(opts: {
     );
   }
 
+  // Paths already toasted as unavailable; cleared when a read succeeds again.
+  const reportedMissing = useRef(new Set<string>());
+
   // Poll every open file for external edits. A change reloads clean tabs in
   // place; for dirty tabs it raises a flag (resolved on the next save). The
   // diskCode baseline filters out our own writes and renames.
@@ -245,7 +260,13 @@ export function useEditorTabs(opts: {
     if (!workspaceRoot) return;
     // Image tabs hold a data URI, not text — skip them so the text watcher
     // never reads their bytes as a string.
-    const openPaths = Array.from(new Set(tabs.filter((t) => !t.dataUri).map((t) => t.path)));
+    const openPaths = Array.from(
+      new Set(
+        tabs
+          .filter((t) => !t.dataUri && insideWorkspace(t.path, workspaceRoot))
+          .map((t) => t.path)
+      )
+    );
     if (openPaths.length === 0) return;
 
     let cancelled = false;
@@ -255,6 +276,7 @@ export function useEditorTabs(opts: {
         readWorkspaceTextFile(workspaceRoot, path)
           .then((diskCode) => {
             if (cancelled) return;
+            reportedMissing.current.delete(path);
             setTabs((cur) => {
               let changed = false;
               const next = cur.map((tab) => {
@@ -286,6 +308,9 @@ export function useEditorTabs(opts: {
               // Tab may have been renamed or closed already (e.g. via the
               // explorer context menu) — don't raise a false alarm.
               if (!cur.some((tab) => tab.path === path)) return cur;
+              // Once per disappearance, not once per 2 s poll.
+              if (reportedMissing.current.has(path)) return cur;
+              reportedMissing.current.add(path);
               notify(`${filename(path)} is unavailable on disk`);
               return cur.map((tab) =>
                 tab.path === path ? { ...tab, externalChanged: true } : tab
