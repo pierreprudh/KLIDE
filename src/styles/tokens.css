@@ -6,6 +6,10 @@
      theme.ts, so chrome that must merge into the editor (the active tab)
      matches it exactly. */
   --editor-bg:    #FCFBF8;
+  /* The editor tab strip: one step off the editor's surface — darker on
+     light themes, lighter on dark — so the active tab (--editor-bg) reads
+     as cut out of it. Resolves per theme through --fg-strong/--editor-bg. */
+  --tab-strip-bg: color-mix(in srgb, var(--fg-strong) 5%, var(--editor-bg));
   /* Workbench panes on the page background (Git Review's cards): plain
      white on light themes so content sits on a clean sheet; dark themes keep
      their elevated surface. */
