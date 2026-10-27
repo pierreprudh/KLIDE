@@ -302,7 +302,7 @@ describe("a delegation row while the child works", () => {
     expect(html).not.toContain("subagent report");
   });
 
-  it("says it sent a worker once the worker started, and not before or when declined", () => {
+  it("says it is sending a worker from the first frame, and not when declined", () => {
     const row = (args: Record<string, unknown>, content: string, childRunId?: string) => renderToStaticMarkup(
       renderMessageBody(
         { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "claude-code", task: "Add a test.", ...args }, childRunId }] },
@@ -311,10 +311,10 @@ describe("a delegation row while the child works", () => {
       ),
     );
     expect(row({ background: true }, "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", "sub_run_c0"))
-      .toContain("I sent a worker: Claude Code is on it in the background, and I&#x27;ll tell you when it reports.");
-    expect(row({}, "Done.", "sub_run_c0")).toContain("I sent a worker: Claude Code is on it.");
-    expect(row({}, "Running spawn_subagent...")).not.toContain("I sent a worker");
-    expect(row({ background: true }, "The user declined to dispatch Claude Code.")).not.toContain("I sent a worker");
+      .toContain("I&#x27;m sending a worker: Claude Code will work on it in the background, and I&#x27;ll tell you when it reports.");
+    expect(row({}, "Done.", "sub_run_c0")).toContain("I&#x27;m sending a worker: Claude Code will work on it.");
+    expect(row({}, "Running spawn_subagent...")).toContain("I&#x27;m sending a worker");
+    expect(row({ background: true }, "The user declined to dispatch Claude Code.")).not.toContain("sending a worker");
   });
 
   it("draws a dispatch cancelled at its card as cancelled, not as a child still starting", () => {

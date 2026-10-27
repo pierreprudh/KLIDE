@@ -17,7 +17,7 @@ import { dismissToast, notify, type ToastAction } from "./toast";
 import { canOpenConversation, openConversation } from "./conversationNavigation";
 import { resolvePermission } from "./agent/client";
 import { errMessage } from "./errors";
-import { markNeedsYou } from "./runAttention";
+import { isOnScreen, markNeedsYou } from "./runAttention";
 
 export type WorkerState = "working" | "asking" | "finished" | "failed";
 
@@ -97,6 +97,9 @@ export function applyWorkerStatus(status: WorkerStatus): void {
   const provider = providerOf.get(runId);
   if (!live) providerOf.delete(runId);
   const requestId = status.requestId;
+  // The conversation on screen already shows the worker's card on its row:
+  // a toast would be a second copy of the same question.
+  if (status.state === "asking" && isOnScreen(status.parentId)) return;
   if (status.state === "asking" && requestId) {
     // Answered from here exactly as the row's card answers it: once, and a
     // refused answer says so (the card on the row is still there).

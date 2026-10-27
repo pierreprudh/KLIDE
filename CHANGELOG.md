@@ -3,7 +3,7 @@
 ## Unreleased
 
 - A conversation waiting on you says so from anywhere. When a Run asks for an approval or a question while you are in another conversation, a toast names it under its Provider's mark — Deny / Allow / Open for an approval, Open for a question — and closes once it is answered anywhere. In the rail, the row's name is swept by the Working row's shimmer (dim → accent) for its own Run or for a worker it dispatched; a running row keeps the loader. The conversation on screen shows its card as before, without a toast.
-- A dispatched worker is announced in the conversation: "I sent a worker: Claude Code is on it in the background, and I'll tell you when it reports." A parent that dispatched without a word used to leave only the row.
+- A dispatched worker is announced in the conversation as a sentence of the answer, from the first frame: "I'm sending a worker: Claude Code will work on it in the background, and I'll tell you when it reports." A parent that dispatched without a word used to leave only the row. A worker's approval raises no toast while its conversation is on screen; the card on the row is enough.
 - A conversation that finished while you were elsewhere gets an accent point in the rail's trailing slot until you open it; the running loader condenses into it.
 - Toasts with more than one answer put Deny / Allow / Open on their own centred row under the words, the ✕ sits on the card's middle, and a command line is set a step in.
 - A command reads `› npm test`, not `$ npm test`, on approval cards, toasts, tool rows and the inline command review. Older transcripts keep the `$` they recorded.
