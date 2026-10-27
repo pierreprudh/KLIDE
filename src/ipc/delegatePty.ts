@@ -121,11 +121,15 @@ export function delegateSessionId(convoId: string, provider: string): string {
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 export function spawnDelegatePty(sessionId: string, args: DelegateSpawnArgs): Promise<void> {
+  // A panel can pass its current conversation as the launch origin. The
+  // terminal opens that same Run; only a different Run can be its parent.
+  const parentRunId = args.parentRunId && delegateSessionId(args.parentRunId, args.provider) !== sessionId
+    ? args.parentRunId : null;
   return invoke("delegate_pty_spawn", {
     sessionId,
     provider: args.provider,
     workspaceRoot: args.workspaceRoot,
-    parentRunId: args.parentRunId ?? null,
+    parentRunId,
     resumeSessionId: args.resumeSessionId ?? null,
     model: args.model ?? null,
     effort: args.effort ?? null,

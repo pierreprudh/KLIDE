@@ -121,13 +121,15 @@ impl Delegate for OpenCode {
     }
 
     fn spawn_command(&self, task: Option<&str>, model: Option<&str>, resume: Option<&str>, effort: Option<&str>) -> String {
-        let task = task.map(str::trim).filter(|v| !v.is_empty());
-        let model = model.map(str::trim).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(super::CLI_DEFAULT_MODEL));
-        let resume = resume.map(str::trim).filter(|v| !v.is_empty());
-        let prefix = self.spawn_prefix(task.is_some(), resume.is_some());
-        let resume = resume.map(|v| self.resume_arg(v)).unwrap_or_default();
-        let model = model.map(|v| self.model_arg(&model_variant(v, effort))).unwrap_or_default();
-        match task { Some(task) => format!("{prefix}{resume}{model} {}", shell_quote(task)), None => format!("{prefix}{resume}{model}") }
+        pty_command(task, model, resume, effort, installed_v2())
+    }
+
+    fn spawn_env(&self, model: Option<&str>, effort: Option<&str>) -> Result<Vec<(String, String)>, String> {
+        let Some(model) = model.map(str::trim).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(super::CLI_DEFAULT_MODEL)) else { return Ok(vec![]); };
+        // Routed sources supply this configuration at the process host, where
+        // their provider endpoint and credentials are resolved.
+        if !installed_v2() || crate::harness_source::selection(model)?.is_some() { return Ok(vec![]); }
+        crate::model_source_bridge::opencode_model_env(&model_variant(model, effort))
     }
 
     /// OpenCode has no per-invocation MCP flag; `OPENCODE_CONFIG` names an
@@ -1124,8 +1126,111 @@ fn launch_prefix(has_task: bool, resuming: bool, v2: bool) -> String {
     format!("opencode{}{private}", if has_task && !resuming { " run" } else { "" })
 }
 
+fn pty_command(task: Option<&str>, model: Option<&str>, resume: Option<&str>, effort: Option<&str>, v2: bool) -> String {
+    let task = task.map(str::trim).filter(|v| !v.is_empty());
+    let model = model.map(str::trim).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(super::CLI_DEFAULT_MODEL));
+    let resume = resume.map(str::trim).filter(|v| !v.is_empty());
+    let interactive = task.is_none() || resume.is_some();
+    // V2's classic TUI has no --model flag. spawn_env carries the selection
+    // in per-process config, preserving the interface and persistent settings.
+    let prefix = launch_prefix(task.is_some(), resume.is_some(), v2);
+    let resume_arg = resume.map(|v| OpenCode.resume_arg(v)).unwrap_or_default();
+    let model_arg = if v2 && interactive { String::new() } else {
+        model.map(|v| OpenCode.model_arg(&model_variant(v, effort))).unwrap_or_default()
+    };
+    match task {
+        // In V2 a resumed interactive prompt is a flag, not a directory.
+        Some(task) if v2 && interactive => format!("{prefix}{resume_arg}{model_arg} --prompt {}", shell_quote(task)),
+        Some(task) => format!("{prefix}{resume_arg}{model_arg} {}", shell_quote(task)),
+        None => format!("{prefix}{resume_arg}{model_arg}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// Runs the Free-layout command in a real PTY against the smoke script's
+    /// isolated model. Focus's streaming path is exercised by chat_server.rs.
+    #[test]
+    #[ignore = "requires scripts/opencode-smoke.py and its local mock model"]
+    fn v2_mock_interactive_terminal_starts_and_resumes() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::{Read, Write};
+        use std::time::{Duration, Instant};
+        let binary = std::env::var("KLIDE_OPENCODE_TEST_BINARY").expect("test binary");
+        let root = std::env::var("KLIDE_OPENCODE_TEST_ROOT").expect("disposable test root");
+        let mut resume = None;
+        for turn in 0..2 {
+            let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
+            let launch = pty_command(if turn == 0 { None } else { Some("hello again") }, Some("mock/mock"), resume.as_deref(), Some("high"), true);
+            let mut command = CommandBuilder::new("/bin/sh");
+            command.args(["-c", &format!("{}{}", shell_quote(&binary), launch.strip_prefix("opencode").unwrap())]);
+            command.cwd(&root);
+            command.env("TERM", "xterm-256color");
+            for (key, value) in OpenCode.spawn_env(Some("mock/mock"), Some("high")).unwrap() {
+                command.env(key, value);
+            }
+            let mut child = pair.slave.spawn_command(command).unwrap();
+            drop(pair.slave);
+            let mut reader = pair.master.try_clone_reader().unwrap();
+            let mut writer = pair.master.take_writer().unwrap();
+            let (send, receive) = std::sync::mpsc::channel();
+            let reading = std::thread::spawn(move || {
+                let mut bytes = [0; 8192];
+                while let Ok(size) = reader.read(&mut bytes) {
+                    if size == 0 || send.send(String::from_utf8_lossy(&bytes[..size]).into_owned()).is_err() { break; }
+                }
+            });
+            let deadline = Instant::now() + Duration::from_secs(35);
+            let mut output = String::new();
+            let mut sent = turn != 0;
+            while Instant::now() < deadline {
+                if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(100)) { output.push_str(&chunk); }
+                if !sent && output.contains("Ask anything") && output.contains("Build") && output.contains("Mock") {
+                    // Wait for the agent and catalog, not just the early
+                    // placeholder: V2 rejects Enter until its input queue is
+                    // ready. Input goes through the same PTY
+                    // writer the Free layout's xterm forwards keystrokes to.
+                    writer.write_all(b"hello\r").unwrap();
+                    writer.flush().unwrap();
+                    sent = true;
+                }
+                if output.contains("Hello from V2.") || output.contains("Unrecognized flag") { break; }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(writer);
+            drop(pair.master);
+            drop(receive);
+            let _ = reading.join();
+            assert!(output.contains("Hello from V2."), "interactive turn {turn}: {output}");
+            assert!(!output.contains("oc mini"), "classic interface was replaced by mini");
+            let db = rusqlite::Connection::open_with_flags(format!("{root}/data/opencode/opencode.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            let session: String = db.query_row("SELECT id FROM session_v2 ORDER BY time_created DESC LIMIT 1", [], |row| row.get(0)).unwrap();
+            if let Some(previous) = &resume { assert_eq!(previous, &session); }
+            resume = Some(session);
+        }
+    }
+
+    #[test]
+    fn v2_interactive_launch_keeps_the_classic_interface() {
+        assert_eq!(pty_command(None, Some("opencode-go/minimax-m3"), None, Some("thinking"), true),
+            "opencode --standalone");
+        assert_eq!(pty_command(Some("continue working"), Some("mock/mock"), Some("ses_1"), None, true),
+            "opencode --standalone -s 'ses_1' --prompt 'continue working'");
+        assert_eq!(pty_command(Some("continue working"), None, Some("ses_1"), None, true),
+            "opencode --standalone -s 'ses_1' --prompt 'continue working'");
+        assert_eq!(pty_command(None, Some("default"), None, None, true), "opencode --standalone");
+        assert_eq!(pty_command(Some("do work"), Some("mock/mock"), None, None, true),
+            "opencode run --standalone -m 'mock/mock' 'do work'");
+    }
+
+    #[test]
+    fn v1_interactive_launch_retains_its_model_and_resume_arguments() {
+        assert_eq!(pty_command(None, Some("mock/mock"), None, None, false), "opencode -m 'mock/mock'");
+        assert_eq!(pty_command(Some("continue"), Some("mock/mock"), Some("ses_1"), None, false),
+            "opencode -s 'ses_1' -m 'mock/mock' 'continue'");
+    }
+
     #[test]
     fn selected_effort_reaches_the_opencode_model_reference() {
         use super::*;

@@ -222,6 +222,12 @@ pub trait Delegate: Sync {
         self.binary().to_string()
     }
 
+    /// Per-launch configuration for a CLI whose interactive entry point
+    /// cannot express the selection with command-line flags.
+    fn spawn_env(&self, _model: Option<&str>, _effort: Option<&str>) -> Result<Vec<(String, String)>, String> {
+        Ok(Vec::new())
+    }
+
     /// The flag fragment selecting a model, with a leading space — each CLI
     /// spells it differently (`--model` vs `-m`). `model` arrives trimmed
     /// and non-empty.
@@ -1021,7 +1027,10 @@ mod tests {
         // In resume mode the TUI must come up interactive — `run` would make
         // it one-shot. The task still lands as the first prompt.
         let cmd = OpenCode.spawn_command(Some("continue"), None, Some("oss-42"), None);
-        assert_eq!(cmd.replacen(" --standalone", "", 1), "opencode -s 'oss-42' 'continue'");
+        assert!([
+            "opencode -s 'oss-42' 'continue'",
+            "opencode -s 'oss-42' --prompt 'continue'",
+        ].contains(&cmd.replacen(" --standalone", "", 1).as_str()), "{cmd}");
     }
 
     #[test]
