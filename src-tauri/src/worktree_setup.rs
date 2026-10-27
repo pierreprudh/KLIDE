@@ -52,6 +52,10 @@ pub struct WorktreeSetup {
     pub port_base: Option<u16>,
     /// Kill a runaway setup script after this long.
     pub script_timeout_secs: u64,
+    /// The project's own check (`npm test`, `sh test.sh`), run in a worker's
+    /// worktree once it reports. Overrides Settings › Harness › test after
+    /// edit, which is one value for every project.
+    pub check_command: Option<String>,
 }
 
 impl Default for WorktreeSetup {
@@ -70,6 +74,7 @@ impl Default for WorktreeSetup {
             setup_script: None,
             port_base: None,
             script_timeout_secs: 600,
+            check_command: None,
         }
     }
 }
@@ -100,19 +105,30 @@ pub fn load(workspace_root: &str) -> WorktreeSetup {
 /// approval doors — the native dialog and a worker's dispatch card — read it
 /// here, so they show and run the same thing.
 pub fn reviewable_script(workspace_root: &str) -> Result<Option<String>, String> {
-    let script = load(workspace_root).setup_script.filter(|s| !s.trim().is_empty());
-    if script.as_ref().is_some_and(|s| s.len() > 4096) {
-        return Err("Worktree setupScript is too large to review safely (max 4096 bytes)".into());
+    reviewable(load(workspace_root).setup_script, "setupScript")
+}
+
+/// The recipe's check command, under the same review rules as the setup
+/// script: it is a command from the repository's own file, so the dispatch
+/// card shows it before anything runs it.
+pub fn reviewable_check(workspace_root: &str) -> Result<Option<String>, String> {
+    reviewable(load(workspace_root).check_command, "checkCommand")
+}
+
+fn reviewable(command: Option<String>, field: &str) -> Result<Option<String>, String> {
+    let command = command.filter(|s| !s.trim().is_empty());
+    if command.as_ref().is_some_and(|s| s.len() > 4096) {
+        return Err(format!("Worktree {field} is too large to review safely (max 4096 bytes)"));
     }
-    if script.as_ref().is_some_and(|script| {
-        script.chars().any(|character| {
+    if command.as_ref().is_some_and(|command| {
+        command.chars().any(|character| {
             (character.is_control() && !matches!(character, '\n' | '\t'))
                 || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
         })
     }) {
-        return Err("Worktree setupScript contains hidden control or bidirectional text".into());
+        return Err(format!("Worktree {field} contains hidden control or bidirectional text"));
     }
-    Ok(script)
+    Ok(command)
 }
 
 /// One top-level name, with no path tricks — the shared guard for everything
@@ -326,6 +342,22 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         std::fs::create_dir_all(&wt).unwrap();
         (base, src, wt)
+    }
+
+    #[test]
+    fn the_project_names_its_own_check_under_the_setup_scripts_review_rules() {
+        let (_base, src, _wt) = temp_pair("check");
+        let root = src.to_str().unwrap();
+        assert_eq!(reviewable_check(root).unwrap(), None);
+        let klide = src.join(".klide");
+        std::fs::create_dir_all(&klide).unwrap();
+        std::fs::write(klide.join("worktree.json"), r#"{ "setupScript": "npm ci", "checkCommand": "sh test.sh" }"#).unwrap();
+        assert_eq!(reviewable_check(root).unwrap().as_deref(), Some("sh test.sh"));
+        assert_eq!(reviewable_script(root).unwrap().as_deref(), Some("npm ci"));
+        std::fs::write(klide.join("worktree.json"), r#"{ "checkCommand": "   " }"#).unwrap();
+        assert_eq!(reviewable_check(root).unwrap(), None, "blank names no check");
+        std::fs::write(klide.join("worktree.json"), "{ \"checkCommand\": \"npm test\\u202e\" }").unwrap();
+        assert!(reviewable_check(root).unwrap_err().contains("checkCommand"));
     }
 
     #[test]

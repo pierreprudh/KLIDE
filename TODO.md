@@ -44,10 +44,9 @@ baseline; unchecked items below are verification or specific remaining gaps.
   condenses into (#315–#321); "I'm sending a worker: …" before the dispatch
   row (#322, #324); no worker approval toast while its conversation is on
   screen (#324).
-- [ ] Small Worker gaps seen in the pass: the check command is one global
-  Harness setting (Settings › Harness › test after edit), so the validation
-  line never appeared until it was set; it belongs to the project, beside
-  `setupScript` in `.klide/worktree.json`. A shell command Kit itself runs
+- [x] A project names its own check (2026-10-28): `checkCommand` in
+  `.klide/worktree.json`, shown on the dispatch card, Settings as fallback.
+- [ ] Small Worker gaps seen in the pass: a shell command Kit itself runs
   can reach outside the workspace (it edited KIDE's README from the sandbox
   conversation) and its card does not say so; give it the same "Outside its
   working folder" note. Background subscription chats in `klide ptyd`
