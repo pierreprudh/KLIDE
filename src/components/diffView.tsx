@@ -16,8 +16,9 @@
 // agent. A selected line's edge marker turns accent (selection, not state).
 
 import { memo, useState, type ReactNode } from "react";
-import { ChevronIcon, CodeIcon, OpenInEditorIcon } from "../icons";
+import { ChevronIcon, OpenInEditorIcon } from "../icons";
 import { gitStatusMark } from "../gitStatusMark";
+import { FileTypeIcon } from "./fileMarks";
 import {
   commentFromBlocks,
   fileOfBlock,
@@ -236,6 +237,45 @@ const DiffCodeRow = memo(function DiffCodeRow({
   );
 });
 
+/** The classic five-block diffstat: each side gets its share of five
+ *  blocks (rounded down, but never zero when it changed anything), the rest
+ *  stay neutral. */
+export function diffStatBlocks(additions: number, deletions: number): ("add" | "del" | "none")[] {
+  const total = additions + deletions;
+  if (total === 0) return Array(5).fill("none");
+  let add = additions > 0 ? Math.max(1, Math.floor((additions / total) * 5)) : 0;
+  let del = deletions > 0 ? Math.max(1, Math.floor((deletions / total) * 5)) : 0;
+  while (add + del > 5) {
+    if (add >= del) add--;
+    else del--;
+  }
+  return [...Array(add).fill("add"), ...Array(del).fill("del"), ...Array(5 - add - del).fill("none")];
+}
+
+/** +N −N and the five blocks, on one line. */
+export function DiffStat({ additions, deletions }: { additions: number; deletions: number }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11.5, flexShrink: 0 }}>
+      <span>
+        <span style={{ color: "var(--diff-add)" }}>+{additions}</span>{" "}
+        <span style={{ color: "var(--diff-remove)" }}>−{deletions}</span>
+      </span>
+      <span aria-hidden style={{ display: "inline-flex", gap: 2 }}>
+        {diffStatBlocks(additions, deletions).map((tone, i) => (
+          <span
+            key={i}
+            style={{
+              width: 8, height: 8, borderRadius: 2,
+              background: tone === "add" ? "var(--diff-add)" : tone === "del" ? "var(--diff-remove)" : "var(--bg-hover)",
+              boxShadow: tone === "none" ? "inset 0 0 0 1px var(--border)" : undefined,
+            }}
+          />
+        ))}
+      </span>
+    </span>
+  );
+}
+
 export type FileCount = { status: string; additions: number; deletions: number };
 
 type DiffViewProps = {
@@ -434,7 +474,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
                 title={collapsed ? "Expand file" : "Collapse file"}
                 style={{ height: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", borderBottom: collapsed ? "none" : "1px solid var(--border)", cursor: "pointer", userSelect: "none" }}
               >
-                <CodeIcon size={13} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
+                <span style={{ display: "inline-flex", flexShrink: 0 }}><FileTypeIcon name={card.path.split("/").pop() ?? card.path} size={14} /></span>
                 <span title={mark?.title} style={{ color: mark?.color ?? "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {card.path}
                 </span>
@@ -463,7 +503,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
               </div>
             )}
             {card.rows.length > 0 && (
-              <div style={{ overflowX: "auto", padding: "4px 0" }}>
+              <div className="klide-scroll-slim" style={{ overflowX: "auto", padding: "4px 0" }}>
                 <div style={{ width: "max-content", minWidth: "100%" }}>{card.rows}</div>
               </div>
             )}

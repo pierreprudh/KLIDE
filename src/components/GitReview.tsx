@@ -23,7 +23,7 @@ import {
   DETAIL_PCT_KEY,
   GitHistoryGraph,
 } from "./GitHistoryGraph";
-import { parseDiffBlocks, DiffView, type DiffBlock } from "./diffView";
+import { parseDiffBlocks, DiffView, DiffStat, type DiffBlock } from "./diffView";
 import {
   formatDiffComment,
   sendTextToDelegatePty,
@@ -245,34 +245,19 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
     [workspaceRoot]
   );
 
-  // The recap island over the file islands: how many files, the totals and
-  // their share as one thin bar, and the way back to history.
-  const changed = totals.add + totals.del;
+  // The recap island over the file islands — one line: how many files, the
+  // totals with the five-block diffstat, and the way back to history.
   const recap = (
-    <div style={{ ...PANE_CARD, flexShrink: 0, padding: "12px 8px 12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, fontSize: 13 }}>
-          <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
-            {files.length} file{files.length === 1 ? "" : "s"} {staged ? "staged" : "changed"}
-          </span>
-          {diffs && (
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
-              <span style={{ color: "var(--diff-add)" }}>+{totals.add}</span>{" "}
-              <span style={{ color: "var(--diff-remove)" }}>−{totals.del}</span>
-            </span>
-          )}
-        </div>
-        {diffs && changed > 0 && (
-          <div aria-hidden style={{ height: 4, borderRadius: 2, overflow: "hidden", display: "flex", background: "var(--bg-hover)" }}>
-            <span style={{ width: `${(totals.add / changed) * 100}%`, background: "var(--diff-add)" }} />
-            <span style={{ width: `${(totals.del / changed) * 100}%`, background: "var(--diff-remove)" }} />
-          </div>
-        )}
-      </div>
+    <div style={{ ...PANE_CARD, flexShrink: 0, height: 44, padding: "0 8px 0 16px", display: "flex", alignItems: "center", gap: 12 }}>
+      <span style={{ color: "var(--fg-strong)", fontWeight: 600, fontSize: 13 }}>
+        {files.length} file{files.length === 1 ? "" : "s"} {staged ? "staged" : "changed"}
+      </span>
+      <span style={{ flex: 1 }} />
+      {diffs && <DiffStat additions={totals.add} deletions={totals.del} />}
       <button
         onClick={onClose}
         title="Close diff — back to history"
-        style={{ ...iconButtonStyle, width: 24, height: 24, borderRadius: "var(--radius-md)", alignSelf: "flex-start" }}
+        style={{ ...iconButtonStyle, width: 24, height: 24, borderRadius: "var(--radius-md)" }}
       >
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
@@ -301,7 +286,7 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
   return (
     <>
       {recap}
-      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative" }}>
+      <div ref={scrollRef} className="klide-scroll-slim" style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative" }}>
         <DiffView
           key={diffKey}
           blocks={blocks}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDiffBlocks } from "./diffView";
+import { diffStatBlocks, parseDiffBlocks } from "./diffView";
 
 const SAMPLE = [
   "diff --git a/src/foo.ts b/src/foo.ts",
@@ -66,5 +66,15 @@ describe("parseDiffBlocks", () => {
     >[];
     expect(lines[0]).toMatchObject({ oldNo: 5, newNo: 5 });
     expect(lines[1]).toMatchObject({ oldNo: 40, newNo: 41 });
+  });
+});
+
+describe("diffStatBlocks", () => {
+  it("splits five blocks by share, never hiding a side that changed", () => {
+    expect(diffStatBlocks(482, 37)).toEqual(["add", "add", "add", "add", "del"]);
+    expect(diffStatBlocks(4, 1)).toEqual(["add", "add", "add", "add", "del"]);
+    expect(diffStatBlocks(1, 1)).toEqual(["add", "add", "del", "del", "none"]);
+    expect(diffStatBlocks(3, 0)).toEqual(["add", "add", "add", "add", "add"]);
+    expect(diffStatBlocks(0, 0)).toEqual(["none", "none", "none", "none", "none"]);
   });
 });
