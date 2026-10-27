@@ -248,14 +248,16 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
   if (branch) facts.push(["Branch", branch]);
   if (childRunId) facts.push(["Run", childRunId]);
   if (background) facts.push(["Dispatch", "background"]);
-  // A worker that actually started is announced in the conversation's own
-  // voice, so a parent that dispatched without a word still says what it did.
-  const sentLine = worker && started && !declined && !setupFailed
-    ? `I sent a worker: ${providerName(worker)} is on it${background ? " in the background, and I'll tell you when it reports" : ""}.`
+  // A worker dispatch is announced in the conversation's own voice, as a
+  // sentence of the answer, so a parent that dispatched without a word still
+  // says what it did. From the first frame, so the row never shifts under it.
+  const sentLine = worker && !declined && !setupFailed
+    ? `I'm sending a worker: ${providerName(worker)} will work on it${background ? " in the background, and I'll tell you when it reports" : ""}.`
     : null;
   return (
+    <>
+    {sentLine && <div style={{ marginTop: 8 }}>{renderMarkdown(sentLine)}</div>}
     <div data-child-run={childRunId} style={{ margin: "8px 0", scrollMarginTop: 72, minWidth: 0, padding: "10px 12px" }}>
-      {sentLine && <div style={{ marginBottom: 10, color: "var(--fg)" }}>{sentLine}</div>}
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         {worker && <ProviderLogo id={worker} size={14} />}
         <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)" }}>{worker ? providerName(worker) : `@${subagent}`}</span>
@@ -319,6 +321,7 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
         )}
       </div>
     </div>
+    </>
   );
 }
 

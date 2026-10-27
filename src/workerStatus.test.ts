@@ -12,6 +12,7 @@ vi.mock("./conversationNavigation", () => ({ canOpenConversation: () => true, op
 vi.mock("./agent/client", () => ({ resolvePermission: async (input: unknown) => { answers.push(input); } }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 
+import { showConversation } from "./runAttention";
 import { applyWorkerStatus, hasLiveWorker, resetWorkerStatus, workerTransition, type WorkerStatus } from "./workerStatus";
 
 const status = (state: WorkerStatus["state"], extra: Partial<WorkerStatus> = {}): WorkerStatus => ({
@@ -59,5 +60,15 @@ describe("applyWorkerStatus", () => {
     // The worker moves on (answered here or on the row): the question goes.
     applyWorkerStatus(status("working"));
     expect(dismissed).toEqual([ask.id]);
+  });
+
+  it("raises no approval toast while its conversation is on screen: the row shows the card", () => {
+    const release = showConversation("convo-1");
+    applyWorkerStatus(status("working", { provider: "claude-code" }));
+    applyWorkerStatus(status("asking", { detail: "Edit test.sh", requestId: "perm_1" }));
+    expect(toasts).toHaveLength(0);
+    applyWorkerStatus(status("finished"));
+    expect(toasts.map((t) => t.message)).toEqual(["Claude Code (implementer) finished"]);
+    release();
   });
 });
