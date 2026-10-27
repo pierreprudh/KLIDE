@@ -33,6 +33,7 @@ const commits = [
   ["b2c3d4e", "fix(toast): more room between the answers", []],
   ["c3d4e5f", "polish(diff): each file a hairline card with edge markers", []],
   ["d4e5f6a", "feat(review): Diff Comment → Agent", ["tag: v0.6.11"]],
+  ...Array.from({ length: params.has("long") ? 60 : 0 }, (_, i) => [`e${String(i).padStart(6, "0")}`, `chore: filler commit ${i}`, []]),
 ].map(([h, subject, refs], i, all) => ({
   hash: (h as string).repeat(6).slice(0, 40), shortHash: h as string, subject: subject as string, author: "pierreprudh",
   authorEmail: "pierreprudh@users.noreply.github.com", timestamp: now - i * 5400, refs: refs as string[],
@@ -82,7 +83,8 @@ diff --git a/src/session.ts b/src/session.ts
       if (path === "CONTEXT.md") return { path, diff: DIFF, additions: 2, deletions: 0 };
       return {
         path,
-        diff: `diff --git a/${path} b/${path}\n@@ -1,3 +1,4 @@\n export const a = 1;\n-export const b = 2;\n+export const b = 3;\n+export const c = b * 2;\n export default a;`,
+        diff: `diff --git a/${path} b/${path}\n@@ -1,3 +1,4 @@\n export const a = 1;\n-export const b = 2;\n+export const b = 3;\n+export const c = b * 2;\n export default a;` +
+          (params.has("long") ? Array.from({ length: 80 }, (_, i) => `\n+export const x${i} = ${i};`).join("") : ""),
         additions: 2,
         deletions: 1,
       };
