@@ -302,6 +302,21 @@ describe("a delegation row while the child works", () => {
     expect(html).not.toContain("subagent report");
   });
 
+  it("says it sent a worker once the worker started, and not before or when declined", () => {
+    const row = (args: Record<string, unknown>, content: string, childRunId?: string) => renderToStaticMarkup(
+      renderMessageBody(
+        { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "claude-code", task: "Add a test.", ...args }, childRunId }] },
+        false,
+        { results: new Map([["c0", { msg: { role: "tool", content, toolName: "spawn_subagent" }, active: false }]]) },
+      ),
+    );
+    expect(row({ background: true }, "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", "sub_run_c0"))
+      .toContain("I sent a worker: Claude Code is on it in the background, and I&#x27;ll tell you when it reports.");
+    expect(row({}, "Done.", "sub_run_c0")).toContain("I sent a worker: Claude Code is on it.");
+    expect(row({}, "Running spawn_subagent...")).not.toContain("I sent a worker");
+    expect(row({ background: true }, "The user declined to dispatch Claude Code.")).not.toContain("I sent a worker");
+  });
+
   it("draws a dispatch cancelled at its card as cancelled, not as a child still starting", () => {
     // Rust answers a rejected dispatch gate with this sentence and emits no
     // `subagent_requested`, so the call has no child Run id — and the model's
