@@ -603,7 +603,9 @@ export function CommitDetailPane({
           ? "none"
           : "height var(--motion-slow) var(--ease-soft), opacity var(--motion-med) var(--ease-out)",
         flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0,
-        borderTop: "1px solid var(--border)", position: "relative", background: "var(--bg)", overflow: "hidden",
+        // A card like the panes above it, under the same 10px gutter.
+        margin: entered ? "0 10px 10px" : "0 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-xl)",
+        position: "relative", background: "var(--bg-elevated)", overflow: "hidden",
       }}
     >
       {!collapsed && (
