@@ -6036,12 +6036,30 @@ button:focus-visible .menu-leadout {
     opacity var(--motion-slow) var(--ease-soft),
     transform var(--motion-slow) var(--ease-soft);
 }
-/* A conversation waiting on you (an approval, a question) says so in the
-   same slot, in the accent and the UI face — words, not a badge. */
-.klide-focus-convo-needs-you {
-  color: var(--accent);
-  font-family: var(--font-ui);
-  font-size: 11px;
+/* A conversation waiting on you (an approval, a question): its name is swept
+   by the Working row's shimmer — the same gradient, painted through the text —
+   instead of a word in the trailing slot. Reduced motion leaves the name in
+   the strong ink. */
+.klide-focus-convo-title[data-waiting="true"] {
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-image: linear-gradient(90deg, var(--fg-subtle) 35%, var(--fg-strong) 50%, var(--fg-subtle) 65%);
+  background-size: 200% 100%;
+  animation: ai-shimmer-text 1.4s linear infinite;
+}
+.klide-focus-convo-title[data-waiting="true"] .klide-focus-convo-title-in {
+  color: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-focus-convo-title[data-waiting="true"] {
+    animation: none;
+    background-image: none;
+    color: var(--fg-strong);
+  }
+  .klide-focus-convo-title[data-waiting="true"] .klide-focus-convo-title-in {
+    color: inherit;
+  }
 }
 
 /* The row's ⋯ lives in the trailing slot too, over the timestamp: the row
