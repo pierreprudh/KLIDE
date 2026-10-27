@@ -14,7 +14,10 @@ import { useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { dismissToast, notify, type ToastAction } from "./toast";
 import { canOpenConversation, openConversation } from "./conversationNavigation";
-import { resolvePermission } from "./agent/client";
+import { getAgentRunStatus, readAgentRunEvents, resolvePermission } from "./agent/client";
+import { pendingGatesFromEvents } from "./agent/pendingGates";
+import type { AgentEvent } from "./agent/types";
+import { getRunningConversationIds, subscribeRunningConversations } from "./runningConversations";
 import { getKlideConvos } from "./klideConvos";
 import { errMessage } from "./errors";
 
@@ -124,6 +127,28 @@ export function applyRunAttention(attention: RunAttention): void {
   ));
 }
 
+/** What a transcript says its run is asking right now, if anything. Diffs are
+ *  left out on purpose: Rust's `run:attention` doesn't carry them either. */
+export function attentionFromEvents(runId: string, events: readonly AgentEvent[]): RunAttention | null {
+  const { permission, question } = pendingGatesFromEvents(events);
+  if (permission) return { runId, state: "asking", kind: "permission", requestId: permission.id, summary: permission.summary };
+  if (question) return { runId, state: "asking", kind: "question", requestId: question.requestId, summary: question.question };
+  return null;
+}
+
+/** A run that was already asking before this webview loaded (the window was
+ *  reopened, the page reloaded) sent its `run:attention` to nobody. Ask Rust
+ *  whether it is parked, and if so read what on from its transcript. */
+async function recoverRunAttention(runId: string): Promise<void> {
+  const parked = async () => (await getAgentRunStatus(runId).catch(() => null)) === "waiting_for_permission";
+  if (!(await parked())) return;
+  const events = await readAgentRunEvents(runId).catch(() => null);
+  const attention = events && attentionFromEvents(runId, events);
+  // Answered while we read: the live `clear` already went by, so check again
+  // rather than raise a card nobody is waiting on.
+  if (attention && (await parked())) applyRunAttention(attention);
+}
+
 /** Start the app-wide watcher. One, at the App root (ToastHost). */
 export function watchRunAttention(): () => void {
   let unlisten: (() => void) | null = null;
@@ -132,9 +157,24 @@ export function watchRunAttention(): () => void {
     if (stopped) fn();
     else unlisten = fn;
   });
+  // Each run confirmed live is checked once for a request it made before we
+  // were listening; after that the live events carry it.
+  const checked = new Set<string>();
+  const sweep = () => {
+    const live = getRunningConversationIds();
+    for (const id of checked) if (!live.has(id)) checked.delete(id);
+    for (const id of live) {
+      if (checked.has(id)) continue;
+      checked.add(id);
+      void recoverRunAttention(id);
+    }
+  };
+  const stopSweep = subscribeRunningConversations(sweep);
+  sweep();
   return () => {
     stopped = true;
     unlisten?.();
+    stopSweep();
   };
 }
 

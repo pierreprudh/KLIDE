@@ -38,8 +38,8 @@ export const NO_PENDING_GATES: PendingGates = {
  * Resolutions are matched by id rather than "the last one wins": the harness
  * can resolve a request the panel has already moved past (a subagent's, or one
  * abandoned by a retry), and clearing on any resolution would drop the card the
- * run is actually waiting on. A terminal event ends everything — a finished run
- * is waiting on nothing, whatever its last gate said.
+ * run is actually waiting on. A terminal event or a new `run_started` ends
+ * everything — a finished run is waiting on nothing, whatever its last gate said.
  */
 export function pendingGatesFromEvents(events: readonly AgentEvent[]): PendingGates {
   let permission: PermissionRequest | null = null;
@@ -71,6 +71,9 @@ export function pendingGatesFromEvents(events: readonly AgentEvent[]): PendingGa
       case "user_question_resolved":
         if (question?.requestId === event.requestId) question = null;
         break;
+      // A new attempt starts clean too: a request left by a run killed with the
+      // app has nothing listening for its answer.
+      case "run_started":
       case "run_result":
       case "run_error":
         permission = null;
