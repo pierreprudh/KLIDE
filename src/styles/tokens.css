@@ -161,6 +161,7 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
+  --radius-xl: 12px; /* Design.md rounded.card — standard cards, workbench panes */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-soft: cubic-bezier(0.32, 0.72, 0, 1);
   /* Sampled spring — lands at 1, overshoots gently to ~1.04, settles. */

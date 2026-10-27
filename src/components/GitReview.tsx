@@ -114,6 +114,15 @@ const LEFT_MIN = 220;
 const RIGHT_MIN = 260;
 const MAX_PANE = 720;
 const PANE_TRANSITION = "width var(--motion-med) var(--ease-soft)";
+/** Each pane is a card on the page background — one hairline, the card
+ *  radius, no shadow — with a gutter between them that is also the resize
+ *  handle. */
+const PANE_CARD: React.CSSProperties = {
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-xl)",
+  background: "var(--bg-elevated)",
+  overflow: "hidden",
+};
 const DIFF_RENDER_LIMIT = 1600;
 
 
@@ -135,9 +144,12 @@ function StatusLetter({ status }: { status: string }) {
 type DiffViewerProps = {
   workspaceRoot: string | null;
   open: OpenFile | null;
+  /** The open file's git status, for the header's status letter. */
+  status: string;
+  onClose: () => void;
 };
 
-const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerProps) {
+const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClose }: DiffViewerProps) {
   const [diff, setDiff] = useState<{ path: string; diff: string; additions: number; deletions: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -225,15 +237,49 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
       </div>
     );
   }
+  // The pane is the file's card: its header names the file, counts the
+  // change and says which side of the index it is, over the bare rows.
+  const header = (
+    <div
+      style={{
+        height: 40, flexShrink: 0, padding: "0 8px 0 14px", display: "flex", alignItems: "center", gap: 8,
+        borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--fg-subtle)",
+      }}
+    >
+      <StatusLetter status={status} />
+      <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-strong)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.path}</span>
+      {diff && diff.path === open.path && (
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, flexShrink: 0 }}>
+          <span style={{ color: "var(--diff-add)" }}>+{diff.additions}</span>{" "}
+          <span style={{ color: "var(--diff-remove)" }}>−{diff.deletions}</span>
+        </span>
+      )}
+      <span style={{ color: open.staged ? "var(--accent)" : "var(--fg-dim)", flexShrink: 0 }}>{open.staged ? "staged" : "working"}</span>
+      <button
+        onClick={onClose}
+        title="Close diff — back to history"
+        style={{ ...iconButtonStyle, width: 24, height: 24, borderRadius: "var(--radius-md)" }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+    </div>
+  );
+  const body = (content: React.ReactNode) => (
+    <>
+      {header}
+      {content}
+    </>
+  );
+
   if (loading) {
-    return (
+    return body(
       <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13 }}>
         Loading diff…
       </div>
     );
   }
   if (error) {
-    return (
+    return body(
       <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center", padding: 24 }}>
         <div>
           <div style={{ color: "var(--fg)", marginBottom: 4, fontWeight: 600 }}>Diff unavailable</div>
@@ -242,16 +288,16 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
       </div>
     );
   }
-  if (!diff) return null;
+  if (!diff) return body(null);
   if (blocks.length === 0) {
-    return (
+    return body(
       <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13 }}>
         No diff available.
       </div>
     );
   }
-  return (
-    <div style={{ flex: 1, overflow: "auto", background: "var(--bg)", padding: "8px 0" }}>
+  return body(
+    <div style={{ flex: 1, overflow: "auto", padding: "6px 0" }}>
       <DiffView
         key={diffKey}
         blocks={blocks}
@@ -291,6 +337,7 @@ type PaneDividerProps = {
 
 function PaneDivider({ width, setWidth, side, min, max }: PaneDividerProps) {
   const [dragging, setDragging] = useState(false);
+  const [hover, setHover] = useState(false);
 
   useEffect(() => {
     if (!dragging) return;
@@ -316,25 +363,20 @@ function PaneDivider({ width, setWidth, side, min, max }: PaneDividerProps) {
   return (
     <div
       onMouseDown={() => setDragging(true)}
-      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent)"; }}
-      onMouseLeave={(e) => { if (!dragging) e.currentTarget.style.background = "var(--border)"; }}
-      style={{
-        width: 1,
-        background: dragging ? "var(--accent)" : "var(--border)",
-        cursor: "col-resize",
-        flexShrink: 0,
-        position: "relative",
-        transition: "background var(--motion-fast) var(--ease-out)",
-      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      // The gutter between two pane cards is the handle; a short rounded
+      // grip fades in on hover and turns accent while dragging.
+      style={{ width: 8, flexShrink: 0, cursor: "col-resize", display: "grid", placeItems: "center" }}
       title="Drag to resize"
     >
-      <div
+      <span
+        aria-hidden
         style={{
-          position: "absolute",
-          top: 0,
-          bottom: 0,
-          left: -4,
-          right: -4,
+          width: 2, height: 32, borderRadius: 1,
+          background: dragging ? "var(--accent)" : "var(--border-strong)",
+          opacity: dragging || hover ? 1 : 0,
+          transition: "opacity var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
         }}
       />
     </div>
@@ -367,7 +409,7 @@ function FileRow({ file, active, onOpen, onStage, onUnstage, onDiscard, loading 
       onMouseLeave={() => setHovered(false)}
       // Rows sit one step in from their section header (10px) so the list
       // reads as header → children, not a flat column.
-      style={{ gridTemplateColumns: "1fr auto", gap: 8, padding: "5px 10px 5px 18px", fontSize: 13 }}
+      style={{ gridTemplateColumns: "1fr auto", gap: 8, margin: "1px 6px", padding: "5px 8px 5px 14px", borderRadius: "var(--radius-md)", fontSize: 13 }}
     >
       {/* No status letter: the name itself wears the status colour (warning
           for modified, success for new, danger for deleted). The word stays
@@ -431,7 +473,7 @@ function SectionHeader({ title, count, spaced, onAction, actionLabel, actionIcon
   const [hover, setHover] = useState(false);
   return (
     <div style={{
-      height: 28, marginTop: spaced ? 14 : 0, padding: "0 10px", display: "flex", alignItems: "center", gap: 6,
+      height: 32, marginTop: spaced ? 10 : 4, padding: "0 10px 0 14px", display: "flex", alignItems: "center", gap: 6,
       color: "var(--fg-subtle)", fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
     }}>
       <span style={{ color: "var(--fg)" }}>{title}</span>
@@ -1871,8 +1913,8 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
           no fill, no glass. It leads with the branch (the rail already names
           the project and the view); the fetch time sits dim beside it. */}
       <div style={{
-        minHeight: 60, padding: "0 20px", display: "flex", alignItems: "center", gap: 16,
-        borderBottom: "1px solid var(--border)", position: "relative", zIndex: 2,
+        minHeight: 56, padding: "0 20px", display: "flex", alignItems: "center", gap: 16,
+        position: "relative", zIndex: 2,
       }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0, flexShrink: 0 }}>
           <div style={{ position: "relative", display: "inline-flex", alignItems: "baseline", gap: 10 }}>
@@ -1991,9 +2033,9 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
           pane below squeezes this row, the side panes' fixed-height content
           (GitHub summary card, empty states) must clip at the row edge
           instead of painting over the detail pane. */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", padding: "0 10px 10px" }}>
         {/* Left: files */}
-        <div style={{ width: leftWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid var(--border)", position: "relative" }}>
+        <div style={{ ...PANE_CARD, width: leftWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
           {/* Staged only exists once something is staged. An empty section
               header is a label for nothing, and its "Unstage all" action has
               nothing to act on — so the clean tree shows neither. */}
@@ -2054,7 +2096,7 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
               working changes to stash; a clean tree with no stash shows nothing. */}
           {((stashes && stashes.length > 0) || changedFiles.length > 0) && (
             <div style={{
-              height: 30, padding: "0 10px", display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+              height: 34, padding: "0 10px 0 14px", display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
               borderTop: "1px solid var(--border)",
               fontSize: 11, color: "var(--fg-subtle)",
             }}>
@@ -2074,30 +2116,14 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
         <PaneDivider width={leftWidth} setWidth={setLeftWidth} side="left" min={LEFT_MIN} max={MAX_PANE} />
 
         {/* Center: diff for the open file, commit graph otherwise */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+        <div style={{ ...PANE_CARD, flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
           {open ? (
-            <>
-              <div
-                className="pane-inset-top"
-                style={{
-                  height: 36, padding: "0 14px", display: "flex", alignItems: "center", gap: 8,
-                  borderBottom: "1px solid var(--border)",
-                  fontSize: 12, color: "var(--fg-subtle)",
-                }}
-              >
-                <StatusLetter status={reviewStatus?.files.find((f) => f.path === open.path)?.status ?? ""} />
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-strong)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.path}</span>
-                <span style={{ color: open.staged ? "var(--accent)" : "var(--fg-dim)" }}>{open.staged ? "staged" : "working"}</span>
-                <button
-                  onClick={() => setOpen(null)}
-                  title="Close diff — back to history"
-                  style={{ ...iconButtonStyle, width: 22, height: 22 }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                </button>
-              </div>
-              <DiffViewer workspaceRoot={workspaceRoot} open={open} />
-            </>
+            <DiffViewer
+              workspaceRoot={workspaceRoot}
+              open={open}
+              status={reviewStatus?.files.find((f) => f.path === open.path)?.status ?? ""}
+              onClose={() => setOpen(null)}
+            />
           ) : (
             <GitHistoryGraph
               workspaceRoot={workspaceRoot}
@@ -2111,7 +2137,7 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
         <PaneDivider width={rightWidth} setWidth={setRightWidth} side="right" min={RIGHT_MIN} max={MAX_PANE} />
 
         {/* Right: PRs */}
-        <div style={{ width: rightWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0, borderLeft: "1px solid var(--border)" }}>
+        <div style={{ ...PANE_CARD, width: rightWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0 }}>
           <GitHubSummaryCard
             canCreate={stagedFiles.length > 0}
             refreshing={prsLoading}
