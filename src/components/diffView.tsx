@@ -5,15 +5,18 @@
 // line-number gutters, a separated sign column so code indentation aligns,
 // word-level highlighting inside changed line pairs, collapsible per-file
 // sections, and hunk gaps as quiet "···" bands instead of raw @@ noise.
-// Row tinting keeps the 12% success/danger vocabulary.
+// Each file is a hairline card: a code mark and the path over a number
+// gutter split from the code by one rule, and a 3px edge marker per changed
+// line — solid for added, hatched for removed.
 //
 // Line comments (Diff Comment → Agent): when a host passes `onLineComment`,
 // clicking a line's number gutter selects it (⇧-click extends within the
 // file) and an inline composer appears under the selection — the note plus
 // its line anchor goes back to the host, which routes it to the running
-// agent. Selection is marked with a 2px left spine (selection, not state).
+// agent. A selected line's edge marker turns accent (selection, not state).
 
 import { memo, useState, type ReactNode } from "react";
+import { ChevronIcon, CodeIcon } from "../icons";
 import {
   commentFromBlocks,
   fileOfBlock,
@@ -157,10 +160,17 @@ export function FileStatusIcon({ status }: { status: string }) {
   );
 }
 
-/** One diff code row: [old№ | new№ | sign | code], tinted by tone, with
- *  the word-level changed span on a stronger tint. When the host supports
- *  line comments the gutter becomes the click target and a selected row
- *  carries a 2px accent spine. */
+/** Row geometry shared by code rows, hunk bands and the comment composer:
+ *  [edge marker | old№ | new№ ‖ sign | code]. The hairline after the
+ *  number gutter separates "where" from "what". */
+const ROW_COLUMNS = "3px 34px 34px 22px 1fr";
+const GUTTER_WIDTH = 71;
+
+/** One diff code row, tinted by tone, with the word-level changed span on a
+ *  stronger tint. The 3px edge marker says what happened to the line — solid
+ *  for added, hatched for removed — and turns accent when the line is
+ *  selected for a comment. When the host supports line comments the number
+ *  gutter is the click target. */
 const DiffCodeRow = memo(function DiffCodeRow({
   block,
   selected = false,
@@ -170,54 +180,44 @@ const DiffCodeRow = memo(function DiffCodeRow({
   selected?: boolean;
   onGutterClick?: (e: React.MouseEvent) => void;
 }) {
-  const bg =
-    block.tone === "add" ? "color-mix(in srgb, var(--success) 12%, transparent)"
-    : block.tone === "del" ? "color-mix(in srgb, var(--danger) 12%, transparent)"
+  const toneColor = block.tone === "add" ? "var(--diff-add)" : "var(--diff-remove)";
+  const bg = block.tone === "ctx" ? "transparent" : `color-mix(in srgb, ${toneColor} 9%, transparent)`;
+  const hiBg = `color-mix(in srgb, ${toneColor} 24%, transparent)`;
+  const marker =
+    selected ? "var(--accent)"
+    : block.tone === "add" ? "var(--diff-add)"
+    : block.tone === "del" ? "repeating-linear-gradient(-45deg, var(--diff-remove) 0 2px, transparent 2px 4px)"
     : "transparent";
-  const fg =
-    block.tone === "add" ? "var(--success)"
-    : block.tone === "del" ? "var(--danger)"
-    : "var(--fg-subtle)";
-  const hiBg =
-    block.tone === "add" ? "color-mix(in srgb, var(--success) 30%, transparent)"
-    : "color-mix(in srgb, var(--danger) 30%, transparent)";
   const code = block.code || " ";
   const hi = block.hi;
+  const gutterTitle = onGutterClick ? "Comment on this line (⇧-click extends the selection)" : undefined;
   const gutterStyle: React.CSSProperties = {
     textAlign: "right",
     paddingRight: 8,
     userSelect: "none",
-    fontSize: 10,
+    fontSize: 10.5,
     color: "var(--fg-dim)",
-    lineHeight: "18px",
     cursor: onGutterClick ? "pointer" : undefined,
   };
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "36px 36px 18px 1fr",
-        minHeight: 18,
+        gridTemplateColumns: ROW_COLUMNS,
+        minHeight: 20,
+        lineHeight: "20px",
         background: bg,
-        color: fg,
-        boxShadow: selected ? "inset 2px 0 0 var(--accent)" : undefined,
+        color: block.tone === "ctx" ? "var(--fg-subtle)" : "var(--fg-strong)",
       }}
     >
-      <span
-        style={gutterStyle}
-        onClick={onGutterClick}
-        title={onGutterClick ? "Comment on this line (⇧-click extends the selection)" : undefined}
-      >
+      <span aria-hidden style={{ background: marker }} />
+      <span style={gutterStyle} onClick={onGutterClick} title={gutterTitle}>
         {block.oldNo ?? ""}
       </span>
-      <span
-        style={gutterStyle}
-        onClick={onGutterClick}
-        title={onGutterClick ? "Comment on this line (⇧-click extends the selection)" : undefined}
-      >
+      <span style={{ ...gutterStyle, borderRight: "1px solid var(--border)" }} onClick={onGutterClick} title={gutterTitle}>
         {block.newNo ?? ""}
       </span>
-      <span style={{ userSelect: "none", textAlign: "center" }}>
+      <span style={{ userSelect: "none", textAlign: "center", color: toneColor }}>
         {block.tone === "add" ? "+" : block.tone === "del" ? "−" : ""}
       </span>
       <span style={{ whiteSpace: "pre", paddingRight: 16 }}>
@@ -308,50 +308,36 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
   const selFrom = sel ? Math.min(sel.anchor, sel.head) : -1;
   const selTo = sel ? Math.max(sel.anchor, sel.head) : -1;
 
-  const out: ReactNode[] = [];
-  let fileCollapsed = false;
+  // Each file is its own card: a header (mark, path, counts) over its rows.
+  // Lines before any `diff --git` (a bare hunk) get a card with no header.
+  const cards: { key: number; path: string | null; rows: ReactNode[] }[] = [];
+  const rowsOf = (i: number) => {
+    if (cards.length === 0) cards.push({ key: i, path: null, rows: [] });
+    return cards[cards.length - 1].rows;
+  };
   visible.forEach((block, i) => {
     if (block.kind === "file") {
-      const counts = fileCounts?.get(block.path);
-      const collapsed = collapsedFiles.has(block.path);
-      fileCollapsed = collapsed;
-      out.push(
-        <div
-          key={i}
-          onClick={() => toggleFileCollapsed(block.path)}
-          title={collapsed ? "Expand file" : "Collapse file"}
-          style={{ height: 26, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", marginTop: i > 0 ? 8 : 0, borderTop: i > 0 ? "1px solid var(--border)" : "none", borderBottom: "1px solid var(--border)", background: "color-mix(in srgb, var(--bg-hover) 45%, transparent)", cursor: "pointer", userSelect: "none" }}
-        >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0, transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }}>
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-          {counts && <FileStatusIcon status={counts.status} />}
-          <span style={{ color: "var(--fg-strong)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {block.path}
-          </span>
-          <span style={{ flex: 1 }} />
-          {counts && (
-            <span style={{ fontSize: 10.5, flexShrink: 0 }}>
-              <span style={{ color: "var(--diff-add)" }}>+{counts.additions}</span>{" "}
-              <span style={{ color: "var(--diff-remove)" }}>−{counts.deletions}</span>
-            </span>
-          )}
-        </div>
-      );
+      cards.push({ key: i, path: block.path, rows: [] });
       return;
     }
-    if (fileCollapsed) return;
+    const current = cards[cards.length - 1];
+    if (current?.path != null && collapsedFiles.has(current.path)) return;
+    const rows = rowsOf(i);
     if (block.kind === "hunk") {
-      out.push(
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 1fr", minHeight: 18, color: "var(--fg-dim)", background: "color-mix(in srgb, var(--bg-hover) 60%, transparent)", fontSize: 10.5 }}>
-          <span style={{ textAlign: "center", userSelect: "none", letterSpacing: "2px" }}>···</span>
-          <span style={{ paddingLeft: 18, whiteSpace: "pre", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.8 }}>{block.text}</span>
+      // A card's opening band with no context text (a new file) says nothing.
+      if (rows.length === 0 && !block.text) return;
+      rows.push(
+        <div key={i} style={{ display: "grid", gridTemplateColumns: ROW_COLUMNS, minHeight: 20, lineHeight: "20px", color: "var(--fg-dim)", background: "color-mix(in srgb, var(--bg-hover) 70%, transparent)", fontSize: 10.5 }}>
+          <span />
+          <span style={{ gridColumn: "span 2", textAlign: "center", userSelect: "none", letterSpacing: "2px", borderRight: "1px solid var(--border)" }}>···</span>
+          <span />
+          <span style={{ whiteSpace: "pre", overflow: "hidden", textOverflow: "ellipsis" }}>{block.text}</span>
         </div>
       );
       return;
     }
     const selected = sel !== null && i >= selFrom && i <= selTo;
-    out.push(
+    rows.push(
       <DiffCodeRow
         key={i}
         block={block}
@@ -361,13 +347,13 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
     );
     // The composer sits directly under the selection's last row.
     if (sel !== null && i === selTo && onLineComment) {
-      out.push(
+      rows.push(
         <div
           key="comment-composer"
           style={{
             display: "grid",
-            gridTemplateColumns: "72px minmax(220px, 620px) 1fr",
-            padding: "2px 16px 4px 0",
+            gridTemplateColumns: `${GUTTER_WIDTH}px minmax(220px, 620px) 1fr`,
+            padding: "4px 16px 6px 0",
             fontFamily: "var(--font-ui)",
           }}
         >
@@ -423,8 +409,48 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
   });
 
   return (
-    <div style={{ padding: "0 0 8px", fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6 }}>
-      {out}
+    <div style={{ padding: "0 16px 8px", fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
+      {cards.map((card) => {
+        const counts = card.path != null ? fileCounts?.get(card.path) : undefined;
+        const collapsed = card.path != null && collapsedFiles.has(card.path);
+        const status = counts?.status[0] ?? "M";
+        return (
+          <section
+            key={card.key}
+            style={{ marginTop: 8, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", overflow: "hidden" }}
+          >
+            {card.path != null && (
+              <div
+                onClick={() => toggleFileCollapsed(card.path!)}
+                title={collapsed ? "Expand file" : "Collapse file"}
+                style={{ height: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", borderBottom: collapsed ? "none" : "1px solid var(--border)", cursor: "pointer", userSelect: "none" }}
+              >
+                {counts && status !== "M" ? (
+                  <FileStatusIcon status={counts.status} />
+                ) : (
+                  <CodeIcon size={13} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
+                )}
+                <span style={{ color: "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {card.path}
+                </span>
+                <span style={{ flex: 1 }} />
+                {counts && (
+                  <span style={{ fontSize: 10.5, flexShrink: 0 }}>
+                    <span style={{ color: "var(--diff-add)" }}>+{counts.additions}</span>{" "}
+                    <span style={{ color: "var(--diff-remove)" }}>−{counts.deletions}</span>
+                  </span>
+                )}
+                <ChevronIcon open={!collapsed} size={11} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
+              </div>
+            )}
+            {card.rows.length > 0 && (
+              <div style={{ overflowX: "auto", padding: "4px 0" }}>
+                <div style={{ width: "max-content", minWidth: "100%" }}>{card.rows}</div>
+              </div>
+            )}
+          </section>
+        );
+      })}
       {hidden > 0 && (
         <div style={{ padding: "10px 16px 2px", color: "var(--fg-subtle)", fontFamily: "var(--font-ui)", fontSize: 12 }}>
           {hidden} more lines hidden.{" "}
