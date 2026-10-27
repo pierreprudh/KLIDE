@@ -364,6 +364,10 @@ where
     let mut worktree_path: Option<String> = None;
     let mut source_commit: Option<String> = None;
     let mut setup_script: Option<String> = None;
+    // The project's own check, from the same recipe; Settings' "test after
+    // edit" when the project names none. Shown on the card, run once the
+    // worker reports — the string approved here, never a re-read.
+    let mut check_command: Option<String> = None;
     let worker_label = worker.map(|w| w.label());
     // Set by the dispatch card's answer, read when the worker's spec is built.
     let mut dispatch_full_auto = false;
@@ -397,9 +401,15 @@ where
             let probe_root = root.clone();
             match crate::blocking::run(move || {
                 let toplevel = crate::git::git_output(&probe_root, &["rev-parse", "--show-toplevel"])?;
-                crate::worktree_setup::reviewable_script(toplevel.trim())
+                let root = toplevel.trim();
+                Ok::<_, String>((crate::worktree_setup::reviewable_script(root)?, crate::worktree_setup::reviewable_check(root)?))
             }).await {
-                Ok(script) => setup_script = script,
+                Ok((script, check)) => {
+                    setup_script = script;
+                    check_command = check.or_else(|| {
+                        ctx.request.test_after_edit_command.clone().filter(|c| !c.trim().is_empty())
+                    });
+                }
                 Err(error) => return Ok(ToolOutcome::Produced(ToolResult {
                     ok: false,
                     content: format!("{error} (.klide/worktree.json). No worker was started."),
@@ -462,13 +472,18 @@ where
                 "sourceCommit": source_commit,
                 "background": background,
                 "setupScript": setup_script,
+                "checkCommand": check_command,
             }),
             summary: format!("Dispatch {who} as {} {where_it_works}", def.id),
             reason: format!(
-                "{}{} {how_it_edits} {}{} Dispatch approvals are never remembered.",
+                "{}{}{} {how_it_edits} {}{} Dispatch approvals are never remembered.",
                 setup_script.as_ref().map(|script| format!(
                     "Runs the worktree setup `{}` first; if it fails, no worker starts. ",
                     script.trim()
+                )).unwrap_or_default(),
+                check_command.as_ref().map(|check| format!(
+                    "Checks with `{}` in its worktree when it reports. ",
+                    check.trim()
                 )).unwrap_or_default(),
                 source_commit.as_ref().map(|commit| format!(
                     "Starts at {commit} (committed files only)."
@@ -656,7 +671,7 @@ where
         branch: branch.clone(),
         worktree_path: worktree_path.clone(),
         source_commit: source_commit.clone(),
-        check: ctx.request.test_after_edit_command.clone(),
+        check: check_command.clone(),
         check_timeout_secs: ctx.request.command_timeout_secs.unwrap_or(180).clamp(1, 1800),
     };
 
