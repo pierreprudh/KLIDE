@@ -6058,10 +6058,10 @@ button:focus-visible .menu-leadout {
   }
 }
 
-/* A conversation that finished while you were elsewhere: its name sits one
-   step up the ink scale (subtle → fg) until you open it. No mark, no motion. */
-.klide-focus-convo-row:not(:hover):not(:focus-within) .klide-focus-convo-title[data-unseen="true"] {
-  color: var(--fg);
+/* A conversation that finished while you were elsewhere: its name takes the
+   strong ink (the hover colour) until you open it. No mark, no motion. */
+.klide-focus-convo-title[data-unseen="true"] {
+  color: var(--fg-strong);
 }
 
 /* The row's ⋯ lives in the trailing slot too, over the timestamp: the row
