@@ -8,9 +8,10 @@ type Props = {
   onSelect: (i: number) => void;
   onClose: (i: number) => void;
   workspaceRoot: string | null;
-  /** "raised" (default) — the desktop-style strip: full-height tabs split by
-   *  short hairlines, the active one a card with rounded top corners that
-   *  merges into the editor surface below; drawn for the full-bleed editor.
+  /** "raised" (default) — the desktop-style strip: its own shade, full-height
+   *  tabs split by short hairlines, and the active tab cut out of it in the
+   *  editor's colour (--editor-bg) so tab and code are one surface; drawn for
+   *  the full-bleed editor.
    *  "flat" — the
    *  docked pane's soft-segment strip: inset row, the active tab carries a
    *  quiet rounded neutral fill (the hover token, not a saturated pill), no
@@ -48,19 +49,17 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
       style={{
         position: "relative",
         height: "var(--size-tab-strip)",
+        // Raised: the strip is its own shade, one step off the editor's
+        // surface (darker on light themes, lighter on dark).
         background: flat
           ? "transparent"
-          : "color-mix(in srgb, var(--bg-elevated) 72%, transparent)",
+          : "color-mix(in srgb, var(--fg-strong) 5%, var(--editor-bg))",
         display: "flex",
         alignItems: flat ? "center" : "flex-end",
         overflowX: "auto",
-        backdropFilter: flat ? undefined : "blur(12px)",
         flexShrink: 0,
         padding: flat ? "0 8px" : "0 8px",
         gap: flat ? 4 : 0,
-        // Raised: one hairline under the strip; the active card covers its
-        // stretch, so the tab and the editor read as one surface.
-        boxShadow: flat ? undefined : "inset 0 -1px 0 var(--border)",
       }}
     >
       {/* One marker per variant: the active card (raised) or the active fill
@@ -88,7 +87,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
             onClick={() => onSelect(i)}
             title={relative}
             data-active={isActive}
-            className="klide-tab"
+            className={flat ? "klide-tab" : "klide-tab klide-tab-raised"}
             style={{
               display: "flex",
               alignItems: "center",
@@ -99,17 +98,11 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, vari
               position: "relative",
               // Flat: the active tab carries a quiet neutral fill — the hover
               // token, not a saturated pill — and that fill is the only
-              // marker. Raised keeps the card that merges into the editor.
-              background: isActive ? (flat ? "var(--bg-hover)" : "var(--bg)") : "transparent",
-              borderTop: !flat && isActive
-                ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
-                : "1px solid transparent",
-              borderLeft: !flat && isActive
-                ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
-                : "1px solid transparent",
-              borderRight: !flat && isActive
-                ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
-                : "1px solid transparent",
+              // marker. Raised: the active tab is the editor's own surface,
+              // no outline — the strip's shade around it draws the shape, and
+              // .klide-tab-raised's flares curve the strip into it.
+              background: isActive ? (flat ? "var(--bg-hover)" : "var(--editor-bg)") : "transparent",
+              border: "1px solid transparent",
               borderRadius: flat ? "var(--radius-sm)" : "8px 8px 0 0",
               color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
               fontSize: flat ? 12.5 : 13,
