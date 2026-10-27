@@ -33,6 +33,10 @@ type Props = {
   onEmptyAction?: (action: EditorEmptyAction) => void;
 };
 
+/** Languages written as prose, where completing words while typing only gets
+ *  in the way. */
+const PROSE_LANGUAGES = new Set(["markdown", "plaintext"]);
+
 export function EditorArea({
   code,
   onChange,
@@ -165,6 +169,14 @@ export function EditorArea({
           overviewRulerLanes: minimap ? 3 : 0,
           hideCursorInOverviewRuler: !minimap,
           smoothScrolling: true,
+          // Suggestions while typing come from the language (TypeScript,
+          // Rust…) and the words of this file only — never every word of
+          // every open tab — and prose (Markdown, plain text) gets none.
+          quickSuggestions: PROSE_LANGUAGES.has(language) ? false : { other: true, comments: false, strings: false },
+          wordBasedSuggestions: "currentDocument",
+          // The suggest list and hovers can be wider than a narrow editor;
+          // let them overflow it instead of being shifted left and clipped.
+          fixedOverflowWidgets: true,
         }}
       />
     </div>
