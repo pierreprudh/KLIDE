@@ -211,6 +211,7 @@ function App() {
   const [autoSaveMode] = useSetting(SETTINGS.autoSaveMode);
   const [showHiddenFiles] = useSetting(SETTINGS.showHiddenFiles);
   const [confirmCloseDirty] = useSetting(SETTINGS.confirmCloseDirty);
+  const [openFilesIn] = useSetting(SETTINGS.openFilesIn);
   // Focus screen state: home (hero composer) vs the live conversation, and
   // the hero composer's text on its way into the AI panel.
   const [focusChatActive, setFocusChatActive] = useState(false);
@@ -1566,6 +1567,19 @@ function App() {
   function openFile(path: string, content: string, position?: { line: number; column: number }) {
     if (isSpreadsheetPath(path)) { openSpreadsheet(path); return; }
     openTextFile(path, content, position);
+  }
+
+  /** A diff card's arrow in Git Review: leave the view for the workbench the
+   *  "Open files in" setting names, and open the file there in a tab. */
+  async function openFromGitReview(path: string) {
+    if (!workspaceRoot) return;
+    try {
+      const content = isSpreadsheetPath(path) ? "" : await readWorkspaceTextFile(workspaceRoot, path);
+      enterWorkbench(openFilesIn);
+      openFile(path, content);
+    } catch (e) {
+      notify(`Couldn't open ${path}: ${errMessage(e)}`, { tone: "error" });
+    }
   }
 
   async function openRunArtifact(
@@ -3529,6 +3543,9 @@ function App() {
                       : Promise.resolve()
                   }
                   theme={theme}
+                  // Tabs belong to the open project, so a worktree's files
+                  // (another root) get no open arrow.
+                  onOpenFile={effectiveGitReviewRoot === workspaceRoot ? (path) => void openFromGitReview(path) : undefined}
                 />
               </Suspense>
             ) : overlay === "runs" ? (

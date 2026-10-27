@@ -16,7 +16,8 @@
 // agent. A selected line's edge marker turns accent (selection, not state).
 
 import { memo, useState, type ReactNode } from "react";
-import { ChevronIcon, CodeIcon } from "../icons";
+import { ChevronIcon, CodeIcon, OpenInEditorIcon } from "../icons";
+import { gitStatusMark } from "../gitStatusMark";
 import {
   commentFromBlocks,
   fileOfBlock,
@@ -249,15 +250,14 @@ type DiffViewProps = {
   /** The send button's label — hosts name the actual target
    *  ("Send to claude-code" / "Copy for the agent"). */
   commentActionLabel?: string;
-  /** For a host that is already one file's frame (it names the file in its
-   *  own header): rows run edge to edge, with no card and no file header. */
-  bare?: boolean;
+  /** Adds an open-in-editor arrow to each file card's header. */
+  onOpenFile?: (path: string) => void;
 };
 
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel, bare = false }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel, onOpenFile }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Line-comment selection: block indices, anchor→head (⇧-click moves head).
@@ -412,28 +412,27 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
   });
 
   return (
-    <div style={{ padding: bare ? 0 : "0 16px 8px", fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
+    <div style={{ padding: "0 16px 8px", fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
       {cards.map((card) => {
         const counts = card.path != null ? fileCounts?.get(card.path) : undefined;
         const collapsed = card.path != null && collapsedFiles.has(card.path);
-        const status = counts?.status[0] ?? "M";
+        // The path wears its status colour (amber modified, green new, red
+        // deleted) — the same reading as every file list in the app.
+        const mark = counts ? gitStatusMark(counts.status) : null;
         return (
           <section
             key={card.key}
-            style={bare ? undefined : { marginTop: 8, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}
+            data-diff-path={card.path ?? undefined}
+            style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}
           >
-            {card.path != null && !bare && (
+            {card.path != null && (
               <div
                 onClick={() => toggleFileCollapsed(card.path!)}
                 title={collapsed ? "Expand file" : "Collapse file"}
                 style={{ height: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", borderBottom: collapsed ? "none" : "1px solid var(--border)", cursor: "pointer", userSelect: "none" }}
               >
-                {counts && status !== "M" ? (
-                  <FileStatusIcon status={counts.status} />
-                ) : (
-                  <CodeIcon size={13} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
-                )}
-                <span style={{ color: "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <CodeIcon size={13} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
+                <span title={mark?.title} style={{ color: mark?.color ?? "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {card.path}
                 </span>
                 <span style={{ flex: 1 }} />
@@ -443,11 +442,25 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
                     <span style={{ color: "var(--diff-remove)" }}>−{counts.deletions}</span>
                   </span>
                 )}
+                {onOpenFile && mark?.label !== "D" && (
+                  <button
+                    type="button"
+                    className="klide-diff-open"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenFile(card.path!);
+                    }}
+                    title="Open in editor"
+                    aria-label={`Open ${card.path} in editor`}
+                  >
+                    <OpenInEditorIcon size={13} />
+                  </button>
+                )}
                 <ChevronIcon open={!collapsed} size={11} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
               </div>
             )}
             {card.rows.length > 0 && (
-              <div style={{ overflowX: "auto", padding: bare ? 0 : "4px 0" }}>
+              <div style={{ overflowX: "auto", padding: "4px 0" }}>
                 <div style={{ width: "max-content", minWidth: "100%" }}>{card.rows}</div>
               </div>
             )}

@@ -318,6 +318,18 @@ export const SETTINGS = {
       keywords: "autosave auto save delay focus blur dirty unsaved",
     },
   } as SettingDef<"off" | "delay" | "blur">,
+  /** Which workbench a file opens in when it is opened from a full view
+   *  (Git Review's diff cards): the classic IDE layout or free mode. */
+  openFilesIn: {
+    key: "klide-open-files-in",
+    fallback: () => "anchored" as "anchored" | "free",
+    normalize: (v) => (v === "free" ? "free" : "anchored"),
+    search: {
+      label: "Open files in",
+      section: "general",
+      keywords: "open file editor git review diff layout free floating classic ide anchored workbench",
+    },
+  } as SettingDef<"anchored" | "free">,
   showHiddenFiles: {
     key: "klide-show-hidden",
     fallback: () => true,
