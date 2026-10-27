@@ -53,11 +53,12 @@ baseline; unchecked items below are verification or specific remaining gaps.
   working folder" note. Background subscription chats in `klide ptyd`
   (`agent/remote.rs`) emit no `run:attention`, so they get no toast or rail
   shimmer.
-- [ ] Finish the local Worker dispatch gaps listed below. Setup before model
-  work shipped (PR #291). Left: aggregate capacity enforced at admission.
-  Decided 2026-10-26: a dispatch over the limit **waits in a queue** (visible
-  on its row) rather than being refused; defaults 2 Delegate CLI workers and
-  4 API workers running at once, app-wide.
+- [x] Worker capacity at admission (2026-10-27): 2 Delegate CLI / 4 API
+  workers app-wide, the rest wait in a fair queue in front of the child Run
+  (`agent/worker_slots.rs`), "Queued behind N running … workers" on the row,
+  cancellable while queued. Limits are constants for now; a Settings knob can
+  come when someone needs a different number. In-app check owed: dispatch
+  three Claude Code workers at once and watch the third queue.
 - [ ] Consolidate local launch readiness from the existing checks: ready /
   unsupported / needs login / offline / unknown, with a reason and observation
   time. Recheck before dispatch; extend the same answer for VPS later.

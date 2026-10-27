@@ -596,6 +596,7 @@ where
             // commands unasked (each recorded as answered by policy).
             // Otherwise the worker asks, on the card its parent's row draws.
             auto_approve_commands: worker_full_auto.then_some(true),
+            slot: Some(worker_slots::SlotKind::Cli),
         },
         // An API worker is Klide's own Harness on another house's model: Kit's
         // tools and conventions, the role appended, edits applied and commands
@@ -619,6 +620,7 @@ where
             command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: Some(false),
             auto_approve_commands: Some(true),
+            slot: Some(worker_slots::SlotKind::Api),
         },
         None => subagents::SubagentRunSpec {
             run_id: request_id.clone(),
@@ -638,6 +640,7 @@ where
             command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: ctx.request.require_diff_review,
             auto_approve_commands: None,
+            slot: None,
         },
     };
     if let Some(commit) = source_commit.as_deref() {
@@ -655,6 +658,25 @@ where
         check: ctx.request.test_after_edit_command.clone(),
         check_timeout_secs: ctx.request.command_timeout_secs.unwrap_or(180).clamp(1, 1800),
     };
+
+    // Over capacity, the child waits for a slot before its Run starts
+    // (worker_slots.rs). The row says so until it does; the model is told.
+    let queued = spec.slot.filter(|kind| worker_slots::slots().full(*kind)).map(|kind| {
+        let slots = worker_slots::slots();
+        format!(
+            "Queued behind {} running {} workers",
+            slots.running(kind),
+            kind.noun()
+        )
+    });
+    if let Some(notice) = &queued {
+        emit(AgentEvent::ToolProgress {
+            run_id: ctx.id.to_string(),
+            tool_call_id: call.id.clone(),
+            message: notice.clone(),
+            ts: now_ms(),
+        })?;
+    }
 
     if background {
         // The parent carries on. The child is a Run of its own — registered
@@ -685,11 +707,12 @@ where
         return Ok(ToolOutcome::Produced(ToolResult {
             ok: true,
             content: format!(
-                "Dispatched {label} as {} in the background as Run `{request_id}`, working {where_now}. \
+                "Dispatched {label} as {} in the background as Run `{request_id}`, working {where_now}.{} \
                  You are not waiting for it: carry on, or answer the user. Its report is delivered to \
                  this conversation when it settles. Until then agent_list shows its state, agent_cancel \
                  with runId `{request_id}` stops it, and agent_read_result reads what it published once settled.",
-                def.id
+                def.id,
+                queued.as_deref().map(|q| format!(" {q}; it starts when one finishes.")).unwrap_or_default(),
             ),
             metadata: Some(serde_json::json!({
                 "runId": request_id,

@@ -209,7 +209,7 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
   const o = (args ?? {}) as Record<string, unknown>;
   // The worktree setup runs between the card and the child's Run; its
   // progress is the line's word until the child exists.
-  const stage = !childRunId && typeof o.stage === "string" && o.stage ? o.stage : undefined;
+  const rawStage = typeof o.stage === "string" && o.stage ? o.stage : undefined;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
   const worker = typeof o.worker === "string" && o.worker.trim() ? (o.worker.trim() as ProviderId) : null;
   // The model the worker was started on, once the card decided it — the
@@ -239,6 +239,11 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
   // Only once its transcript has been read: an unresolved call whose child
   // actually died with the app would otherwise flash "starting" and vanish.
   const watching = !!childRunId && live && watch.loaded && isWatchable(watch.activity);
+  // A worker over capacity has its Run id but no Run until a slot frees
+  // (agent/worker_slots.rs): "Queued: …" is its word until its first event.
+  const stage = !childRunId
+    ? rawStage
+    : rawStage?.startsWith("Queued") && watch.events.length === 0 && live ? rawStage : undefined;
   const rows = useMemo(
     () => (revealed && watch.events.length ? childTranscriptRows(foldedToMsgs(foldAgentEvents(watch.events)), task) : []),
     [revealed, watch.events, task],

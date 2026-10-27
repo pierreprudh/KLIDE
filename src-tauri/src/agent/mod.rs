@@ -11,6 +11,7 @@ mod process;
 pub(crate) mod command_env;
 mod observers;
 pub(crate) mod workers;
+pub(crate) mod worker_slots;
 mod attention;
 mod command_allowlist;
 mod compaction;
@@ -702,9 +703,30 @@ impl RunSupervisor for TauriSupervisor {
         &self,
         spec: subagents::SubagentRunSpec,
     ) -> tokio::sync::oneshot::Receiver<Result<String, String>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (mut tx, rx) = tokio::sync::oneshot::channel();
         let app = self.app.clone();
         tauri::async_runtime::spawn(async move {
+            // A worker waits for a slot before its Run exists (worker_slots.rs).
+            // Its parent giving up on it (a foreground Stop drops the receiver)
+            // or a cancel while queued means it never starts.
+            let _slot = match spec.slot {
+                Some(kind) => {
+                    let taken = tokio::select! {
+                        taken = worker_slots::slots().take(kind, &spec.run_id) => taken,
+                        _ = tx.closed() => return,
+                    };
+                    match taken {
+                        Ok(permit) => Some(permit),
+                        Err(worker_slots::NotStarted::Cancelled) => {
+                            let _ = tx.send(Err(
+                                "Cancelled while it waited for a free worker slot; it never started.".to_string(),
+                            ));
+                            return;
+                        }
+                    }
+                }
+                None => None,
+            };
             let _ = tx.send(run_subagent_to_completion(app, spec).await);
         });
         rx
@@ -1822,6 +1844,8 @@ impl ops::CoordinationHost for SupervisorHost<'_> {
     fn signal_cancel(&self, run_id: &str) -> bool {
         self.0
             .with_handle(run_id, &mut |handle| handle.cancel.cancel())
+            // A worker still queued for a slot has no Run handle yet.
+            || worker_slots::slots().cancel_queued(run_id)
     }
 }
 
