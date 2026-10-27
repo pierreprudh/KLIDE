@@ -646,7 +646,7 @@ impl RunSupervisor for TauriSupervisor {
         // screen, where nothing listens on its `agent-run:` stream. Its
         // asking, working and settling go out app-wide too, naming the parent,
         // so a toast and the rail can say it (`src/workerStatus.ts`).
-        if let Some((state, detail)) = workers::state_for(event) {
+        if let Some(change) = workers::state_for(event) {
             if let Some((parent_id, label, role)) = workers::identity(run_id) {
                 let _ = self.app.emit(
                     "worker:status",
@@ -655,8 +655,10 @@ impl RunSupervisor for TauriSupervisor {
                         "runId": run_id,
                         "label": label,
                         "role": role,
-                        "state": state,
-                        "detail": detail,
+                        "state": change.state,
+                        "detail": change.detail,
+                        "provider": change.provider,
+                        "requestId": change.request_id,
                     }),
                 );
             }

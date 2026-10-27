@@ -13,8 +13,10 @@
 
 import { useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { notify, type ToastAction } from "./toast";
+import { dismissToast, notify, type ToastAction } from "./toast";
 import { canOpenConversation, openConversation } from "./conversationNavigation";
+import { resolvePermission } from "./agent/client";
+import { errMessage } from "./errors";
 
 export type WorkerState = "working" | "asking" | "finished" | "failed";
 
@@ -25,6 +27,10 @@ export type WorkerStatus = {
   role: string;
   state: WorkerState;
   detail?: string | null;
+  /** The Provider it runs on — sent with its first status (`run_started`). */
+  provider?: string | null;
+  /** The permission request to answer, while it asks. */
+  requestId?: string | null;
 };
 
 /** What one status change means: the toast to show (if any) and whether the
@@ -38,17 +44,21 @@ export function workerTransition(
   const who = `${next.label} (${next.role})`;
   switch (next.state) {
     case "asking":
-      return { toast: { message: `${who} needs your approval${next.detail ? `: ${next.detail}` : ""}`, tone: "warn" }, live };
+      return { toast: { message: `${who} needs your approval${next.detail ? ` — ${next.detail}` : ""}`, tone: "warn" }, live };
     case "finished":
       return { toast: { message: `${who} finished`, tone: "success" }, live };
     case "failed":
-      return { toast: { message: `${who} stopped${next.detail ? `: ${next.detail}` : ""}`, tone: "error" }, live };
+      return { toast: { message: `${who} stopped${next.detail ? ` — ${next.detail}` : ""}`, tone: "error" }, live };
     default:
       return { toast: null, live };
   }
 }
 
 const lastState = new Map<string, WorkerState>();
+/** run id → its Provider, learned from its first status. */
+const providerOf = new Map<string, string>();
+/** run id → the approval toast still up for it. */
+const askingToast = new Map<string, number>();
 /** child run id → parent conversation id, for workers still going. */
 const liveWorkers = new Map<string, string>();
 let liveParents: ReadonlySet<string> = new Set();
@@ -61,21 +71,49 @@ function publish() {
 
 /** Apply one status from Rust. Exported for tests; the watcher calls it. */
 export function applyWorkerStatus(status: WorkerStatus): void {
-  const { toast, live } = workerTransition(lastState.get(status.runId), status);
-  lastState.set(status.runId, status.state);
-  const wasLive = liveWorkers.has(status.runId);
-  if (live) liveWorkers.set(status.runId, status.parentId);
+  const { runId } = status;
+  if (status.provider) providerOf.set(runId, status.provider);
+  const { toast, live } = workerTransition(lastState.get(runId), status);
+  lastState.set(runId, status.state);
+  // Answered — here, on the row, or by policy — the question is gone.
+  if (status.state !== "asking" && askingToast.has(runId)) {
+    dismissToast(askingToast.get(runId)!);
+    askingToast.delete(runId);
+  }
+  const wasLive = liveWorkers.has(runId);
+  if (live) liveWorkers.set(runId, status.parentId);
   else {
-    liveWorkers.delete(status.runId);
-    lastState.delete(status.runId);
+    liveWorkers.delete(runId);
+    lastState.delete(runId);
   }
   if (live !== wasLive) publish();
-  if (toast) {
-    const action: ToastAction | undefined = canOpenConversation()
-      ? { label: "Open", run: () => openConversation(status.parentId) }
-      : undefined;
-    notify(toast.message, { tone: toast.tone, action });
+  if (!toast) return;
+  const open: ToastAction | undefined = canOpenConversation()
+    ? { label: "Open", run: () => openConversation(status.parentId) }
+    : undefined;
+  const provider = providerOf.get(runId);
+  if (!live) providerOf.delete(runId);
+  const requestId = status.requestId;
+  if (status.state === "asking" && requestId) {
+    // Answered from here exactly as the row's card answers it: once, and a
+    // refused answer says so (the card on the row is still there).
+    const answer = (decision: Parameters<typeof resolvePermission>[0]["decision"]) =>
+      void resolvePermission({ runId, requestId, decision }).catch((error) =>
+        notify(`Couldn't answer ${status.label}: ${errMessage(error)}`, { tone: "error" }),
+      );
+    askingToast.set(runId, notify(toast.message, {
+      tone: toast.tone,
+      provider,
+      duration: 0,
+      actions: [
+        { label: "Deny", run: () => answer({ behavior: "deny" }) },
+        { label: "Allow", run: () => answer({ behavior: "allow", scope: "once" }), primary: true },
+      ],
+      action: open,
+    }));
+    return;
   }
+  notify(toast.message, { tone: toast.tone, provider, action: open });
 }
 
 /** Does this conversation have a background worker going right now? */
@@ -109,6 +147,8 @@ export function watchWorkerStatus(): () => void {
 /** Test seam. */
 export function resetWorkerStatus(): void {
   lastState.clear();
+  providerOf.clear();
+  askingToast.clear();
   liveWorkers.clear();
   publish();
 }

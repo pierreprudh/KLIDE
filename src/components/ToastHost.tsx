@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { Z } from "../zLayers";
 import { watchDelegateStatus } from "../delegateStatusNotify";
 import { watchWorkerStatus } from "../workerStatus";
+import { ProviderLogo } from "./ai/icons";
+import type { ProviderId } from "../agent/types";
 import { CloseIcon, ErrorIcon, InfoIcon, SuccessIcon, WarningIcon } from "../icons";
 import {
   type Toast,
@@ -101,7 +103,8 @@ function ToastCard({
   leaving: boolean;
   onHeight: (id: number, height: number) => void;
 }) {
-  const { id, message, tone, action, duration } = toast;
+  const { id, message, tone, action, actions, provider, duration } = toast;
+  const buttons = [...(actions ?? []), ...(action ? [action] : [])];
   const { tucked } = place;
   const interactive = !leaving && !tucked;
 
@@ -184,7 +187,9 @@ function ToastCard({
         }}
       >
         <span style={{ flexShrink: 0, display: "grid", placeItems: "center", color: TONE_COLOR[tone] }}>
-          <Mark size={18} />
+          {/* A toast about an agent wears its mark; the tone stays in the
+              wording and the buttons. */}
+          {provider ? <ProviderLogo id={provider as ProviderId} size={18} /> : <Mark size={18} />}
         </span>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
           <div style={{ ...CLAMP, fontSize: 13, lineHeight: "18px", color: "var(--fg-strong)" }}>
@@ -196,12 +201,13 @@ function ToastCard({
             </div>
           )}
         </div>
-        {action && (
+        {buttons.map((button) => (
           <button
+            key={button.label}
             type="button"
             tabIndex={interactive ? 0 : -1}
             onClick={() => {
-              action.run();
+              button.run();
               dismissToast(id);
             }}
             style={{
@@ -211,7 +217,7 @@ function ToastCard({
               borderRadius: 999,
               border: "none",
               background: WASH,
-              color: "var(--fg-strong)",
+              color: button.primary ? "var(--accent)" : "var(--fg-strong)",
               fontSize: 12,
               transition: "transform 160ms var(--ease-out)",
             }}
@@ -225,9 +231,9 @@ function ToastCard({
               e.currentTarget.style.transform = "";
             }}
           >
-            {action.label}
+            {button.label}
           </button>
-        )}
+        ))}
         <button
           type="button"
           tabIndex={interactive ? 0 : -1}
