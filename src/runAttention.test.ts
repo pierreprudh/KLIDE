@@ -18,12 +18,13 @@ vi.mock("./agent/client", () => ({
 vi.mock("./klideConvos", () => ({ getKlideConvos: () => [{ id: "convo-1", title: "Fix the login", provider: "anthropic" }] }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 const live = new Set<string>();
+const liveListeners = new Set<() => void>();
 vi.mock("./runningConversations", () => ({
   getRunningConversationIds: () => live,
-  subscribeRunningConversations: () => () => {},
+  subscribeRunningConversations: (fn: () => void) => { liveListeners.add(fn); return () => liveListeners.delete(fn); },
 }));
 
-import { applyRunAttention, markNeedsYou, needsYouNow, resetRunAttention, showConversation, watchRunAttention } from "./runAttention";
+import { applyRunAttention, finishedUnseenNow, markNeedsYou, needsYouNow, resetRunAttention, showConversation, watchRunAttention } from "./runAttention";
 
 const ask = { runId: "convo-1", state: "asking" as const, kind: "permission" as const, requestId: "perm_1", summary: "Run npm test" };
 
@@ -89,5 +90,29 @@ describe("runAttention", () => {
     expect(needsYouNow("parent")).toBe(true);
     markNeedsYou("parent", "sub_parent_c2", false);
     expect(needsYouNow("parent")).toBe(false);
+  });
+
+  it("a run that finishes while you are elsewhere marks the row until you open it", async () => {
+    rust.status = "running";
+    live.add("convo-1");
+    const stop = watchRunAttention();
+    live.delete("convo-1");
+    for (const fn of liveListeners) fn();
+    expect(finishedUnseenNow("convo-1")).toBe(true);
+    showConversation("convo-1")();
+    expect(finishedUnseenNow("convo-1")).toBe(false);
+    stop();
+  });
+
+  it("a run that finishes on screen leaves nothing to catch up on", () => {
+    rust.status = "running";
+    live.add("convo-1");
+    const release = showConversation("convo-1");
+    const stop = watchRunAttention();
+    live.delete("convo-1");
+    for (const fn of liveListeners) fn();
+    expect(finishedUnseenNow("convo-1")).toBe(false);
+    release();
+    stop();
   });
 });
