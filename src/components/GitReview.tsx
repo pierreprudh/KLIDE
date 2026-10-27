@@ -23,7 +23,7 @@ import {
   DETAIL_PCT_KEY,
   GitHistoryGraph,
 } from "./GitHistoryGraph";
-import { parseDiffBlocks, DiffView } from "./diffView";
+import { parseDiffBlocks, DiffView, type DiffBlock } from "./diffView";
 import {
   formatDiffComment,
   sendTextToDelegatePty,
@@ -98,6 +98,8 @@ type Props = {
   gitStatus: GitStatus | null;
   onRefreshGitStatus: () => Promise<void> | void;
   theme: ThemeId;
+  /** Opens a project file in the editor (the diff cards' arrow). */
+  onOpenFile?: (path: string) => void;
 };
 
 type OpenFile = { path: string; staged: boolean };
@@ -137,19 +139,28 @@ function splitPath(path: string) {
 
 type DiffViewerProps = {
   workspaceRoot: string | null;
-  open: OpenFile | null;
-  /** The open file's git status, for the header's status letter. */
-  status: string;
+  open: OpenFile;
+  /** Every file of the section `open` was picked from (Staged or Changes),
+   *  in list order — the pane stacks all of them. */
+  files: GitFile[];
   onClose: () => void;
+  onOpenFile?: (path: string) => void;
 };
 
-const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClose }: DiffViewerProps) {
-  const [diff, setDiff] = useState<{ path: string; diff: string; additions: number; deletions: number } | null>(null);
-  const [loading, setLoading] = useState(false);
+type LoadedDiff = { path: string; diff: string; additions: number; deletions: number };
+
+/** The section's diffs stacked, one card per file with room between them;
+ *  picking a file in the list scrolls its card into view. */
+const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClose, onOpenFile }: DiffViewerProps) {
+  const [diffs, setDiffs] = useState<LoadedDiff[] | null>(null);
+  const [failed, setFailed] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const openPath = open?.path ?? null;
-  const openStaged = open?.staged ?? false;
-  const diffKey = `${openPath ?? ""}::${openStaged ? "staged" : "work"}`;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const staged = open.staged;
+  // The fetch follows the section's file list, not the picked file, so
+  // moving between files of one section never refetches.
+  const paths = files.map((f) => f.path).join("\n");
+  const diffKey = `${staged ? "staged" : "work"}::${paths}`;
 
   // Every effect run fetches; the per-run `cancelled` flag drops a stale
   // result instead of applying it. Deliberately NO ref-based "already loaded"
@@ -157,41 +168,54 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClo
   // cancelled after claiming the key and run B early-returns on it — leaving
   // "Loading diff…" on screen forever (the HAIKU.md bug).
   useEffect(() => {
-    if (!workspaceRoot || !openPath) {
-      setDiff(null);
+    const list = paths ? paths.split("\n") : [];
+    if (!workspaceRoot || list.length === 0) {
+      setDiffs([]);
+      setFailed([]);
       setError(null);
       return;
     }
-    setLoading(true);
-    setError(null);
     let cancelled = false;
-    gitDiff(workspaceRoot, openPath, openStaged)
-      .then((d) => {
-        if (!cancelled) setDiff(d);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setDiff(null);
-        setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    void Promise.allSettled(list.map((path) => gitDiff(workspaceRoot, path, staged))).then((results) => {
+      if (cancelled) return;
+      const loaded: LoadedDiff[] = [];
+      const missed: string[] = [];
+      results.forEach((r, i) => (r.status === "fulfilled" ? loaded.push(r.value) : missed.push(list[i])));
+      const firstError = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      setDiffs(loaded);
+      setFailed(missed);
+      setError(loaded.length === 0 && firstError ? errMessage(firstError.reason) : null);
+    });
     return () => {
       cancelled = true;
     };
-  }, [openPath, openStaged, workspaceRoot]);
+  }, [paths, staged, workspaceRoot]);
 
   const blocks = useMemo(() => {
-    if (!diff || !diff.diff.trim()) return [];
-    const parsed = parseDiffBlocks(diff.diff.replace(/\n$/, "").split("\n"));
-    // A single-file diff may arrive without its `diff --git` header — line
-    // comments anchor to the nearest file block, so guarantee one.
-    if (parsed.length > 0 && parsed[0].kind !== "file") {
-      parsed.unshift({ kind: "file", path: diff.path });
+    const out: DiffBlock[] = [];
+    for (const d of diffs ?? []) {
+      if (!d.diff.trim()) continue;
+      const parsed = parseDiffBlocks(d.diff.replace(/\n$/, "").split("\n"));
+      // A single-file diff may arrive without its `diff --git` header — the
+      // card and line comments anchor to a file block, so guarantee one.
+      if (parsed.length > 0 && parsed[0].kind !== "file") parsed.unshift({ kind: "file", path: d.path });
+      out.push(...parsed);
     }
-    return parsed;
-  }, [diff]);
+    return out;
+  }, [diffs]);
+
+  const fileCounts = useMemo(() => {
+    const byPath = new Map(files.map((f) => [f.path, f.status]));
+    return new Map((diffs ?? []).map((d) => [d.path, { status: byPath.get(d.path) ?? "M", additions: d.additions, deletions: d.deletions }]));
+  }, [diffs, files]);
+  const totals = (diffs ?? []).reduce((t, d) => ({ add: t.add + d.additions, del: t.del + d.deletions }), { add: 0, del: 0 });
+
+  // Bring the picked file's card to the top of the pane.
+  useEffect(() => {
+    const root = scrollRef.current;
+    const card = root?.querySelector<HTMLElement>(`[data-diff-path="${CSS.escape(open.path)}"]`);
+    if (root && card) root.scrollTo({ top: card.offsetTop - 12, behavior: "smooth" });
+  }, [open.path, blocks]);
 
   // Diff Comment → Agent: route a line comment to the live delegate session
   // working this checkout; without one, the contract goes to the clipboard so
@@ -221,21 +245,8 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClo
     [workspaceRoot]
   );
 
-  if (!open) {
-    return (
-      <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center", padding: 24 }}>
-        <div>
-          <div style={{ color: "var(--fg)", marginBottom: 4, fontWeight: 600 }}>No file selected</div>
-          <div>Pick a file on the left to see its diff here.</div>
-        </div>
-      </div>
-    );
-  }
-  // The pane is the file's card: its header names the file — in its status
-  // colour, as the file list does — and counts the change, over the bare
-  // rows. Staged vs working is already said by the section the file was
-  // picked from, so the tooltip carries it and the header doesn't.
-  const mark = gitStatusMark(status) ?? UNNAMED_GIT_STATUS;
+  // The pane's own row: which section, how many files, the totals, close.
+  // Each file names itself on its card below.
   const header = (
     <div
       style={{
@@ -243,16 +254,13 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClo
         borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--fg-subtle)",
       }}
     >
-      <span
-        title={`${mark.title} · ${open.staged ? "staged" : "not staged"}`}
-        style={{ fontFamily: "var(--font-mono)", color: mark.color, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-      >
-        {open.path}
-      </span>
-      {diff && diff.path === open.path && (
+      <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>{staged ? "Staged" : "Changes"}</span>
+      <span style={{ color: "var(--fg-dim)" }}>{files.length} file{files.length === 1 ? "" : "s"}</span>
+      <span style={{ flex: 1 }} />
+      {diffs && (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, flexShrink: 0 }}>
-          <span style={{ color: "var(--diff-add)" }}>+{diff.additions}</span>{" "}
-          <span style={{ color: "var(--diff-remove)" }}>−{diff.deletions}</span>
+          <span style={{ color: "var(--diff-add)" }}>+{totals.add}</span>{" "}
+          <span style={{ color: "var(--diff-remove)" }}>−{totals.del}</span>
         </span>
       )}
       <button
@@ -264,49 +272,46 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, status, onClo
       </button>
     </div>
   );
-  const body = (content: React.ReactNode) => (
+  const centered = (content: React.ReactNode) => (
     <>
       {header}
-      {content}
+      <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center", padding: 24 }}>
+        {content}
+      </div>
     </>
   );
 
-  if (loading) {
-    return body(
-      <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13 }}>
-        Loading diff…
-      </div>
-    );
-  }
+  // A refresh keeps the cards on screen; only the first load says so.
+  if (!diffs) return centered("Loading diff…");
   if (error) {
-    return body(
-      <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center", padding: 24 }}>
-        <div>
-          <div style={{ color: "var(--fg)", marginBottom: 4, fontWeight: 600 }}>Diff unavailable</div>
-          <div>{error}</div>
-        </div>
+    return centered(
+      <div>
+        <div style={{ color: "var(--fg)", marginBottom: 4, fontWeight: 600 }}>Diff unavailable</div>
+        <div>{error}</div>
       </div>
     );
   }
-  if (!diff) return body(null);
-  if (blocks.length === 0) {
-    return body(
-      <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13 }}>
-        No diff available.
+  if (blocks.length === 0) return centered("No diff available.");
+  return (
+    <>
+      {header}
+      <div ref={scrollRef} style={{ flex: 1, overflow: "auto", padding: "0 0 4px", position: "relative" }}>
+        <DiffView
+          key={diffKey}
+          blocks={blocks}
+          limit={DIFF_RENDER_LIMIT}
+          fileCounts={fileCounts}
+          onOpenFile={onOpenFile}
+          onLineComment={(c) => void sendLineComment(c)}
+          commentActionLabel="Send to agent"
+        />
+        {failed.length > 0 && (
+          <div style={{ padding: "0 16px 8px", color: "var(--fg-subtle)", fontSize: 12 }}>
+            Couldn't load {failed.join(", ")}.
+          </div>
+        )}
       </div>
-    );
-  }
-  return body(
-    <div style={{ flex: 1, overflow: "auto", padding: "6px 0" }}>
-      <DiffView
-        key={diffKey}
-        blocks={blocks}
-        limit={DIFF_RENDER_LIMIT}
-        bare
-        onLineComment={(c) => void sendLineComment(c)}
-        commentActionLabel="Send to agent"
-      />
-    </div>
+    </>
   );
 });
 
@@ -1505,7 +1510,7 @@ function BranchMenu({ branches, tags, defaultBranch, current, onSelect, onClose 
   );
 }
 
-export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitStatus, theme: _theme }: Props) {
+export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitStatus, theme: _theme, onOpenFile }: Props) {
   const [log, setLog] = useState<GitLog | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [localStatus, setLocalStatus] = useState<GitStatus | null>(null);
@@ -2121,8 +2126,9 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
             <DiffViewer
               workspaceRoot={workspaceRoot}
               open={open}
-              status={reviewStatus?.files.find((f) => f.path === open.path)?.status ?? ""}
+              files={open.staged ? stagedFiles : changedFiles}
               onClose={() => setOpen(null)}
+              onOpenFile={onOpenFile}
             />
           ) : (
             <GitHistoryGraph

@@ -27,6 +27,7 @@ import { ArrowCounterClockwise } from "@phosphor-icons/react/dist/csr/ArrowCount
 import { Play } from "@phosphor-icons/react/dist/csr/Play";
 import { Pause } from "@phosphor-icons/react/dist/csr/Pause";
 import { Clock } from "@phosphor-icons/react/dist/csr/Clock";
+import { ArrowSquareOut } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { Code } from "@phosphor-icons/react/dist/csr/Code";
 import { DotsThree } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PushPinSimple } from "@phosphor-icons/react/dist/csr/PushPinSimple";
@@ -334,6 +335,7 @@ export function ExpandIcon(p: GlyphProps) { return <Icon as={ArrowsOut} {...p} /
 export function DownloadIcon(p: GlyphProps) { return <Icon as={DownloadSimple} {...p} />; }
 
 export function CodeIcon(p: GlyphProps) { return <Icon as={Code} {...p} />; }
+export function OpenInEditorIcon(p: GlyphProps) { return <Icon as={ArrowSquareOut} {...p} />; }
 export function CopyIcon(p: GlyphProps) { return <Icon as={Copy} {...p} />; }
 export function CheckIcon(p: GlyphProps) { return <Icon as={Check} {...p} />; }
 

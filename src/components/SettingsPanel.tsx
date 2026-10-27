@@ -488,6 +488,7 @@ export function SettingsPanel({
   const [harnessSettings, onHarnessSettingsChange] = useSetting(SETTINGS.harnessSettings);
   const [restoreLastProject, onRestoreLastProjectChange] = useSetting(SETTINGS.restoreLastProject);
   const [autoSaveMode, onAutoSaveModeChange] = useSetting(SETTINGS.autoSaveMode);
+  const [openFilesIn, onOpenFilesInChange] = useSetting(SETTINGS.openFilesIn);
   const [showHiddenFiles, onShowHiddenFilesChange] = useSetting(SETTINGS.showHiddenFiles);
   const [confirmCloseDirty, onConfirmCloseDirtyChange] = useSetting(SETTINGS.confirmCloseDirty);
   const [showAskerAvatar, onShowAskerAvatarChange] = useSetting(SETTINGS.showAskerAvatar);
@@ -1048,6 +1049,21 @@ export function SettingsPanel({
                       onChange={(v) =>
                         onAutoSaveModeChange(v === "delay" || v === "blur" ? v : "off")
                       }
+                    />
+                  }
+                />
+                <Row
+                  title="Open files in"
+                  description="Where a file opens from Git Review's diff: the classic IDE layout, or free mode's floating panels."
+                  control={
+                    <Segmented
+                      label="Open files in"
+                      value={openFilesIn}
+                      options={[
+                        { label: "Classic IDE", value: "anchored" },
+                        { label: "Free mode", value: "free" },
+                      ]}
+                      onChange={(v) => onOpenFilesInChange(v === "free" ? "free" : "anchored")}
                     />
                   }
                 />

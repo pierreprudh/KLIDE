@@ -58,7 +58,7 @@ const replies: Record<string, unknown> = {
   git_status: status,
   git_log: { branch: "main", upstream: "origin/main", ahead: 1, behind: 0, lastFetchMs: Date.now() - 120000, commits, branches: [{ name: "main", isCurrent: true }], tags: [], defaultBranch: "main" },
   git_graph: commits,
-  git_diff: { path: "CONTEXT.md", diff: DIFF, additions: 2, deletions: 0 },
+
   git_stash_list: [{ index: 0, branch: "main", message: "WIP on main", timestamp: now - 3600 }],
   git_commit_details: {
     ...commits[2], body: "", files: [{ path: "src/components/diffView.tsx", status: "M", additions: 3, deletions: 1 }, { path: "src/session.ts", status: "A", additions: 1, deletions: 0 }],
@@ -76,12 +76,24 @@ diff --git a/src/session.ts b/src/session.ts
   git_pr_list: [pr(321, "Git Review on rounded cards", "open"), pr(318, "Commit graph density zoom", "draft")],
 };
 (window as any).__TAURI_INTERNALS__ = {
-  invoke: async (cmd: string) => (cmd in replies ? replies[cmd] : null),
+  invoke: async (cmd: string, args?: { path?: string }) => {
+    if (cmd === "git_diff") {
+      const path = args?.path ?? "";
+      if (path === "CONTEXT.md") return { path, diff: DIFF, additions: 2, deletions: 0 };
+      return {
+        path,
+        diff: `diff --git a/${path} b/${path}\n@@ -1,3 +1,4 @@\n export const a = 1;\n-export const b = 2;\n+export const b = 3;\n+export const c = b * 2;\n export default a;`,
+        additions: 2,
+        deletions: 1,
+      };
+    }
+    return cmd in replies ? replies[cmd] : null;
+  },
   transformCallback: () => 0,
 };
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <div style={{ height: "100vh", display: "flex" }}>
-    <GitReview workspaceRoot="/fixture" gitStatus={status} onRefreshGitStatus={() => {}} theme={theme as never} />
+    <GitReview workspaceRoot="/fixture" gitStatus={status} onRefreshGitStatus={() => {}} theme={theme as never} onOpenFile={(path) => console.log("open", path)} />
   </div>
 );

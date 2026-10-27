@@ -773,6 +773,27 @@ select.klide-field {
 /* Diff line-comment composer. Kept in the token layer because DiffView is
    shared by Git Review and commit/detail surfaces, and this little note editor
    should feel like one Klide control everywhere it appears. */
+/* A diff card's open-in-editor arrow. */
+.klide-diff-open {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+.klide-diff-open:hover {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+}
+
 .klide-diff-comment-row {
   min-width: 0;
   display: grid;
