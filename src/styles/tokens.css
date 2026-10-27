@@ -3288,6 +3288,24 @@ textarea.klide-diff-comment-input:focus-visible {
   background-clip: padding-box;
 }
 
+/* Slim, quiet scrolling for long reading surfaces (Git Review's diff
+   column, a diff card's sideways scroll): a 6px pill that shows on hover,
+   smooth programmatic scrolls, and no scroll chaining into the page. Same
+   WebKit rule as .todo-scroll — no `scrollbar-width`. */
+.klide-scroll-slim { scroll-behavior: smooth; overscroll-behavior: contain; }
+.klide-scroll-slim::-webkit-scrollbar { width: 6px; height: 6px; }
+.klide-scroll-slim::-webkit-scrollbar-track { background: transparent; margin: 4px; }
+.klide-scroll-slim::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+.klide-scroll-slim:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-dim) 30%, transparent);
+}
+.klide-scroll-slim::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg-dim) 50%, transparent);
+}
+
 /* Frosted glass for portalled menus — the same recipe as .floating-panel, so a
    picker reads as the same material as the panels it floats over: translucent
    surface, hairline edge, a 1px lit top edge, and depth from the panel shadow
