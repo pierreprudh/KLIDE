@@ -252,12 +252,15 @@ type DiffViewProps = {
   commentActionLabel?: string;
   /** Adds an open-in-editor arrow to each file card's header. */
   onOpenFile?: (path: string) => void;
+  /** False when the host already gives the cards their gutter (Git Review's
+   *  diff column), so they run to its edges. */
+  inset?: boolean;
 };
 
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel, onOpenFile }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel, onOpenFile, inset = true }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Line-comment selection: block indices, anchor→head (⇧-click moves head).
@@ -412,7 +415,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
   });
 
   return (
-    <div style={{ padding: "0 16px 8px", fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
+    <div style={{ padding: inset ? "0 16px 8px" : 0, fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
       {cards.map((card) => {
         const counts = card.path != null ? fileCounts?.get(card.path) : undefined;
         const collapsed = card.path != null && collapsedFiles.has(card.path);
@@ -423,7 +426,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
           <section
             key={card.key}
             data-diff-path={card.path ?? undefined}
-            style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}
+            style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: "var(--radius-xl)", background: "var(--bg-elevated)", overflow: "hidden" }}
           >
             {card.path != null && (
               <div
