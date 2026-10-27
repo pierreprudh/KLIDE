@@ -34,7 +34,9 @@ baseline; unchecked items below are verification or specific remaining gaps.
   failure drew as a boxed report with no way to drop its worktree (#301).
 - [ ] Verify a **background** Worker in the app, including when the parent
   Conversation is hidden: its permission prompt and its report must reach you.
-  Make waiting work discoverable.
+  First pass (2026-10-27) found nothing reached a hidden parent; fixed by
+  `worker:status` → toasts + rail running marker (`src/workerStatus.ts`) and
+  outside-folder paths named on relayed cards. Re-run to close.
 - [ ] Small Worker gaps seen in the pass: the check command is one global
   Harness setting (Settings › Harness › test after edit), so the validation
   line never appeared until it was set; it belongs to the project, beside

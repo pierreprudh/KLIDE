@@ -239,6 +239,21 @@ pub(crate) fn answer(
     Ok(allow(&ask.input))
 }
 
+/// Absolute paths the ask reaches outside the Run's folder: a file tool's
+/// own path, or what a shell command names (the Harness's own preflight).
+fn outside_paths(workspace_root: &str, ask: &DelegatePermissionAsk, command: Option<&str>) -> Vec<String> {
+    if let Some(cmd) = command {
+        return super::tools::preflight_command(workspace_root, workspace_root, cmd).external_paths;
+    }
+    let root = std::path::Path::new(workspace_root);
+    ["file_path", "path", "notebook_path"]
+        .iter()
+        .filter_map(|key| ask.input.get(*key).and_then(Value::as_str))
+        .filter(|p| std::path::Path::new(p).is_absolute() && !std::path::Path::new(p).starts_with(root))
+        .map(str::to_string)
+        .collect()
+}
+
 /// The request the card renders. A shell command carries `command` + `cwd`,
 /// which is what makes the surface draw the `$` card with its scope choices;
 /// anything else carries the CLI's own tool name and input, and offers no
@@ -249,17 +264,31 @@ fn card(run_id: &str, request_id: &str, workspace_root: &str, ask: &DelegatePerm
         .into_iter()
         .filter(|option| command.is_some() || option.option_id != "allow_project")
         .collect();
+    let outside = outside_paths(workspace_root, ask, command);
     let input = match command {
         Some(cmd) => json!({
             "command": cmd,
             "cwd": workspace_root,
-            "externalPaths": [],
+            "externalPaths": outside,
             "delegateTool": ask.tool_name,
         }),
         None => json!({
             "delegateTool": ask.tool_name,
             "delegateInput": ask.input,
+            "externalPaths": outside,
         }),
+    };
+    // Said first, so a narrow card that truncates the line still shows it: a
+    // worker approved to edit a path outside its worktree changes a file no
+    // branch, Merge or Discard will ever hold (dogfood: an Edit of another
+    // project's test.sh, approved without that being visible).
+    let outside_note = if outside.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Outside its working folder ({}): a yes lets it change files no branch or review holds. ",
+            outside.join(", ")
+        )
     };
     PermissionRequest {
         id: request_id.to_string(),
@@ -268,7 +297,7 @@ fn card(run_id: &str, request_id: &str, workspace_root: &str, ask: &DelegatePerm
         tool_name: ask.tool_name.clone(),
         input,
         summary: format!("The agent asks to run {subject}"),
-        reason: "The CLI asked before acting. A headless turn has no terminal of its own, so the question comes here; the CLI runs it under its own sandbox once told yes. Approving for this project also lets later turns run it without asking.".to_string(),
+        reason: outside_note + "The CLI asked before acting. A headless turn has no terminal of its own, so the question comes here; the CLI runs it under its own sandbox once told yes. Approving for this project also lets later turns run it without asking.",
         options,
     }
 }
@@ -286,6 +315,22 @@ mod tests {
             input: json!({ "command": command, "description": "list PRs" }),
             tool_use_id: Some("toolu_1".into()),
         }
+    }
+
+    #[test]
+    fn a_path_outside_the_runs_folder_is_named_on_the_card() {
+        let edit = |path: &str| DelegatePermissionAsk {
+            tool_name: "Edit".into(),
+            input: json!({ "file_path": path, "old_string": "a", "new_string": "b" }),
+            tool_use_id: Some("toolu_2".into()),
+        };
+        let wt = "/Users/p/proj-worktrees/klide-worker-x";
+        let outside = card("r", "q", wt, &edit("/Users/p/other/test.sh"), None);
+        assert_eq!(outside.input["externalPaths"], json!(["/Users/p/other/test.sh"]));
+        assert!(outside.reason.starts_with("Outside its working folder (/Users/p/other/test.sh)"), "{}", outside.reason);
+        let inside = card("r", "q", wt, &edit(&format!("{wt}/test.sh")), None);
+        assert_eq!(inside.input["externalPaths"], json!([]));
+        assert!(inside.reason.starts_with("The CLI asked before acting."));
     }
 
     fn port(runs_dir: &std::path::Path) -> (OutOfBandPort, mpsc::Receiver<AgentEvent>) {
