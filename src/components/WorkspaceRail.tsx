@@ -72,7 +72,7 @@ import { conversationMark } from "../modelIdentity";
 import { setConversationDrag } from "../conversationDrag";
 import { useIsConversationRunning } from "../runningConversations";
 import { useHasLiveWorker } from "../workerStatus";
-import { useNeedsYou } from "../runAttention";
+import { useFinishedUnseen, useNeedsYou } from "../runAttention";
 import { orderProviderHistory, providerHistoryExpanded } from "../focusHistory";
 import { canonicalWorkspaceRoot, linkedProjectForPath } from "../projectPaths";
 
@@ -506,6 +506,9 @@ function ConvoRow({
   const running = useIsConversationRunning(convo.id) || hasLiveWorker;
   // Waiting on you outranks working: it is the one row state you act on.
   const needsYou = useNeedsYou(convo.id);
+  // Finished while you were elsewhere: the name sits a step brighter until
+  // the conversation is opened.
+  const finishedUnseen = useFinishedUnseen(convo.id) && !running && !needsYou;
   // Captured once: see `useEntranceValue`. Recomputing this from the row's
   // current index is what made the tree replay on every list update.
   const entranceDelay = useEntranceValue(revealDelay);
@@ -625,6 +628,7 @@ function ConvoRow({
             className="klide-focus-convo-title"
             data-swapping={swap ? true : undefined}
             data-waiting={needsYou ? true : undefined}
+            data-unseen={finishedUnseen ? true : undefined}
           >
             {swap ? (
               <span

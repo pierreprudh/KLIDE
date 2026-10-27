@@ -6058,6 +6058,12 @@ button:focus-visible .menu-leadout {
   }
 }
 
+/* A conversation that finished while you were elsewhere: its name sits one
+   step up the ink scale (subtle → fg) until you open it. No mark, no motion. */
+.klide-focus-convo-row:not(:hover):not(:focus-within) .klide-focus-convo-title[data-unseen="true"] {
+  color: var(--fg);
+}
+
 /* The row's ⋯ lives in the trailing slot too, over the timestamp: the row
    keeps one trailing mark, and it says the thing you can do right now. Hidden until the
    row is hovered or holds focus, when it drifts in from the right as the

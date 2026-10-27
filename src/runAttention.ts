@@ -33,6 +33,8 @@ const listeners = new Set<() => void>();
 const onScreen = new Map<string, number>();
 /** run id → the toast still up for its question. */
 const toastFor = new Map<string, number>();
+/** Conversations whose run ended while nobody was looking — until opened. */
+let finishedUnseen: ReadonlySet<string> = new Set();
 
 function publish() {
   needsYou = new Set(waiting.keys());
@@ -69,8 +71,32 @@ export function useNeedsYou(conversationId: string): boolean {
   );
 }
 
+/** Did this conversation finish while you were elsewhere? Cleared when it is
+ *  shown. For the rail, which lifts the row's ink a step. */
+export function useFinishedUnseen(conversationId: string): boolean {
+  return useSyncExternalStore(
+    (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    () => finishedUnseen.has(conversationId),
+    () => false,
+  );
+}
+
+export function finishedUnseenNow(conversationId: string): boolean {
+  return finishedUnseen.has(conversationId);
+}
+
+function setFinishedUnseen(conversationId: string, on: boolean): void {
+  if (finishedUnseen.has(conversationId) === on) return;
+  const next = new Set(finishedUnseen);
+  if (on) next.add(conversationId);
+  else next.delete(conversationId);
+  finishedUnseen = next;
+  for (const fn of listeners) fn();
+}
+
 /** A panel showing this conversation, visibly. Returns the release. */
 export function showConversation(conversationId: string): () => void {
+  setFinishedUnseen(conversationId, false);
   onScreen.set(conversationId, (onScreen.get(conversationId) ?? 0) + 1);
   return () => {
     const n = (onScreen.get(conversationId) ?? 1) - 1;
@@ -162,6 +188,9 @@ export function watchRunAttention(): () => void {
   const checked = new Set<string>();
   const sweep = () => {
     const live = getRunningConversationIds();
+    // A run that left the live set while its conversation was off screen
+    // finished without you: the rail says so until you open it.
+    for (const id of checked) if (!live.has(id) && !isOnScreen(id)) setFinishedUnseen(id, true);
     for (const id of checked) if (!live.has(id)) checked.delete(id);
     for (const id of live) {
       if (checked.has(id)) continue;
@@ -183,5 +212,6 @@ export function resetRunAttention(): void {
   waiting.clear();
   onScreen.clear();
   toastFor.clear();
+  finishedUnseen = new Set();
   publish();
 }
