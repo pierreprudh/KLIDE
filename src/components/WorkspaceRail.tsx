@@ -506,8 +506,8 @@ function ConvoRow({
   const running = useIsConversationRunning(convo.id) || hasLiveWorker;
   // Waiting on you outranks working: it is the one row state you act on.
   const needsYou = useNeedsYou(convo.id);
-  // Finished while you were elsewhere: the name sits a step brighter until
-  // the conversation is opened.
+  // Finished while you were elsewhere: an accent point in the trailing slot
+  // until the conversation is opened.
   const finishedUnseen = useFinishedUnseen(convo.id) && !running && !needsYou;
   // Captured once: see `useEntranceValue`. Recomputing this from the row's
   // current index is what made the tree replay on every list update.
@@ -611,6 +611,8 @@ function ConvoRow({
         title={
           needsYou
             ? `${convo.title} — needs you`
+            : finishedUnseen
+            ? `${convo.title} — finished`
             : running
             ? `${convo.title} — running`
             : open && !selected
@@ -628,7 +630,6 @@ function ConvoRow({
             className="klide-focus-convo-title"
             data-swapping={swap ? true : undefined}
             data-waiting={needsYou ? true : undefined}
-            data-unseen={finishedUnseen ? true : undefined}
           >
             {swap ? (
               <span
@@ -654,6 +655,12 @@ function ConvoRow({
           {running && !needsYou ? (
             <span className="klide-focus-convo-live">
               <DotGridLoader size={11} color="var(--accent)" label="Running" />
+            </span>
+          ) : finishedUnseen ? (
+            // Finished while you were elsewhere: one accent point until you
+            // open it — the only dot the rail draws.
+            <span className="klide-focus-convo-time klide-focus-convo-done" aria-label="Finished">
+              <span className="klide-focus-convo-done-dot" />
             </span>
           ) : pinned ? (
             <span className="klide-focus-convo-time klide-focus-convo-pinned" title="Pinned" aria-label="Pinned">
