@@ -596,7 +596,8 @@ where
             // commands unasked (each recorded as answered by policy).
             // Otherwise the worker asks, on the card its parent's row draws.
             auto_approve_commands: worker_full_auto.then_some(true),
-            slot: Some(worker_slots::SlotKind::Cli),
+            // CLI workers are not limited (worker_slots.rs says why).
+            takes_slot: false,
         },
         // An API worker is Klide's own Harness on another house's model: Kit's
         // tools and conventions, the role appended, edits applied and commands
@@ -620,7 +621,7 @@ where
             command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: Some(false),
             auto_approve_commands: Some(true),
-            slot: Some(worker_slots::SlotKind::Api),
+            takes_slot: true,
         },
         None => subagents::SubagentRunSpec {
             run_id: request_id.clone(),
@@ -640,7 +641,7 @@ where
             command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: ctx.request.require_diff_review,
             auto_approve_commands: None,
-            slot: None,
+            takes_slot: false,
         },
     };
     if let Some(commit) = source_commit.as_deref() {
@@ -661,14 +662,8 @@ where
 
     // Over capacity, the child waits for a slot before its Run starts
     // (worker_slots.rs). The row says so until it does; the model is told.
-    let queued = spec.slot.filter(|kind| worker_slots::slots().full(*kind)).map(|kind| {
-        let slots = worker_slots::slots();
-        format!(
-            "Queued behind {} running {} workers",
-            slots.running(kind),
-            kind.noun()
-        )
-    });
+    let queued = (spec.takes_slot && worker_slots::api_slots().full())
+        .then(|| format!("Queued behind {} running API workers", worker_slots::api_slots().running()));
     if let Some(notice) = &queued {
         emit(AgentEvent::ToolProgress {
             run_id: ctx.id.to_string(),

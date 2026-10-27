@@ -320,12 +320,12 @@ describe("a delegation row while the child works", () => {
   it("says a worker over capacity is queued until its Run starts", () => {
     const html = renderToStaticMarkup(
       renderMessageBody(
-        { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "claude-code", task: "Add a test.", background: true, stage: "Queued behind 2 running CLI workers" }, childRunId: "sub_run_c0" }] },
+        { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "implementer", worker: "anthropic", task: "Add a test.", background: true, stage: "Queued behind 4 running API workers" }, childRunId: "sub_run_c0" }] },
         false,
-        { results: new Map([["c0", { msg: { role: "tool", content: "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", toolName: "spawn_subagent" }, active: false }]]) },
+        { results: new Map([["c0", { msg: { role: "tool", content: "Dispatched Anthropic as implementer in the background as Run `sub_run_c0`", toolName: "spawn_subagent" }, active: false }]]) },
       ),
     );
-    expect(html).toContain("Queued behind 2 running CLI workers");
+    expect(html).toContain("Queued behind 4 running API workers");
     expect(html).not.toContain("Starting…");
   });
 

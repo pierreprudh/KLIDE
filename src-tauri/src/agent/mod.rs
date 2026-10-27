@@ -709,23 +709,22 @@ impl RunSupervisor for TauriSupervisor {
             // A worker waits for a slot before its Run exists (worker_slots.rs).
             // Its parent giving up on it (a foreground Stop drops the receiver)
             // or a cancel while queued means it never starts.
-            let _slot = match spec.slot {
-                Some(kind) => {
-                    let taken = tokio::select! {
-                        taken = worker_slots::slots().take(kind, &spec.run_id) => taken,
-                        _ = tx.closed() => return,
-                    };
-                    match taken {
-                        Ok(permit) => Some(permit),
-                        Err(worker_slots::NotStarted::Cancelled) => {
-                            let _ = tx.send(Err(
-                                "Cancelled while it waited for a free worker slot; it never started.".to_string(),
-                            ));
-                            return;
-                        }
+            let _slot = if spec.takes_slot {
+                let taken = tokio::select! {
+                    taken = worker_slots::api_slots().take(&spec.run_id) => taken,
+                    _ = tx.closed() => return,
+                };
+                match taken {
+                    Ok(permit) => Some(permit),
+                    Err(worker_slots::NotStarted::Cancelled) => {
+                        let _ = tx.send(Err(
+                            "Cancelled while it waited for a free worker slot; it never started.".to_string(),
+                        ));
+                        return;
                     }
                 }
-                None => None,
+            } else {
+                None
             };
             let _ = tx.send(run_subagent_to_completion(app, spec).await);
         });
@@ -1845,7 +1844,7 @@ impl ops::CoordinationHost for SupervisorHost<'_> {
         self.0
             .with_handle(run_id, &mut |handle| handle.cancel.cancel())
             // A worker still queued for a slot has no Run handle yet.
-            || worker_slots::slots().cancel_queued(run_id)
+            || worker_slots::api_slots().cancel_queued(run_id)
     }
 }
 

@@ -53,12 +53,12 @@ baseline; unchecked items below are verification or specific remaining gaps.
   working folder" note. Background subscription chats in `klide ptyd`
   (`agent/remote.rs`) emit no `run:attention`, so they get no toast or rail
   shimmer.
-- [x] Worker capacity at admission (2026-10-27): 2 Delegate CLI / 4 API
-  workers app-wide, the rest wait in a fair queue in front of the child Run
-  (`agent/worker_slots.rs`), "Queued behind N running … workers" on the row,
-  cancellable while queued. Limits are constants for now; a Settings knob can
-  come when someone needs a different number. In-app check owed: dispatch
-  three Claude Code workers at once and watch the third queue.
+- [x] Worker capacity at admission (2026-10-27): API workers wait in a fair
+  queue for one of 4 app-wide slots, in front of the child Run
+  (`agent/worker_slots.rs`), "Queued behind N running API workers" on the
+  row, cancellable while queued. Verified in the app with a 2-CLI limit, then
+  Pierre dropped the CLI limit (a CLI runs on its own subscription); bring it
+  back as a second `Slots` if needed.
 - [ ] Consolidate local launch readiness from the existing checks: ready /
   unsupported / needs login / offline / unknown, with a reason and observation
   time. Recheck before dispatch; extend the same answer for VPS later.

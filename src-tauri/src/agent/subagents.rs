@@ -365,9 +365,9 @@ pub struct SubagentRunSpec {
     /// good. An API worker the operator dispatched runs with it on, the way a
     /// Delegate CLI runs with its own auto policy; a plain subagent never has it.
     pub auto_approve_commands: Option<bool>,
-    /// The capacity pool a worker waits on before its Run starts
-    /// (`worker_slots.rs`); `None` for a plain subagent, which takes none.
-    pub slot: Option<super::worker_slots::SlotKind>,
+    /// Whether the child waits for an API worker slot before its Run starts
+    /// (`worker_slots.rs`). Only API workers do.
+    pub takes_slot: bool,
 }
 
 #[cfg(test)]
