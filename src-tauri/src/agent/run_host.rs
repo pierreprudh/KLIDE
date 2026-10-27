@@ -298,7 +298,7 @@ pub(super) async fn state(app: &tauri::AppHandle, id: &str) -> Result<RunState, 
     }
     // A worker waiting for a slot has no Run yet, but it is not gone: a
     // watcher that read "no status" would call it interrupted.
-    if super::worker_slots::slots().is_queued(id) {
+    if super::worker_slots::api_slots().is_queued(id) {
         return Ok(RunState { status: Some("queued".to_string()), from_seq: None });
     }
     remote::state(app, id).await
