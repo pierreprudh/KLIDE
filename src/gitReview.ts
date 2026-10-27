@@ -100,9 +100,20 @@ export function unstageFileOutcome(): GitActionOutcome {
   return { message: "Unstaged", refresh: ["status"] };
 }
 
-export function discardFileOutcome(path: string, openPath: string | null): GitActionOutcome {
-  // Discarding the file whose diff is open leaves nothing to show.
-  return { message: "Discarded", refresh: ["status"], closeDiff: openPath === path };
+export function discardFileOutcome(): GitActionOutcome {
+  return { message: "Discarded", refresh: ["status"] };
+}
+
+/** Keep the stacked section open after a discard; if its selected file was
+ *  removed, select the next working file. A staged diff is unaffected. */
+export function selectionAfterDiscard<T extends { path: string; staged: boolean }>(
+  open: T | null,
+  discardedPath: string,
+  changedFiles: readonly Pick<GitFile, "path">[],
+): T | null {
+  if (!open || open.staged || open.path !== discardedPath) return open;
+  const next = changedFiles.find((file) => file.path !== discardedPath);
+  return next ? { ...open, path: next.path } : null;
 }
 
 export function stageAllOutcome(): GitActionOutcome {

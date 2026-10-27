@@ -131,8 +131,8 @@ function Conversation() {
         </p>
         <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.7 }}>
           <div style={{ padding: "8px 12px", fontFamily: "var(--font-ui)", fontSize: 13, color: text.muted, borderBottom: "1px solid var(--border)" }}>src-tauri/src/agent/compaction.rs <span style={{ color: text.dim }}>· +1 −1</span></div>
-          <div style={{ padding: "0 12px", background: "color-mix(in srgb, var(--diff-remove) 16%, transparent)" }}>- let kept = marker_index + 1;</div>
-          <div style={{ padding: "0 12px", background: "color-mix(in srgb, var(--diff-add) 16%, transparent)" }}>+ let kept = marker_index;</div>
+          <div style={{ padding: "0 12px", background: "var(--diff-remove-bg)" }}>- let kept = marker_index + 1;</div>
+          <div style={{ padding: "0 12px", background: "var(--diff-add-bg)" }}>+ let kept = marker_index;</div>
         </div>
         {answer === null ? (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>

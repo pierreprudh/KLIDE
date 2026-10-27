@@ -3542,7 +3542,6 @@ function App() {
                       ? refreshGitStatus(effectiveGitReviewRoot)
                       : Promise.resolve()
                   }
-                  theme={theme}
                   // Tabs belong to the open project, so a worktree's files
                   // (another root) get no open arrow.
                   onOpenFile={effectiveGitReviewRoot === workspaceRoot ? (path) => void openFromGitReview(path) : undefined}
