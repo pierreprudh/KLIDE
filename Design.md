@@ -294,4 +294,5 @@ principles:
 known_gaps:
   - "Form input error states — focus ring is documented, but validation error styles are not."
   - "Decorative gradients — hero, footer, and onboarding use subtle warm gradients; stops are described qualitatively, not numerically."
-  - "Chart and diff tokens — --chart-1..7 and --diff-add/--diff-remove ship in tokens.css but are not documented here."
+  - "Chart tokens — --chart-1..7 ship in tokens.css but are not documented here."
+  - "Diff tokens are the one deliberate exception to the brand palette: classic code-review green/red (GitHub's #1A7F37 / #CF222E light, #3FB950 / #F85149 dark) so a diff reads the same as in every editor. --diff-add / --diff-remove colour signs, counts and edge markers; --diff-*-bg tints a changed line and --diff-*-word its changed span, both translucent so they sit on any surface."

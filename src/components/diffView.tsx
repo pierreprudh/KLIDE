@@ -181,8 +181,8 @@ const DiffCodeRow = memo(function DiffCodeRow({
   onGutterClick?: (e: React.MouseEvent) => void;
 }) {
   const toneColor = block.tone === "add" ? "var(--diff-add)" : "var(--diff-remove)";
-  const bg = block.tone === "ctx" ? "transparent" : `color-mix(in srgb, ${toneColor} 9%, transparent)`;
-  const hiBg = `color-mix(in srgb, ${toneColor} 24%, transparent)`;
+  const bg = block.tone === "add" ? "var(--diff-add-bg)" : block.tone === "del" ? "var(--diff-remove-bg)" : "transparent";
+  const hiBg = block.tone === "add" ? "var(--diff-add-word)" : "var(--diff-remove-word)";
   const marker =
     selected ? "var(--accent)"
     : block.tone === "add" ? "var(--diff-add)"

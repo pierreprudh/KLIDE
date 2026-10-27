@@ -35,12 +35,17 @@
   --warning:      #B5832E;
   --danger:       #A8514A;
 
-  /* Diff add/remove — theme-aware semantic green/red for inline + modal diffs.
-     Line/hunk backgrounds are derived at call sites via
-     color-mix(in srgb, var(--diff-*) 12%, transparent). Dark themes override
-     with lighter variants for contrast on dark surfaces. */
-  --diff-add:     #3E7C5A;
-  --diff-remove:  #A8514A;
+  /* Diff add/remove — the classic code-review green/red (GitHub's), apart
+     from the brand palette on purpose: a diff reads the same in every editor.
+     -bg tints a changed line, -word its changed span; both are translucent so
+     they sit on any surface. Light themes share these; dark themes swap in
+     the brighter set. */
+  --diff-add:     #1A7F37;
+  --diff-remove:  #CF222E;
+  --diff-add-bg:     rgba(70, 230, 110, 0.16);
+  --diff-remove-bg:  rgba(255, 80, 70, 0.12);
+  --diff-add-word:   rgba(40, 200, 80, 0.34);
+  --diff-remove-word: rgba(255, 90, 80, 0.30);
 
   /* Modal scrim — warm charcoal veil behind centered overlays (replaces
      per-modal hardcoded rgba blacks). Dark themes deepen it. */
@@ -226,8 +231,12 @@
   --warning:      #A8842F;
   --danger:       #A85B52;
 
-  --diff-add:     #4A8062;
-  --diff-remove:  #A85B52;
+  --diff-add:     #1A7F37;
+  --diff-remove:  #CF222E;
+  --diff-add-bg:     rgba(70, 230, 110, 0.16);
+  --diff-remove-bg:  rgba(255, 80, 70, 0.12);
+  --diff-add-word:   rgba(40, 200, 80, 0.34);
+  --diff-remove-word: rgba(255, 90, 80, 0.30);
   --modal-scrim:  rgba(26, 31, 46, 0.30);
 
   --code-comment: rgba(26, 31, 46, 0.42);
@@ -285,8 +294,12 @@
   --warning:      #D0A85C;
   --danger:       #D98C84;
 
-  --diff-add:     #7FC3A0;
-  --diff-remove:  #D98C84;
+  --diff-add:     #3FB950;
+  --diff-remove:  #F85149;
+  --diff-add-bg:     rgba(46, 160, 67, 0.15);
+  --diff-remove-bg:  rgba(248, 81, 73, 0.12);
+  --diff-add-word:   rgba(46, 160, 67, 0.40);
+  --diff-remove-word: rgba(248, 81, 73, 0.38);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --code-comment: #6E756F;
@@ -332,8 +345,12 @@
      Every dark theme owes itself an override. */
   --code-comment: #6E6C66;
 
-  --diff-add:     #6FBF8F;
-  --diff-remove:  #D98C84;
+  --diff-add:     #3FB950;
+  --diff-remove:  #F85149;
+  --diff-add-bg:     rgba(46, 160, 67, 0.15);
+  --diff-remove-bg:  rgba(248, 81, 73, 0.12);
+  --diff-add-word:   rgba(46, 160, 67, 0.40);
+  --diff-remove-word: rgba(248, 81, 73, 0.38);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #F0EFE9;
@@ -377,8 +394,12 @@
 
   --code-comment: #6A9955;
 
-  --diff-add:     #6FBF8F;
-  --diff-remove:  #D98C84;
+  --diff-add:     #3FB950;
+  --diff-remove:  #F85149;
+  --diff-add-bg:     rgba(46, 160, 67, 0.15);
+  --diff-remove-bg:  rgba(248, 81, 73, 0.12);
+  --diff-add-word:   rgba(46, 160, 67, 0.40);
+  --diff-remove-word: rgba(248, 81, 73, 0.38);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #FFFFFF;
@@ -473,8 +494,12 @@
   --warning:      #AE7B26;
   --danger:       #B5524B;
 
-  --diff-add:     #2F8060;
-  --diff-remove:  #B5524B;
+  --diff-add:     #1A7F37;
+  --diff-remove:  #CF222E;
+  --diff-add-bg:     rgba(70, 230, 110, 0.16);
+  --diff-remove-bg:  rgba(255, 80, 70, 0.12);
+  --diff-add-word:   rgba(40, 200, 80, 0.34);
+  --diff-remove-word: rgba(255, 90, 80, 0.30);
   --modal-scrim:  rgba(28, 27, 24, 0.28);
 
   --lane-2: #7FA38A;
@@ -534,8 +559,12 @@
 
   --code-comment: #657B83;
 
-  --diff-add:     #6FBF8F;
-  --diff-remove:  #D98C84;
+  --diff-add:     #3FB950;
+  --diff-remove:  #F85149;
+  --diff-add-bg:     rgba(46, 160, 67, 0.15);
+  --diff-remove-bg:  rgba(248, 81, 73, 0.12);
+  --diff-add-word:   rgba(46, 160, 67, 0.40);
+  --diff-remove-word: rgba(248, 81, 73, 0.38);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #FDF6E3;
