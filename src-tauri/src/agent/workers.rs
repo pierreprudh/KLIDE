@@ -199,6 +199,37 @@ pub fn notification_state(parent_id: &str, child_id: &str) -> Option<bool> {
     Some(dispatch.report.is_some())
 }
 
+/// Who a background worker is, for the app-wide status a hidden parent
+/// conversation is told through: `(parent id, label, role)`.
+pub fn identity(child_id: &str) -> Option<(String, String, String)> {
+    let dispatches = registry().lock().ok()?;
+    let d = dispatches.get(child_id)?;
+    Some((d.parent_id.clone(), d.label.clone(), d.role.clone()))
+}
+
+/// What a worker's own event means to someone not looking at it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkerState {
+    Working,
+    /// Waiting on a person: the summary is what it asks to do.
+    Asking,
+    Finished,
+    Failed,
+}
+
+/// The state change an event of the worker's own Run makes, if any.
+pub fn state_for(event: &super::types::AgentEvent) -> Option<(WorkerState, Option<String>)> {
+    use super::types::AgentEvent;
+    match event {
+        AgentEvent::RunStarted { .. } | AgentEvent::PermissionResolved { .. } => Some((WorkerState::Working, None)),
+        AgentEvent::PermissionRequested { request, .. } => Some((WorkerState::Asking, Some(request.summary.clone()))),
+        AgentEvent::RunResult { .. } => Some((WorkerState::Finished, None)),
+        AgentEvent::RunError { error, .. } => Some((WorkerState::Failed, Some(error.message.clone()))),
+        _ => None,
+    }
+}
+
 /// The dispatches a Run made, oldest first.
 #[cfg(test)]
 pub fn list(parent_id: &str) -> Vec<WorkerSnapshot> {
@@ -279,6 +310,24 @@ mod tests {
         release("parent-c");
         assert!(list("parent-c").is_empty());
         assert!(completions("parent-c").is_empty());
+    }
+
+    #[test]
+    fn a_workers_own_events_become_the_status_its_parent_is_told() {
+        use crate::agent::types::{AgentError, AgentEvent, PermissionRequest};
+        register("parent-s", "child-s", "Claude Code", "implementer", Some("klide/w"), Some("/wt"));
+        assert_eq!(identity("child-s"), Some(("parent-s".into(), "Claude Code".into(), "implementer".into())));
+        assert_eq!(identity("nobody"), None);
+        let ask = AgentEvent::PermissionRequested {
+            run_id: "child-s".into(),
+            request: PermissionRequest { id: "p".into(), run_id: "child-s".into(), tool_call_id: "t".into(), tool_name: "Bash".into(), input: serde_json::json!({}), summary: "Run sh test.sh".into(), reason: String::new(), options: vec![] },
+            ts: 0,
+        };
+        assert_eq!(state_for(&ask), Some((WorkerState::Asking, Some("Run sh test.sh".into()))));
+        assert_eq!(state_for(&AgentEvent::RunResult { run_id: "child-s".into(), result: serde_json::json!({}), ts: 0 }), Some((WorkerState::Finished, None)));
+        let failed = AgentEvent::RunError { run_id: "child-s".into(), error: AgentError { code: "provider_unavailable".into(), message: "gone".into(), detail: None, retryable: false }, ts: 0 };
+        assert_eq!(state_for(&failed), Some((WorkerState::Failed, Some("gone".into()))));
+        release("parent-s");
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from "react-dom";
 import { Z } from "../zLayers";
 import { watchDelegateStatus } from "../delegateStatusNotify";
+import { watchWorkerStatus } from "../workerStatus";
 import { CloseIcon, ErrorIcon, InfoIcon, SuccessIcon, WarningIcon } from "../icons";
 import {
   type Toast,
@@ -324,7 +325,9 @@ export default function ToastHost() {
   // can't be double-mounted or forgotten.
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    return watchDelegateStatus();
+    const stopDelegates = watchDelegateStatus();
+    const stopWorkers = watchWorkerStatus();
+    return () => { stopDelegates(); stopWorkers(); };
   }, []);
 
   if (rows.length === 0) return null;

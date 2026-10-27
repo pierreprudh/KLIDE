@@ -642,6 +642,25 @@ impl RunSupervisor for TauriSupervisor {
                 event: event.clone(),
             },
         );
+        // A background worker works while its parent conversation may be off
+        // screen, where nothing listens on its `agent-run:` stream. Its
+        // asking, working and settling go out app-wide too, naming the parent,
+        // so a toast and the rail can say it (`src/workerStatus.ts`).
+        if let Some((state, detail)) = workers::state_for(event) {
+            if let Some((parent_id, label, role)) = workers::identity(run_id) {
+                let _ = self.app.emit(
+                    "worker:status",
+                    serde_json::json!({
+                        "parentId": parent_id,
+                        "runId": run_id,
+                        "label": label,
+                        "role": role,
+                        "state": state,
+                        "detail": detail,
+                    }),
+                );
+            }
+        }
     }
 
     fn watch_background(&self, run_id: &str, shell_id: &str, request: &StartRunRequest) {

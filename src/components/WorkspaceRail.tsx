@@ -71,6 +71,7 @@ import { DotGridLoader, ProviderLogo } from "./ai/icons";
 import { conversationMark } from "../modelIdentity";
 import { setConversationDrag } from "../conversationDrag";
 import { useIsConversationRunning } from "../runningConversations";
+import { useHasLiveWorker } from "../workerStatus";
 import { orderProviderHistory, providerHistoryExpanded } from "../focusHistory";
 import { canonicalWorkspaceRoot, linkedProjectForPath } from "../projectPaths";
 
@@ -498,7 +499,10 @@ function ConvoRow({
   // unbranded local pull — drew no mark at all, and the tree read as if the
   // metadata had failed to load.
   const mark = conversationMark(convo.model, convo.provider, 15);
-  const running = useIsConversationRunning(convo.id);
+  // A background worker it dispatched counts: the conversation is still
+  // getting work done, and may be waiting on you (src/workerStatus.ts).
+  const hasLiveWorker = useHasLiveWorker(convo.id);
+  const running = useIsConversationRunning(convo.id) || hasLiveWorker;
   // Captured once: see `useEntranceValue`. Recomputing this from the row's
   // current index is what made the tree replay on every list update.
   const entranceDelay = useEntranceValue(revealDelay);
