@@ -3289,10 +3289,12 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 
 /* Slim, quiet scrolling for long reading surfaces (Git Review's diff
-   column, a diff card's sideways scroll): a 6px pill that shows on hover,
-   smooth programmatic scrolls, and no scroll chaining into the page. Same
-   WebKit rule as .todo-scroll — no `scrollbar-width`. */
-.klide-scroll-slim { scroll-behavior: smooth; overscroll-behavior: contain; }
+   column, a diff card's sideways scroll): a 6px pill that shows on hover and
+   smooth programmatic scrolls. Same WebKit rule as .todo-scroll — no
+   `scrollbar-width`. No `overscroll-behavior` either: a card's sideways
+   scroller is a scroll container on both axes, and `contain` there swallows
+   the vertical wheel instead of passing it to the column. */
+.klide-scroll-slim { scroll-behavior: smooth; }
 .klide-scroll-slim::-webkit-scrollbar { width: 6px; height: 6px; }
 .klide-scroll-slim::-webkit-scrollbar-track { background: transparent; margin: 4px; }
 .klide-scroll-slim::-webkit-scrollbar-thumb {
