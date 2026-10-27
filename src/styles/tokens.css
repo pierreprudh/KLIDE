@@ -4086,26 +4086,15 @@ button:focus-visible .menu-leadout {
   transition: none;
 }
 
-/* Tab bar indicator — a 2px tall accent bar that rides along the
-   bottom of the active tab. Width tracks the tab's measured width
-   inline; the transform is set by the FLIP hook. */
-.klide-tab-bar-indicator {
-  top: auto;
-  bottom: 0;
-  transition: transform var(--motion-slow) var(--ease-soft);
-}
-
-[data-flip="false"] .klide-tab-bar-indicator {
-  transition: none;
-}
-
-/* Tab close buttons reveal on hover — a resting × on every tab is noise.
+/* Tab close buttons reveal on hover — a resting × on every tab is noise —
+   and always show on the active tab, the one you're most likely to close.
    The button keeps its 18px footprint while hidden so tabs never shift.
    Keyboard focus reveals it too. */
 .klide-tab .klide-tab-close {
   opacity: 0;
 }
 .klide-tab:hover .klide-tab-close,
+.klide-tab[data-active="true"] .klide-tab-close,
 .klide-tab .klide-tab-close:focus-visible {
   opacity: 1;
 }
