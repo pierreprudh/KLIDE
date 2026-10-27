@@ -6128,6 +6128,24 @@ button:focus-visible .menu-leadout {
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
+  /* The loader it replaces condenses into it: the 11px square of the dot
+     grid draws in to one round point, on the rail's soft ease, no overshoot. */
+  animation: klide-convo-done-in 420ms var(--ease-soft) both;
+}
+@keyframes klide-convo-done-in {
+  from {
+    transform: scale(1.83);
+    border-radius: 2px;
+    opacity: 0.35;
+  }
+  to {
+    transform: scale(1);
+    border-radius: 50%;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-focus-convo-done-dot { animation: none; }
 }
 
 .klide-focus-convo-pinned {
