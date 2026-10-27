@@ -249,12 +249,15 @@ type DiffViewProps = {
   /** The send button's label — hosts name the actual target
    *  ("Send to claude-code" / "Copy for the agent"). */
   commentActionLabel?: string;
+  /** For a host that is already one file's frame (it names the file in its
+   *  own header): rows run edge to edge, with no card and no file header. */
+  bare?: boolean;
 };
 
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel, bare = false }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Line-comment selection: block indices, anchor→head (⇧-click moves head).
@@ -409,7 +412,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
   });
 
   return (
-    <div style={{ padding: "0 16px 8px", fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
+    <div style={{ padding: bare ? 0 : "0 16px 8px", fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
       {cards.map((card) => {
         const counts = card.path != null ? fileCounts?.get(card.path) : undefined;
         const collapsed = card.path != null && collapsedFiles.has(card.path);
@@ -417,9 +420,9 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
         return (
           <section
             key={card.key}
-            style={{ marginTop: 8, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", overflow: "hidden" }}
+            style={bare ? undefined : { marginTop: 8, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}
           >
-            {card.path != null && (
+            {card.path != null && !bare && (
               <div
                 onClick={() => toggleFileCollapsed(card.path!)}
                 title={collapsed ? "Expand file" : "Collapse file"}
@@ -444,7 +447,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
               </div>
             )}
             {card.rows.length > 0 && (
-              <div style={{ overflowX: "auto", padding: "4px 0" }}>
+              <div style={{ overflowX: "auto", padding: bare ? 0 : "4px 0" }}>
                 <div style={{ width: "max-content", minWidth: "100%" }}>{card.rows}</div>
               </div>
             )}

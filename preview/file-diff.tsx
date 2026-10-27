@@ -5,7 +5,7 @@
 // gutter click shows the selection marker and the composer.
 //
 //   npm run dev  →  http://localhost:1420/preview/file-diff.html
-//   ?theme=dark | klide-light | sage-garden | …
+//   ?theme=dark | klide-light | sage-garden | …   ?bare — the single-file pane
 import ReactDOM from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
@@ -56,6 +56,7 @@ function App() {
         fileCounts={counts}
         onLineComment={(c) => console.log(c)}
         commentActionLabel="Send to agent"
+        bare={params.has("bare")}
       />
     </div>
   );

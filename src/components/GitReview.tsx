@@ -256,6 +256,7 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
         key={diffKey}
         blocks={blocks}
         limit={DIFF_RENDER_LIMIT}
+        bare
         onLineComment={(c) => void sendLineComment(c)}
         commentActionLabel="Send to agent"
       />
