@@ -56,6 +56,25 @@ describe("runAttention", () => {
     release();
   });
 
+  it("a subagent asking under the conversation on screen is its card on the row: no toast", () => {
+    const release = showConversation("convo-1");
+    applyRunAttention({ ...ask, runId: "child-1", parentId: "convo-1" });
+    expect(toasts).toHaveLength(0);
+    expect(needsYouNow("convo-1")).toBe(true);
+    applyRunAttention({ runId: "child-1", parentId: "convo-1", state: "clear" });
+    expect(needsYouNow("convo-1")).toBe(false);
+    release();
+  });
+
+  it("a subagent asking off screen toasts as its parent, answered as itself", () => {
+    applyRunAttention({ ...ask, runId: "child-1", parentId: "convo-1" });
+    expect(toasts[0].message).toBe("Fix the login needs your approval — Run npm test");
+    expect(needsYouNow("convo-1")).toBe(true);
+    expect(needsYouNow("child-1")).toBe(false);
+    toasts[0].actions![1].run();
+    expect(answers).toEqual([{ runId: "child-1", requestId: "perm_1", decision: { behavior: "allow", scope: "once" } }]);
+  });
+
   it("a question is opened, not answered, from the toast", () => {
     applyRunAttention({ ...ask, kind: "question", summary: "Which model?" });
     expect(toasts[0].message).toBe("Fix the login asks — Which model?");

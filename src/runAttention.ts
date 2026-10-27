@@ -8,7 +8,9 @@
 // through `worker:status` and marks its parent here (src/workerStatus.ts).
 //
 // The toast is for a conversation you are NOT looking at: the one on screen
-// already shows its card, and a second copy of it in a toast is noise.
+// already shows its card, and a second copy of it in a toast is noise. A
+// foreground subagent's card is drawn on its parent's row, so Rust names the
+// parent (`parentId`) and the parent is the conversation that asks.
 
 import { useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -22,8 +24,8 @@ import { getKlideConvos } from "./klideConvos";
 import { errMessage } from "./errors";
 
 export type RunAttention =
-  | { runId: string; state: "asking"; kind: "permission" | "question"; requestId: string; summary: string; externalPaths?: string[] }
-  | { runId: string; state: "clear" };
+  | { runId: string; parentId?: string; state: "asking"; kind: "permission" | "question"; requestId: string; summary: string; externalPaths?: string[] }
+  | { runId: string; parentId?: string; state: "clear" };
 
 /** conversation id → the things it waits on (its own run, or a worker's). */
 const waiting = new Map<string, Set<string>>();
@@ -110,22 +112,24 @@ export function isOnScreen(conversationId: string): boolean {
 }
 
 /** Apply one attention change from Rust. A Klide conversation's id is its
- *  run id, so the run names the conversation. */
+ *  run id, so the run names the conversation — or, for a subagent, its
+ *  parent does. */
 export function applyRunAttention(attention: RunAttention): void {
   const { runId } = attention;
+  const conversationId = attention.parentId ?? runId;
   if (attention.state === "clear") {
-    markNeedsYou(runId, runId, false);
+    markNeedsYou(conversationId, runId, false);
     const id = toastFor.get(runId);
     if (id !== undefined) dismissToast(id);
     toastFor.delete(runId);
     return;
   }
-  markNeedsYou(runId, runId, true);
-  if (isOnScreen(runId) || toastFor.has(runId)) return;
-  const convo = getKlideConvos().find((c) => c.id === runId);
+  markNeedsYou(conversationId, runId, true);
+  if (isOnScreen(conversationId) || toastFor.has(runId)) return;
+  const convo = getKlideConvos().find((c) => c.id === conversationId);
   const title = convo?.title?.trim() || "A conversation";
   const open: ToastAction | undefined = canOpenConversation()
-    ? { label: "Open", run: () => openConversation(runId) }
+    ? { label: "Open", run: () => openConversation(conversationId) }
     : undefined;
   const { requestId } = attention;
   const outside = !!attention.externalPaths?.length;

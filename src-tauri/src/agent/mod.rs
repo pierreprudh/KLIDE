@@ -2150,6 +2150,9 @@ async fn loop_body(
     // stale read/write hashes from a previous run (see tools::clear_run_snapshots).
     clear_run_snapshots(&id);
     skill_resources::register(&id, &request.skills, request.parent_id.as_deref());
+    if let Some(parent) = request.parent_id.as_deref().filter(|p| !p.trim().is_empty()) {
+        attention::note_parent(&id, parent);
+    }
     let prior_turns = prior_events
         .iter()
         .filter(|e| matches!(e, AgentEvent::AssistantMessage { .. }))

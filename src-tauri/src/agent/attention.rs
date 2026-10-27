@@ -7,6 +7,8 @@
 
 use super::types::AgentEvent;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "state")]
@@ -45,6 +47,22 @@ pub(super) fn external_paths(request: &super::types::PermissionRequest) -> Vec<S
         .unwrap_or_default()
 }
 
+/// subagent child → the conversation that dispatched it. A foreground child
+/// is not a background worker (workers.rs), but its card is drawn on its
+/// parent's row: the parent is the conversation that waits on you, and the
+/// one whose being on screen makes a toast a second copy.
+fn parents() -> &'static Mutex<HashMap<String, String>> {
+    static PARENTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    PARENTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Called as a child Run starts; forgotten when it ends.
+pub(super) fn note_parent(child_id: &str, parent_id: &str) {
+    if let Ok(mut parents) = parents().lock() {
+        parents.insert(child_id.to_string(), parent_id.to_string());
+    }
+}
+
 /// Both app-hosted events and the daemon's GUI forwarding path pass here.
 /// Keeping classification here prevents host placement changing notifications.
 pub(super) fn notifications_for(run_id: &str, seq: u64, event: &AgentEvent) -> Option<(&'static str, serde_json::Value)> {
@@ -55,6 +73,13 @@ pub(super) fn notifications_for(run_id: &str, seq: u64, event: &AgentEvent) -> O
     attention_for(event).map(|attention| {
         let mut payload = serde_json::to_value(attention).unwrap();
         payload["runId"] = serde_json::json!(run_id);
+        let ended = matches!(event, AgentEvent::RunResult { .. } | AgentEvent::RunError { .. });
+        if let Ok(mut parents) = parents().lock() {
+            let parent = if ended { parents.remove(run_id) } else { parents.get(run_id).cloned() };
+            if let Some(parent) = parent {
+                payload["parentId"] = serde_json::json!(parent);
+            }
+        }
         ("run:attention", payload)
     })
 }
@@ -113,6 +138,23 @@ mod tests {
         assert!(!workers::active_statuses().iter().any(|s| s.run_id == child));
         assert!(notifications_for(child, 2, &ask).is_none());
         workers::release(parent);
+    }
+
+    #[test]
+    fn a_foreground_childs_asking_names_its_parent_until_it_ends() {
+        let child = "foreground-child";
+        note_parent(child, "parent-convo");
+        let ask = AgentEvent::PermissionRequested { run_id: child.into(), request: PermissionRequest {
+            id: "p".into(), run_id: child.into(), tool_call_id: "t".into(), tool_name: "Bash".into(),
+            input: serde_json::json!({}), summary: "Run sh slug.sh".into(), reason: String::new(), options: vec![],
+        }, ts: 0 };
+        let (name, payload) = notifications_for(child, 1, &ask).unwrap();
+        assert_eq!(name, "run:attention");
+        assert_eq!(payload["parentId"], "parent-convo");
+        let end = AgentEvent::RunResult { run_id: child.into(), result: serde_json::json!({}), ts: 1 };
+        assert_eq!(notifications_for(child, 2, &end).unwrap().1,
+            serde_json::json!({"runId": child, "state": "clear", "parentId": "parent-convo"}));
+        assert!(notifications_for(child, 3, &ask).unwrap().1.get("parentId").is_none());
     }
 
     #[test]
