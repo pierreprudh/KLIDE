@@ -424,7 +424,9 @@ function stillArriving(m: Msg, index: number, opts: RunFoldOptions, runStart: nu
 
 /** What the one line says. `label` is the wall time the work took — "Worked
  *  for 19.4s", the honest span when tools ran — or the reasoning span when
- *  only that was measured, or the count when nothing was timed at all. The
+ *  only that was measured, or, when nothing was timed (a carried CLI
+ *  transcript), what the work did in the live line's words — "Ran commands,
+ *  read files" — and only with no names at all, the count. The
  *  count and `names` (every distinct tool) are for the hover: printed on the
  *  row they made the line a sentence nobody read, but a pointer resting on
  *  it is a question. */
@@ -439,7 +441,9 @@ export function toolRunLabel(run: Pick<ToolRun, "calls" | "names" | "thinkingMs"
       ? `${verb("Worked")} for ${formatElapsed(run.workedMs)}`
       : run.thinkingMs
         ? `${verb("Thought")} for ${formatElapsed(run.thinkingMs)}`
-        : count,
+        : run.names.length > 0
+          ? verb(workSummary(run.names))
+          : count,
     count,
     names: run.names.join(", "),
   };

@@ -189,6 +189,12 @@ export type Conversation = {
    *  set when a CLI conversation was carried into Focus. The first headless
    *  turn resumes it instead of cold-starting over the folded transcript. */
   delegateSession?: string | null;
+  /** Set when `msgs` were carried in from another transcript (a run opened
+   *  in another agent, continued with Kit, forked) and the Harness holds none
+   *  of them: who held them ("Claude Code"). The first turn sent carries the
+   *  history in its text (`carriedHistory.ts`); after that the Run's own
+   *  Transcript has it. */
+  carriedHistory?: string | null;
   forkedFrom?: {
     conversationId: string;
     title: string;

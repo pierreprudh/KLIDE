@@ -146,6 +146,7 @@ import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
 import { groupToolRuns, pairToolResults, questionVerdicts, toolRunLabel, turnsAfterQuestions } from "./ai/toolRuns";
+import { historyBefore, withCarriedHistory } from "./ai/carriedHistory";
 import { responseCosts } from "./ai/responseCost";
 import { LiveWork } from "./ai/LiveWork";
 import type { AttachedResult } from "./ai/ChatMessage";
@@ -807,6 +808,10 @@ export function AiPanel({
   // the one transition function below.
   const conversationSessionRef = useRef(conversationSession);
   const msgsRef = useRef<Msg[]>(conversationSession.messages);
+  // A conversation carried in from another transcript, waiting for its first
+  // turn to carry that history to the Harness (`carriedHistory.ts`). Spent by
+  // the first request built for it.
+  const carriedHistoryRef = useRef<{ conversationId: string; from: string } | null>(null);
   // The conversation Klide last started a Run in — once it has, a CLI
   // session carried in from a terminal is no longer followed (below).
   const klideRanForRef = useRef<string | null>(null);
@@ -2878,6 +2883,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     setModelActivationDeferred(true);
     manuallyInspectedModelRef.current = null;
     transitionConversation({ type: "resumed", conversation: c });
+    carriedHistoryRef.current = c.carriedHistory != null ? { conversationId: c.id, from: c.carriedHistory } : null;
     // Keep the host's panel record aligned with the atomically adopted
     // Conversation configuration.
     if (c.provider && c.provider !== provider) {
@@ -3436,6 +3442,12 @@ This user request requires workspace inspection. Before answering, you MUST call
    * message was typed. Identity (run id, parent) is the controller's.
    */
   function buildTurnRequest(turn: QueuedTurn): Omit<StartAgentRunInput, "runId" | "parentId"> {
+    const carried = carriedHistoryRef.current;
+    const carry = carried && carried.conversationId === conversationSessionRef.current.conversationId ? carried : null;
+    if (carry) carriedHistoryRef.current = null;
+    const text = carry
+      ? withCarriedHistory(historyBefore(msgsRef.current, turn.text), turn.text, carry.from)
+      : turn.text;
     const toolsAvailable = turn.modelSupportsTools;
     const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
     // Use the same provider capability and prompt as the draft estimate.
@@ -3474,7 +3486,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     return {
       sideQuestionOf: sideQuestionParent,
       workspaceRoot, mode: sideQuestionParent ? "plan" : turn.mode, provider: turn.provider, model: turn.model,
-      text: turn.text, attachments,
+      text, attachments,
       context: { workspaceRoot, attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
       systemPrompt,
       skills: enabledRunSkills(skills),
