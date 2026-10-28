@@ -846,6 +846,21 @@ export function AiPanel({
     transitionConversation({ type: "run-settled" });
   }
   const currentId = conversationSession.conversationId;
+  // What the Delegate terminal is spawned with from a handoff — the CLI
+  // session to resume and the task to start on — latched for the conversation
+  // the panel opened on. The host clears the handoff props as soon as the
+  // panel mounts (`onInitialConsumed`); passing them through live would re-run
+  // the terminal's attach before its first spawn left, and the spawn that did
+  // go out had no session id, so "Resume in OpenCode" opened a new session.
+  const handoffSpawnRef = useRef<{ conversationId: string; resumeSessionId: string | null; task: string | null } | null>(null);
+  if (handoffSpawnRef.current === null) {
+    handoffSpawnRef.current = {
+      conversationId: currentId,
+      resumeSessionId: initialResumeSessionId ?? null,
+      task: initialTask ?? null,
+    };
+  }
+  const handoffSpawn = handoffSpawnRef.current.conversationId === currentId ? handoffSpawnRef.current : null;
   // While this panel shows a conversation, that conversation's cards are on
   // screen: an approval it raises needs no toast (src/runAttention.ts).
   useEffect(() => {
@@ -4287,7 +4302,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             provider={providerName(provider)}
             workspaceRoot={workspaceRoot}
             parentRunId={runView.activeRunId ?? currentId}
-            resumeSessionId={initialResumeSessionId ?? null}
+            resumeSessionId={handoffSpawn?.resumeSessionId ?? null}
             // The spawn model comes from the per-provider store, NOT the
             // `model` prop: on relaunch the prop is App's last value for the
             // panel and can belong to another provider entirely (`claude
@@ -4300,7 +4315,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             // paired with the model it was picked for, and only when the CLI
             // published it (`reflectionLevel` is already filtered to the set).
             effort={storedModelForProvider(provider) === model ? reflectionLevel ?? null : null}
-            task={initialTask ?? null}
+            task={handoffSpawn?.task ?? null}
           />
         ) : (
           <>

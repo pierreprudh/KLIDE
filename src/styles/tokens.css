@@ -8460,21 +8460,43 @@ button:focus-visible .menu-leadout {
   overflow: hidden;
 }
 
+/* The board and the detail are cards on the page — Git Review's pane recipe:
+   one hairline, the card radius, no shadow. Anything raised inside a card
+   (run rows, the evidence strip) is raised relative to the card. */
+.mission-control-board,
+.mission-control-detail {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-panel);
+  overflow: hidden;
+  --bg-elevated: var(--bg-panel);
+}
+
 .mission-control-board {
-  background: color-mix(in srgb, var(--bg-elevated) 28%, var(--bg));
   transition: width 320ms var(--ease-soft);
 }
 
 .mission-control-detail {
   position: relative;
   min-height: 0;
-  overflow: hidden;
-  background: var(--bg);
-  transition: background 220ms var(--ease-out);
 }
 
-.mission-control-workbench[data-inspector-open="true"] .mission-control-detail {
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated));
+/* Docked beside the detail, the inspector is a third card in the same row. */
+.mission-control-workbench .artifact-inspector-shell {
+  transition:
+    width 320ms var(--ease-soft),
+    margin-left 320ms var(--ease-soft),
+    opacity 160ms var(--ease-out);
+}
+
+.mission-control-workbench .artifact-inspector-shell[data-open="true"] {
+  margin-left: 8px;
+}
+
+.mission-control-workbench .artifact-inspector {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: none;
 }
 
 .artifact-inspector-shell {

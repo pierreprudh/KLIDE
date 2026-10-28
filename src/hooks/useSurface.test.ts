@@ -246,7 +246,7 @@ describe("surface predicates", () => {
     ["workbench anchored", ANCHORED_S, false, true, true, true],
     ["workbench free", FREE_S, false, true, true, true],
     ["workbench grid", GRID_S, false, true, true, true],
-    ["overlay runs", RUNS_S, false, true, true, false],
+    ["overlay runs", RUNS_S, false, true, false, false],
     ["overlay settings", SETTINGS_S, false, false, false, false],
     ["overlay git-review", GIT_S, false, true, false, false],
   ];

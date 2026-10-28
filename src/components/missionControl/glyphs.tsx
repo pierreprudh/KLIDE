@@ -397,9 +397,7 @@ export const CompareGlyph = <Glyph><circle cx="6" cy="6" r="2.5" /><circle cx="1
 export const DiffGlyph = <Glyph><path d="M12 4v8" /><path d="M8 8h8" /><path d="M6 20h12" /></Glyph>;
 export const MemoryGlyph = <Glyph><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" /></Glyph>;
 export const CopyGlyph = <Glyph><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></Glyph>;
-export const FolderGlyph = <Glyph><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" /></Glyph>;
 // A document bearing a check — the run's proof, not just its words.
-export const EvidenceGlyph = <Glyph><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="m9 15 2 2 4-4" /></Glyph>;
 
 // Micro glyphs for the review bar — 11px so they sit flush with the 10px mono
 // counts they annotate.

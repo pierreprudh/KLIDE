@@ -2403,17 +2403,29 @@ function App() {
   // that CLI headless with the whole history folded into its prompt
   // (`delegate/chat.rs`). Continuity of the transcript, not of the CLI's own
   // session — the agent starts fresh underneath and reads the thread.
-  async function continueRunInFocus(run: Run, preloadedMessages?: MissionRunMessage[]) {
+  async function continueRunInFocus(
+    run: Run,
+    preloadedMessages?: MissionRunMessage[],
+    opts?: { withKit?: boolean },
+  ) {
     try {
       const messages = preloadedMessages ?? await fetchRunMessages(run);
       if (messages.length === 0) {
         setFileNotice("Run has no readable messages to continue.");
         return;
       }
-      // The agent that produced the run keeps producing it: a CLI run
-      // continues on its own delegate, a Klide run on the provider it ran on.
-      const provider =
-        run.source === "klide"
+      // By default the agent that produced the run keeps producing it: a CLI
+      // run continues on its own delegate, a Klide run on the provider it ran
+      // on. `withKit` hands the thread to Kit instead — Klide's own Harness on
+      // the last API/local pick (never a CLI), or Auto when there is none.
+      const withKit = !!opts?.withKit;
+      const kitProvider = (() => {
+        const last = localStorage.getItem("klide.provider");
+        return last && !isDelegateId(last) && !last.startsWith("cli:") ? (last as ProviderId) : ("auto" as ProviderId);
+      })();
+      const provider = withKit
+        ? kitProvider
+        : run.source === "klide"
           ? (run.provider as ProviderId | undefined)
           : isDelegateId(run.source)
             ? (run.source as ProviderId)
@@ -2429,10 +2441,12 @@ function App() {
           title: run.title,
           forkedFrom: null,
           provider,
+          model: withKit ? localStorage.getItem(`klide.model.${kitProvider}`) || undefined : run.model,
           // A CLI run's id is the session its CLI resumes it under, so the
           // first headless turn continues the real session (`claude --resume`)
-          // rather than cold-starting over the folded transcript.
-          delegateSession: isDelegateId(run.source) ? run.id : null,
+          // rather than cold-starting over the folded transcript. Kit starts
+          // from the folded transcript — it has no CLI session to resume.
+          delegateSession: !withKit && isDelegateId(run.source) ? run.id : null,
         },
       });
     } catch (e) {
@@ -2593,7 +2607,10 @@ function App() {
       provider: opts.provider,
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: opts.initialTask ?? null,
-      cwd: opts.cwd,
+      // A CLI looks its sessions up by the folder they started in (OpenCode's
+      // `-s` silently creates a new one elsewhere), so a resume runs where
+      // the run ran — Mission Control passes that as `workspaceRoot`.
+      cwd: opts.cwd ?? (opts.resumeSessionId ? opts.workspaceRoot ?? undefined : undefined),
     });
   }
 
