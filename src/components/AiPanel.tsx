@@ -4318,12 +4318,15 @@ This user request requires workspace inspection. Before answering, you MUST call
             // --model pierreprudh/lfm2.5…` shipped that way once), and the
             // surface spawns on mount — before the models-load effect can
             // heal the prop. The store is written on every in-session pick,
-            // so it is exactly "the model last used with THIS provider".
-            model={storedModelForProvider(provider)}
-            // The effort follows that same stored model: it is only meaningful
+            // so it is "the model last used with THIS provider" — and with no
+            // usable pick, the newest star, as a provider switch lands. Only
+            // then the CLI's own default, which for OpenCode is a free model
+            // a workspace's privacy settings may refuse.
+            model={switchModelForProvider(provider)}
+            // The effort follows that same model: it is only meaningful
             // paired with the model it was picked for, and only when the CLI
             // published it (`reflectionLevel` is already filtered to the set).
-            effort={storedModelForProvider(provider) === model ? reflectionLevel ?? null : null}
+            effort={switchModelForProvider(provider) === model ? reflectionLevel ?? null : null}
             task={handoffSpawn?.task ?? null}
           />
         ) : (
