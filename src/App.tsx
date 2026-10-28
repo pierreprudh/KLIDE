@@ -65,7 +65,7 @@ import { isForeignModelFor, rememberModelForProvider, switchModelForProvider } f
 import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchCliSessionRun, fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
-import { isDelegateId, type DelegateId } from "./delegates";
+import { delegateLabel, isDelegateId, type DelegateId } from "./delegates";
 import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId } from "./theme";
 import { SETTINGS, getSetting, setSetting, useSetting } from "./settingsStore";
@@ -2361,6 +2361,9 @@ function App() {
     return {
       id,
       title: `Fork: ${run.title}`,
+      // A new id: the Harness has no Transcript for these messages, so the
+      // first turn carries them (`carriedHistory.ts`).
+      carriedHistory: isDelegateId(run.source) ? delegateLabel(run.source) : "Klide",
       // A delegate's tool rows say which CLI ran them; a Klide run's tools
       // went through the harness and carry no such disclaimer.
       msgs: runMessagesToMsgs(messages, isDelegateId(run.source) ? run.source : undefined),
@@ -2457,6 +2460,9 @@ function App() {
           // rather than cold-starting over the folded transcript. Kit starts
           // from the folded transcript — it has no CLI session to resume.
           delegateSession: !withKit && !agent && isDelegateId(run.source) ? run.id : null,
+          // A resumed CLI session already holds the history; anything else
+          // starts a new Run and carries it on the first turn.
+          ...(!withKit && !agent && isDelegateId(run.source) ? { carriedHistory: null } : {}),
         },
       });
     } catch (e) {

@@ -220,7 +220,7 @@ describe("a delegate's own sub-agents", () => {
 describe("toolRunLabel", () => {
   it("counts the calls, and names every distinct tool for the hover", () => {
     expect(toolRunLabel({ calls: 9, names: ["Bash", "Read", "Grep", "Edit"] })).toEqual({
-      label: "9 tool calls",
+      label: "Ran commands, read files, searched files, edited files",
       count: "9 tool calls",
       names: "Bash, Read, Grep, Edit",
     });
@@ -242,8 +242,12 @@ describe("toolRunLabel", () => {
     expect(toolRunLabel({ calls: 2, names: [], observedBy: "hermes" }).label).toBe("2 tool calls");
   });
 
-  it("falls back to the reasoning span, then to the count", () => {
+  it("falls back to the reasoning span, then to what the work did, then to the count", () => {
     expect(toolRunLabel({ calls: 11, names: [], thinkingMs: 6300 }).label).toBe("Thought for 6.3s");
+    // A carried transcript has no timing: the line says what was done, in the
+    // live line's words, rather than a bare count.
+    expect(toolRunLabel({ calls: 4, names: ["Bash", "Read"] }).label).toBe("Ran commands, read files");
+    expect(toolRunLabel({ calls: 4, names: ["Bash"], observedBy: "claude-code" }).label).toBe("Claude Code ran commands");
     expect(toolRunLabel({ calls: 11, names: [] }).label).toBe("11 tool calls");
   });
 });
