@@ -23,6 +23,7 @@ mod cli_commands;
 mod claude_code;
 mod codex;
 mod copilot;
+mod hosted_sessions;
 pub mod home;
 mod omp;
 mod opencode;
@@ -864,6 +865,7 @@ fn list_runs_matching(
     let mut runs: Vec<AgentRun> = Vec::new();
     let mut matched = 0usize;
     let mut misses = 0usize;
+    let hosted = hosted_sessions::all();
     for (i, c) in candidates {
         let Some(run) = PARSED_RUNS.get_or_compute(std::path::Path::new(&c.key), stamps[i], |_| {
             parsers[i]
@@ -872,8 +874,10 @@ fn list_runs_matching(
         }) else {
             continue;
         };
-        // Klide's own conversation is the row for this session already.
-        if run.klide_hosted {
+        // Klide's own conversation is the row for this session already — or
+        // for its parent, when this is one of that session's sub-agents.
+        let hosted_id = |id: &String| hosted.contains(&(ALL[i].id().to_string(), id.clone()));
+        if run.klide_hosted || hosted_id(&run.id) || run.parent_id.as_ref().is_some_and(hosted_id) {
             continue;
         }
         if let Some(root) = workspace_root {
@@ -958,6 +962,28 @@ mod tests {
 
         std::fs::remove_file(&log).unwrap();
         assert!(session_tail(&env, "claude-code", "tail-id", Some(&moved.stamp)).unwrap().is_none(), "a vanished session stops the follower");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn a_session_a_klide_conversation_continues_leaves_the_board_with_its_sub_agents() {
+        let home = std::env::temp_dir().join(format!("klide-hosted-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let proj = home.join(".claude/projects/-tmp-work");
+        std::fs::create_dir_all(proj.join("carried/subagents")).unwrap();
+        let turn = r#"{"type":"user","cwd":"/tmp/work","message":{"content":"my own ask"}}"#;
+        for log in ["carried.jsonl", "carried/subagents/agent-1.jsonl", "mine.jsonl"] {
+            std::fs::write(proj.join(log), turn).unwrap();
+        }
+        hosted_sessions::use_test_path(Some(home.join("hosted_sessions.jsonl")));
+        hosted_sessions::record("claude-code", "carried");
+        let env = home::test_env(&home);
+
+        let ids: Vec<String> = list_runs(&env, 10, 0).into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, ["mine"], "the carried session and its sub-agent are Klide's conversation now");
+        assert!(find_run(&env, "claude-code", "carried").is_some(), "following it by id still works");
+
+        hosted_sessions::use_test_path(None);
         std::fs::remove_dir_all(home).unwrap();
     }
 

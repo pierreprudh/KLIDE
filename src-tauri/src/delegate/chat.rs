@@ -217,7 +217,11 @@ pub async fn run_subscription_chat(
     // nothing is remembered yet — once a turn has run, the CLI's newest id
     // (a fork, a compaction) outranks what the conversation was opened with.
     if let (Some(k), Some(seed)) = (key.as_deref(), delegate_session.as_deref()) {
-        if routed_source.is_none() { seed_session(k, seed); }
+        if routed_source.is_none() {
+            seed_session(k, seed);
+            // This conversation is that session's row now (`hosted_sessions`).
+            super::hosted_sessions::record(adapter.id(), seed);
+        }
     }
     let base_spec = ChatSpec {
         model,
@@ -692,6 +696,7 @@ impl<'a> Emitter<'a> {
             StreamItem::Session(session) => {
                 if let Some(key) = self.session_key {
                     remember_session(key, &session);
+                    super::hosted_sessions::record(self.provider_id, &session);
                 }
             }
             // The CLI's name for its session rides its own chunk; nothing
