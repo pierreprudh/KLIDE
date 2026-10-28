@@ -4,7 +4,7 @@
 
 ### Every agent visible. Every change reviewable.
 
-A local-first coding workspace that runs local models and coding agents side by side — and lets any agent run on any intelligence.
+A local-first coding workspace that runs local models and coding agents side by side, with independent agent and model selection for supported combinations.
 
 <br/>
 
@@ -26,9 +26,9 @@ Klide keeps three questions in view:
 
 - **What is running?** Mission Control tracks Klide runs and delegate command-line interface (CLI) sessions
 - **What needs attention?** Waiting, blocked, failed, and reviewable work rises to the top
-- **What changed?** Each run keeps its files, branch, transcript, validation state, cost, and memory evidence
+- **What changed?** Run inspection brings together available file, branch, transcript, validation, cost, and memory evidence; coverage depends on the runtime
 
-And one rule most tools don't offer: **any agent, any intelligence.** The agent you like and the intelligence you can pay for are two separate choices. Keep Claude Code, Codex, OpenCode, or Hermes as the agent, and point it at an API key, a local model, a self-hosted endpoint, or a subscription. The conversation stays the agent's; the mark in your history shows what actually answered.
+And one rule most tools don't offer: **any agent, any intelligence.** The agent you like and the intelligence you can pay for are two separate choices. Keep Claude Code, Codex, OpenCode, or Hermes as the agent, and point it at an API key, a local model, a self-hosted endpoint, or a subscription. Available combinations depend on the CLI and its adapter; unsupported pairs remain visible with a reason. The conversation stays the agent's; the mark in your history shows what actually answered.
 
 ## Three ways to work
 
@@ -90,7 +90,7 @@ Klide has two modes in the composer, and one command above them:
 |---|---|
 | `Plan` | Reads the workspace and proposes an approach |
 | `Work` | Edits and runs commands — the default. The foot bar sets the policy: review every edit, auto-accept edits, or full auto |
-| `/goal <objective>` | One Work turn with a finish line: the run keeps going until the check you configured passes, and a failed check ends it in error |
+| `/goal <objective>` | One Work turn with a finish line: a failed configured check returns to the model for bounded retries, then ends in error if still failing. Native runs with no changes, or runs with no configured check, can finish without a passing check; a missing check is recorded explicitly |
 
 A model that cannot call tools collapses to a tool-less chat. `Tab` toggles the mode.
 
@@ -103,7 +103,7 @@ A model that cannot call tools collapses to a tool-less chat. `Tab` toggles the 
 | **Agent coordination** | One Rust-owned journal: runs address each other by a stable id, delegate CLIs join through an embedded MCP server, each Delegate session proves itself with its own secret, and another agent's words arrive in one fenced delivery, reviewed before they reach a conversation |
 | **Connectors** | The MCP servers you already configured in Claude Code, Codex, or OpenCode, local or remote; the assistant calls them in Plan and Work (reads free, writes gated per tool), and GitHub connects in one click as the pinned account |
 | **Side questions** | `/btw <question>` opens a saved, read-only conversation beside the main agent with a bounded snapshot of its public context. Uses native models with enforced read-only tools; its Stop affects only the side conversation, and closing the panel hides it |
-| **Background work** | Background shells a Run can read, stop, or be woken by; GitHub CI observer cards that follow a pinned run and open its PR in Git Review; subscription conversations that keep running after the app quits |
+| **Background work** | Background shells a Run can read, stop, or be woken by; GitHub CI observer cards that follow a pinned run and open its PR in Git Review. On macOS, eligible standalone subscription conversations use the local daemon and can continue after the app quits; API runs, Mission attempts and nested workers remain app-hosted. Real CLI quit/relaunch acceptance remains open; see [background conversation scope](docs/BACKGROUND_CONVERSATIONS.md) |
 | **Workers** | `spawn_subagent` hands a task to a Delegate CLI as an approved, isolated Run of its own, watched live from the parent conversation or dispatched in the background with its report delivered when it settles |
 | **Documents** | Native workbook tools that create and revise a recalculated `.xlsx` through the normal review path, plus a built-in sheet surface for `.xlsx` and `.sheet.json` |
 | **Review and evidence** | Diff comments sent to agents, command approval, per-mode tool toggles enforced at dispatch, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
@@ -129,7 +129,7 @@ smoke test.
 
 Klide currently targets macOS. Apple Silicon is the primary development platform.
 
-### Download the unsigned Apple Silicon build
+### Download the ad-hoc signed Apple Silicon build
 
 Download the newest `.app.zip` attached to a release on [GitHub Releases](https://github.com/pierreprudh/KLIDE/releases), unzip it, and move `Klide.app` to Applications. Not every patch release ships a bundle — take the most recent release that has one.
 
@@ -314,7 +314,7 @@ Klide separates the interface from the durable execution layer:
 | **JSON Lines (JSONL) transcripts** | Append-only run events used by Mission Control, validation, memory, and replay |
 | **SQLite conversation index** | The conversation list and its message snapshots, under app data, with no count cap; migrated automatically from earlier builds |
 
-The Rust harness checks capabilities when it advertises tools and again before execution. Writes pause for diff review. Commands and network access pause for permission.
+The Rust harness checks capabilities when it advertises tools and again before execution. Under the default review policy, writes pause for diff review and commands and network access use permission gates. Auto-accept edits and full auto change those gates; existing approvals and project allowlists can also permit execution. Delegate CLIs use their supported permission mechanisms. Workspace-rooted file tools do not sandbox arbitrary shell code; the outside-path warning is a best-effort argument scan.
 
 Read the [Harness contract](./docs/HARNESS_CONTRACT.md) for the trust model and [Harness schema](./docs/KLIDE_HARNESS_SCHEMA.md) for the tool interface.
 The [Memory Engine](./docs/MEMORY_ENGINE.md) and [Project Memory schema](./docs/KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its authenticated MCP search/read boundary for supported Delegates.
@@ -323,7 +323,7 @@ The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordin
 
 ## Project status
 
-Klide is under active development. Its frontend tests, production build, Rust suite, PTY socket integration, and release-bundle boot check pass. Unsigned Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs the Open Anyway step above.
+Klide is under active development. The recorded 2026-10-26 baseline passed 1,753 frontend tests, the production build/bundle-split check, and the Rust suite outside the sandbox. Earlier v0.5 records cover PTY integration and release-bundle boot verification; these are dated results, not a fresh check of every change. Automated checks do not replace the live acceptance work below. Ad-hoc signed Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs the Open Anyway step above.
 
 The current line is **0.6.11** (2026-10-26).
 
@@ -345,11 +345,23 @@ The v0.6 orchestration milestone itself — Missions as outcomes, budget and cap
 
 Current priorities:
 
-- Dogfood the new intelligence routes live: Claude Code on Ollama, Codex on DeepSeek and on the Anthropic wire, OpenCode on a local model, Claude Code on Nous Portal
-- Close the pairs without an adapter before "any" goes on a landing page: Oh My Pi, Amp, Cursor, Factory, and one subscription CLI powering another
-- v0.5.1: dogfood the spreadsheet path and the full race/restart/permission/merge/cleanup path in the app
-- v0.5.1: notarize the macOS bundle, then validate Windows and Linux
-- v0.6: make Missions the primary outcome, with visible budget and capacity, capability routing, automatic validation contracts, and durable background execution with local-to-cloud handoff
+- Finish local stabilization before VPS: real-app approval, stop/resume, restart/recovery, Diff, validation and merge/discard acceptance across native hosted, local and Delegate paths
+- Verify individual worker Cancel in the app, consolidate launch readiness, and record remaining limitations
+- Then build the first VPS slice: one SSH-connected Linux host, one supported CLI and an existing checkout, with launch, stream, stop and reattach
+- Keep spreadsheet and race acceptance open; notarization is deferred, and Windows/Linux still need real app builds and smoke checks (Linux Rust tests run in CI; Windows currently compiles without running its suite)
+- Keep phone control, machine transfer, durable scheduling and broader Mission orchestration for later work
+
+Acceptance recorded so far includes `/btw` on a native Anthropic model
+(2026-10-26), foreground Claude Code worker setup/merge/discard (2026-10-26),
+and background worker approval/finish notifications (2026-10-27). These do not
+establish every provider/runtime combination or desktop quit/relaunch recovery.
+Spreadsheet/race flows, headless compaction, Auto routing in the app, and the
+Anthropic cache display after 10+ minutes still await their live checks.
+OpenCode's transport fixtures and smoke harness use a local mock model; the
+[local inference smoke](scripts/local-inference/results/SMOKE.md) records the
+specific real-server setup checks and model limitations.
+See the [acceptance evidence audit](TODO.md#acceptance-evidence-audit--2026-10-28)
+for sources, evidence scope and the remaining checks.
 
 See the [changelog](./CHANGELOG.md) for shipped milestones.
 

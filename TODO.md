@@ -74,14 +74,45 @@ baseline; unchecked items below are verification or specific remaining gaps.
 - [ ] Consolidate local launch readiness from the existing checks: ready /
   unsupported / needs login / offline / unknown, with a reason and observation
   time. Recheck before dispatch; extend the same answer for VPS later.
-- [ ] Reconcile README/TODO claims with acceptance evidence, leaving unverified
-  or unsupported behavior explicit. Link results here before closing this pass.
+- [x] Reconcile README/TODO claims with acceptance evidence (2026-10-28),
+  leaving unverified or unsupported behavior explicit. Results and remaining
+  live checks: [acceptance evidence audit](#acceptance-evidence-audit--2026-10-28).
+  This closes the documentation audit only; the stabilization pass stays open.
 
 Exit: the checks above pass for the recorded supported paths, with no unresolved
 blocker involving lost work, missed approvals, duplicate execution or misleading
 completion. Then start the narrow VPS execution slice below. Phone control,
 machine transfer, scheduling, new agent integrations and broad redesigns remain
 later work; notarization and other desktop platforms keep their own release scope.
+
+## Acceptance evidence audit — 2026-10-28
+
+Documentation audit against repository code, tracked contracts, and the dated
+acceptance notes below. No model calls, native app exercises, test suites or
+release builds were run for this audit. A checked implementation item is not
+proof of live acceptance for every runtime. Local notes and transcripts are
+machine-local evidence, not fixtures shipped with the repository.
+
+| Claim / flow | Available evidence | Remaining limit or check |
+|---|---|---|
+| Automated baseline | 2026-10-26 result recorded above; current [CI configuration](.github/workflows/ci.yml) defines frontend/build and Rust checks | Historical pass, not a fresh run. Linux tests enabled; Windows compile-only. Desktop acceptance still open |
+| Foreground workers | 2026-10-26 record above: DeepSeek Flash parent, Claude Code worker, setup, commit, Merge cleanup, failed setup and Discard | Does not verify every runtime pair or cancellation stage |
+| Background worker attention | 2026-10-27 record above: hidden parent, approval toast, Allow, finish notification and rail status; [attention handling](src-tauri/src/agent/attention.rs) | Hiding a conversation is not quitting the desktop. Individual Cancel and restart recovery still need acceptance |
+| Worker cancellation / capacity | [Dispatch and setup regressions](src-tauri/src/agent/mod.rs), [worker validation](src-tauri/src/agent/tool_handlers.rs), [dispatch cancellation](src-tauri/src/agent/dispatch_cancel.rs), [API slot queue](src-tauri/src/agent/worker_slots.rs) | Live cancellation matrix remains open; orchestration capacity display still uses fresh planning state per task |
+| `/btw` | Local note `docs/btw-live-acceptance-2026-10-26.md`: real Anthropic model, unchanged canary, concurrent main command, history and panel remount | No app/OS restart or live side-Stop exercise; Delegates that cannot enforce read-only are refused |
+| Desktop quit/relaunch | [Background contract and verification scope](docs/BACKGROUND_CONVERSATIONS.md), [host placement](src-tauri/src/agent/run_host.rs) | Process test uses a fake CLI; real installed-CLI desktop quit/relaunch remains open. Eligible standalone subscription Runs only on Unix; no VPS execution |
+| OpenCode V2 | [Verification notes](docs/OPENCODE_DELEGATE.md#verification), captured CLI fixtures and reproducible mock-model transport smoke | Transport coverage is not a funded real-model desktop acceptance pass; V2 account switching stays CLI-owned |
+| Local inference | [Live smoke record](scripts/local-inference/results/SMOKE.md) for Llama app/managed llama.cpp setup, tool calls and restart selection | Specific servers/model only; not the full local Run recovery/review matrix |
+| Spreadsheets / races | Implemented tools and automated coverage; live acceptance items under v0.5.1 remain unchecked | Create/revise/reject/rollback on local and hosted models; race approval/restart/compare/merge/cleanup still owed |
+| Compaction / caching / Auto | Dated compaction and Ollama continuation records under Context management; [routing contract](docs/MODEL_ROUTING.md) | Headless compaction, delayed Anthropic cache display and Auto desktop flow remain unchecked; no universal runtime acceptance claim |
+| Goal completion / review | [Goal gate](src-tauri/src/agent/goal.rs), [permission engine](src-tauri/src/agent/permission.rs) | Bounded check retries; missing check or unchanged native Run can finish without a pass. Review policy and prior approvals govern prompts; shell path warnings are not containment |
+| Project Memory | [Automatic draft creation](src/components/AiPanel.tsx), [draft inbox](src/memoryDrafts.ts), repository [.gitignore](.gitignore) | Automatic drafts require review; `.klide/memory/` is ignored here. Other repositories choose their sharing policy |
+
+README now states these verification limits and follows the current local-first
+stabilization → narrow VPS priority. No live acceptance item was closed by this
+audit. Next follow-up: verify worker Cancel during setup, API queueing, active
+Delegate/API execution and an approval pause, then reopen and inspect Cancelled
+state and the retained worktree.
 
 ## Orb follow-ups — remote work and continuity
 
@@ -220,11 +251,12 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   boundary or by a follow-up turn (the observer watcher, asking the worker
   registry). Inspect / cancel / read-result go through the coordination verbs
   the child is already registered for; no second door. Shipped 2026-10-13,
-  in-app dogfood owed.
+  foreground/background Claude Code acceptance recorded 2026-10-26/27 above.
+  Individual Cancel and desktop restart recovery remain open.
 - [ ] Align the orchestration capacity display with live admission usage:
   `OrchestratorConsole` currently constructs a fresh `createCapacityState()`
   for each task, rather than reserving against shared live occupancy. Rust
-  already limits API workers to 4 with cancellable queuing (`worker_slots.rs`).
+  already limits API workers to 4 with cancellable queuing (`agent/worker_slots.rs`).
   Delegate CLI workers deliberately have no limit. Other capacity kinds in
   `capacityPlanner.ts` remain a planning model, not enforced admission limits.
   Off-screen permission notifications are implemented (`attention.rs` and
@@ -239,12 +271,14 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   `scriptTimeoutSecs` remains the timeout fallback (default 600 s).
 - [x] Join worker results to validation evidence and a review/apply action
   (2026-10-26). The parent's check command runs in the worker's worktree when
-  it reports (`WorkerOutcome::describe`; result on the report and on the Tool
-  metadata as `validation`). The dispatch row offers Merge / Discard while a
+  it reports (`WorkerOutcome::describe` in `agent/tool_handlers.rs`; result on the report
+  and, for foreground workers, on the Tool metadata as `validation`). The dispatch row offers Merge / Discard while a
   worktree on the branch exists (`WorkerBranchActions`, Mission Control's
-  semantics); nothing removes a worker's worktree on its own. Open: a
-  background worker's check is not cancel-aware (bounded by the command
-  timeout), and Merge has no diff preview on the row: Git Review shows it.
+  semantics); nothing removes a worker's worktree on its own. A
+  background worker's check takes the individual dispatch cancellation token;
+  parent Stop intentionally does not cancel it, and the command timeout still
+  bounds it. Live Cancel during validation remains unverified. Merge has no
+  diff preview on the row: Git Review shows it.
 
 Research and benchmark plan: `docs/workers-comparison-2026-09-21.md` (local notes).
 
@@ -439,7 +473,7 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   Harness Tools with their own `ReadProjectMemory` Transcript capability.
   Architecture, JSON Schemas, website SVGs, and the embedded-MCP PR sequence
   live in `docs/MEMORY_ENGINE.md` and `docs/KLIDE_MEMORY_SCHEMA.md`.
-- [x] Memory auto-summarizer: when a Klide agent run settles with status "done", automatically write a durable Project Memory note from the conversation. Toggle in Settings → Harness (`autoMemoryOnRunDone`, default ON). Manual Summarize header action still works. Inline "Auto-saved" notice under the composer fades after 4s. Done runs only (skip cancelled / errored / delegate providers / single-message exchanges).
+- [x] Memory auto-summarizer foundation (superseded by the v0.4 review inbox below): eligible completed native Runs propose a memory draft, controlled by `autoMemoryOnRunDone` (default ON). Automatic proposals do not become Project Memory until the user reviews and accepts them (`AiPanel.tsx`, `memoryDrafts.ts`). Explicit manual save actions remain available.
 - [x] `userAnswerQuestion` pause tool + `/interview` slash command: new tool in the Rust registry that pauses the harness via oneshot, surfaces an inline Q&A card in the AI panel, returns the user's typed answer to the model. Built-in skill "Codebase Interview" shipped in `DEFAULT_SKILLS` (src/skills.ts) — visible in the Skills modal, toggleable like the Code Review built-in, and the system prompt picks it up automatically. Plan mode, read-only, writes `docs/codebase-decisions.md` at the end. The skill explicitly forbids re-asking the same question (the model must track asked questions in its scratchpad). The `/interview` slash command inlines a self-contained prompt so it works even when the skill is disabled.
 
 - [x] Several API keys per provider, one main (2026-10-19): Settings › API keys
@@ -599,5 +633,6 @@ Three fixes landed (`6c28a74`, `2e49d0a`, `adbcbf4`):
   the project-graph UI — the heuristics weren't earning their place.
   If a real project-graph signal ever lands, it should feed Memory /
   summarization, not the chat composer.
-- `.klide/memory/` write semantics — currently plain workspace files,
-  not gitignored and not auto-committed. The user needs to pick per repo.
+- `.klide/memory/` sharing policy — plain workspace files, ignored in this
+  repository and not auto-committed. Other repositories choose whether to
+  ignore or explicitly share reviewed memory; drafts remain private.
