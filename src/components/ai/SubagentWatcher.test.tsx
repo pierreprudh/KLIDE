@@ -14,8 +14,8 @@ vi.mock("../../agent/client", () => ({
 }));
 vi.mock("../../toast", () => ({ notify: vi.fn() }));
 
-import { SubagentPermissionCard, SubagentWatchLine } from "./SubagentWatcher";
-import { neverStarted, subagentActivity } from "./subagentWatch";
+import { SubagentPermissionCard, SubagentWatchLine, WorkerCancelButton } from "./SubagentWatcher";
+import { isWatchable, neverStarted, subagentActivity } from "./subagentWatch";
 
 const CHILD = "sub_parent_call_1";
 const request: PermissionRequest = {
@@ -65,7 +65,7 @@ describe("SubagentWatchLine", () => {
 
 describe("worker cancellation control", () => {
   const render = (activity: ReturnType<typeof subagentActivity>, runId?: string, stage?: string) =>
-    renderToStaticMarkup(<SubagentWatchLine activity={activity} runId={runId} stage={stage} open={false} onToggle={() => {}} hasRows={false} />);
+    renderToStaticMarkup(<><WorkerCancelButton runId={runId} active={isWatchable(activity)} /><SubagentWatchLine activity={activity} stage={stage} open={false} onToggle={() => {}} hasRows={false} /></>);
 
   it("offers Cancel for a worker during setup, while queued and while running", () => {
     for (const stage of ["Running setup…", "Queued behind 4 running API workers", undefined]) {

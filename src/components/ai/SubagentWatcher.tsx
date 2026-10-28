@@ -20,6 +20,9 @@ import { InlineCommandReview } from "../InlineCommandReview";
 import { resolvePermission, setRunCommandPolicy, stopAgentRun } from "../../agent/client";
 import { notify } from "../../toast";
 import { errMessage } from "../../errors";
+import { CloseIcon } from "../../icons";
+import { Tooltip } from "../Tooltip";
+import "./workerCancel.css";
 import type { AgentEvent, PermissionDecision, PermissionRequest } from "../../agent/types";
 
 export type SubagentWatchState = {
@@ -117,7 +120,6 @@ export function SubagentWatchLine({
   onToggle,
   hasRows,
   stage,
-  runId,
 }: {
   activity: SubagentActivity;
   open: boolean;
@@ -126,8 +128,6 @@ export function SubagentWatchLine({
   hasRows: boolean;
   /** What the dispatch is doing before the child exists ("Running setup…"). */
   stage?: string;
-  /** A Klide-owned child Run (including its cancellable setup/queue). */
-  runId?: string;
 }) {
   const elapsed = useElapsed(activity.status === "starting" || activity.status === "working" ? activity.startedMs : undefined);
   const working = activity.status === "starting" || activity.status === "working";
@@ -203,15 +203,17 @@ export function SubagentWatchLine({
           <CaretRightIcon aria-hidden size={14} pointerEvents="none" className="klide-subagent-chevron" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
         </button>
       )}
-      {working && runId && <WorkerCancelButton key={runId} runId={runId} />}
     </div>
   );
 }
 
-function WorkerCancelButton({ runId }: { runId: string }) {
+/** Hover-revealed header action; its label keeps the cancellation explicit. */
+export function WorkerCancelButton({ runId, active = true }: { runId?: string; active?: boolean }) {
   const [cancelling, setCancelling] = useState(false);
+  if (!runId || !active) return null;
   return (
-    <button type="button" disabled={cancelling} aria-label="Cancel worker"
+    <Tooltip label={cancelling ? "Cancelling worker…" : "Cancel worker"} delay={200}>
+    <button type="button" className="klide-worker-cancel" disabled={cancelling} aria-label={cancelling ? "Cancelling worker" : "Cancel worker"} aria-busy={cancelling}
       onClick={(event) => {
         event.stopPropagation();
         setCancelling(true);
@@ -220,9 +222,10 @@ function WorkerCancelButton({ runId }: { runId: string }) {
           notify(`Couldn't cancel the worker: ${errMessage(error)}`, { tone: "error" });
         });
       }}
-      style={{ border: 0, background: "none", padding: "4px 2px", font: "inherit", fontSize: 11.5, color: "var(--fg-subtle)", cursor: cancelling ? "default" : "pointer", flexShrink: 0, opacity: cancelling ? 0.6 : 1 }}>
-      {cancelling ? "Cancelling…" : "Cancel"}
+      >
+      <CloseIcon size={14} />
     </button>
+    </Tooltip>
   );
 }
 

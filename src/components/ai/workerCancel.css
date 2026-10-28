@@ -1,0 +1,46 @@
+.klide-worker-cancel {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateX(2px);
+  pointer-events: none;
+  transition:
+    opacity 280ms var(--ease-soft),
+    transform 360ms var(--ease-soft),
+    color var(--motion-fast) var(--ease-out);
+}
+.klide-worker:hover .klide-worker-cancel,
+.klide-worker:focus-within .klide-worker-cancel,
+.klide-worker-cancel:focus-visible {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.klide-worker-cancel:hover {
+  color: var(--fg-strong);
+}
+.klide-worker-cancel[aria-busy="true"] {
+  opacity: 0.4;
+  transform: translateX(0);
+  cursor: default;
+  pointer-events: none;
+}
+@media (hover: none) {
+  .klide-worker-cancel {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-worker-cancel { transition: none; }
+}

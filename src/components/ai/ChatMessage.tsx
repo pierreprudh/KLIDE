@@ -27,7 +27,7 @@ import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 import { liftLetteredChoices } from "./QuestionCard";
 
 import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, USER_QUESTION_TOOL, isSpeakingCall, dropVerdictMark, gradeAnswer, questionArgs, toolCallKey, toolRunLabel, withoutAnswerKey, type QuestionVerdict } from "./toolRuns";
-import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
+import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, WorkerCancelButton, useSubagentWatch } from "./SubagentWatcher";
 import { WorkerBranchActions } from "./WorkerBranchActions";
 import { childTranscriptRows, isWatchable, neverStarted } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
@@ -260,21 +260,24 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
   const sentLine = worker && !declined && !setupFailed
     ? `I'm sending a worker: ${providerName(worker)} will work on it${background ? " in the background, and I'll tell you when it reports" : ""}.`
     : null;
+  const activity = declined ? neverStarted("Cancelled at its dispatch card.")
+    : setupFailed ? neverStarted(setupCancelled ? "Cancelled during setup." : "Setup failed before the worker started.")
+    : !watch.loaded && !live ? { ...watch.activity, status: "done" as const } : watch.activity;
   return (
     <>
     {sentLine && <div style={{ marginTop: 8 }}>{renderMarkdown(sentLine)}</div>}
-    <div data-child-run={childRunId} style={{ margin: "8px 0", scrollMarginTop: 72, minWidth: 0, padding: "10px 12px" }}>
+    <div className="klide-worker" data-child-run={childRunId} style={{ margin: "8px 0", scrollMarginTop: 72, minWidth: 0, padding: "10px 12px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         {worker && <ProviderLogo id={worker} size={14} />}
         <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)" }}>{worker ? providerName(worker) : `@${subagent}`}</span>
         {worker && <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>{subagent}</span>}
+        <WorkerCancelButton key={childRunId} runId={live && !setupFailed && !declined ? childRunId : undefined} active={isWatchable(activity)} />
       </div>
       <div style={{ margin: "10px 0 0 7px", padding: "1px 0 2px 18px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
         {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
         <SubagentWatchLine
-          activity={declined ? neverStarted("Cancelled at its dispatch card.") : setupFailed ? neverStarted(setupCancelled ? "Cancelled during setup." : "Setup failed before the worker started.") : !watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
+          activity={activity}
           open={opened} onToggle={toggle} hasRows={started} stage={stage}
-          runId={!setupFailed && !declined && live ? childRunId : undefined}
         />
         {/* Once the worker is done, its branch waits on the operator: merge
             it or drop it, here, without a trip to Mission Control. */}
@@ -459,9 +462,10 @@ function BackgroundSubagentReport({
     [opened, watch.events],
   );
   return (
-    <div style={{ margin: "4px 0 8px" }}>
-      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", marginBottom: 4 }}>
-        @{role}
+    <div className="klide-worker" style={{ margin: "4px 0 8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", marginBottom: 4 }}>
+        <span>@{role}</span>
+        <WorkerCancelButton key={runId} runId={runId} active={pending && isWatchable(watch.activity)} />
         {/* Without a run id to watch there is still something to say. */}
         {pending && !runId && <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}> · working…</span>}
       </div>
@@ -471,7 +475,6 @@ function BackgroundSubagentReport({
           open={opened}
           onToggle={() => setOpened((was) => !was)}
           hasRows={watch.events.length > 0}
-          runId={pending ? runId : undefined}
         />
       )}
       {opened && (
