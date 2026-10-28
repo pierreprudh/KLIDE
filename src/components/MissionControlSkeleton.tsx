@@ -342,84 +342,47 @@ export function MissionControlSkeleton() {
       className="mission-control-workbench"
       aria-busy="true"
       aria-label="Loading Mission Control"
-      style={{ flex: 1, display: "flex", minWidth: 0, background: "var(--bg)" }}
+      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: "var(--bg)" }}
     >
       <style>{SKELETON_CSS}</style>
-      <div
-        className="mission-control-board"
-        style={{
-          width: 340,
-          flexShrink: 0,
-          borderRight: "1px solid var(--border)",
-          display: "flex",
-          flexDirection: "column",
-          minHeight: 0,
-        }}
-      >
-        <header
-          style={{
-            padding: "16px 16px 12px",
-            borderBottom: "1px solid var(--border)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-          }}
-        >
-          {/* Row 1 — the title is real text, not a placeholder: it can be
-              painted before anything is known, and seeing it lands the view.
-              Right side holds the project switcher (22px) and the 28px
-              refresh icon button. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h1
-              style={{
-                fontSize: 14,
-                fontWeight: 600,
-                color: "var(--fg-strong)",
-                margin: 0,
-                flexShrink: 0,
-              }}
-            >
-              Mission Control
-            </h1>
-            <div
-              className="mc-skel"
-              style={{
-                marginLeft: "auto",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                minWidth: 0,
-              }}
-            >
-              <Bar width={96} height={22} radius={6} />
-              <Bar width={28} height={28} radius={6} delay={60} />
-            </div>
-          </div>
-
-          {/* Row 2 — source filter · search · archived. Mirrors the board's
-              own empty state: before runs load there are no agent logos yet,
-              so only the "All" toggle sits left of a full-width search. */}
-          <div className="mc-skel" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Bar width={34} height={28} radius={7} />
-            <Bar grow height={28} radius={8} delay={60} />
-            <Bar width={28} height={28} radius={6} delay={120} />
-          </div>
-        </header>
-
-        {/* No live-sessions strip: it renders nothing until a delegate PTY is
-            found, and inventing one would collapse a moment later. */}
-
-        <div style={{ overflow: "hidden", padding: "8px 8px 16px", flex: 1, minHeight: 0 }}>
-          <div className="mc-skel" aria-hidden>
-            <ComposerPlaceholder icon="plus" labelWidth={64} delay={0} />
-            <ComposerPlaceholder icon="race" labelWidth={148} delay={60} />
-          </div>
-          <BoardRowsSkeleton />
+      {/* Header band — the title is real text, not a placeholder: it can be
+          painted before anything is known, and seeing it lands the view. The
+          search field fills the middle; archive + refresh sit right. */}
+      <header style={{ minHeight: 56, padding: "0 20px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+        <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
+          Mission Control
+        </h1>
+        <div className="mc-skel" style={{ flex: 1, display: "flex", alignItems: "center", gap: 16, minWidth: 0 }}>
+          <Bar grow height={32} radius={10} />
+          <Bar width={60} height={28} radius={6} delay={60} />
         </div>
-      </div>
+      </header>
 
-      <div className="mission-control-detail" style={{ flex: 1, minWidth: 0 }}>
-        <RunDetailSkeleton />
+      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", padding: "0 10px 10px" }}>
+        <div
+          className="mission-control-board"
+          style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0 }}
+        >
+          {/* Source filter — before runs load there are no agent logos yet,
+              so only the "All" toggle. No live-sessions strip: it renders
+              nothing until a delegate PTY is found, and inventing one would
+              collapse a moment later. */}
+          <div className="mc-skel" style={{ padding: "10px 10px 4px" }}>
+            <Bar width={34} height={28} radius={7} />
+          </div>
+
+          <div style={{ overflow: "hidden", padding: "8px 8px 16px", flex: 1, minHeight: 0 }}>
+            <div className="mc-skel" aria-hidden>
+              <ComposerPlaceholder icon="plus" labelWidth={64} delay={0} />
+              <ComposerPlaceholder icon="race" labelWidth={148} delay={60} />
+            </div>
+            <BoardRowsSkeleton />
+          </div>
+        </div>
+
+        <div className="mission-control-detail" style={{ flex: 1, minWidth: 0, marginLeft: 8 }}>
+          <RunDetailSkeleton />
+        </div>
       </div>
     </div>
   );

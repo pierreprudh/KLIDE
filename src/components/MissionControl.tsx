@@ -106,9 +106,7 @@ import {
   CopyGlyph,
   DiffGlyph,
   DismissIcon,
-  EvidenceGlyph,
   ExportGlyph,
-  FolderGlyph,
   ForkGlyph,
   IconActionButton,
   KlideLogo,
@@ -128,7 +126,7 @@ import {
   TurnsGlyph,
   WorktreeGlyph,
 } from "./missionControl/glyphs";
-import { FocusLayoutIcon } from "../icons";
+import { ChevronIcon } from "../icons";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { listCheckpoints } from "../agent/client";
 import type { ArtifactRequest } from "./ArtifactInspector";
@@ -208,6 +206,10 @@ function patchForFile(diff: string, path: string): string {
  * (If the rail should simply be 7px narrower, that is a design call, not a
  * refactor.)
  */
+/** How many "Open in {agent}" marks a run's action row shows before its
+ *  chevron opens the rest. */
+const HANDOFF_PREVIEW = 3;
+
 function RowStatusSpacer({ run, compact }: { run: Run; compact?: boolean }) {
   if (compact) return null;
   if (boardSectionForRun(run) === "ready_for_review") return null;
@@ -1143,92 +1145,6 @@ function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean })
         {meta}
       </div>
     </div>
-  );
-}
-
-function CopyButton({
-  value,
-  label = "Copy",
-  icon,
-}: {
-  value: string | null;
-  label?: string;
-  // When provided, renders as an icon-only square (matching IconActionButton);
-  // otherwise falls back to the original text pill.
-  icon?: React.ReactNode;
-}) {
-  const [copied, setCopied] = useState(false);
-  const disabled = !value;
-
-  async function copy() {
-    if (!value) return;
-    try {
-      await navigator.clipboard?.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  if (icon) {
-    return (
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => void copy()}
-        aria-label={label}
-        title={disabled ? "Nothing to copy" : copied ? "Copied" : label}
-        style={{
-          width: 28,
-          height: 28,
-          flexShrink: 0,
-          display: "grid",
-          placeItems: "center",
-          border: "none",
-          color: disabled ? "var(--fg-dim)" : copied ? "var(--accent)" : "var(--fg-subtle)",
-          background: "transparent",
-          opacity: disabled ? 0.45 : 1,
-          cursor: disabled ? "default" : "pointer",
-          transform: "scale(1)",
-          transformOrigin: "center bottom",
-          transition:
-            "transform 220ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms var(--ease-out)",
-        }}
-        onMouseEnter={(e) => {
-          if (disabled || copied) return;
-          e.currentTarget.style.transform = "scale(1.45)";
-          e.currentTarget.style.color = "var(--fg)";
-        }}
-        onMouseLeave={(e) => {
-          if (copied) return;
-          e.currentTarget.style.transform = "scale(1)";
-          e.currentTarget.style.color = "var(--fg-subtle)";
-        }}
-      >
-        {copied ? CheckGlyph : icon}
-      </button>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => void copy()}
-      title={disabled ? "Nothing to copy" : label}
-      style={{
-        fontSize: 11,
-        padding: "3px 7px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        color: disabled ? "var(--fg-dim)" : copied ? "var(--accent)" : "var(--fg-subtle)",
-        background: copied ? "var(--accent-soft)" : "transparent",
-        opacity: disabled ? 0.55 : 1,
-      }}
-    >
-      {copied ? "Copied" : label}
-    </button>
   );
 }
 
@@ -2782,7 +2698,7 @@ function RunDetail({
   onForkInWorktree?: (run: RunLedgerEntry, messages?: RunMessage[]) => void;
   /** Carry this run's conversation into the Focus canvas and keep talking
    *  there — the chat-first answer to the delegate CLI's own `/resume`. */
-  onContinueInFocus?: (run: RunLedgerEntry, messages?: RunMessage[]) => void;
+  onContinueInFocus?: (run: RunLedgerEntry, messages?: RunMessage[], opts?: { withKit?: boolean }) => void;
   onMergeWorktree?: (run: RunLedgerEntry) => void;
   forkParent?: RunLedgerEntry | null;
   forkChildren?: RunLedgerEntry[];
@@ -2816,14 +2732,23 @@ function RunDetail({
   // three commands inline and had already gone stale — it said "all 3" after omp
   // made it four. The UI only needs to know a resume is possible.
   const resumable = isDelegateId(run.source) && run.capabilities.canResume;
+  // The CLI agent behind this run, if any: its own source, or the Delegate a
+  // Klide conversation ran on headless. Null means Kit drove it.
+  const cliAgent: DelegateId | null = isDelegateId(run.source)
+    ? run.source
+    : run.provider && isDelegateId(run.provider)
+      ? run.provider
+      : null;
   // The full set of CLI sources we can offer as "Open in {source}". Klide
   // runs hand off to one of these with compact task state as the prompt.
   const cliSources: DelegateId[] = handoffTargetsFor(run);
+  const [handoffsExpanded, setHandoffsExpanded] = useState(false);
+  const shownHandoffs = handoffsExpanded ? cliSources : cliSources.slice(0, HANDOFF_PREVIEW);
+  const hiddenHandoffs = cliSources.length - HANDOFF_PREVIEW;
   const [activityTab, setActivityTab] = useState<RunActivityView>("conversation");
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(run.title);
   const [exportState, setExportState] = useState<"idle" | "copying" | "copied" | "error">("idle");
-  const [evidenceState, setEvidenceState] = useState<"idle" | "exporting" | "saved" | "error">("idle");
   const [compareState, setCompareState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [branchDiff, setBranchDiff] = useState<GitBranchDiff | null>(null);
   const [compareError, setCompareError] = useState<string | null>(null);
@@ -2834,7 +2759,6 @@ function RunDetail({
     setCompareState("idle");
     setBranchDiff(null);
     setCompareError(null);
-    setEvidenceState("idle");
   }, [run.id, run.source, run.title]);
 
   function commitRename() {
@@ -2859,28 +2783,6 @@ function RunDetail({
     } catch {
       setExportState("error");
       window.setTimeout(() => setExportState((state) => (state === "error" ? "idle" : state)), 1800);
-    }
-  }
-
-  async function exportEvidence() {
-    setEvidenceState("exporting");
-    try {
-      const res = await invoke<{ markdown: string; relPath: string | null; absPath: string | null }>(
-        "agent_export_evidence",
-        { runId: run.id, workspaceRoot: run.cwd ?? workspaceRoot ?? null },
-      );
-      setEvidenceState("saved");
-      notify(res.relPath ? `Evidence packet saved to ${res.relPath}` : "Evidence packet generated", {
-        action: {
-          label: "Copy Markdown",
-          run: () => void navigator.clipboard.writeText(res.markdown),
-        },
-      });
-      window.setTimeout(() => setEvidenceState((state) => (state === "saved" ? "idle" : state)), 1400);
-    } catch (err) {
-      setEvidenceState("error");
-      notify(`Evidence export failed: ${err instanceof Error ? err.message : String(err)}`);
-      window.setTimeout(() => setEvidenceState((state) => (state === "error" ? "idle" : state)), 1800);
     }
   }
 
@@ -3168,11 +3070,14 @@ function RunDetail({
               }
             />
           )}
+          {/* A Klide conversation keeps the agent it ran on — one that ran on
+              a CLI agent (Hermes, Claude Code…) resumes on that agent, so the
+              button names it and wears its mark rather than Klide's. */}
           {run.source === "klide" && run.capabilities.canResume && onResumeKlide && (
             <IconActionButton
               tone="primary"
-              label="Resume in Klide"
-              icon={<KlideLogo size={16} />}
+              label={cliAgent ? `Resume in ${SOURCE_LABEL[cliAgent]}` : "Resume in Klide"}
+              icon={cliAgent ? <SourceLogo source={cliAgent} size={16} /> : <KlideLogo size={16} />}
               onClick={() => onResumeKlide(run.id)}
             />
           )}
@@ -3181,12 +3086,17 @@ function RunDetail({
               and Focus hosts none — this replays the conversation instead, so
               the next turn runs the same delegate headless with the whole
               thread behind it. */}
-          {onContinueInFocus && run.capabilities.canFork && (
+          {/* The Klide mark means Kit. A run a CLI agent drove is handed to
+              Kit (its transcript carried onto the Focus canvas); a Kit run
+              that can't resume in place is carried there as it is. */}
+          {onContinueInFocus &&
+            run.capabilities.canFork &&
+            (cliAgent || !(run.source === "klide" && run.capabilities.canResume && onResumeKlide)) && (
             <IconActionButton
-              label="Continue in Focus"
+              label={cliAgent ? "Continue with Kit" : "Continue in Klide"}
               description="Its conversation, carried onto the Focus canvas."
-              icon={<FocusLayoutIcon size={16} />}
-              onClick={() => onContinueInFocus(run, messages)}
+              icon={<KlideLogo size={16} />}
+              onClick={() => onContinueInFocus(run, messages, { withKit: !!cliAgent })}
             />
           )}
           {/* "Open in {other CLI}" hands the run off to a fresh delegate TUI in
@@ -3194,7 +3104,7 @@ function RunDetail({
               pass compact task state so the session starts with context. */}
           {onOpenInAiPanel &&
             run.capabilities.canOpenInOtherAgent &&
-            cliSources.map((s) => (
+            shownHandoffs.map((s) => (
               <IconActionButton
                 key={s}
                 label={`Open in ${SOURCE_LABEL[s]}`}
@@ -3210,6 +3120,16 @@ function RunDetail({
                 }
               />
             ))}
+          {/* Every other agent is a hand-off target, so the row would list
+              them all; the first few stay, the chevron opens the rest. */}
+          {onOpenInAiPanel && run.capabilities.canOpenInOtherAgent && hiddenHandoffs > 0 && (
+            <IconActionButton
+              label={handoffsExpanded ? "Fewer agents" : `${hiddenHandoffs} more agent${hiddenHandoffs === 1 ? "" : "s"}`}
+              description={handoffsExpanded ? undefined : "Open this run in another agent."}
+              icon={<span style={{ display: "grid", transform: "rotate(-90deg)" }}><ChevronIcon open={handoffsExpanded} size={14} /></span>}
+              onClick={() => setHandoffsExpanded((v) => !v)}
+            />
+          )}
           {onReviewRun && run.capabilities.canReviewDiff && (
             <IconActionButton
               label="Review changes"
@@ -3281,23 +3201,6 @@ function RunDetail({
               onClick={() => void exportTranscript()}
             />
           )}
-          {run.capabilities.canExportEvidence && (
-            <IconActionButton
-              tone={evidenceState === "saved" ? "success" : "default"}
-              label={
-                evidenceState === "exporting"
-                  ? "Exporting…"
-                  : evidenceState === "saved"
-                  ? "Evidence saved"
-                  : evidenceState === "error"
-                  ? "Evidence export failed — try again"
-                  : "Export evidence packet"
-              }
-              icon={evidenceState === "saved" ? CheckGlyph : EvidenceGlyph}
-              disabled={evidenceState === "exporting"}
-              onClick={() => void exportEvidence()}
-            />
-          )}
           {onRename && run.capabilities.canRename && (
             <IconActionButton
               tone={renaming ? "success" : "default"}
@@ -3316,8 +3219,6 @@ function RunDetail({
               onClick={() => onArchive(run, !run.archived)}
             />
           )}
-          <CopyButton value={run.path || null} label="Copy log path" icon={CopyGlyph} />
-          <CopyButton value={run.cwd} label="Copy cwd" icon={FolderGlyph} />
         </div>
       </div>
 
@@ -4112,7 +4013,7 @@ export function MissionControl({
   onForkRun?: (run: Run, messages?: RunMessage[]) => void;
   onForkRunInWorktree?: (run: Run, messages?: RunMessage[]) => void;
   /** Continue this run as a Focus conversation (see RunDetail). */
-  onContinueRunInFocus?: (run: Run, messages?: RunMessage[]) => void;
+  onContinueRunInFocus?: (run: Run, messages?: RunMessage[], opts?: { withKit?: boolean }) => void;
   onMergeWorktreeRun?: (run: Run) => void;
   /** runId currently being summarised by `onSaveMemory`. Used to show a
    *  subtle spinner on the row so the user knows the model call is in
@@ -4586,7 +4487,7 @@ export function MissionControl({
     <div
       className="mission-control-workbench"
       data-inspector-open={artifactOpen ? "true" : undefined}
-      style={{ flex: 1, display: "flex", minWidth: 0, background: "var(--bg)" }}
+      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: "var(--bg)" }}
     >
       {/* Board motion — same de-blur/spring-settle family as the rest of the app
           (klide-orch-in). Rows fade + rise on first mount with a capped stagger;
@@ -4616,7 +4517,7 @@ export function MissionControl({
         /* source filter — agent logos as toggles; "All" is the resting state.
            Every present source shows; the strip scrolls horizontally rather
            than squeezing search or wrapping. */
-        .mc-srcscroll { display: flex; align-items: center; gap: 1px; min-width: 0; max-width: 58%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; scroll-snap-type: x proximity; }
+        .mc-srcscroll { display: flex; align-items: center; gap: 1px; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; scroll-snap-type: x proximity; }
         .mc-srcscroll::-webkit-scrollbar { height: 0; width: 0; display: none; }
         .mc-src { height: 28px; min-width: 28px; flex-shrink: 0; padding: 0 7px; border: none; background: transparent; border-radius: 7px; cursor: pointer; display: grid; place-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); opacity: 0.42; transition: opacity var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
         .mc-src:hover { opacity: 1; }
@@ -4633,102 +4534,109 @@ export function MissionControl({
           .mc-sec-head .mc-hint { transition: none; }
         }
       `}</style>
-      {/* Left: the board */}
+      {/* Header — one quiet row on the page background, Git Review's band:
+          the view and its project on the left, the search filling the middle
+          like the commit field, the icon actions on the right. No hairline:
+          the cards below carry the structure. No back chevron — Esc returns
+          to the editor and the rail stays reachable. */}
+      <header style={{ minHeight: 56, padding: "0 20px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flexShrink: 0 }}>
+          <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
+            Mission Control
+          </h1>
+          {projectOptions.length > 0 && (
+            <ProjectSwitcher value={projectFilter} options={projectOptions} onChange={setProjectFilter} />
+          )}
+          {/* Only on refresh — during the first scan the row skeleton below
+              already carries the "working on it" signal. */}
+          {loading && filtered.length > 0 && (
+            <span style={{ fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>refreshing…</span>
+          )}
+        </div>
+        <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+          <span aria-hidden style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "grid", placeItems: "center", color: "var(--fg-subtle)", pointerEvents: "none" }}>
+            <SearchIcon />
+          </span>
+          <input
+            value={sessionQuery}
+            onChange={(e) => setSessionQuery(e.target.value)}
+            aria-label="Search sessions"
+            placeholder="Search runs…"
+            style={{
+              width: "100%", height: 32, padding: "0 12px 0 32px",
+              border: "1px solid transparent", borderRadius: "var(--radius-lg)",
+              background: "var(--bg-hover)", color: "var(--fg-strong)", font: "inherit", fontSize: 13, outline: "none",
+              transition: "border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg)"; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = "transparent"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setShowArchived((v) => !v)}
+            aria-pressed={showArchived}
+            title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
+            className="mc-iconbtn"
+            style={showArchived ? { color: "var(--accent)", background: "var(--accent-soft)" } : undefined}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="4" rx="1" />
+              <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+            </svg>
+          </button>
+          <Tooltip label="Refresh" description="Re-reads session logs and Klide conversations">
+            <button onClick={() => void load()} aria-label="Refresh runs" className="mc-iconbtn">
+              <RefreshIcon />
+            </button>
+          </Tooltip>
+        </div>
+      </header>
+
+      {/* Body — the board and the detail as two cards on the page, the same
+          recipe and gutter as Git Review's panes (tokens.css). */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", padding: "0 10px 10px" }}>
       <div
         className="mission-control-board"
         style={{
           width: artifactOpen ? 320 : 340,
           flexShrink: 0,
-          borderRight: "1px solid var(--border)",
           display: "flex",
           flexDirection: "column",
           minHeight: 0,
           overflowX: "hidden",
         }}
       >
-        <header style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Row 1 — title · status chips · refresh. No back chevron: Esc
-              returns to the editor and the activity bar stays reachable. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
-              Mission Control
-            </h1>
-            {/* Only on refresh — during the first scan the row skeleton below
-                already carries the "working on it" signal. */}
-            {loading && filtered.length > 0 && (
-              <span style={{ fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}>loading…</span>
-            )}
-            {/* Project switcher + refresh ride together on the right. */}
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-              {projectOptions.length > 0 && (
-                <ProjectSwitcher value={projectFilter} options={projectOptions} onChange={setProjectFilter} />
-              )}
-              <Tooltip label="Refresh" description="Re-reads session logs and Klide conversations">
-                <button onClick={() => void load()} aria-label="Refresh runs" className="mc-iconbtn">
-                  <RefreshIcon />
-                </button>
-              </Tooltip>
-            </div>
-          </div>
-
-          {/* Row 2 — source filter (agent logos) · search · archived.
-              Project switching lives in the native macOS Projects menu;
-              the board stays scoped to the current project by default. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div role="group" aria-label="Filter by agent" className="mc-srcscroll">
-              <button
-                type="button"
-                className={`mc-src${sourceFilter === "all" ? " active" : ""}`}
-                aria-pressed={sourceFilter === "all"}
-                onClick={() => setSourceFilter("all")}
-                title="All runs"
-              >
-                All
-              </button>
-              {presentSources.length > 0 && <span className="mc-srcdiv" aria-hidden />}
-              {presentSources.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className={`mc-src${sourceFilter === s ? " active" : ""}`}
-                  aria-pressed={sourceFilter === s}
-                  aria-label={SOURCE_LABEL[s]}
-                  title={SOURCE_LABEL[s]}
-                  onClick={() => setSourceFilter(sourceFilter === s ? "all" : s)}
-                >
-                  <SourceMark source={s} size={16} />
-                </button>
-              ))}
-            </div>
-            <div style={{ position: "relative", flex: "1 1 auto", minWidth: 0 }}>
-              <span aria-hidden style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", display: "grid", placeItems: "center", color: "var(--fg-subtle)", pointerEvents: "none" }}>
-                <SearchIcon />
-              </span>
-              <input
-                value={sessionQuery}
-                onChange={(e) => setSessionQuery(e.target.value)}
-                aria-label="Search sessions"
-                placeholder="Search"
-                style={{ width: "100%", height: 28, padding: "3px 8px 3px 28px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-strong)", fontSize: 11, fontFamily: "inherit", outline: "none", transition: "border-color var(--motion-fast) var(--ease-out)" }}
-                onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-                onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
-              />
-            </div>
+        {/* Source filter — agent logos as toggles, "All" at rest. It filters
+            this card's list, so it opens the card rather than the page. */}
+        <div style={{ padding: "10px 10px 4px", flexShrink: 0 }}>
+          <div role="group" aria-label="Filter by agent" className="mc-srcscroll">
             <button
               type="button"
-              onClick={() => setShowArchived((v) => !v)}
-              aria-pressed={showArchived}
-              title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
-              className="mc-iconbtn"
-              style={showArchived ? { color: "var(--accent)", background: "var(--accent-soft)" } : undefined}
+              className={`mc-src${sourceFilter === "all" ? " active" : ""}`}
+              aria-pressed={sourceFilter === "all"}
+              onClick={() => setSourceFilter("all")}
+              title="All runs"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="4" width="18" height="4" rx="1" />
-                <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
-              </svg>
+              All
             </button>
+            {presentSources.length > 0 && <span className="mc-srcdiv" aria-hidden />}
+            {presentSources.map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`mc-src${sourceFilter === s ? " active" : ""}`}
+                aria-pressed={sourceFilter === s}
+                aria-label={SOURCE_LABEL[s]}
+                title={SOURCE_LABEL[s]}
+                onClick={() => setSourceFilter(sourceFilter === s ? "all" : s)}
+              >
+                <SourceMark source={s} size={16} />
+              </button>
+            ))}
           </div>
-        </header>
+        </div>
 
         <LiveSessionsStrip
           sessions={liveSessions}
@@ -4805,20 +4713,23 @@ export function MissionControl({
                 <div key={section} style={{ marginBottom: 14 }}>
                   <div
                     className="mc-sec-head"
+                    // Git Review's section label: UI face, bold caps, the
+                    // name in body colour and the count dim beside it.
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: 6,
-                      padding: "4px 10px",
-                      fontSize: 10,
-                      letterSpacing: "0.06em",
+                      height: 28,
+                      padding: "0 10px",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: "0.04em",
                       textTransform: "uppercase",
-                      color: "var(--fg-subtle)",
-                      fontFamily: "var(--font-mono)",
+                      color: "var(--fg)",
                     }}
                   >
                     {BOARD_SECTION_LABEL[section]}
-                    <span style={{ opacity: 0.7 }}>{visible.length}</span>
+                    <span style={{ color: "var(--fg-dim)" }}>{visible.length}</span>
                     {/* The section's meaning, revealed softly on hover — no
                         abrupt native tooltip. */}
                     <span
@@ -4831,7 +4742,7 @@ export function MissionControl({
                         whiteSpace: "nowrap",
                         textTransform: "none",
                         letterSpacing: "0.01em",
-                        fontFamily: "var(--font-ui)",
+                        fontWeight: 400,
                         fontSize: 10.5,
                         color: "var(--fg-dim)",
                       }}
@@ -5117,11 +5028,11 @@ export function MissionControl({
                 margin: "4px 8px 0",
                 padding: "8px",
                 fontSize: 11,
-                fontFamily: "var(--font-mono)",
                 color: "var(--fg-subtle)",
-                border: "1px dashed var(--border)",
-                borderRadius: "var(--radius-sm)",
+                border: "none",
+                borderRadius: "var(--radius-md)",
                 background: "transparent",
+                cursor: "pointer",
               }}
               onMouseEnter={(e) => {
                 if (!loadingMore) e.currentTarget.style.background = "var(--bg-hover)";
@@ -5138,7 +5049,7 @@ export function MissionControl({
         {error && (
           <div
             style={{
-              padding: "8px 16px",
+              padding: "8px 14px",
               fontSize: 11,
               color: "var(--fg-subtle)",
               borderTop: "1px solid var(--border)",
@@ -5150,7 +5061,7 @@ export function MissionControl({
       </div>
 
       {/* Right: detail */}
-      <div className="mission-control-detail" style={{ flex: 1, minWidth: 0 }}>
+      <div className="mission-control-detail" style={{ flex: 1, minWidth: 0, marginLeft: 8 }}>
         {selectedTask ? (
           <TaskDetail task={selectedTask} theme={theme} />
         ) : selectedRun ? (
@@ -5234,6 +5145,7 @@ export function MissionControl({
             />
           </Suspense>
         )}
+      </div>
       </div>
     </div>
   );
