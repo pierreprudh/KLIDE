@@ -1,7 +1,46 @@
+/* A gentle start and finish: text fades in place instead of being wiped by
+   a shrinking width. The header keeps its geometry throughout the handoff. */
+.klide-subagent-tray {
+  --subagent-morph-duration: 560ms;
+  --subagent-morph-ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+.klide-subagent-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  opacity: 0;
+  transform: translateY(3px);
+  filter: blur(2px);
+  transition:
+    opacity 400ms var(--subagent-morph-ease),
+    filter 400ms var(--subagent-morph-ease),
+    transform var(--subagent-morph-duration) var(--subagent-morph-ease);
+}
+.klide-subagent-summary[data-visible="true"] {
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
+  transition-delay: 80ms;
+}
+.klide-subagent-rows {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--subagent-morph-duration) var(--subagent-morph-ease),
+    opacity 400ms var(--subagent-morph-ease);
+}
+.klide-subagent-rows[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
 /* The sub-agent tray's marks (SubagentTray.tsx). A hairline circle per
    sub-agent; while it works an accent arc turns over it, the plan rows'
-   comet at a walking pace; when it is done the ring unwinds and a check
-   draws in its place. Dash values are percentages (pathLength=100). */
+   comet at a walking pace; when it is done a solid circle holds a crisp
+   contrasting check. Dash values are percentages (pathLength=100). */
 .klide-subagent-mark {
   display: block;
   overflow: visible;
@@ -32,31 +71,27 @@
   transform-origin: 7px 7px;
   animation: klide-subagent-mark-spin 1.6s linear infinite;
 }
-/* Done: the full ring closes back along itself as the check is drawn —
-   one stroke handing over to the next, not a swap. */
-.klide-subagent-mark-unwind {
-  stroke: var(--accent);
-  stroke-dasharray: 100 100;
-  transform-origin: 7px 7px;
-  transform: rotate(-90deg);
-  animation: klide-subagent-mark-unwind 360ms var(--ease-soft) forwards;
+/* The reference's filled validation badge, in the current theme's accent. */
+.klide-subagent-mark-complete {
+  fill: var(--accent);
+  stroke: none;
+  animation: klide-subagent-mark-complete 180ms var(--ease-soft) both;
 }
 .klide-subagent-mark-check {
-  stroke: var(--accent);
-  stroke-width: 1.5;
+  stroke: #fff;
+  stroke-width: 1.7;
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
-  animation: klide-subagent-mark-check 300ms var(--ease-soft) 160ms forwards;
+  animation: klide-subagent-mark-check 240ms var(--ease-soft) 80ms forwards;
 }
 @keyframes klide-subagent-mark-spin {
   to {
     transform: rotate(360deg);
   }
 }
-@keyframes klide-subagent-mark-unwind {
-  to {
-    stroke-dasharray: 0 100;
-  }
+@keyframes klide-subagent-mark-complete {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 @keyframes klide-subagent-mark-check {
   to {
@@ -88,14 +123,19 @@
   text-decoration-color: color-mix(in srgb, var(--fg-dim) 70%, transparent);
 }
 @media (prefers-reduced-motion: reduce) {
+  .klide-subagent-tray {
+    --subagent-morph-duration: 0ms;
+  }
+  .klide-subagent-summary,
+  .klide-subagent-rows,
   .klide-subagent-kind {
     transition: none;
   }
   .klide-subagent-mark-arc {
     animation: none;
   }
-  .klide-subagent-mark-unwind {
-    display: none;
+  .klide-subagent-mark-complete {
+    animation: none;
   }
   .klide-subagent-mark-check {
     animation: none;

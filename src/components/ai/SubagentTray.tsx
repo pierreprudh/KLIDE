@@ -28,7 +28,7 @@ export function SubagentTray({ subagents }: { subagents: TraySubagent[] }) {
   const mixedKinds = new Set(subagents.map((s) => s.kind)).size > 1;
   return (
     <div
-      className="ai-msg-in"
+      className="ai-msg-in klide-subagent-tray"
       style={{
         margin: "0 14px -1px",
         border: "1px solid var(--composer-border)",
@@ -46,16 +46,18 @@ export function SubagentTray({ subagents }: { subagents: TraySubagent[] }) {
       >
         {provider && <ProviderLogo id={provider as ProviderId} size={12} />}
         <span style={{ color: "var(--fg)" }}>{subagents.length === 1 ? "Sub-agent" : `${subagents.length} sub-agents`}</span>
-        <span style={{ color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{traySummary(subagents)}</span>
-        <ChevronIcon open={open} size={12} style={{ marginLeft: "auto", flexShrink: 0, color: "var(--fg-dim)" }} />
+        <span className="klide-subagent-summary" data-visible={!open} aria-hidden={open}>{traySummary(subagents)}</span>
+        <ChevronIcon open={open} size={12} style={{ marginLeft: "auto", flexShrink: 0, color: "var(--fg-dim)", transition: "transform var(--subagent-morph-duration) var(--subagent-morph-ease)" }} />
       </button>
-      {open && (
-        <div style={{ maxHeight: 260, overflowY: "auto", padding: "0 0 6px" }}>
-          {subagents.map((s) => (
-            <TrayRow key={s.id} subagent={s} showKind={mixedKinds} open={opened === s.id} onToggle={() => setOpened((was) => (was === s.id ? null : s.id))} />
-          ))}
+      <div className="klide-subagent-rows" data-open={open} aria-hidden={!open} inert={!open}>
+        <div style={{ minHeight: 0, overflow: "hidden" }}>
+          <div style={{ maxHeight: 260, overflowY: "auto", padding: "0 0 6px" }}>
+            {subagents.map((s) => (
+              <TrayRow key={s.id} subagent={s} showKind={mixedKinds} open={opened === s.id} onToggle={() => setOpened((was) => (was === s.id ? null : s.id))} />
+            ))}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -110,8 +112,8 @@ function TrayRow({ subagent: s, showKind, open, onToggle }: { subagent: TraySuba
   );
 }
 
-/** A circle per sub-agent: a turning arc while it works; when it is done the
- *  ring unwinds as a check draws in. Failed keeps the ring in the danger
+/** A circle per sub-agent: a turning arc while it works; when it is done a
+ *  filled circle carries a contrasting check. Failed keeps the ring in the danger
  *  colour; a sub-agent that stopped or ended without a report keeps a broken
  *  ring, because nothing said it finished. */
 function SubagentMark({ status }: { status: TraySubagent["status"] }) {
@@ -122,8 +124,8 @@ function SubagentMark({ status }: { status: TraySubagent["status"] }) {
       {state === "running" && <circle className="klide-subagent-mark-arc" cx={7} cy={7} r={6} fill="none" pathLength={100} strokeLinecap="round" />}
       {state === "done" && (
         <>
-          <circle className="klide-subagent-mark-unwind" cx={7} cy={7} r={6} fill="none" pathLength={100} />
-          <path className="klide-subagent-mark-check" d="M3.8 7.2 6 9.3 10.2 4.9" fill="none" pathLength={100} strokeLinecap="round" strokeLinejoin="round" />
+          <circle className="klide-subagent-mark-complete" cx={7} cy={7} r={6} />
+          <path className="klide-subagent-mark-check" d="M4.2 7.1 6.1 9 9.8 5.2" fill="none" pathLength={100} strokeLinecap="round" strokeLinejoin="round" />
         </>
       )}
     </svg>
