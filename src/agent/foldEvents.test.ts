@@ -467,6 +467,34 @@ describe("foldAgentEvents", () => {
       expect(toolMsg).toMatchObject({ toolName: "Edit", observedBy: "claude-code" });
     });
 
+    it("keeps a delegate's sub-agent steps under the call that started them", () => {
+      // Claude Code fanning out two sub-agents (2026-10-28): every step a
+      // sub-agent takes names its `Agent` call. They are that sub-agent's
+      // steps, not the turn's, so they ride the call rather than becoming rows.
+      const observed = (toolCallId: string, name: string, parentToolCallId?: string): AgentEvent => ({
+        type: "observed_tool_call", runId: RUN, toolCallId, provider: "claude-code", name, input: {}, summary: name, ts: at(), ...(parentToolCallId ? { parentToolCallId } : {}),
+      });
+      const done = (toolCallId: string, parentToolCallId?: string): AgentEvent => ({
+        type: "observed_tool_result", runId: RUN, toolCallId, ok: true, content: "ok", ts: at(), ...(parentToolCallId ? { parentToolCallId } : {}),
+      });
+      const rows = foldAgentEvents([
+        observed("A", "Agent"), observed("B", "Agent"),
+        observed("ra", "Read", "A"), observed("rb", "Read", "B"), done("ra", "A"), done("rb", "B"),
+        done("A"),
+      ]);
+      expect(rows).toHaveLength(1);
+      const row = rows[0];
+      if (row.kind !== "assistant") throw new Error("expected one assistant row");
+      expect(row.toolCalls.map((t) => t.id)).toEqual(["A", "B"]);
+      expect(row.toolCalls[0].nested?.map((e) => e.type)).toEqual(["observed_tool_call", "observed_tool_result"]);
+      expect(row.toolCalls[0]).toMatchObject({ status: "finished" });
+      expect(row.toolCalls[1]).toMatchObject({ status: "started" });
+
+      const assistant = foldedRowToMsgs(row).find((m) => m.role === "assistant");
+      if (assistant?.role !== "assistant") throw new Error("expected an assistant message");
+      expect(assistant.toolCalls?.[1]).toMatchObject({ observedBy: "claude-code", nested: [{ toolCallId: "rb" }, { toolCallId: "rb" }] });
+    });
+
     it("does not repeat text the rows above a delegate's tool card already show", () => {
       // Reproduces a duplicated preamble seen in Focus with Claude Code. A
       // delegate interleaves its own tool calls with its prose inside ONE turn,

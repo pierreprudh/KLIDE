@@ -19,17 +19,17 @@ import type { ResponseCost } from "./responseCost";
 import { ConnectorMark } from "../linkMark";
 import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
-import type { ProviderId } from "../../agent/types";
+import type { AgentEvent, ProviderId } from "../../agent/types";
 import { conversationMark } from "../../modelIdentity";
 import { AgentMark } from "../fileMarks";
 import { formatElapsed, useElapsed } from "./WorkingRow";
 import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 import { liftLetteredChoices } from "./QuestionCard";
 
-import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, SPEAKING_TOOLS, USER_QUESTION_TOOL, dropVerdictMark, gradeAnswer, questionArgs, toolCallKey, toolRunLabel, withoutAnswerKey, type QuestionVerdict } from "./toolRuns";
+import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, USER_QUESTION_TOOL, isObservedSubagent, isSpeakingCall, dropVerdictMark, gradeAnswer, questionArgs, toolCallKey, toolRunLabel, withoutAnswerKey, type QuestionVerdict } from "./toolRuns";
 import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
 import { WorkerBranchActions } from "./WorkerBranchActions";
-import { childTranscriptRows, isWatchable, neverStarted } from "./subagentWatch";
+import { childTranscriptRows, isWatchable, neverStarted, subagentActivity, type SubagentActivity } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
 // The thinking block: a disclosure line and, under it, the reasoning as one
@@ -327,6 +327,55 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
       </div>
     </div>
     </>
+  );
+}
+
+// A sub-agent the Delegate CLI started on its own — Claude Code's `Agent`
+// tool, many at once under a skill that fans out. Drawn the way Klide's own
+// delegation is: whose it is, the brief, one live line, the steps one click
+// away. The steps arrive nested under the call (`FoldedToolCall.nested`), so
+// they fold through the one fold exactly as a watched child Run's do. Klide
+// gated none of it — the CLI's mark says whose permission mode it ran under.
+function ObservedSubagentRow({ args, observedBy, nested, settled, failed }: { args: unknown; observedBy: string; nested?: AgentEvent[]; settled: boolean; failed?: boolean }) {
+  const o = (args ?? {}) as Record<string, unknown>;
+  const kind = typeof o.subagent_type === "string" && o.subagent_type.trim() ? o.subagent_type.trim() : "sub-agent";
+  const brief = typeof o.description === "string" && o.description.trim() ? o.description : typeof o.prompt === "string" ? o.prompt : "";
+  const task = brief.replace(/\s+/g, " ").trim();
+  const [opened, setOpened] = useState(false);
+  const activity = useMemo((): SubagentActivity => {
+    const events = nested ?? [];
+    const seen = subagentActivity(events);
+    const startedMs = events[0]?.ts;
+    // The call's own result is the settlement: the CLI hands the report back
+    // when the sub-agent stops, whatever its last step was.
+    if (settled) return { ...seen, startedMs, status: failed ? "failed" : "done", current: null, error: failed ? "Stopped" : undefined };
+    return { ...seen, startedMs };
+  }, [nested, settled, failed]);
+  const rows = useMemo(
+    () => (opened && nested?.length ? childTranscriptRows(foldedToMsgs(foldAgentEvents(nested)), task) : []),
+    [opened, nested, task],
+  );
+  return (
+    <div style={{ margin: "8px 0", minWidth: 0, padding: "10px 12px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <ProviderLogo id={observedBy as ProviderId} size={14} />
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)" }}>{kind}</span>
+        <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>{providerName(observedBy as ProviderId)} sub-agent</span>
+      </div>
+      <div style={{ margin: "10px 0 0 7px", padding: "1px 0 2px 18px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
+        {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
+        <SubagentWatchLine activity={activity} open={opened} onToggle={() => setOpened((was) => !was)} hasRows={!!nested?.length} />
+        <div className="klide-subagent-reveal" data-open={opened ? "true" : "false"} inert={!opened}>
+          <div>
+            {opened && rows.length > 0 && (
+              <div className="ai-msg-in" style={{ marginTop: 12 }}>
+                {rows.map((row, i) => <div key={i}>{renderMessageBody(row, false, { nested: true })}</div>)}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -643,7 +692,12 @@ function InlineToolRun({ count, working, children }: { count: string; working: b
   );
 }
 
-function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot, onOpenRun, verdict }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; workspaceRoot?: string | null; onOpenRun?: (runId: string) => void; verdict?: QuestionVerdict }) {
+function ToolCallRow({ name, args, count = 1, result, childRunId, observedBy, nested, failed, workspaceRoot, onOpenRun, verdict }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string; observedBy?: string; nested?: AgentEvent[]; failed?: boolean; workspaceRoot?: string | null; onOpenRun?: (runId: string) => void; verdict?: QuestionVerdict }) {
+  // The CLI's own sub-agent owns its status line and its steps; its report
+  // goes back to the CLI, which answers with it, so it is not drawn twice.
+  if (observedBy && isObservedSubagent({ name, observedBy })) {
+    return <ObservedSubagentRow args={args} observedBy={observedBy} nested={nested} settled={!!result && !/^Running /.test(result.msg.content)} failed={failed} />;
+  }
   // A planned Mission is drawn, not printed: the card reads the draft the
   // receipt names and carries the operator's approval. Until the receipt
   // lands, or if the call failed, the row is an ordinary tool call.
@@ -1697,10 +1751,10 @@ function MessageBodyImpl({ m, active = false, workspaceRoot, results, onOpenRun,
             calls.map((tc, index) => ({ tc, key: toolCallKey(tc, index) })),
             ({ tc }) => (COORDINATION_TOOL_NAMES.has(tc.name) ? `${tc.name}\n${JSON.stringify(tc.args ?? null)}` : null),
           ).map(({ item: { tc, key }, count }) => (
-            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} verdict={questionVerdict} />
+            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} observedBy={tc.observedBy} nested={tc.nested} failed={tc.failed} workspaceRoot={workspaceRoot} onOpenRun={onOpenRun} verdict={questionVerdict} />
           ));
           // A call that draws a card is the point of the turn, never folded.
-          if (inRun || !visibleContent || calls.length < MIN_STACKED_CALLS || calls.some((tc) => SPEAKING_TOOLS.has(tc.name))) return rows;
+          if (inRun || !visibleContent || calls.length < MIN_STACKED_CALLS || calls.some(isSpeakingCall)) return rows;
           const names: string[] = [];
           for (const tc of calls) if (!names.includes(tc.name)) names.push(tc.name);
           const label = toolRunLabel({ calls: calls.length, names });

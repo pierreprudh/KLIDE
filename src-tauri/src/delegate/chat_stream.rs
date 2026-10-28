@@ -59,6 +59,11 @@ pub(crate) enum StreamItem {
         ok: bool,
         content: String,
     },
+    /// A tool call or result from inside a sub-agent the CLI started itself
+    /// (Claude Code's `Agent` tool). `parent` is the id of that call, so the
+    /// conversation can draw the sub-agent's steps under it instead of as the
+    /// turn's own.
+    Nested { parent: String, item: Box<StreamItem> },
     /// The terminating line: what the CLI thinks the turn cost.
     Finished {
         cost_usd: Option<f64>,

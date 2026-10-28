@@ -1,7 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentMode } from "./types";
+import type { AgentEvent, AgentMode } from "./types";
 
-export type AgentToolCall = { id?: string; name: string; args: any; childRunId?: string };
+export type AgentToolCall = {
+    id?: string;
+    name: string;
+    args: any;
+    childRunId?: string;
+    /** The Delegate CLI that ran this call itself (see `FoldedToolCall`). */
+    observedBy?: string;
+    /** A Delegate's own sub-agent call: the steps it took, as events. */
+    nested?: AgentEvent[];
+    /** An observed call whose result the CLI marked as an error. */
+    failed?: boolean;
+};
 
 // The Rust tool registry is the source of truth. The frontend fetches
 // tool schemas over IPC so there is only one copy of each tool's name,

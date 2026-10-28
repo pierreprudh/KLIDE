@@ -55,6 +55,11 @@ export type FoldedToolCall = {
    *  so it is carried on the call rather than re-derived from a parent id the
    *  renderer does not have. */
   childRunId?: string;
+  /** For a sub-agent the Delegate CLI started itself (Claude Code's `Agent`):
+   *  the observed calls and results it made, in order. They are its steps,
+   *  not the turn's, so they ride the call that started them — the row folds
+   *  them through this same fold when it is opened. */
+  nested?: AgentEvent[];
 };
 
 /** Per-message footer metrics. One type for both paces — a turn must read the
@@ -656,6 +661,14 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     // Work a delegate CLI did on its own. Same row shape as a dispatched call
     // so the conversation reads consistently, tagged with who ran it so nothing
     // downstream can claim Klide gated it.
+    if ((event.type === "observed_tool_call" || event.type === "observed_tool_result") && event.parentToolCallId) {
+      const host = findTool(event.parentToolCallId);
+      if (host) {
+        host.call.nested = [...(host.call.nested ?? []), event];
+        return { changed: [host.idx] };
+      }
+    }
+
     if (event.type === "observed_tool_call") {
       const idx = upsertTool(event.toolCallId, (t) => {
         t.name = event.name;
@@ -1033,6 +1046,9 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
             // off it, and the memory summarizer extracts file paths from it.
             args: t.input,
             childRunId: t.childRunId,
+            ...(t.observedBy ? { observedBy: t.observedBy } : {}),
+            ...(t.nested ? { nested: t.nested } : {}),
+            ...(t.observedBy && t.result?.ok === false ? { failed: true } : {}),
           }))
         : undefined,
       meta: row.meta

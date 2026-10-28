@@ -290,9 +290,12 @@ export type AgentEvent =
       name: string;
       input: unknown;
       summary: string;
+      /** Set when the step ran inside one of the delegate's own sub-agents:
+       *  the id of the observed call that started it (Claude Code's `Agent`). */
+      parentToolCallId?: string;
       ts: number;
     }
-  | { type: "observed_tool_result"; runId: string; toolCallId: string; ok: boolean; content: string; ts: number }
+  | { type: "observed_tool_result"; runId: string; toolCallId: string; ok: boolean; content: string; parentToolCallId?: string; ts: number }
   /** The delegate CLI named its session itself (OpenCode titles a session
    *  with a small model after its first message). A suggestion for the
    *  conversation's title; a name the person typed always wins. */

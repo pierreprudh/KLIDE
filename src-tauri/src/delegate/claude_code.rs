@@ -272,7 +272,14 @@ impl Delegate for ClaudeCode {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             return Vec::new();
         };
-        match value.get("type").and_then(|v| v.as_str()) {
+        // A line a sub-agent wrote (its `Agent` call's id rides every one).
+        // Its tool work is kept, nested under that call; its words are not
+        // this turn's answer, so they are dropped.
+        let parent = value
+            .get("parent_tool_use_id")
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.is_empty());
+        let items = match value.get("type").and_then(|v| v.as_str()) {
             // Only `init` carries the session id and the command list; the
             // other `system` lines (hook_started, hook_response, …) are noise
             // for our purposes.
@@ -331,6 +338,14 @@ impl Delegate for ClaudeCode {
                 turns: value.get("num_turns").and_then(|v| v.as_i64()),
             }],
             _ => Vec::new(),
+        };
+        match parent {
+            None => items,
+            Some(parent) => items
+                .into_iter()
+                .filter(|item| matches!(item, StreamItem::ToolCall { .. } | StreamItem::ToolResult { .. }))
+                .map(|item| StreamItem::Nested { parent: parent.to_string(), item: Box::new(item) })
+                .collect(),
         }
     }
 
@@ -942,6 +957,41 @@ mod tests {
     const RESULT_LINE: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"1\t<div align=\"center\">"}]}}"#;
     const RATE_LIMIT: &str = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#;
     const FINISHED: &str = r#"{"type":"result","subtype":"success","total_cost_usd":0.348942,"num_turns":2}"#;
+
+    /// Lines from a real `claude -p` turn that fanned out two sub-agents
+    /// (2026-10-28): every line a sub-agent wrote names its `Agent` call.
+    #[test]
+    fn a_sub_agents_tool_work_nests_under_its_agent_call_and_its_words_do_not_reach_the_answer() {
+        let agent_call = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Read a.txt contents","subagent_type":"general-purpose"}}]}}"#;
+        let brief = r#"{"type":"user","parent_tool_use_id":"toolu_A","message":{"role":"user","content":[{"type":"text","text":"Read the file a.txt"}]}}"#;
+        let child_call = r#"{"type":"assistant","parent_tool_use_id":"toolu_A","message":{"content":[{"type":"text","text":"Reading it now."},{"type":"tool_use","id":"toolu_R","name":"Read","input":{"file_path":"/ws/a.txt"}}]}}"#;
+        let child_result = r#"{"type":"user","parent_tool_use_id":"toolu_A","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_R","content":"1\tapple"}]}}"#;
+        let child_delta = r#"{"type":"stream_event","parent_tool_use_id":"toolu_A","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"apple"}}}"#;
+        let report = r#"{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"a.txt says apple"}]}]}}"#;
+
+        assert!(matches!(&ClaudeCode.parse_stream_line(agent_call)[..], [StreamItem::ToolCall { id, name, .. }] if id == "toolu_A" && name == "Agent"));
+        assert!(ClaudeCode.parse_stream_line(brief).is_empty());
+        assert_eq!(
+            ClaudeCode.parse_stream_line(child_call),
+            vec![StreamItem::Nested {
+                parent: "toolu_A".into(),
+                item: Box::new(StreamItem::ToolCall {
+                    id: "toolu_R".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({"file_path": "/ws/a.txt"}),
+                }),
+            }]
+        );
+        assert_eq!(
+            ClaudeCode.parse_stream_line(child_result),
+            vec![StreamItem::Nested {
+                parent: "toolu_A".into(),
+                item: Box::new(StreamItem::ToolResult { id: "toolu_R".into(), ok: true, content: "1\tapple".into() }),
+            }]
+        );
+        assert!(ClaudeCode.parse_stream_line(child_delta).is_empty());
+        assert!(matches!(&ClaudeCode.parse_stream_line(report)[..], [StreamItem::ToolResult { id, .. }] if id == "toolu_A"));
+    }
 
     #[test]
     fn init_names_the_commands_the_cli_answers_itself() {
