@@ -3,6 +3,7 @@ use super::runs::{
     mtime_ms, project_name, tool_file_path, transcript_status, AgentRun, RunMessage, RunToolCall,
     TranscriptState,
 };
+use super::chat::KLIDE_PREAMBLE;
 use super::chat_stream::{message_blocks, result_text, StreamItem};
 use super::cli_commands::{CliCommands, SlashProbe};
 use super::{shell_quote, ChatSpec, Delegate, Env, McpServerSpec, McpWiring, RunCandidate, RunParser};
@@ -550,6 +551,8 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let id = path.file_stem()?.to_string_lossy().to_string();
     let parent_id = claude_subagent_parent_id(path);
     let is_subagent_log = parent_id.is_some();
+    // A sub-agent of a session Klide drove belongs to that conversation too.
+    let mut klide_hosted = is_subagent_log && parent_session_log(path).is_some_and(|p| opens_with_klide_preamble(&p));
     let (mut title, mut model, mut cwd, mut branch) = (None, None, None, None);
     let mut count: u32 = 0;
     let mut created_ms: i64 = 0;
@@ -610,6 +613,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                 transcript_state = TranscriptState::Working;
                 if title.is_none() {
                     if let Some(t) = v.get("message").and_then(extract_user_text) {
+                        klide_hosted |= !is_subagent_log && t.starts_with(KLIDE_PREAMBLE);
                         title = Some(clean_title(&t));
                     }
                 }
@@ -719,7 +723,32 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         subagent_count,
         last_event,
         parent_id,
+        klide_hosted,
     })
+}
+
+/// `<project>/<session>.jsonl` for a sub-agent log at
+/// `<project>/<session>/subagents/<agent>.jsonl`.
+fn parent_session_log(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let session_dir = path.parent()?.parent()?;
+    let name = session_dir.file_name()?.to_string_lossy();
+    Some(session_dir.with_file_name(format!("{name}.jsonl")))
+}
+
+/// Whether a session's first prompt is the one `delegate::chat` folds for a
+/// headless turn. Reads only up to that prompt.
+fn opens_with_klide_preamble(path: &std::path::Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else { return false };
+    for line in std::io::BufRead::lines(std::io::BufReader::new(file)).take(64) {
+        let Ok(line) = line else { return false };
+        if line.len() > MAX_PARSE_LINE { continue }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("user") { continue }
+        if let Some(t) = v.get("message").and_then(extract_user_text) {
+            return t.starts_with(KLIDE_PREAMBLE);
+        }
+    }
+    false
 }
 
 /// Whether an oversized transcript line is one of the operator's turns, decided
@@ -1602,6 +1631,28 @@ mod tests {
         assert_eq!(run.model.as_deref(), Some("claude-haiku-4-5"));
         assert_eq!(run.cwd.as_deref(), Some("/Users/x/proj"));
         assert_eq!(run.last_event.as_deref(), Some("Mapped the terrain."));
+        assert!(!run.klide_hosted);
+    }
+
+    #[test]
+    fn a_session_klide_drove_headless_and_its_sub_agents_are_marked_hosted() {
+        let home = temp_home("klide-hosted");
+        let project = home.join(".claude/projects/-Users-x-proj");
+        let subagents = project.join("hosted-1/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let prompt = serde_json::json!({
+            "type": "user",
+            "message": { "content": format!("{KLIDE_PREAMBLE}\nAnswer…\n\n[user]\nmap the repo\n\n") },
+        });
+        std::fs::write(project.join("hosted-1.jsonl"), format!("{prompt}\n")).unwrap();
+        let child = subagents.join("agent-a1.jsonl");
+        std::fs::write(&child, concat!(r#"{"type":"user","isSidechain":true,"message":{"content":"Map src"}}"#, "\n")).unwrap();
+        let own = project.join("own-1.jsonl");
+        std::fs::write(&own, FIXTURE).unwrap();
+
+        assert!(parse_run(&project.join("hosted-1.jsonl")).unwrap().klide_hosted);
+        assert!(parse_run(&child).unwrap().klide_hosted, "its sub-agent belongs to the same conversation");
+        assert!(!parse_run(&own).unwrap().klide_hosted, "a session the person started stays listed");
     }
 
     #[test]

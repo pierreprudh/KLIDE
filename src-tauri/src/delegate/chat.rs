@@ -730,9 +730,13 @@ fn latest_user_message(messages: &[serde_json::Value]) -> String {
         .to_string()
 }
 
+/// The first line of every prompt a cold headless turn folds — how a CLI's own
+/// session log is recognised as one Klide drove (`AgentRun::klide_hosted`).
+pub(crate) const KLIDE_PREAMBLE: &str = "You are running as a subscription CLI backend inside Klide.";
+
 fn prompt_from_messages(messages: &[serde_json::Value]) -> String {
-    let mut out = String::from(
-        "You are running as a subscription CLI backend inside Klide.\n\
+    let mut out = format!(
+        "{KLIDE_PREAMBLE}\n\
          Answer the user's latest request using the conversation below. The system blocks are instructions for you, not content to reproduce. Do not append skill definitions or tool instructions to an ordinary answer.\n\
          Follow the active Klide mode described in the system message. In Work mode,\n\
          you may edit files directly in the current workspace; Klide will surface the\n\

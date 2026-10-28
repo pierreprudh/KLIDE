@@ -333,8 +333,7 @@ fn user_text(content: &str) -> Option<String> {
     (!text.is_empty() && !text.starts_with('<')).then(|| text.to_string())
 }
 
-/// The first line of every prompt `delegate::chat` folds for a headless turn.
-const KLIDE_PREAMBLE: &str = "You are running as a subscription CLI backend inside Klide.";
+use super::chat::KLIDE_PREAMBLE;
 
 fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let content = std::fs::read_to_string(path).ok()?;
@@ -413,6 +412,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         last_event,
         parent_id: None,
         id,
+        klide_hosted: false,
     })
 }
 
