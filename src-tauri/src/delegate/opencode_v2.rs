@@ -3,6 +3,7 @@
 //! The CLI still prints V1-shaped compatibility parts, whose synthetic ids
 //! differ from native events. We bind its session but consume answer/tool
 //! content through one native reader, then reconcile the durable projection.
+use crate::delegate::chat_stream::SubagentStatus;
 use super::{opencode_error, result_text, StreamItem};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -14,6 +15,10 @@ pub(super) struct Turn {
     tool_names: HashMap<String, String>,
     calls: HashSet<String>,
     results: HashSet<String>,
+    /// A sub-agent's child session → the `subagent` call in this session that
+    /// started it, learned from that call's `session.tool.progress`. Its tool
+    /// work is nested under the call; its words are not the answer.
+    children: HashMap<String, String>,
     pub boundary: Option<String>,
     pub settled: bool,
     /// The feed already delivered the session's name; the record read after
@@ -30,6 +35,7 @@ impl Turn {
             tool_names: HashMap::new(),
             calls: HashSet::new(),
             results: HashSet::new(),
+            children: HashMap::new(),
             boundary: None,
             settled: false,
             titled: false,
@@ -95,8 +101,14 @@ impl Turn {
             self.session = Some(session.into());
             return vec![StreamItem::Session(session.into())];
         }
+        if let Some(parent) = self.children.get(session).cloned() {
+            return self.feed_child(kind, data, parent);
+        }
         if self.session.as_deref() != Some(session) {
             return Vec::new();
+        }
+        if let Some(items) = self.tool_event(kind, data) {
+            return items;
         }
         match kind {
             "session.text.delta" | "session.text.ended" | "session.reasoning.delta" | "session.reasoning.ended" => {
@@ -125,35 +137,19 @@ impl Turn {
                     text: known.clone(),
                 } }]
             }
-            "session.tool.input.started" => {
-                if let (Some(id), Some(name)) = (
+            // A `subagent` call names the child session it started: from
+            // here on that session's tool work belongs under the call.
+            "session.tool.progress" => {
+                let (Some(call), Some(child)) = (
                     data.get("id").and_then(Value::as_str),
-                    data.get("name").and_then(Value::as_str),
-                ) {
-                    self.tool_names.insert(id.into(), name.into());
+                    data.pointer("/metadata/sessionID").and_then(Value::as_str),
+                ) else {
+                    return Vec::new();
+                };
+                if self.children.insert(child.into(), call.into()).is_some() {
+                    return Vec::new();
                 }
-                Vec::new()
-            }
-            "session.tool.called" => {
-                let Some(id) = data.get("id").and_then(Value::as_str) else {
-                    return Vec::new();
-                };
-                let Some(name) = self.tool_names.get(id).cloned() else {
-                    return Vec::new();
-                };
-                self.call(id, &name, data.get("input").cloned().unwrap_or_default())
-            }
-            "session.tool.success" | "session.tool.failed" => {
-                let Some(id) = data.get("id").and_then(Value::as_str) else {
-                    return Vec::new();
-                };
-                let ok = kind == "session.tool.success";
-                let content = if ok {
-                    result_text(data.get("content"))
-                } else {
-                    opencode_error(data.get("error"))
-                };
-                self.result(id, ok, content)
+                vec![StreamItem::Subagent { id: call.into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
             }
             // The small model named the session, beside the turn — the name
             // reaches the rail while the answer is still streaming.
@@ -181,6 +177,64 @@ impl Turn {
             }
             _ => Vec::new(), // reasoning, retries and subagent events are not the answer
         }
+    }
+
+    /// A tool's life in whichever session it ran: its name, the call, the
+    /// result. `None` for any other event.
+    fn tool_event(&mut self, kind: &str, data: &Value) -> Option<Vec<StreamItem>> {
+        match kind {
+            "session.tool.input.started" => {
+                if let (Some(id), Some(name)) = (
+                    data.get("id").and_then(Value::as_str),
+                    data.get("name").and_then(Value::as_str),
+                ) {
+                    self.tool_names.insert(id.into(), name.into());
+                }
+                Some(Vec::new())
+            }
+            "session.tool.called" => {
+                let Some(id) = data.get("id").and_then(Value::as_str) else {
+                    return Some(Vec::new());
+                };
+                let Some(name) = self.tool_names.get(id).cloned() else {
+                    return Some(Vec::new());
+                };
+                Some(self.call(id, &name, data.get("input").cloned().unwrap_or_default()))
+            }
+            "session.tool.success" | "session.tool.failed" => {
+                let Some(id) = data.get("id").and_then(Value::as_str) else {
+                    return Some(Vec::new());
+                };
+                let ok = kind == "session.tool.success";
+                let content = if ok {
+                    result_text(data.get("content"))
+                } else {
+                    opencode_error(data.get("error"))
+                };
+                Some(self.result(id, ok, content))
+            }
+            _ => None,
+        }
+    }
+
+    /// An event from a sub-agent's child session: its tool work, nested under
+    /// the call that started it, and how it ended. Its text, its reasoning and
+    /// its execution events are never this turn's — the child settling does
+    /// not settle the turn.
+    fn feed_child(&mut self, kind: &str, data: &Value, parent: String) -> Vec<StreamItem> {
+        if let Some(items) = self.tool_event(kind, data) {
+            return items
+                .into_iter()
+                .map(|item| StreamItem::Nested { parent: parent.clone(), item: Box::new(item) })
+                .collect();
+        }
+        let status = match kind {
+            "session.execution.succeeded" => SubagentStatus::Completed,
+            "session.execution.failed" => SubagentStatus::Failed,
+            "session.execution.interrupted" => SubagentStatus::Stopped,
+            _ => return Vec::new(),
+        };
+        vec![StreamItem::Subagent { id: parent, status, activity: None, tokens: None, steps: None }]
     }
 
     fn call(&mut self, id: &str, name: &str, input: Value) -> Vec<StreamItem> {
@@ -607,6 +661,47 @@ mod tests {
             matches!(&recovered[2], StreamItem::ToolResult { content, ok:true, .. } if content == "file contents")
         );
         assert!(turn.settled);
+    }
+
+    /// Shapes from a real OpenCode 2.0.27 fan-out (2026-10-28): the parent's
+    /// `subagent` call names its child session in `session.tool.progress`;
+    /// the child's own tool events and execution then arrive under that id.
+    #[test]
+    fn a_subagents_child_session_nests_under_the_call_that_started_it() {
+        let mut turn = Turn::new(Some(session()));
+        let root = session();
+        let at = |turn: &mut Turn, kind: &str, data: Value| turn.feed(&json!({"type": kind, "data": data}).to_string());
+        assert!(event(&mut turn, "session.tool.input.started", json!({"id":"call_A","name":"subagent"})).is_empty());
+        assert!(matches!(
+            &event(&mut turn, "session.tool.called", json!({"id":"call_A","input":{"agent":"explore","description":"Read a.txt content"}}))[..],
+            [StreamItem::ToolCall { id, name, .. }] if id == "call_A" && name == "subagent"
+        ));
+        // The child session exists before the link; nothing of it is read yet.
+        assert!(at(&mut turn, "session.created", json!({"sessionID":"ses_child","parentID": root,"agent":"explore"})).is_empty());
+        assert_eq!(
+            event(&mut turn, "session.tool.progress", json!({"id":"call_A","metadata":{"sessionID":"ses_child","status":"running"}})),
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
+        );
+        assert!(at(&mut turn, "session.tool.input.started", json!({"sessionID":"ses_child","id":"call_R","name":"read"})).is_empty());
+        assert_eq!(
+            at(&mut turn, "session.tool.called", json!({"sessionID":"ses_child","id":"call_R","input":{"path":"/ws/a.txt"}})),
+            [StreamItem::Nested { parent: "call_A".into(), item: Box::new(StreamItem::ToolCall { id: "call_R".into(), name: "read".into(), input: json!({"path":"/ws/a.txt"}) }) }]
+        );
+        assert_eq!(
+            at(&mut turn, "session.tool.success", json!({"sessionID":"ses_child","id":"call_R","content":[{"type":"text","text":"apple"}]})),
+            [StreamItem::Nested { parent: "call_A".into(), item: Box::new(StreamItem::ToolResult { id: "call_R".into(), ok: true, content: "apple".into() }) }]
+        );
+        // Its words are not the answer, and its finishing does not end the turn.
+        assert!(at(&mut turn, "session.text.delta", json!({"sessionID":"ses_child","assistantMessageID":"m","ordinal":0,"delta":"apple"})).is_empty());
+        assert_eq!(
+            at(&mut turn, "session.execution.succeeded", json!({"sessionID":"ses_child"})),
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Completed, activity: None, tokens: None, steps: None }]
+        );
+        assert!(!turn.settled);
+        assert!(matches!(
+            &event(&mut turn, "session.tool.success", json!({"id":"call_A","content":[{"type":"text","text":"a.txt says apple"}]}))[..],
+            [StreamItem::ToolResult { id, ok: true, .. }] if id == "call_A"
+        ));
     }
 
     #[test]

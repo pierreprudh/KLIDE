@@ -93,7 +93,7 @@ function TrayRow({ subagent: s, showKind, open, onToggle }: { subagent: TraySuba
         {/* Its own column, outside the sweep: a clip-to-text parent paints
             through its children's glyphs, so the step would shimmer too. */}
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
-          {working ? s.state?.activity : null}
+          {working ? s.activity : null}
         </span>
         <TrayStatusWord subagent={s} />
       </button>

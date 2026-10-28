@@ -10,7 +10,7 @@
 // Pure: which calls, what each one's state reads as. The component draws it.
 
 import type { AgentEvent, ObservedSubagentState } from "../../agent/types";
-import { isObservedSubagent } from "./toolRuns";
+import { isObservedSubagent, liveWorkLine } from "./toolRuns";
 import type { Msg } from "./types";
 
 export type TrayStatus = ObservedSubagentState["status"] | "ended";
@@ -25,6 +25,9 @@ export type TraySubagent = {
   task: string;
   status: TrayStatus;
   state?: ObservedSubagentState;
+  /** The step in hand: the CLI's own words when it reports them (Claude
+   *  Code's "Reading a.txt"), else the newest of its nested calls still open. */
+  activity?: string;
   /** Its own steps, folded when a row is opened. */
   nested?: AgentEvent[];
 };
@@ -53,7 +56,9 @@ export function turnSubagents(msgs: Msg[], live: boolean): TraySubagent[] {
     for (const call of m.toolCalls ?? []) {
       if (!call.id || !call.observedBy || !isObservedSubagent(call)) continue;
       const args = (call.args ?? {}) as Record<string, unknown>;
-      const kind = typeof args.subagent_type === "string" && args.subagent_type.trim() ? args.subagent_type.trim() : "sub-agent";
+      // Claude Code names the type `subagent_type`, OpenCode `agent`.
+      const named = [args.subagent_type, args.agent].find((v): v is string => typeof v === "string" && !!v.trim());
+      const kind = named?.trim() ?? "sub-agent";
       const brief = typeof args.description === "string" && args.description.trim() ? args.description : typeof args.prompt === "string" ? args.prompt : "";
       out.push({
         id: call.id,
@@ -62,6 +67,7 @@ export function turnSubagents(msgs: Msg[], live: boolean): TraySubagent[] {
         task: brief.replace(/\s+/g, " ").trim(),
         status: statusOf(call.subagent, results.get(call.id), call.failed, live),
         state: call.subagent,
+        activity: call.subagent?.activity ?? openStep(call.nested),
         nested: call.nested,
       });
     }
@@ -69,14 +75,24 @@ export function turnSubagents(msgs: Msg[], live: boolean): TraySubagent[] {
   return out;
 }
 
+function openStep(nested: AgentEvent[] | undefined): string | undefined {
+  const open = new Map<string, { name: string; args: unknown }>();
+  for (const event of nested ?? []) {
+    if (event.type === "observed_tool_call") open.set(event.toolCallId, { name: event.name, args: event.input });
+    else if (event.type === "observed_tool_result") open.delete(event.toolCallId);
+  }
+  const last = [...open.values()].pop();
+  return last ? liveWorkLine(last) : undefined;
+}
+
 function statusOf(state: ObservedSubagentState | undefined, result: string | undefined, failed: boolean | undefined, live: boolean): TrayStatus {
   const settled = state && state.status !== "running" ? state.status : undefined;
   if (settled) return settled;
-  if (live) return "running";
-  if (state) return "ended";
-  // An older transcript: a foreground call's result is the sub-agent's report.
-  if (result === undefined || /^Running /.test(result) || /^Async agent launched/.test(result)) return "ended";
-  return failed ? "failed" : "completed";
+  // A CLI that reports no sub-agent lifecycle: its call returning with the
+  // sub-agent's report is the finish (a background launch receipt is not).
+  const reported = result !== undefined && !/^Running /.test(result) && !/^Async agent launched/.test(result);
+  if (!state && reported) return failed ? "failed" : "completed";
+  return live ? "running" : "ended";
 }
 
 /** "2 running · 1 done" — the tray's header, in the order a reader cares. */

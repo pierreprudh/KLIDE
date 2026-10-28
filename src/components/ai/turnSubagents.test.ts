@@ -44,6 +44,23 @@ describe("the sub-agents of the turn in hand", () => {
     expect(turnSubagents(msgs, false).map((r) => r.status)).toEqual(["ended", "ended", "completed"]);
   });
 
+  it("reads OpenCode's `subagent` call: its `agent`, and the step it has open", () => {
+    const step = (type: "observed_tool_call" | "observed_tool_result", toolCallId: string) =>
+      type === "observed_tool_call"
+        ? { type, runId: "r", toolCallId, provider: "opencode", name: "read", input: { path: "src/time.ts" }, summary: "read src/time.ts", parentToolCallId: "A", ts: 1 } as const
+        : { type, runId: "r", toolCallId, ok: true, content: "…", parentToolCallId: "A", ts: 2 } as const;
+    const msgs: Msg[] = [
+      { role: "user", content: "fan out" },
+      { role: "assistant", content: "", toolCalls: [{
+        id: "A", name: "subagent", observedBy: "opencode",
+        args: { agent: "explore", description: "Find the clock" },
+        subagent: { status: "running", startedMs: 1 },
+        nested: [step("observed_tool_call", "r1"), step("observed_tool_result", "r1"), step("observed_tool_call", "r2")],
+      }] },
+    ];
+    expect(turnSubagents(msgs, true)).toMatchObject([{ kind: "explore", task: "Find the clock", status: "running", activity: "Reading src/time.ts" }]);
+  });
+
   it("is empty for a turn that started none, or for calls Klide ran itself", () => {
     const own: Msg = { role: "assistant", content: "", toolCalls: [{ id: "k", name: "Agent", args: {} }] };
     expect(turnSubagents([{ role: "user", content: "hi" }, own], true)).toEqual([]);
