@@ -487,6 +487,7 @@ export function SettingsPanel({
   const [stopAfterRejection, onStopAfterRejectionChange] = useSetting(SETTINGS.stopAfterRejection);
   const [harnessSettings, onHarnessSettingsChange] = useSetting(SETTINGS.harnessSettings);
   const [restoreLastProject, onRestoreLastProjectChange] = useSetting(SETTINGS.restoreLastProject);
+  const [uiSounds, onUiSoundsChange] = useSetting(SETTINGS.uiSounds);
   const [autoSaveMode, onAutoSaveModeChange] = useSetting(SETTINGS.autoSaveMode);
   const [openFilesIn, onOpenFilesInChange] = useSetting(SETTINGS.openFilesIn);
   const [showHiddenFiles, onShowHiddenFilesChange] = useSetting(SETTINGS.showHiddenFiles);
@@ -916,6 +917,7 @@ export function SettingsPanel({
               <button
                 type="button"
                 className="klide-settings-nav-item"
+                data-sound="tap"
                 data-active={active}
                 onClick={() => goToPage(section.id)}
                 aria-current={active && !SETTINGS_PAGES[section.id] ? "page" : undefined}
@@ -956,7 +958,7 @@ export function SettingsPanel({
                 <div className="klide-settings-subpages">
                   {SETTINGS_PAGES[section.id]!.map((page) => (
                     <button key={page.id} type="button"
-                      className="klide-settings-subpage"
+                      className="klide-settings-subpage" data-sound="tap"
                       aria-current={activePage === page.id ? "page" : undefined}
                       onClick={() => goToPage(section.id, page.id)}>
                       <span>{page.label}</span>
@@ -1024,6 +1026,17 @@ export function SettingsPanel({
                       onChange={onRestoreLastProjectChange}
                       label="Reopen last project"
                     />
+                  }
+                />
+              </Panel>
+            </SettingBlock>
+            <SettingBlock title="Sounds">
+              <Panel>
+                <Row
+                  title="Click sound"
+                  description="A soft tap when you move to another view, page or option."
+                  control={
+                    <Toggle checked={uiSounds} onChange={onUiSoundsChange} label="Click sound" />
                   }
                 />
               </Panel>

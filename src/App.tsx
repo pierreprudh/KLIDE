@@ -3482,6 +3482,7 @@ function App() {
                   <button
                     type="button"
                     className="klide-rail-view-switch"
+                    data-sound="tap"
                     data-active={(focusBase ? focusTerminalOpen : terminalVisible) || undefined}
                     aria-label={
                       (focusBase ? focusTerminalOpen : terminalVisible)
@@ -3505,6 +3506,7 @@ function App() {
                   <button
                     type="button"
                     className="klide-rail-view-switch"
+                    data-sound="tap"
                     aria-label={focusBase ? "Leave Focus — Free layout" : "Focus layout"}
                     title={focusBase ? "Leave Focus — Free layout" : "Focus layout"}
                     onClick={() => {
