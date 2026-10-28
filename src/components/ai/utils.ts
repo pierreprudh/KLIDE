@@ -58,25 +58,38 @@ export function estimateTokens(text: string): number {
 export const IMAGE_TOKEN_ESTIMATE = 1_300;
 
 export function messageTokenEstimate(m: Msg): number {
-  let total = estimateTokens(m.content);
-  if (m.role === "user" && m.attachments) {
-    total += m.attachments.reduce(
-      (sum, a) =>
-        sum +
-        estimateTokens(a.path) +
-        (a.dataUri ? IMAGE_TOKEN_ESTIMATE : estimateTokens(a.content)),
-      0
-    );
+  const p = messageTokenParts(m);
+  return p.prompts + p.answers + p.reasoning + p.tools + p.other;
+}
+
+/** Where one message's tokens sit — the context popover's Messages detail.
+ *  `messageTokenEstimate` is their sum, so the two never disagree. */
+export type MessageTokenParts = { prompts: number; answers: number; reasoning: number; tools: number; other: number };
+
+export function messageTokenParts(m: Msg): MessageTokenParts {
+  const parts: MessageTokenParts = { prompts: 0, answers: 0, reasoning: 0, tools: 0, other: 0 };
+  if (m.role === "user") {
+    parts.prompts = estimateTokens(m.content);
+    if (m.attachments) {
+      parts.prompts += m.attachments.reduce(
+        (sum, a) =>
+          sum +
+          estimateTokens(a.path) +
+          (a.dataUri ? IMAGE_TOKEN_ESTIMATE : estimateTokens(a.content)),
+        0
+      );
+    }
+    if (m.projectContext) parts.prompts += estimateProjectContextTokens(m.projectContext.items);
+  } else if (m.role === "assistant") {
+    parts.answers = estimateTokens(m.content);
+    parts.reasoning = estimateTokens(m.thinking ?? "");
+    parts.tools = estimateTokens(JSON.stringify(m.toolCalls ?? []));
+  } else if (m.role === "tool") {
+    parts.tools = estimateTokens(m.content) + estimateTokens(m.toolName);
+  } else {
+    parts.other = estimateTokens(m.content);
   }
-  if (m.role === "user" && m.projectContext) {
-    total += estimateProjectContextTokens(m.projectContext.items);
-  }
-  if (m.role === "assistant") {
-    total += estimateTokens(m.thinking ?? "");
-    total += estimateTokens(JSON.stringify(m.toolCalls ?? []));
-  }
-  if (m.role === "tool") total += estimateTokens(m.toolName);
-  return total;
+  return parts;
 }
 
 

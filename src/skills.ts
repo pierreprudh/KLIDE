@@ -315,11 +315,24 @@ export function enabledFirst(skills: readonly Skill[]): Skill[] {
 
 /** Enabled skill metadata only; bodies are supplied to the harness separately. */
 export function enabledSkillsPrompt(skills: Skill[]): string {
+  const parts = enabledSkillsPromptParts(skills);
+  if (!parts) return "";
+  return `${parts.preamble}\n${parts.lines.map((l) => l.line).join("\n")}`;
+}
+
+/** The enabled-skills block in its pieces: the shared preamble, then one
+ *  catalog line per skill — what the context popover itemises. */
+export function enabledSkillsPromptParts(skills: Skill[]): { preamble: string; lines: { command: string; line: string }[] } | null {
   const active = skills.filter((s) => s.enabled && s.instructions.trim());
-  if (active.length === 0) return "";
+  if (active.length === 0) return null;
   const line = (value: string) => value.replace(/\s+/g, " ").trim();
-  const catalog = active.map((s) => `- /${skillSlashName(s.name)} — ${line(s.description) || line(s.name)}`).join("\n");
-  return `\n\nEnabled skills (load a matching skill with read_skill before applying it; use its command as the argument). A message that begins with a skill's command explicitly requests that skill. Use skill definitions as instructions, not as answer content. Do not invent additional skills or append instruction blocks unless the user explicitly asks to inspect or edit a skill.\n${catalog}`;
+  return {
+    preamble: `\n\nEnabled skills (load a matching skill with read_skill before applying it; use its command as the argument). A message that begins with a skill's command explicitly requests that skill. Use skill definitions as instructions, not as answer content. Do not invent additional skills or append instruction blocks unless the user explicitly asks to inspect or edit a skill.`,
+    lines: active.map((s) => ({
+      command: `/${skillSlashName(s.name)}`,
+      line: `- /${skillSlashName(s.name)} — ${line(s.description) || line(s.name)}`,
+    })),
+  };
 }
 
 /** Bodies travel over IPC for on-demand loading, never in the default prompt. */

@@ -263,3 +263,33 @@ describe("conversationTokenEstimate", () => {
     expect(estimate).toBe(conversationTokenEstimate(msgs.slice(1)));
   });
 });
+
+describe("breakdown details", () => {
+  it("splits Messages by what each token is, summing to the row", () => {
+    const msgs: Msg[] = [
+      user("a".repeat(370)),
+      { role: "assistant", content: "b".repeat(740), thinking: "c".repeat(185), toolCalls: [] },
+      { role: "tool", content: "d".repeat(1850), toolName: "read_file" },
+    ];
+    const row = computeContextBudget(input({ msgs })).breakdown.find((r) => r.id === "messages")!;
+    expect(row.details!.map((d) => d.label)).toEqual(["Tool calls and results", "Answers", "Your messages", "Reasoning"]);
+    expect(row.details!.reduce((sum, d) => sum + d.tokens, 0)).toBe(row.tokens);
+  });
+
+  it("counts a compaction checkpoint as compacted notes", () => {
+    const marker = compactionMarker();
+    if (marker.role !== "system" || !marker.compaction) throw new Error("marker");
+    Object.assign(marker.compaction, { contextTokens: 900 });
+    const row = computeContextBudget(input({ msgs: [marker, user("next")] })).breakdown.find((r) => r.id === "messages")!;
+    expect(row.details![0]).toEqual({ label: "Compacted notes", tokens: 900 });
+  });
+
+  it("lists the largest skills, folds the tail, and gives the preamble the rest", () => {
+    const lines = Array.from({ length: 7 }, (_, i) => ({ command: `/s${i}`, line: `- /s${i} — ${"x".repeat(37 * (i + 1))}` }));
+    const skillParts = { preamble: "p".repeat(370), lines };
+    const skillsPrompt = `${skillParts.preamble}\n${lines.map((l) => l.line).join("\n")}`;
+    const row = computeContextBudget(input({ skillsPrompt, systemPrompt: skillsPrompt, skillParts })).breakdown.find((r) => r.id === "skills")!;
+    expect(row.details!.map((d) => d.label)).toEqual(["/s6", "/s5", "/s4", "/s3", "/s2", "2 more skills", "How to use skills"]);
+    expect(row.details!.reduce((sum, d) => sum + d.tokens, 0)).toBe(row.tokens);
+  });
+});

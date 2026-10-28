@@ -10,7 +10,7 @@
 //
 // Everything here is values in, values out. No React, no IPC, no clock.
 
-import { estimateProjectContextTokens, estimateTokens, messageTokenEstimate } from "./utils";
+import { estimateProjectContextTokens, estimateTokens, messageTokenParts } from "./utils";
 import type { Msg } from "./types";
 import type { ProjectContextItem } from "../../contextTray";
 
@@ -21,7 +21,15 @@ export type ContextBreakdownRow = {
   tokens: number;
   color: string;
   muted?: boolean;
+  /** What the row is made of, largest first — the popover's flyout. Only
+   *  rows with a split worth reading carry one (Messages, Skills). */
+  details?: ContextDetailRow[];
 };
+
+export type ContextDetailRow = { label: string; tokens: number };
+
+/** Skills listed by name in the flyout before the rest fold into one line. */
+const SKILL_DETAIL_LIMIT = 5;
 
 export type ContextBudgetInput = {
   msgs: Msg[];
@@ -29,12 +37,16 @@ export type ContextBudgetInput = {
    *  message walk stringifies every tool call and depends on `msgs` alone;
    *  the rest of the budget moves with every keystroke of the draft. */
   messageTokens?: number;
+  /** `conversationTokens(msgs).details`, memoized beside `messageTokens`. */
+  messageDetails?: ContextDetailRow[];
   /** The unsent draft in the composer. Counted, because it will be sent. */
   draft: string;
   /** Already-assembled system prompt for this draft, skills and rules included
    *  (they are subtracted back out so each is attributed once). */
   systemPrompt: string;
   skillsPrompt: string;
+  /** `enabledSkillsPromptParts(skills)` — the same block, in pieces. */
+  skillParts?: { preamble: string; lines: { command: string; line: string }[] } | null;
   projectRules: string;
   lens: ProjectContextItem[];
   toolSchemaTokens: number;
@@ -100,14 +112,61 @@ export function lastCompactionIndex(msgs: Msg[]): number {
  *  `JSON.stringify` per tool call — and a function of `msgs` alone, so a
  *  caller can memoize it on the message list and pass it in. */
 export function conversationTokenEstimate(msgs: Msg[]): number {
+  return conversationTokens(msgs).total;
+}
+
+/** The same walk, kept apart by what each token is: the user's words, the
+ *  answers, reasoning, tool traffic, and the compacted checkpoint. */
+export function conversationTokens(msgs: Msg[]): { total: number; details: ContextDetailRow[] } {
   const markerIdx = lastCompactionIndex(msgs);
-  if (markerIdx < 0) return msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0);
-  const marker = msgs[markerIdx];
-  const compaction = marker.role === "system" ? marker.compaction : undefined;
-  // The visible marker follows its retained turns. Rust's snapshot includes
-  // those turns and their retained-value stubs, without counting history twice.
-  const checkpoint = compaction?.contextTokens ?? estimateTokens(`[Earlier conversation compacted to save context]\n${compaction?.summary ?? ""}`);
-  return checkpoint + msgs.slice(markerIdx + 1).reduce((sum, m) => sum + messageTokenEstimate(m), 0);
+  let compacted = 0;
+  if (markerIdx >= 0) {
+    const marker = msgs[markerIdx];
+    const compaction = marker.role === "system" ? marker.compaction : undefined;
+    // The visible marker follows its retained turns. Rust's snapshot includes
+    // those turns and their retained-value stubs, without counting history twice.
+    compacted = compaction?.contextTokens ?? estimateTokens(`[Earlier conversation compacted to save context]\n${compaction?.summary ?? ""}`);
+  }
+  const sums = { prompts: 0, answers: 0, reasoning: 0, tools: 0, other: 0 };
+  for (const m of markerIdx < 0 ? msgs : msgs.slice(markerIdx + 1)) {
+    const p = messageTokenParts(m);
+    sums.prompts += p.prompts;
+    sums.answers += p.answers;
+    sums.reasoning += p.reasoning;
+    sums.tools += p.tools;
+    sums.other += p.other;
+  }
+  const details = [
+    { label: "Your messages", tokens: sums.prompts },
+    { label: "Answers", tokens: sums.answers },
+    { label: "Reasoning", tokens: sums.reasoning },
+    { label: "Tool calls and results", tokens: sums.tools },
+    { label: "Compacted notes", tokens: compacted },
+    { label: "Notices", tokens: sums.other },
+  ].filter((d) => d.tokens > 0).sort((a, b) => b.tokens - a.tokens);
+  return { total: compacted + sums.prompts + sums.answers + sums.reasoning + sums.tools + sums.other, details };
+}
+
+/** One line per enabled skill, largest first, the tail folded into one; the
+ *  shared preamble takes whatever the lines don't, so the flyout sums to the
+ *  row. */
+function skillDetails(
+  parts: NonNullable<ContextBudgetInput["skillParts"]>,
+  skillsTokens: number,
+): ContextDetailRow[] {
+  const lines = parts.lines
+    .map((l) => ({ label: l.command, tokens: estimateTokens(l.line) }))
+    .sort((a, b) => b.tokens - a.tokens);
+  const shown = lines.slice(0, SKILL_DETAIL_LIMIT);
+  const rest = lines.slice(SKILL_DETAIL_LIMIT);
+  const linesTotal = lines.reduce((sum, l) => sum + l.tokens, 0);
+  return [
+    ...shown,
+    ...(rest.length > 0
+      ? [{ label: `${rest.length} more ${rest.length === 1 ? "skill" : "skills"}`, tokens: rest.reduce((sum, l) => sum + l.tokens, 0) }]
+      : []),
+    { label: "How to use skills", tokens: Math.max(0, skillsTokens - linesTotal) },
+  ].filter((d) => d.tokens > 0);
 }
 
 export function computeContextBudget(input: ContextBudgetInput): ContextBudget {
@@ -125,7 +184,10 @@ export function computeContextBudget(input: ContextBudgetInput): ContextBudget {
     streaming,
   } = input;
 
-  const messageTokens = input.messageTokens ?? conversationTokenEstimate(msgs);
+  const conversation =
+    input.messageTokens === undefined || input.messageDetails === undefined ? conversationTokens(msgs) : null;
+  const messageTokens = input.messageTokens ?? conversation!.total;
+  const messageDetails = input.messageDetails ?? conversation!.details;
 
   const draftTokens = estimateTokens(draft);
   const skillsTokens = estimateTokens(skillsPrompt);
@@ -160,10 +222,16 @@ export function computeContextBudget(input: ContextBudgetInput): ContextBudget {
   const ratio = contextLimit > 0 ? Math.min(1, used / contextLimit) : 0;
 
   const rows: ContextBreakdownRow[] = [
-    { id: "messages", label: "Messages", tokens: messageTokens, color: "var(--ctx-messages)" },
+    { id: "messages", label: "Messages", tokens: messageTokens, color: "var(--ctx-messages)", details: messageDetails },
     { id: "tools", label: "System tools", tokens: toolSchemaTokens, color: "var(--ctx-tools)" },
     { id: "system", label: "System prompt", tokens: systemPromptTokens, color: "var(--ctx-system)" },
-    { id: "skills", label: "Skills", tokens: skillsTokens, color: "var(--ctx-skills)" },
+    {
+      id: "skills",
+      label: "Skills",
+      tokens: skillsTokens,
+      color: "var(--ctx-skills)",
+      details: input.skillParts ? skillDetails(input.skillParts, skillsTokens) : undefined,
+    },
     { id: "rules", label: "Project rules", tokens: projectRulesTokens, color: "var(--ctx-rules)" },
     { id: "lens", label: "Context lens", tokens: lensTokens, color: "var(--ctx-lens)" },
     { id: "draft", label: "Draft input", tokens: draftTokens, color: "var(--ctx-draft)" },
