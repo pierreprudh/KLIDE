@@ -1697,6 +1697,8 @@ pub(crate) enum ObservedToolActivity {
         tokens: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<u32>,
     },
 }
 

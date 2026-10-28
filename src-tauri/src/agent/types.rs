@@ -768,6 +768,10 @@ pub enum AgentEvent {
         tokens: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u64>,
+        /// Which of the call's sub-agents, when one call starts several
+        /// (omp's `task` list): its index there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<u32>,
         ts: i64,
     },
     /// The delegate CLI named the conversation's session itself (OpenCode

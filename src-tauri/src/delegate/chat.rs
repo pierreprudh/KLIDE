@@ -536,6 +536,8 @@ pub(super) struct Emitter<'a> {
     paragraph_due: bool,
     // Whether the last thing streamed was prose (a call resets it).
     prose_last: bool,
+    // The last report sent for each sub-agent, keyed by call and item.
+    subagents: HashMap<(String, Option<u32>), (super::chat_stream::SubagentStatus, Option<String>, Option<u64>, Option<u64>)>,
 }
 
 impl<'a> Emitter<'a> {
@@ -559,6 +561,7 @@ impl<'a> Emitter<'a> {
             usage_steps: HashMap::new(),
             paragraph_due: false,
             prose_last: false,
+            subagents: HashMap::new(),
         }
     }
 
@@ -683,9 +686,16 @@ impl<'a> Emitter<'a> {
                 // turn's to show.
                 _ => {}
             },
-            StreamItem::Subagent { id, status, activity, tokens, steps } => {
+            StreamItem::Subagent { id, status, activity, tokens, steps, item } => {
+                // omp repeats every sub-agent's progress on each update of
+                // its call; only a change is news.
+                let report = (status, activity.clone(), tokens, steps);
+                if self.subagents.get(&(id.clone(), item)) == Some(&report) {
+                    return;
+                }
+                self.subagents.insert((id.clone(), item), report);
                 let _ = self.on_chunk.send(StreamChunk {
-                    observed: Some(ObservedToolActivity::Subagent { id, status, activity, tokens, steps }),
+                    observed: Some(ObservedToolActivity::Subagent { id, status, activity, tokens, steps, item }),
                     ..Default::default()
                 });
             }
@@ -1076,6 +1086,27 @@ mod tests {
             emitter.finish().unwrap(),
             "Three agents are running.\n\nThe CONTEXT.md agent has finished. Done."
         );
+    }
+
+    #[test]
+    fn a_sub_agent_report_repeated_unchanged_is_sent_once() {
+        // omp re-sends every sub-agent's progress on each update of its call.
+        use super::super::chat_stream::{StreamItem, SubagentStatus};
+        let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = sent.clone();
+        let emitted = AtomicBool::new(false);
+        let channel = Channel::new(move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+        let mut emitter = Emitter::new(&super::super::omp::Omp, "/tmp", None, &emitted, &channel);
+        let report = |status, item| StreamItem::Subagent { id: "t".into(), status, activity: None, tokens: None, steps: None, item: Some(item) };
+        emitter.handle(report(SubagentStatus::Running, 0));
+        emitter.handle(report(SubagentStatus::Running, 1));
+        emitter.handle(report(SubagentStatus::Running, 0));
+        emitter.handle(report(SubagentStatus::Running, 1));
+        emitter.handle(report(SubagentStatus::Completed, 0));
+        assert_eq!(sent.load(Ordering::Relaxed), 3);
     }
 
     #[test]

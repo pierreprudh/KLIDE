@@ -312,6 +312,9 @@ export type AgentEvent =
       activity?: string;
       tokens?: number;
       steps?: number;
+      /** Which of the call's sub-agents, when one call starts several
+       *  (omp's `task` list): its index there. */
+      item?: number;
       ts: number;
     }
   | { type: "conversation_titled"; runId: string; title: string; ts: number }

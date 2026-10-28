@@ -149,7 +149,7 @@ impl Turn {
                 if self.children.insert(child.into(), call.into()).is_some() {
                     return Vec::new();
                 }
-                vec![StreamItem::Subagent { id: call.into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
+                vec![StreamItem::Subagent { id: call.into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None, item: None }]
             }
             // The small model named the session, beside the turn — the name
             // reaches the rail while the answer is still streaming.
@@ -234,7 +234,7 @@ impl Turn {
             "session.execution.interrupted" => SubagentStatus::Stopped,
             _ => return Vec::new(),
         };
-        vec![StreamItem::Subagent { id: parent, status, activity: None, tokens: None, steps: None }]
+        vec![StreamItem::Subagent { id: parent, status, activity: None, tokens: None, steps: None, item: None }]
     }
 
     fn call(&mut self, id: &str, name: &str, input: Value) -> Vec<StreamItem> {
@@ -680,7 +680,7 @@ mod tests {
         assert!(at(&mut turn, "session.created", json!({"sessionID":"ses_child","parentID": root,"agent":"explore"})).is_empty());
         assert_eq!(
             event(&mut turn, "session.tool.progress", json!({"id":"call_A","metadata":{"sessionID":"ses_child","status":"running"}})),
-            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None, item: None }]
         );
         assert!(at(&mut turn, "session.tool.input.started", json!({"sessionID":"ses_child","id":"call_R","name":"read"})).is_empty());
         assert_eq!(
@@ -695,7 +695,7 @@ mod tests {
         assert!(at(&mut turn, "session.text.delta", json!({"sessionID":"ses_child","assistantMessageID":"m","ordinal":0,"delta":"apple"})).is_empty());
         assert_eq!(
             at(&mut turn, "session.execution.succeeded", json!({"sessionID":"ses_child"})),
-            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Completed, activity: None, tokens: None, steps: None }]
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Completed, activity: None, tokens: None, steps: None, item: None }]
         );
         assert!(!turn.settled);
         assert!(matches!(

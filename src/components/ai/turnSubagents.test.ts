@@ -44,6 +44,29 @@ describe("the sub-agents of the turn in hand", () => {
     expect(turnSubagents(msgs, false).map((r) => r.status)).toEqual(["ended", "ended", "completed"]);
   });
 
+  it("draws each item of omp's `task` list as a sub-agent of its own", () => {
+    const msgs: Msg[] = [
+      { role: "user", content: "fan out" },
+      { role: "assistant", content: "", toolCalls: [
+        {
+          id: "T", name: "task", observedBy: "omp",
+          args: { agent: "explore", tasks: [{ id: "ReadA", description: "Read a.txt", assignment: "# Target…" }, { id: "ReadB", assignment: "Read  b.txt" }] },
+          subagentItems: { 0: { status: "completed", tokens: 54689, startedMs: 1, endedMs: 7 }, 1: { status: "running", activity: "Reading b.txt", startedMs: 1 } },
+        },
+        // A call with an empty list starts nothing.
+        { id: "W", name: "task", observedBy: "omp", args: { agent: "explore", tasks: [] } },
+      ] },
+      // The batch's call returns before its sub-agents finish.
+      { role: "tool", content: "Spawned 2 background agents using explore.", toolName: "task", toolCallId: "T", observedBy: "omp" },
+    ];
+    const rows = turnSubagents(msgs, true);
+    expect(rows.map((r) => [r.id, r.kind, r.task, r.status, r.activity])).toEqual([
+      ["T#0", "explore", "Read a.txt", "completed", undefined],
+      ["T#1", "explore", "Read b.txt", "running", "Reading b.txt"],
+    ]);
+    expect(turnSubagents(msgs.slice(0, 2).map((m) => m.role === "assistant" ? { ...m, toolCalls: m.toolCalls?.map((c) => ({ ...c, subagentItems: undefined })) } : m), false).map((r) => r.status)).toEqual(["ended", "ended"]);
+  });
+
   it("reads OpenCode's `subagent` call: its `agent`, and the step it has open", () => {
     const step = (type: "observed_tool_call" | "observed_tool_result", toolCallId: string) =>
       type === "observed_tool_call"

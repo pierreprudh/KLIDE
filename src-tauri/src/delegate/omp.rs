@@ -2,7 +2,7 @@ use super::runs::{
     cap_messages, clean_title, extract_user_text, mtime_ms, project_name, tool_file_path,
     transcript_status, AgentRun, RunMessage, RunToolCall, TranscriptState,
 };
-use super::chat_stream::{result_text, StreamItem};
+use super::chat_stream::{result_text, StreamItem, SubagentStatus};
 use super::cli_commands::{CliCommands, SlashProbe};
 use super::{shell_quote, ChatSpec, Delegate, Env, RunCandidate, RunParser};
 use serde_json::Value;
@@ -140,6 +140,12 @@ impl Delegate for Omp {
                     vec![StreamItem::TextDelta(delta)]
                 }
             }
+            // A new assistant message: after prose with no call between, the
+            // next words open a paragraph.
+            Some("message_start") => match value.pointer("/message/role").and_then(Value::as_str) {
+                Some("assistant") => vec![StreamItem::MessageStart],
+                _ => Vec::new(),
+            },
             Some("message_end") => {
                 let Some(message) = value.get("message") else { return Vec::new() };
                 if message.get("role").and_then(Value::as_str) != Some("assistant") {
@@ -178,6 +184,17 @@ impl Delegate for Omp {
                 ok: !value.get("isError").and_then(Value::as_bool).unwrap_or(false),
                 content: result_text(value.get("result").and_then(|r| r.get("content").or(Some(r)))),
             }],
+            // A `task` call starts a list of sub-agents and reports each one's
+            // progress on its updates — which go on arriving after the call
+            // returns, for a background batch.
+            Some("tool_execution_update") if value.get("toolName").and_then(Value::as_str) == Some("task") => {
+                let id = text_of(value.get("toolCallId"));
+                value
+                    .pointer("/partialResult/details/progress")
+                    .and_then(Value::as_array)
+                    .map(|items| items.iter().filter_map(|item| task_progress(&id, item)).collect())
+                    .unwrap_or_default()
+            }
             Some("agent_end") => vec![StreamItem::Finished { cost_usd: None, turns: None }],
             _ => Vec::new(),
         }
@@ -469,6 +486,26 @@ const PROBE_ID: &str = "klide-commands";
 /// commands are expanded by the RPC, ACP and terminal front ends but not by
 /// `-p`, and custom and extension commands may want a UI print mode does not
 /// give them — so every source but `file` is listed as terminal-only.
+/// One sub-agent of a `task` call, from its entry in the call's `progress`.
+fn task_progress(call: &str, item: &Value) -> Option<StreamItem> {
+    let text = |key: &str| item.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let status = match text("status")? {
+        "pending" | "running" => SubagentStatus::Running,
+        "completed" => SubagentStatus::Completed,
+        "failed" => SubagentStatus::Failed,
+        "aborted" => SubagentStatus::Stopped,
+        _ => return None,
+    };
+    Some(StreamItem::Subagent {
+        id: call.to_string(),
+        status,
+        activity: text("lastIntent").or_else(|| text("currentTool")).map(str::to_string),
+        tokens: item.get("tokens").and_then(Value::as_u64).filter(|n| *n > 0),
+        steps: item.get("toolCount").and_then(Value::as_u64).filter(|n| *n > 0),
+        item: Some(item.get("index").and_then(Value::as_u64)? as u32),
+    })
+}
+
 fn parse_available_commands(line: &str) -> Option<CliCommands> {
     let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
     if value.get("id").and_then(|v| v.as_str()) != Some(PROBE_ID) {
@@ -595,6 +632,53 @@ mod tests {
             Omp.parse_stream_line(TOOL_FAILED),
             vec![StreamItem::ToolResult { id: "c2".into(), ok: false, content: "Tool run_command not found".into() }]
         );
+    }
+
+    #[test]
+    fn a_task_calls_sub_agents_report_through_its_updates_one_per_item() {
+        // Trimmed from a real `omp -p --mode json` capture: one `task` call,
+        // two background sub-agents, updates after the call has returned.
+        let update = |a: &str, b: &str| {
+            format!(
+                r#"{{"type":"tool_execution_update","toolCallId":"toolu_T","toolName":"task","partialResult":{{"content":[],"details":{{"progress":[{a},{b}]}}}}}}"#
+            )
+        };
+        let pending = r#"{"index":0,"id":"ReadA","agent":"explore","status":"pending","description":"Read a.txt","recentTools":[],"toolCount":0,"tokens":0}"#;
+        let reading = r#"{"index":1,"id":"ReadB","agent":"explore","status":"running","description":"Read b.txt","lastIntent":"Reading b.txt","currentTool":"read","recentTools":[],"toolCount":1,"tokens":900}"#;
+        let done = r#"{"index":0,"id":"ReadA","agent":"explore","status":"completed","description":"Read a.txt","recentTools":[],"toolCount":1,"tokens":54689}"#;
+        let aborted = r#"{"index":1,"id":"ReadB","agent":"explore","status":"aborted","recentTools":[],"toolCount":1,"tokens":900}"#;
+        let report = |status, activity: Option<&str>, tokens, steps, item| StreamItem::Subagent {
+            id: "toolu_T".into(),
+            status,
+            activity: activity.map(str::to_string),
+            tokens,
+            steps,
+            item: Some(item),
+        };
+        assert_eq!(
+            Omp.parse_stream_line(&update(pending, reading)),
+            vec![
+                report(SubagentStatus::Running, None, None, None, 0),
+                report(SubagentStatus::Running, Some("Reading b.txt"), Some(900), Some(1), 1),
+            ]
+        );
+        assert_eq!(
+            Omp.parse_stream_line(&update(done, aborted)),
+            vec![
+                report(SubagentStatus::Completed, None, Some(54689), Some(1), 0),
+                report(SubagentStatus::Stopped, None, Some(900), Some(1), 1),
+            ]
+        );
+        // Another tool's partial output is not a sub-agent.
+        assert!(Omp
+            .parse_stream_line(r#"{"type":"tool_execution_update","toolCallId":"b","toolName":"bash","partialResult":{"details":{"progress":[{"index":0,"status":"running"}]}}}"#)
+            .is_empty());
+    }
+
+    #[test]
+    fn an_assistant_message_start_is_read_so_two_messages_are_two_paragraphs() {
+        assert_eq!(Omp.parse_stream_line(r#"{"type":"message_start","message":{"role":"assistant","content":[]}}"#), vec![StreamItem::MessageStart]);
+        assert!(Omp.parse_stream_line(r#"{"type":"message_start","message":{"role":"toolResult","content":[]}}"#).is_empty());
     }
 
     #[test]

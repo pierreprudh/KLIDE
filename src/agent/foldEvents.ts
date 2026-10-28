@@ -63,6 +63,9 @@ export type FoldedToolCall = {
   nested?: AgentEvent[];
   /** …and where that sub-agent is, from its `observed_subagent` reports. */
   subagent?: ObservedSubagentState;
+  /** A call that starts several sub-agents (omp's `task` list) keeps each
+   *  one's reports by its index in that list. */
+  subagentItems?: Record<number, ObservedSubagentState>;
 };
 
 /** Per-message footer metrics. One type for both paces — a turn must read the
@@ -675,9 +678,10 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     if (event.type === "observed_subagent") {
       const host = findTool(event.toolCallId);
       if (!host) return { changed: [] };
-      const was = host.call.subagent;
+      const item = event.item;
+      const was = item === undefined ? host.call.subagent : host.call.subagentItems?.[item];
       const settled = event.status !== "running";
-      host.call.subagent = {
+      const state: ObservedSubagentState = {
         status: event.status,
         activity: settled ? undefined : event.activity ?? was?.activity,
         tokens: event.tokens ?? was?.tokens,
@@ -685,6 +689,8 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         startedMs: was?.startedMs ?? event.ts,
         endedMs: settled ? event.ts : undefined,
       };
+      if (item === undefined) host.call.subagent = state;
+      else host.call.subagentItems = { ...host.call.subagentItems, [item]: state };
       return { changed: [host.idx] };
     }
 
@@ -1069,6 +1075,7 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
             ...(t.nested ? { nested: t.nested } : {}),
             ...(t.observedBy && t.result?.ok === false ? { failed: true } : {}),
             ...(t.subagent ? { subagent: t.subagent } : {}),
+            ...(t.subagentItems ? { subagentItems: t.subagentItems } : {}),
           }))
         : undefined,
       meta: row.meta
