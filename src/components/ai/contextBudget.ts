@@ -160,14 +160,14 @@ export function computeContextBudget(input: ContextBudgetInput): ContextBudget {
   const ratio = contextLimit > 0 ? Math.min(1, used / contextLimit) : 0;
 
   const rows: ContextBreakdownRow[] = [
-    { id: "messages", label: "Messages", tokens: messageTokens, color: "var(--chart-1)" },
-    { id: "tools", label: "System tools", tokens: toolSchemaTokens, color: "var(--chart-2)" },
-    { id: "system", label: "System prompt", tokens: systemPromptTokens, color: "var(--chart-3)" },
-    { id: "skills", label: "Skills", tokens: skillsTokens, color: "var(--chart-4)" },
-    { id: "rules", label: "Project rules", tokens: projectRulesTokens, color: "var(--chart-5)" },
-    { id: "lens", label: "Context lens", tokens: lensTokens, color: "var(--chart-6)" },
-    { id: "draft", label: "Draft input", tokens: draftTokens, color: "var(--chart-7)" },
-    { id: "reply", label: "Last reply", tokens: replyTokens, color: "var(--chart-2)" },
+    { id: "messages", label: "Messages", tokens: messageTokens, color: "var(--ctx-messages)" },
+    { id: "tools", label: "System tools", tokens: toolSchemaTokens, color: "var(--ctx-tools)" },
+    { id: "system", label: "System prompt", tokens: systemPromptTokens, color: "var(--ctx-system)" },
+    { id: "skills", label: "Skills", tokens: skillsTokens, color: "var(--ctx-skills)" },
+    { id: "rules", label: "Project rules", tokens: projectRulesTokens, color: "var(--ctx-rules)" },
+    { id: "lens", label: "Context lens", tokens: lensTokens, color: "var(--ctx-lens)" },
+    { id: "draft", label: "Draft input", tokens: draftTokens, color: "var(--ctx-draft)" },
+    { id: "reply", label: "Last reply", tokens: replyTokens, color: "var(--ctx-reply)" },
   ].filter((row) => row.tokens > 0);
 
   // Whatever the provider counted that we didn't: its own scaffolding, plus the

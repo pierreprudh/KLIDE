@@ -295,4 +295,5 @@ known_gaps:
   - "Form input error states — focus ring is documented, but validation error styles are not."
   - "Decorative gradients — hero, footer, and onboarding use subtle warm gradients; stops are described qualitatively, not numerically."
   - "Chart tokens — --chart-1..7 ship in tokens.css but are not documented here."
+  - "Context-window tokens (--ctx-messages, --ctx-tools, --ctx-system, --ctx-skills, --ctx-rules, --ctx-lens, --ctx-draft, --ctx-reply) are a sanctioned hue exception, like the git lanes: one soft pastel per kind of token so the 7px breakdown bar's segments can be told apart. Hovering a segment or row lights that kind and drops the others to low opacity. The context popover only — never UI chrome."
   - "Diff tokens are the one deliberate exception to the brand palette: classic code-review green/red (GitHub's #1A7F37 / #CF222E light, #3FB950 / #F85149 dark) so a diff reads the same as in every editor. --diff-add / --diff-remove colour signs, counts and edge markers; --diff-*-bg tints a changed line and --diff-*-word its changed span, both translucent so they sit on any surface."

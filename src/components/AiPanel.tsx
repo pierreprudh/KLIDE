@@ -1270,6 +1270,9 @@ export function AiPanel({
     },
     closeOnOutsideClick: true,
   });
+  // The breakdown kind under the pointer — its segment and row stay lit, the
+  // rest of the popover's kinds step back.
+  const [contextFocusRow, setContextFocusRow] = useState<string | null>(null);
   const {
     open: contextHover,
     pos: contextTooltipPos,
@@ -5417,7 +5420,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // The pointer can cross from the ring into the panel and
                     // stay there (its Compact button); leaving it closes it.
                     onMouseEnter={holdContextPanel}
-                    onMouseLeave={releaseContextPanel}
+                    onMouseLeave={() => { setContextFocusRow(null); releaseContextPanel(); }}
                     // A React child of the ring: keep its clicks from
                     // reaching the ring.
                     onClick={(e) => e.stopPropagation()}
@@ -5432,14 +5435,15 @@ This user request requires workspace inspection. Before answering, you MUST call
                       {contextBreakdownRows.filter((row) => row.id !== "free" && row.tokens > 0).map((row) => (
                         <div
                           key={row.id}
-                          title={`${row.label}: ${row.tokens.toLocaleString()} tokens`}
+                          onMouseEnter={() => setContextFocusRow(row.id)}
+                          onMouseLeave={() => setContextFocusRow(null)}
                           style={{
                             width: `${Math.max(1.4, (row.tokens / effectiveContextLimit) * 100)}%`,
                             maxWidth: `${Math.max(0, (row.tokens / effectiveContextLimit) * 100)}%`,
                             height: "100%",
                             background: row.color,
-                            opacity: row.muted ? 0.7 : 1,
-                            transition: "width var(--motion-slower) var(--ease-out), max-width var(--motion-slower) var(--ease-out)",
+                            opacity: contextFocusRow && contextFocusRow !== row.id ? 0.25 : row.muted ? 0.7 : 1,
+                            transition: "width var(--motion-slower) var(--ease-out), max-width var(--motion-slower) var(--ease-out), opacity var(--motion-fast) var(--ease-out)",
                           }}
                         />
                       ))}
@@ -5447,10 +5451,15 @@ This user request requires workspace inspection. Before answering, you MUST call
                     <div style={{ display: "grid", gap: 7, color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.25 }}>
                       {contextBreakdownRows.map((row) => {
                         const pct = effectiveContextLimit > 0 ? (row.tokens / effectiveContextLimit) * 100 : 0;
+                        const focused = contextFocusRow === row.id;
+                        const dimmed = contextFocusRow !== null && !focused;
                         return (
-                          <div key={row.id} style={{ display: "grid", gridTemplateColumns: contextTooltipPos.compact ? "12px minmax(0, 1fr) 58px 42px" : "14px minmax(0, 1fr) 70px 54px", alignItems: "center", gap: contextTooltipPos.compact ? 6 : 8, opacity: row.muted ? 0.72 : 1 }}>
+                          <div key={row.id}
+                            onMouseEnter={() => setContextFocusRow(row.id)}
+                            onMouseLeave={() => setContextFocusRow(null)}
+                            style={{ display: "grid", gridTemplateColumns: contextTooltipPos.compact ? "12px minmax(0, 1fr) 58px 42px" : "14px minmax(0, 1fr) 70px 54px", alignItems: "center", gap: contextTooltipPos.compact ? 6 : 8, opacity: dimmed ? 0.35 : row.muted ? 0.72 : 1, transition: "opacity var(--motion-fast) var(--ease-out)" }}>
                             <span style={{ width: 8, height: 8, borderRadius: 2, background: row.color, boxShadow: row.id === "free" ? "inset 0 0 0 1px var(--border)" : undefined }} />
-                            <span style={{ color: row.id === "free" ? "var(--fg-dim)" : "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+                            <span style={{ color: focused ? "var(--fg-strong)" : row.id === "free" ? "var(--fg-dim)" : "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
                             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11 : 12 }}><TweenedNumber value={row.tokens} format={formatContextTokens} /></span>
                             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)" }}><TweenedNumber value={pct} format={formatPercentRow} />%</span>
                           </div>
