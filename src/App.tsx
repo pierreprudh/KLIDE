@@ -60,8 +60,8 @@ import {
   loadPanelSession,
 } from "./components/ai/storedConversations";
 import type { AgentAttachment, AgentEvent, AgentMode, ProviderId } from "./agent/types";
-import { providerName } from "./agent/providers";
-import { switchModelForProvider } from "./components/ai/rememberedModel";
+import { CLI_DEFAULT_MODEL, providerName } from "./agent/providers";
+import { isForeignModelFor, rememberModelForProvider, switchModelForProvider } from "./components/ai/rememberedModel";
 import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchCliSessionRun, fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
@@ -2601,7 +2601,21 @@ function App() {
     resumeSessionId?: string;
     initialTask?: string;
     cwd?: string;
+    model?: string | null;
   }) {
+    // A resume picks up on the model the run used. The Delegate terminal
+    // spawns with the Provider's remembered model, so the run's model becomes
+    // that — otherwise the CLI falls back to its own default of the day
+    // (OpenCode's is a free model a workspace's privacy settings may refuse).
+    const runModel = opts.model?.trim();
+    if (
+      opts.resumeSessionId &&
+      runModel &&
+      runModel !== CLI_DEFAULT_MODEL &&
+      !isForeignModelFor(opts.provider, runModel)
+    ) {
+      rememberModelForProvider(opts.provider, runModel);
+    }
     admit({
       kind: "handoff",
       provider: opts.provider,

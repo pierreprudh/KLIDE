@@ -2718,6 +2718,9 @@ function RunDetail({
     workspaceRoot: string | null;
     resumeSessionId?: string;
     initialTask?: string;
+    /** The model the resumed run used, so the CLI picks up on it rather than
+     *  on whatever its own default is today. */
+    model?: string | null;
   }) => void;
   onResumeKlide?: (runId: string) => void;
   /** Open this Run's changes in Mission Control's docked Artifact Inspector. */
@@ -3066,6 +3069,7 @@ function RunDetail({
                   provider: run.source as TaskSource,
                   workspaceRoot: run.cwd,
                   resumeSessionId: run.id,
+                  model: run.model,
                 })
               }
             />
@@ -3991,6 +3995,9 @@ export function MissionControl({
     workspaceRoot: string | null;
     resumeSessionId?: string;
     initialTask?: string;
+    /** The model the resumed run used, so the CLI picks up on it rather than
+     *  on whatever its own default is today. */
+    model?: string | null;
   }) => void;
   /** "Reattach" — reconnect to a delegate PTY still running in this Klide
    *  process. Opens an AI panel bound to the session's conversation id so its
