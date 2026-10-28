@@ -8,7 +8,8 @@ import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 import type { ProviderId } from "../../agent/types";
 import { ChevronIcon } from "../../icons";
 import { renderMessageBody } from "./ChatMessage";
-import { DotGridLoader, ProviderLogo } from "./icons";
+import { ProviderLogo } from "./icons";
+import "./subagentTray.css";
 import { childTranscriptRows } from "./subagentWatch";
 import { traySummary, type TraySubagent } from "./turnSubagents";
 import { formatElapsed, useElapsed } from "./WorkingRow";
@@ -69,17 +70,19 @@ function TrayRow({ subagent: s, open, onToggle }: { subagent: TraySubagent; open
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        style={{ display: "grid", gridTemplateColumns: "14px max-content minmax(0, 1fr) auto", alignItems: "center", columnGap: 10, width: "100%", padding: "4px 12px", border: "none", background: "transparent", font: "inherit", textAlign: "left", cursor: "pointer", minWidth: 0 }}
+        style={{ display: "grid", gridTemplateColumns: "14px minmax(0, max-content) minmax(0, 1fr) auto", alignItems: "center", columnGap: 10, width: "100%", padding: "4px 12px", border: "none", background: "transparent", font: "inherit", textAlign: "left", cursor: "pointer", minWidth: 0 }}
       >
-        <span style={{ display: "inline-flex", justifyContent: "center" }}>
-          {working ? <DotGridLoader size={10} label={`${s.kind} running`} /> : null}
-        </span>
-        <span style={{ fontSize: 12.5, fontWeight: 500, color: working ? "var(--fg-strong)" : "var(--fg-subtle)" }}>{s.kind}</span>
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, color: working ? "var(--fg)" : "var(--fg-dim)" }}>
+        <SubagentMark status={s.status} />
+        {/* One sweep across the name and the brief while it works — the
+            Working row's shimmer, painted through the text. */}
+        <span className={working ? "ai-working-label" : undefined} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, ...(working ? {} : { color: "var(--fg-dim)" }) }}>
+          <span style={{ fontWeight: 500, marginRight: 10, ...(working ? {} : { color: "var(--fg-subtle)" }) }}>{s.kind}</span>
           {s.task}
-          {working && s.state?.activity && (
-            <span style={{ marginLeft: 8, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{s.state.activity}</span>
-          )}
+        </span>
+        {/* Its own column, outside the sweep: a clip-to-text parent paints
+            through its children's glyphs, so the step would shimmer too. */}
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
+          {working ? s.state?.activity : null}
         </span>
         <TrayStatusWord subagent={s} steps={steps} />
       </button>
@@ -93,6 +96,26 @@ function TrayRow({ subagent: s, open, onToggle }: { subagent: TraySubagent; open
         </div>
       )}
     </div>
+  );
+}
+
+/** A circle per sub-agent: a turning arc while it works; when it is done the
+ *  ring unwinds as a check draws in. Failed keeps the ring in the danger
+ *  colour; a sub-agent that stopped or ended without a report keeps a broken
+ *  ring, because nothing said it finished. */
+function SubagentMark({ status }: { status: TraySubagent["status"] }) {
+  const state = status === "running" ? "running" : status === "completed" ? "done" : status === "failed" ? "failed" : "ended";
+  return (
+    <svg className="klide-subagent-mark" data-state={state} width={14} height={14} viewBox="0 0 14 14" aria-label={state} role="img">
+      <circle className="klide-subagent-mark-track" cx={7} cy={7} r={6} fill="none" pathLength={100} />
+      {state === "running" && <circle className="klide-subagent-mark-arc" cx={7} cy={7} r={6} fill="none" pathLength={100} strokeLinecap="round" />}
+      {state === "done" && (
+        <>
+          <circle className="klide-subagent-mark-unwind" cx={7} cy={7} r={6} fill="none" pathLength={100} />
+          <path className="klide-subagent-mark-check" d="M3.8 7.2 6 9.3 10.2 4.9" fill="none" pathLength={100} strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
+    </svg>
   );
 }
 

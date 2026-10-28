@@ -1,0 +1,77 @@
+/* The sub-agent tray's marks (SubagentTray.tsx). A hairline circle per
+   sub-agent; while it works an accent arc turns over it, the plan rows'
+   comet at a walking pace; when it is done the ring unwinds and a check
+   draws in its place. Dash values are percentages (pathLength=100). */
+.klide-subagent-mark {
+  display: block;
+  overflow: visible;
+}
+.klide-subagent-mark circle,
+.klide-subagent-mark path {
+  stroke-width: 1.25;
+}
+.klide-subagent-mark-track {
+  stroke: color-mix(in srgb, var(--fg-dim) 45%, transparent);
+  transition: stroke var(--motion-slower) var(--ease-soft), opacity var(--motion-slow) var(--ease-soft);
+}
+.klide-subagent-mark[data-state="running"] .klide-subagent-mark-track {
+  stroke: color-mix(in srgb, var(--fg-dim) 22%, transparent);
+}
+.klide-subagent-mark[data-state="done"] .klide-subagent-mark-track {
+  opacity: 0;
+}
+.klide-subagent-mark[data-state="failed"] .klide-subagent-mark-track {
+  stroke: var(--danger);
+}
+.klide-subagent-mark[data-state="ended"] .klide-subagent-mark-track {
+  stroke-dasharray: 6 6.5;
+}
+.klide-subagent-mark-arc {
+  stroke: var(--accent);
+  stroke-dasharray: 24 76;
+  transform-origin: 7px 7px;
+  animation: klide-subagent-mark-spin 1.6s linear infinite;
+}
+/* Done: the full ring closes back along itself as the check is drawn —
+   one stroke handing over to the next, not a swap. */
+.klide-subagent-mark-unwind {
+  stroke: var(--accent);
+  stroke-dasharray: 100 100;
+  transform-origin: 7px 7px;
+  transform: rotate(-90deg);
+  animation: klide-subagent-mark-unwind 360ms var(--ease-soft) forwards;
+}
+.klide-subagent-mark-check {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: klide-subagent-mark-check 300ms var(--ease-soft) 160ms forwards;
+}
+@keyframes klide-subagent-mark-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes klide-subagent-mark-unwind {
+  to {
+    stroke-dasharray: 0 100;
+  }
+}
+@keyframes klide-subagent-mark-check {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-subagent-mark-arc {
+    animation: none;
+  }
+  .klide-subagent-mark-unwind {
+    display: none;
+  }
+  .klide-subagent-mark-check {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
