@@ -1,4 +1,5 @@
 import { playSound } from "../sound";
+import { ContextDetailFlyout } from "./ai/ContextDetailFlyout";
 import { SideQuestionToggle } from "./ai/SideQuestionToggle";
 import { isOnScreen, showConversation } from "../runAttention";
 import { SubagentTray } from "./ai/SubagentTray";
@@ -27,6 +28,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useId,
   useMemo,
   useReducer,
   useRef,
@@ -1276,11 +1278,13 @@ export function AiPanel({
   const [contextFocusRow, setContextFocusRow] = useState<string | null>(null);
   // The row whose parts the flyout beside the popover lists, and where that
   // row sits in the popover so the flyout lines up with it.
+  const contextPanelId = useId();
   const [contextDetail, setContextDetail] = useState<{ id: string; top: number } | null>(null);
   const {
     open: contextHover,
     pos: contextTooltipPos,
     triggerRef: contextTriggerRef,
+    menuRef: contextMenuRef,
     openMenu: openContextTooltip,
     close: closeContextTooltip,
   } = usePortalMenu({
@@ -1305,8 +1309,9 @@ export function AiPanel({
   }, []);
   const releaseContextPanel = useCallback(() => {
     holdContextPanel();
+    if (contextMenuRef.current?.contains(document.activeElement) || document.activeElement === contextTriggerRef.current) return;
     contextReleaseTimer.current = setTimeout(closeContextTooltip, 180);
-  }, [holdContextPanel, closeContextTooltip]);
+  }, [holdContextPanel, closeContextTooltip, contextMenuRef, contextTriggerRef]);
   useEffect(() => holdContextPanel, [holdContextPanel]);
   const toggleMode = () => {
     if (sideQuestionParent) return;
@@ -5413,11 +5418,19 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
-              <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${compactOffered ? ", can be compacted" : ""}`}
+              <button ref={contextTriggerRef} type="button" aria-haspopup="dialog" aria-expanded={contextHover} aria-controls={contextHover ? contextPanelId : undefined} aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${compactOffered ? ", can be compacted" : ""}`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
                 onMouseEnter={(e) => { holdContextPanel(); openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseLeave={(e) => { releaseContextPanel(); e.currentTarget.style.background = "transparent"; }}
-                onFocus={() => { holdContextPanel(); openContextTooltip(); }}
+                onFocus={(e) => { if (e.target === e.currentTarget) { holdContextPanel(); openContextTooltip(); } }}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Escape") { e.stopPropagation(); closeContextTooltip(); }
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    contextMenuRef.current?.querySelector<HTMLElement>('[tabindex="0"], button:not(:disabled)')?.focus();
+                  }
+                }}
                 onBlur={releaseContextPanel}>
                 {/* Compaction available: its mark sits inside the ring. */}
                 {compactOffered && !compacting && (
@@ -5430,11 +5443,34 @@ This user request requires workspace inspection. Before answering, you MUST call
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" pathLength="100" strokeDasharray={`${Math.max(2, Math.round(contextRatio * 100))} 100`} transform="rotate(-90 11 11)" style={{ transition: "stroke-dasharray var(--motion-med) var(--ease-out), stroke var(--motion-med) var(--ease-out)" }} />
                 </svg>
                 {contextHover && contextTooltipPos && createPortal(
-                  <div role="tooltip" className="popover-enter"
+                  <div ref={contextMenuRef} id={contextPanelId} role="dialog" aria-label="Context window" className="popover-enter"
+                    onFocusCapture={holdContextPanel}
+                    onBlur={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget)) {
+                        setContextFocusRow(null);
+                        setContextDetail(null);
+                        releaseContextPanel();
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.stopPropagation();
+                        contextTriggerRef.current?.focus();
+                        closeContextTooltip();
+                        setContextFocusRow(null);
+                        setContextDetail(null);
+                      }
+                    }}
                     // The pointer can cross from the ring into the panel and
                     // stay there (its Compact button); leaving it closes it.
                     onMouseEnter={holdContextPanel}
-                    onMouseLeave={() => { setContextFocusRow(null); setContextDetail(null); releaseContextPanel(); }}
+                    onMouseLeave={() => {
+                      if (!contextMenuRef.current?.contains(document.activeElement)) {
+                        setContextFocusRow(null);
+                        setContextDetail(null);
+                      }
+                      releaseContextPanel();
+                    }}
                     // A React child of the ring: keep its clicks from
                     // reaching the ring.
                     onClick={(e) => e.stopPropagation()}
@@ -5469,12 +5505,31 @@ This user request requires workspace inspection. Before answering, you MUST call
                         const dimmed = contextFocusRow !== null && !focused;
                         return (
                           <div key={row.id}
+                            tabIndex={row.details && row.details.length > 1 ? 0 : undefined}
+                            role={row.details && row.details.length > 1 ? "group" : undefined}
+                            aria-label={row.details && row.details.length > 1 ? `${row.label} breakdown` : undefined}
+                            aria-describedby={row.details && row.details.length > 1 ? `${contextPanelId}-${row.id}-details` : undefined}
+                            onFocus={(e) => {
+                              setContextFocusRow(row.id);
+                              setContextDetail(row.details && row.details.length > 1 ? { id: row.id, top: e.currentTarget.offsetTop } : null);
+                            }}
+                            onBlur={() => { setContextFocusRow(null); setContextDetail(null); }}
                             onMouseEnter={(e) => {
                               setContextFocusRow(row.id);
                               setContextDetail(row.details && row.details.length > 1 ? { id: row.id, top: e.currentTarget.offsetTop } : null);
                             }}
-                            onMouseLeave={() => { setContextFocusRow(null); setContextDetail(null); }}
+                            onMouseLeave={(e) => {
+                              if (document.activeElement !== e.currentTarget) {
+                                setContextFocusRow(null);
+                                setContextDetail(null);
+                              }
+                            }}
                             style={{ display: "grid", gridTemplateColumns: contextTooltipPos.compact ? "12px minmax(0, 1fr) 58px 42px" : "14px minmax(0, 1fr) 70px 54px", alignItems: "center", gap: contextTooltipPos.compact ? 6 : 8, opacity: dimmed ? 0.35 : row.muted ? 0.72 : 1, transition: "opacity var(--motion-fast) var(--ease-out)" }}>
+                            {row.details && row.details.length > 1 && (
+                              <span id={`${contextPanelId}-${row.id}-details`} className="visual-sr-only">
+                                {row.details.map((d) => `${d.label}: ${Math.round(d.tokens).toLocaleString()} tokens`).join("; ")}
+                              </span>
+                            )}
                             <span style={{ width: 8, height: 8, borderRadius: 2, background: row.color, boxShadow: row.id === "free" ? "inset 0 0 0 1px var(--border)" : undefined }} />
                             <span style={{ color: focused ? "var(--fg-strong)" : row.id === "free" ? "var(--fg-dim)" : "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
                             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11 : 12 }}><TweenedNumber value={row.tokens} format={formatContextTokens} /></span>
@@ -5492,8 +5547,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                       const onRight = contextTooltipPos.left + contextTooltipPos.width + 8 + flyoutWidth <= window.innerWidth - 8;
                       const pct = effectiveContextLimit > 0 ? (row.tokens / effectiveContextLimit) * 100 : 0;
                       return (
-                        <div key={row.id} className="popover-enter" aria-hidden="true"
-                          style={{ position: "absolute", top: contextDetail.top - 9, ...(onRight ? { left: "calc(100% + 8px)" } : { right: "calc(100% + 8px)" }), width: flyoutWidth, padding: "8px 11px 9px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", pointerEvents: "none", display: "grid", gap: 6, fontSize: 12, lineHeight: 1.25 }}>
+                        <ContextDetailFlyout key={row.id} top={contextDetail.top} onRight={onRight}>
                           <div style={{ display: "grid", gridTemplateColumns: "14px minmax(0, 1fr) auto auto", alignItems: "center", gap: 8 }}>
                             <span style={{ width: 10, height: 3, borderRadius: 2, background: row.color }} />
                             <span style={{ color: "var(--fg-strong)" }}>{row.label}</span>
@@ -5506,7 +5560,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                               <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{formatContextTokens(d.tokens)}</span>
                             </div>
                           ))}
-                        </div>
+                        </ContextDetailFlyout>
                       );
                     })()}
                     <div style={{ height: 1, background: "var(--border)", margin: "10px 0 8px" }} />
