@@ -56,8 +56,9 @@ export function turnSubagents(msgs: Msg[], live: boolean): TraySubagent[] {
     for (const call of m.toolCalls ?? []) {
       if (!call.id || !call.observedBy || !isObservedSubagent(call)) continue;
       const args = (call.args ?? {}) as Record<string, unknown>;
-      // Claude Code names the type `subagent_type`, OpenCode `agent`.
-      const named = [args.subagent_type, args.agent].find((v): v is string => typeof v === "string" && !!v.trim());
+      // Claude Code names the type `subagent_type`, OpenCode `agent`,
+      // Copilot `agent_type`.
+      const named = [args.subagent_type, args.agent, args.agent_type].find((v): v is string => typeof v === "string" && !!v.trim());
       const kind = named?.trim() ?? "sub-agent";
       const brief = typeof args.description === "string" && args.description.trim() ? args.description : typeof args.prompt === "string" ? args.prompt : "";
       out.push({
@@ -85,12 +86,16 @@ function openStep(nested: AgentEvent[] | undefined): string | undefined {
   return last ? liveWorkLine(last) : undefined;
 }
 
+/** What a background sub-agent's call returns the moment it launches —
+ *  Claude Code's and Copilot's words. Not the sub-agent's report. */
+const LAUNCH_RECEIPT = /^(Async agent launched|Agent started in background)/;
+
 function statusOf(state: ObservedSubagentState | undefined, result: string | undefined, failed: boolean | undefined, live: boolean): TrayStatus {
   const settled = state && state.status !== "running" ? state.status : undefined;
   if (settled) return settled;
   // A CLI that reports no sub-agent lifecycle: its call returning with the
   // sub-agent's report is the finish (a background launch receipt is not).
-  const reported = result !== undefined && !/^Running /.test(result) && !/^Async agent launched/.test(result);
+  const reported = result !== undefined && !/^Running /.test(result) && !LAUNCH_RECEIPT.test(result);
   if (!state && reported) return failed ? "failed" : "completed";
   return live ? "running" : "ended";
 }
