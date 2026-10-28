@@ -44,3 +44,22 @@ describe("switchModelForProvider — what a provider switch lands on", () => {
     expect(storedModelForProvider("claude-code")).toBe(defaultModelForProvider("claude-code"));
   });
 });
+
+describe("storedModelForProvider — Auto's sentinel never leaks into another Provider", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", memoryStorage());
+  });
+
+  it("ignores a bare `auto` stored under a Delegate (OpenCode: Invalid model reference: auto)", () => {
+    localStorage.setItem("klide.model.opencode", "auto");
+    expect(storedModelForProvider("opencode")).toBe(defaultModelForProvider("opencode"));
+    expect(rememberedModelForProvider("opencode")).toBeNull();
+  });
+
+  it("keeps `auto` for the Auto Provider itself, and OpenRouter's own router id", () => {
+    localStorage.setItem("klide.model.auto", "auto");
+    expect(storedModelForProvider("auto")).toBe("auto");
+    localStorage.setItem("klide.model.openrouter", "openrouter/auto");
+    expect(storedModelForProvider("openrouter")).toBe("openrouter/auto");
+  });
+});
