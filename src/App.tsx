@@ -2406,7 +2406,7 @@ function App() {
   async function continueRunInFocus(
     run: Run,
     preloadedMessages?: MissionRunMessage[],
-    opts?: { withKit?: boolean },
+    opts?: { withKit?: boolean; agent?: DelegateId },
   ) {
     try {
       const messages = preloadedMessages ?? await fetchRunMessages(run);
@@ -2418,12 +2418,18 @@ function App() {
       // run continues on its own delegate, a Klide run on the provider it ran
       // on. `withKit` hands the thread to Kit instead — Klide's own Harness on
       // the last API/local pick (never a CLI), or Auto when there is none.
-      const withKit = !!opts?.withKit;
+      // `agent` opens the thread on another CLI agent instead: a new
+      // conversation with the run's messages as history, waiting for the next
+      // message — not a take-over prompt the agent acts on by itself.
+      const agent = opts?.agent;
+      const withKit = !agent && !!opts?.withKit;
       const kitProvider = (() => {
         const last = localStorage.getItem("klide.provider");
         return last && !isDelegateId(last) && !last.startsWith("cli:") ? (last as ProviderId) : ("auto" as ProviderId);
       })();
-      const provider = withKit
+      const provider = agent
+        ? (agent as ProviderId)
+        : withKit
         ? kitProvider
         : run.source === "klide"
           ? (run.provider as ProviderId | undefined)
@@ -2441,12 +2447,16 @@ function App() {
           title: run.title,
           forkedFrom: null,
           provider,
-          model: withKit ? localStorage.getItem(`klide.model.${kitProvider}`) || undefined : run.model,
+          model: agent
+            ? switchModelForProvider(agent)
+            : withKit
+            ? localStorage.getItem(`klide.model.${kitProvider}`) || undefined
+            : run.model,
           // A CLI run's id is the session its CLI resumes it under, so the
           // first headless turn continues the real session (`claude --resume`)
           // rather than cold-starting over the folded transcript. Kit starts
           // from the folded transcript — it has no CLI session to resume.
-          delegateSession: !withKit && isDelegateId(run.source) ? run.id : null,
+          delegateSession: !withKit && !agent && isDelegateId(run.source) ? run.id : null,
         },
       });
     } catch (e) {

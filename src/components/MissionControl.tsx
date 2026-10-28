@@ -2698,7 +2698,7 @@ function RunDetail({
   onForkInWorktree?: (run: RunLedgerEntry, messages?: RunMessage[]) => void;
   /** Carry this run's conversation into the Focus canvas and keep talking
    *  there — the chat-first answer to the delegate CLI's own `/resume`. */
-  onContinueInFocus?: (run: RunLedgerEntry, messages?: RunMessage[], opts?: { withKit?: boolean }) => void;
+  onContinueInFocus?: (run: RunLedgerEntry, messages?: RunMessage[], opts?: { withKit?: boolean; agent?: DelegateId }) => void;
   onMergeWorktree?: (run: RunLedgerEntry) => void;
   forkParent?: RunLedgerEntry | null;
   forkChildren?: RunLedgerEntry[];
@@ -3103,24 +3103,28 @@ function RunDetail({
               onClick={() => onContinueInFocus(run, messages, { withKit: !!cliAgent })}
             />
           )}
-          {/* "Open in {other CLI}" hands the run off to a fresh delegate TUI in
-              a new AI panel — each wears that CLI's provider logo. Klide runs
-              pass compact task state so the session starts with context. */}
+          {/* "Open in {other CLI}" opens a new Focus conversation on that
+              agent with this run's messages as history — it waits for the next
+              message rather than acting on a take-over prompt. Where the
+              transcript can't be carried, it falls back to a fresh delegate
+              TUI seeded with compact task state. Each wears the CLI's logo. */}
           {onOpenInAiPanel &&
             run.capabilities.canOpenInOtherAgent &&
             shownHandoffs.map((s) => (
               <IconActionButton
                 key={s}
                 label={`Open in ${SOURCE_LABEL[s]}`}
-                description="Hand this run to another agent, in a fresh session."
+                description="A new conversation with this one's history, in Focus."
                 icon={<SourceLogo source={s} size={16} />}
                 onClick={() =>
-                  onOpenInAiPanel({
-                    provider: s,
-                    workspaceRoot: run.cwd,
-                    initialTask:
-                      run.source === "klide" && handoffPrompt ? handoffPrompt : undefined,
-                  })
+                  onContinueInFocus && run.capabilities.canFork
+                    ? onContinueInFocus(run, messages, { agent: s })
+                    : onOpenInAiPanel({
+                        provider: s,
+                        workspaceRoot: run.cwd,
+                        initialTask:
+                          run.source === "klide" && handoffPrompt ? handoffPrompt : undefined,
+                      })
                 }
               />
             ))}
@@ -4020,7 +4024,7 @@ export function MissionControl({
   onForkRun?: (run: Run, messages?: RunMessage[]) => void;
   onForkRunInWorktree?: (run: Run, messages?: RunMessage[]) => void;
   /** Continue this run as a Focus conversation (see RunDetail). */
-  onContinueRunInFocus?: (run: Run, messages?: RunMessage[], opts?: { withKit?: boolean }) => void;
+  onContinueRunInFocus?: (run: Run, messages?: RunMessage[], opts?: { withKit?: boolean; agent?: DelegateId }) => void;
   onMergeWorktreeRun?: (run: Run) => void;
   /** runId currently being summarised by `onSaveMemory`. Used to show a
    *  subtle spinner on the row so the user knows the model call is in
