@@ -74,6 +74,18 @@
   --chart-6: color-mix(in srgb, var(--accent) 28%, var(--bg));
   --chart-7: color-mix(in srgb, var(--accent) 20%, var(--bg));
 
+  /* Context-window breakdown — one soft hue per kind of token, so the bar's
+     segments can be told apart at 7px. Pastel mid-tones that read on bone
+     and on the dark surfaces alike. The context popover only. */
+  --ctx-messages: #A9BCEB;  /* periwinkle */
+  --ctx-tools:    #7DBF95;  /* green      */
+  --ctx-system:   #C3B3E8;  /* lavender   */
+  --ctx-skills:   #E9B793;  /* peach      */
+  --ctx-rules:    #DFC97E;  /* butter     */
+  --ctx-lens:     #8CC7C2;  /* teal       */
+  --ctx-draft:    #E3A3B6;  /* rose       */
+  --ctx-reply:    #93A9C0;  /* slate blue */
+
   /* Git graph branch lanes — unlike the chart ramp, lanes are 1.5px lines
      that MUST be tellable apart, so this is the one place with hue variety:
      sage first (brand), then muted mid-tone hues that read on light and
