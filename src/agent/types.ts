@@ -299,6 +299,21 @@ export type AgentEvent =
   /** The delegate CLI named its session itself (OpenCode titles a session
    *  with a small model after its first message). A suggestion for the
    *  conversation's title; a name the person typed always wins. */
+  /** Where one of the delegate's own sub-agents is — started, its current
+   *  step, how it ended — keyed by the observed `Agent` call that started it.
+   *  A background sub-agent's call settles the moment it launches; this is
+   *  what says when it finishes. */
+  | {
+      type: "observed_subagent";
+      runId: string;
+      toolCallId: string;
+      status: ObservedSubagentStatus;
+      /** The step in hand, in the CLI's words ("Reading a.txt"). */
+      activity?: string;
+      tokens?: number;
+      steps?: number;
+      ts: number;
+    }
   | { type: "conversation_titled"; runId: string; title: string; ts: number }
   | { type: "permission_requested"; runId: string; request: PermissionRequest; ts: number }
   | { type: "permission_resolved"; runId: string; requestId: string; decision: PermissionDecision; ts: number }
@@ -479,4 +494,19 @@ export type StartAgentRunInput = {
   /** A Delegate CLI session this conversation continues; see
    *  `Conversation.delegateSession`. Only a subscription CLI turn reads it. */
   delegateSession?: string;
+};
+
+export type ObservedSubagentStatus = "running" | "completed" | "failed" | "stopped";
+
+/** Where a Delegate's own sub-agent is, folded from its `observed_subagent`
+ *  events onto the call that started it. */
+export type ObservedSubagentState = {
+  status: ObservedSubagentStatus;
+  activity?: string;
+  tokens?: number;
+  steps?: number;
+  /** First report, epoch ms — the row's clock counts from here. */
+  startedMs?: number;
+  /** When it settled, epoch ms. */
+  endedMs?: number;
 };

@@ -495,6 +495,24 @@ describe("foldAgentEvents", () => {
       expect(assistant.toolCalls?.[1]).toMatchObject({ observedBy: "claude-code", nested: [{ toolCallId: "rb" }, { toolCallId: "rb" }] });
     });
 
+    it("folds where a delegate's sub-agent is onto the call that started it", () => {
+      // A background sub-agent's call returns at once ("Async agent
+      // launched"); its task reports are what say it is still working.
+      const rows = foldAgentEvents([
+        { type: "observed_tool_call", runId: RUN, toolCallId: "A", provider: "claude-code", name: "Agent", input: {}, summary: "Agent", ts: 1000 },
+        { type: "observed_subagent", runId: RUN, toolCallId: "A", status: "running", ts: 1100 },
+        { type: "observed_tool_result", runId: RUN, toolCallId: "A", ok: true, content: "Async agent launched successfully.", ts: 1200 },
+        { type: "observed_subagent", runId: RUN, toolCallId: "A", status: "running", activity: "Reading a.txt", tokens: 18869, steps: 1, ts: 2000 },
+        { type: "observed_subagent", runId: RUN, toolCallId: "A", status: "completed", tokens: 22243, steps: 1, ts: 3700 },
+      ]);
+      const row = rows[0];
+      if (row.kind !== "assistant") throw new Error("expected one assistant row");
+      expect(row.toolCalls[0].subagent).toEqual({ status: "completed", activity: undefined, tokens: 22243, steps: 1, startedMs: 1100, endedMs: 3700 });
+      const assistant = foldedRowToMsgs(row).find((m) => m.role === "assistant");
+      if (assistant?.role !== "assistant") throw new Error("expected an assistant message");
+      expect(assistant.toolCalls?.[0].subagent?.status).toBe("completed");
+    });
+
     it("does not repeat text the rows above a delegate's tool card already show", () => {
       // Reproduces a duplicated preamble seen in Focus with Claude Code. A
       // delegate interleaves its own tool calls with its prose inside ONE turn,

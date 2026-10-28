@@ -570,6 +570,7 @@ impl AgentEvent {
             | AgentEvent::ToolCallFinished { ts, .. }
             | AgentEvent::ObservedToolCall { ts, .. }
             | AgentEvent::ObservedToolResult { ts, .. }
+            | AgentEvent::ObservedSubagent { ts, .. }
             | AgentEvent::ConversationTitled { ts, .. }
             | AgentEvent::PermissionRequested { ts, .. }
             | AgentEvent::PermissionResolved { ts, .. }
@@ -751,6 +752,22 @@ pub enum AgentEvent {
         content: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_tool_call_id: Option<String>,
+        ts: i64,
+    },
+    /// Where one of the delegate's own sub-agents is — started, its current
+    /// step, how it ended — keyed by the observed call that started it.
+    ObservedSubagent {
+        run_id: String,
+        tool_call_id: String,
+        status: crate::delegate::chat_stream::SubagentStatus,
+        /// The step in hand, in the CLI's words ("Reading a.txt").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity: Option<String>,
+        /// Running totals the CLI reports for the sub-agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        steps: Option<u64>,
         ts: i64,
     },
     /// The delegate CLI named the conversation's session itself (OpenCode

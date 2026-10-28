@@ -71,15 +71,16 @@ export const USER_QUESTION_TOOL = "userAnswerQuestion";
 export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "spawn_subagent", USER_QUESTION_TOOL]);
 
 /** A sub-agent a Delegate CLI started itself — Claude Code's `Agent` (`Task`
- *  before it was renamed). Klide did not dispatch it, but it is a delegation
- *  all the same: drawn as one, and never folded into "Worked for…". */
+ *  before it was renamed). Starting one is a step of the turn's work like any
+ *  call; where it is lives in the tray above the composer (turnSubagents.ts),
+ *  so a fan-out never pushes the answer off the screen. */
 export function isObservedSubagent(call: { name: string; observedBy?: string }): boolean {
   return !!call.observedBy && (call.name === "Agent" || call.name === "Task");
 }
 
 /** A call that draws its own card and so speaks for the turn. */
-export function isSpeakingCall(call: { name: string; observedBy?: string }): boolean {
-  return SPEAKING_TOOLS.has(call.name) || isObservedSubagent(call);
+export function isSpeakingCall(call: { name: string }): boolean {
+  return SPEAKING_TOOLS.has(call.name);
 }
 
 /** What a turn would show the reader: its content with every reasoning

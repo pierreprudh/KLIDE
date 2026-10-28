@@ -37,6 +37,10 @@ pub(crate) enum StreamItem {
     Text(String),
     /// One fragment, as it was produced. What makes a turn type out.
     TextDelta(String),
+    /// The CLI began a new assistant message. Two messages of prose in a row
+    /// — a sentence, then another after a background sub-agent woke the CLI —
+    /// are two paragraphs, not one run-on line.
+    MessageStart,
     /// A named part's text *so far*. OpenCode reports text per part rather than
     /// as deltas, and a growing part may be re-sent whole; the consumer keeps
     /// what it has already emitted per `id` and streams only the new suffix, so
@@ -64,11 +68,26 @@ pub(crate) enum StreamItem {
     /// conversation can draw the sub-agent's steps under it instead of as the
     /// turn's own.
     Nested { parent: String, item: Box<StreamItem> },
+    /// Where one of those sub-agents is, as the CLI reports it: started, its
+    /// current step, settled. A background sub-agent's call returns the moment
+    /// it launches, so its own result says nothing about when it finishes;
+    /// this does.
+    Subagent { id: String, status: SubagentStatus, activity: Option<String>, tokens: Option<u64>, steps: Option<u64> },
     /// The terminating line: what the CLI thinks the turn cost.
     Finished {
         cost_usd: Option<f64>,
         turns: Option<i64>,
     },
+}
+
+/// A delegate's own sub-agent, settled or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Stopped,
 }
 
 /// `message.content[]` from an Anthropic-shaped line.
