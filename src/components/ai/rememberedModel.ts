@@ -9,7 +9,7 @@
 
 import type { ProviderId } from "../../agent/types";
 import { routedSelection } from "../../agent/harnessSource";
-import { defaultModelForProvider } from "../../agent/providers";
+import { AUTO_MODEL, AUTO_PROVIDER, defaultModelForProvider } from "../../agent/providers";
 import { favModelsFor } from "../../favModels";
 import { providerSwitchModel } from "./modelSelection";
 
@@ -37,6 +37,9 @@ export function isForeignModelFor(id: ProviderId, model: string): boolean {
   // A routed selection names its source's model *inside* the string, for the
   // CLI to run on; the slashes and tags in there are not a leak.
   if (routedSelection(model)) return false;
+  // Auto's sentinel is Klide's router, not a model any Provider serves — a
+  // CLI handed it fails at launch ("Invalid model reference: auto").
+  if (model === AUTO_MODEL) return id !== AUTO_PROVIDER;
   return (id === "claude-code" || id === "codex") && (model.includes("/") || model.includes(":"));
 }
 

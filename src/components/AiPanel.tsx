@@ -165,7 +165,7 @@ import { inboxSenders, coordinationPeersOf, parseDeliveryReason, peerName, useCo
 import { AgentActivity } from "./ai/AgentActivity";
 import { reviewEnvelope } from "../agent/coordination";
 import { allFavModels, favModelsFor } from "../favModels";
-import { forgetModelForProvider, rememberedModelForProvider, storedModelForProvider, switchModelForProvider } from "./ai/rememberedModel";
+import { forgetModelForProvider, isForeignModelFor, rememberedModelForProvider, storedModelForProvider, switchModelForProvider } from "./ai/rememberedModel";
 import { agentPickForConversation, routedModelString } from "../agent/harnessSource";
 import { readHarnessSourceSupport } from "../ipc/hermes";
 import { conversationMark } from "../modelIdentity";
@@ -3093,11 +3093,20 @@ This user request requires workspace inspection. Before answering, you MUST call
   // a delegate once spawned with `--model pierreprudh/lfm2.5…`). Only picks
   // made after mount — always provider-consistent — are worth remembering.
   const modelPersistArmed = useRef(false);
+  const lastPersistedModelRef = useRef(model);
   useEffect(() => {
     if (!modelPersistArmed.current) {
       modelPersistArmed.current = true;
       return;
     }
+    // A Provider switch re-runs this effect while `model` still holds the old
+    // Provider's pick for a render — writing then files Auto's `auto` under
+    // `klide.model.opencode`, and OpenCode refused every later launch. Only a
+    // changed model is a pick; a model that plainly isn't this Provider's
+    // never is.
+    const modelChanged = lastPersistedModelRef.current !== model;
+    lastPersistedModelRef.current = model;
+    if (!modelChanged || isForeignModelFor(provider, model)) return;
     // A model the *Provider* chose (the current pick was retired from its
     // list) reaches this effect indistinguishably from one a human picked, and
     // writing it makes the substitute the remembered default forever. That is
