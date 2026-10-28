@@ -71,10 +71,10 @@ export const USER_QUESTION_TOOL = "userAnswerQuestion";
 export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "spawn_subagent", USER_QUESTION_TOOL]);
 
 /** A sub-agent a Delegate CLI started itself — Claude Code's `Agent` (`Task`
- *  before it was renamed), OpenCode 2's `subagent`. Starting one is a step of the turn's work like any
+ *  before it was renamed), OpenCode 2's `subagent`, Copilot's `task`. Starting one is a step of the turn's work like any
  *  call; where it is lives in the tray above the composer (turnSubagents.ts),
  *  so a fan-out never pushes the answer off the screen. */
-const OBSERVED_SUBAGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task", "subagent"]);
+const OBSERVED_SUBAGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task", "subagent", "task"]);
 
 export function isObservedSubagent(call: { name: string; observedBy?: string }): boolean {
   return !!call.observedBy && OBSERVED_SUBAGENT_TOOLS.has(call.name);

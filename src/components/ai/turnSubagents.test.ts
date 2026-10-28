@@ -36,7 +36,7 @@ describe("the sub-agents of the turn in hand", () => {
     const msgs: Msg[] = [
       { role: "user", content: "fan out" },
       { role: "assistant", content: "", toolCalls: [agent("A", "Map", { subagent: { status: "running" } }), agent("B", "Read"), agent("C", "Find")] },
-      result("B", "Async agent launched successfully."),
+      result("B", "Agent started in background with agent_id: x."),
       // A conversation recorded before reports were read: a foreground call's
       // result is the sub-agent's own report.
       result("C", "Found three shallow modules."),

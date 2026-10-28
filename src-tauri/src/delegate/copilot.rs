@@ -1,4 +1,4 @@
-use super::chat_stream::StreamItem;
+use super::chat_stream::{StreamItem, SubagentStatus};
 use super::runs::{
     bounded_tool_input, bounded_tool_result, cap_messages, clean_title, mtime_ms, project_name,
     tool_file_path, transcript_status, AgentRun, RunMessage, RunToolCall, TranscriptState,
@@ -160,7 +160,13 @@ impl Delegate for Copilot {
         };
         let data = &value["data"];
         let text = |key: &str| data.get(key).and_then(Value::as_str).filter(|s| !s.is_empty());
-        match value.get("type").and_then(Value::as_str) {
+        // A line one of its `task` sub-agents wrote names that call. Its tool
+        // work is kept, nested under the call; its words — "banana", streamed
+        // as deltas — are not this turn's answer.
+        let parent = text("parentToolCallId");
+        let items = match value.get("type").and_then(Value::as_str) {
+            // A new message: its prose opens a paragraph after the last.
+            Some("assistant.message_start") => vec![StreamItem::MessageStart],
             Some("assistant.message_delta") => text("deltaContent")
                 .map(|t| vec![StreamItem::TextDelta(t.into())])
                 .unwrap_or_default(),
@@ -203,6 +209,23 @@ impl Delegate for Copilot {
                     _ => Vec::new(),
                 }
             }
+            // A sub-agent's lifecycle, keyed by the `task` call that started
+            // it — the call itself returns at once ("Agent started in
+            // background").
+            Some(kind @ ("subagent.started" | "subagent.completed" | "subagent.failed")) => match text("toolCallId") {
+                Some(id) => vec![StreamItem::Subagent {
+                    id: id.into(),
+                    status: match kind {
+                        "subagent.started" => SubagentStatus::Running,
+                        "subagent.completed" => SubagentStatus::Completed,
+                        _ => SubagentStatus::Failed,
+                    },
+                    activity: None,
+                    tokens: data.get("totalTokens").and_then(Value::as_u64),
+                    steps: data.get("totalToolCalls").and_then(Value::as_u64),
+                }],
+                None => Vec::new(),
+            },
             Some("session.error") => vec![StreamItem::Error(
                 text("message").unwrap_or("Copilot reported an error").into(),
             )],
@@ -219,6 +242,14 @@ impl Delegate for Copilot {
                 items
             }
             _ => Vec::new(),
+        };
+        match parent {
+            None => items,
+            Some(parent) => items
+                .into_iter()
+                .filter(|item| matches!(item, StreamItem::ToolCall { .. } | StreamItem::ToolResult { .. }))
+                .map(|item| StreamItem::Nested { parent: parent.to_string(), item: Box::new(item) })
+                .collect(),
         }
     }
     fn login_commands(&self) -> Vec<String> {
@@ -531,6 +562,37 @@ mod tests {
         let server = &serde_json::from_str::<Value>(&wiring.files[0].1).unwrap()["mcpServers"]["klide"];
         assert_eq!(server["command"], "/app/klide");
         assert_eq!(server["tools"][0], "*");
+    }
+
+    /// A `task` fan-out from copilot 1.0.101 (2026-10-28), trimmed: the
+    /// calls return at once, `subagent.*` say where each one is, and every
+    /// line a sub-agent writes names its call.
+    #[test]
+    fn a_task_sub_agents_work_nests_under_its_call_and_its_words_stay_out() {
+        let parse = |line: &str| Copilot.parse_stream_line(line);
+        assert!(matches!(
+            &parse(r#"{"type":"tool.execution_start","data":{"toolCallId":"call_A","toolName":"task","arguments":{"description":"Read a.txt","agent_type":"explore"}}}"#)[..],
+            [StreamItem::ToolCall { id, name, .. }] if id == "call_A" && name == "task"
+        ));
+        assert_eq!(
+            parse(r#"{"type":"subagent.started","data":{"toolCallId":"call_A","agentName":"explore","agentDisplayName":"read-a-file"}}"#),
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
+        );
+        assert_eq!(
+            parse(r#"{"type":"tool.execution_start","data":{"toolCallId":"call_V","toolName":"view","arguments":{"path":"/ws/a.txt"},"parentToolCallId":"call_A"}}"#),
+            [StreamItem::Nested { parent: "call_A".into(), item: Box::new(StreamItem::ToolCall { id: "call_V".into(), name: "view".into(), input: serde_json::json!({"path":"/ws/a.txt"}) }) }]
+        );
+        // The sub-agent's reply streams as deltas: not the answer.
+        assert!(parse(r#"{"type":"assistant.message_delta","data":{"messageId":"m","deltaContent":"apple","parentToolCallId":"call_A"}}"#).is_empty());
+        assert!(parse(r#"{"type":"assistant.message","data":{"messageId":"m","content":"apple","parentToolCallId":"call_A"}}"#).is_empty());
+        assert_eq!(
+            parse(r#"{"type":"subagent.completed","data":{"toolCallId":"call_A","agentName":"explore","totalToolCalls":1,"totalTokens":7921,"durationMs":36143}}"#),
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Completed, activity: None, tokens: Some(7921), steps: Some(1) }]
+        );
+        assert_eq!(parse(r#"{"type":"assistant.message_start","data":{"messageId":"c","parentToolCallId":"call_A"}}"#), []);
+        assert_eq!(parse(r#"{"type":"assistant.message_start","data":{"messageId":"p"}}"#), [StreamItem::MessageStart]);
+        // The parent's own words still are.
+        assert_eq!(parse(r#"{"type":"assistant.message_delta","data":{"messageId":"p","deltaContent":"a.txt: apple"}}"#), [StreamItem::TextDelta("a.txt: apple".into())]);
     }
 
     // Lines captured from copilot 1.0.101 (`--output-format json`), trimmed.
