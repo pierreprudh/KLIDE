@@ -12,6 +12,8 @@
 // Both toasts that do appear carry Open, to the conversation the session
 // belongs to — the reason you'd act on them at all.
 
+import { playSound } from "./sound";
+import { isOnScreen } from "./runAttention";
 import { listen } from "@tauri-apps/api/event";
 import { notify, type ToastAction } from "./toast";
 import { canOpenConversation, openDelegateSession } from "./conversationNavigation";
@@ -51,7 +53,9 @@ export function watchDelegateStatus(): () => void {
     if (prev?.status === status) return; // repeats stay silent
     last.set(sessionId, { status, sinceMs: Date.now() });
 
+    const conversationId = sessionId.slice(0, sessionId.lastIndexOf(":"));
     if (status === "blocked") {
+      if (!isOnScreen(conversationId)) playSound("attention");
       notify(`${providerLabel(sessionId)} needs your input.`, {
         tone: "warn",
         action: openAction(sessionId),
@@ -61,6 +65,7 @@ export function watchDelegateStatus(): () => void {
       prev?.status === "working" &&
       Date.now() - prev.sinceMs >= QUIET_TURN_MS
     ) {
+      if (!isOnScreen(conversationId)) playSound("complete");
       notify(`${providerLabel(sessionId)} finished its turn.`, {
         tone: "success",
         action: openAction(sessionId),

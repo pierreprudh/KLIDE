@@ -70,6 +70,7 @@ import {
 import { WelcomeFilmCards } from "./settings/welcomeFilm";
 import { API_KEY_PROVIDERS, ApiKeyIntro, ApiKeyRow, ProviderBalanceBlock } from "./settings/apiKeys";
 import { notify } from "../toast";
+import { playSound } from "../sound";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
 import { ConnectorsSection } from "./settings/connectors";
 import { GatewayBlock } from "./settings/gateway";
@@ -488,6 +489,8 @@ export function SettingsPanel({
   const [harnessSettings, onHarnessSettingsChange] = useSetting(SETTINGS.harnessSettings);
   const [restoreLastProject, onRestoreLastProjectChange] = useSetting(SETTINGS.restoreLastProject);
   const [uiSounds, onUiSoundsChange] = useSetting(SETTINGS.uiSounds);
+  const [agentSounds, onAgentSoundsChange] = useSetting(SETTINGS.agentSounds);
+  const [soundVolume, onSoundVolumeChange] = useSetting(SETTINGS.soundVolume);
   const [autoSaveMode, onAutoSaveModeChange] = useSetting(SETTINGS.autoSaveMode);
   const [openFilesIn, onOpenFilesInChange] = useSetting(SETTINGS.openFilesIn);
   const [showHiddenFiles, onShowHiddenFilesChange] = useSetting(SETTINGS.showHiddenFiles);
@@ -1033,12 +1036,31 @@ export function SettingsPanel({
             <SettingBlock title="Sounds">
               <Panel>
                 <Row
-                  title="Click sound"
-                  description="A soft tap when you move to another view, page or option."
+                  title="Interaction sounds"
+                  description="The familiar soft tap when you move, and a small pluck when you send a prompt."
                   control={
-                    <Toggle checked={uiSounds} onChange={onUiSoundsChange} label="Click sound" />
+                    <Toggle checked={uiSounds} onChange={onUiSoundsChange} label="Interaction sounds" />
                   }
                 />
+                <Row
+                  title="Agent notifications"
+                  description="Quiet cues for approval, completion and failure when you are away from the conversation."
+                  control={<Toggle checked={agentSounds} onChange={onAgentSoundsChange} label="Agent notifications" />}
+                />
+                <Row
+                  title="Sound volume"
+                  description="Applies to interaction sounds, notifications and previews."
+                  control={<Range value={soundVolume} min={0} max={100} onChange={onSoundVolumeChange} suffix="%" label="Sound volume" />}
+                />
+                <Row title="Preview sounds" description="Listen at the current volume, even with a category switched off." control={
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    <GhostButton onClick={() => playSound("tap", true)}>Tap</GhostButton>
+                    <GhostButton onClick={() => playSound("send", true)}>Send</GhostButton>
+                    <GhostButton onClick={() => playSound("complete", true)}>Complete</GhostButton>
+                    <GhostButton onClick={() => playSound("attention", true)}>Needs you</GhostButton>
+                    <GhostButton onClick={() => playSound("failure", true)}>Failure</GhostButton>
+                  </div>
+                } />
               </Panel>
             </SettingBlock>
             <SettingBlock title="From other apps">

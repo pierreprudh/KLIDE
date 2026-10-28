@@ -19,9 +19,10 @@ import { canOpenConversation, openConversation } from "./conversationNavigation"
 import { getAgentRunStatus, readAgentRunEvents, resolvePermission } from "./agent/client";
 import { pendingGatesFromEvents } from "./agent/pendingGates";
 import type { AgentEvent } from "./agent/types";
-import { getRunningConversationIds, subscribeRunningConversations } from "./runningConversations";
+import { getRunningConversationIds, subscribeRunningConversations, subscribeRunOutcomes } from "./runningConversations";
 import { getKlideConvos } from "./klideConvos";
 import { errMessage } from "./errors";
+import { playSound } from "./sound";
 
 export type RunAttention =
   | { runId: string; parentId?: string; state: "asking"; kind: "permission" | "question"; requestId: string; summary: string; externalPaths?: string[] }
@@ -108,7 +109,7 @@ export function showConversation(conversationId: string): () => void {
 }
 
 export function isOnScreen(conversationId: string): boolean {
-  return onScreen.has(conversationId);
+  return onScreen.has(conversationId) && (typeof document === "undefined" || (document.hasFocus() && document.visibilityState !== "hidden"));
 }
 
 /** Apply one attention change from Rust. A Klide conversation's id is its
@@ -126,6 +127,7 @@ export function applyRunAttention(attention: RunAttention): void {
   }
   markNeedsYou(conversationId, runId, true);
   if (isOnScreen(conversationId) || toastFor.has(runId)) return;
+  playSound("attention");
   const convo = getKlideConvos().find((c) => c.id === conversationId);
   const title = convo?.title?.trim() || "A conversation";
   const open: ToastAction | undefined = canOpenConversation()
@@ -190,6 +192,9 @@ async function recoverRunAttention(runId: string): Promise<void> {
 export function watchRunAttention(): () => void {
   let unlisten: (() => void) | null = null;
   let stopped = false;
+  const stopOutcomes = subscribeRunOutcomes((id, outcome) => {
+    if (!isOnScreen(id)) playSound(outcome);
+  });
   void listen<RunAttention>("run:attention", (e) => applyRunAttention(e.payload)).then((fn) => {
     if (stopped) fn();
     else unlisten = fn;
@@ -215,6 +220,7 @@ export function watchRunAttention(): () => void {
     stopped = true;
     unlisten?.();
     stopSweep();
+    stopOutcomes();
   };
 }
 

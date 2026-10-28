@@ -317,6 +317,17 @@ export const SETTINGS = {
       keywords: "sound sounds audio click tap mute noise feedback",
     },
   } as SettingDef<boolean>,
+  agentSounds: {
+    key: "klide-agent-sounds",
+    fallback: () => true,
+    search: { label: "Agent notifications", section: "general", keywords: "sound audio approval attention completion failure mute" },
+  } as SettingDef<boolean>,
+  soundVolume: {
+    key: "klide-sound-volume",
+    fallback: () => 100,
+    normalize: clamp(0, 100),
+    search: { label: "Sound volume", section: "general", keywords: "sound audio volume mute" },
+  } as SettingDef<number>,
   autoSaveMode: {
     key: "klide-autosave",
     fallback: () => "off" as "off" | "delay" | "blur",
