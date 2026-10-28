@@ -58,6 +58,12 @@ pub struct AgentRun {
     pub worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>, // set when we can infer parent from spawn mapping
+    /// The CLI saved this session because Klide drove it headless for a
+    /// conversation of its own (`delegate::chat`). That conversation is
+    /// already a row, so the board leaves this copy out; following or
+    /// resuming the session by id still finds it.
+    #[serde(skip)]
+    pub klide_hosted: bool,
 }
 
 /// Name of the linked git worktree at `cwd`, or `None` if `cwd` is a main

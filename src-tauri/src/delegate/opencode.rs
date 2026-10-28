@@ -1022,6 +1022,7 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
         subagent_count: 0,
         last_event,
         parent_id,
+        klide_hosted: false,
     })
 }
 

@@ -872,6 +872,10 @@ fn list_runs_matching(
         }) else {
             continue;
         };
+        // Klide's own conversation is the row for this session already.
+        if run.klide_hosted {
+            continue;
+        }
         if let Some(root) = workspace_root {
             if !run_matches_workspace(&run, root) {
                 misses += 1;

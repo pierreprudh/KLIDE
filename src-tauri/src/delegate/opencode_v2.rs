@@ -520,6 +520,7 @@ pub(super) fn parse_run(conn: &rusqlite::Connection, id: &str) -> Option<AgentRu
         subagent_count: 0,
         last_event: last,
         parent_id: row.get(5).ok()?,
+        klide_hosted: false,
     })
 }
 

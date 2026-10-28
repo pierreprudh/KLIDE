@@ -454,6 +454,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         subagent_count: 0, // omp's session record doesn't expose sub-agent calls.
         last_event,
         parent_id: None,
+        klide_hosted: false,
     })
 }
 
