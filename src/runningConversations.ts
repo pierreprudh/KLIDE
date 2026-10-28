@@ -27,6 +27,15 @@ import {
   type RunReattachment,
 } from "./agent/client";
 
+type RunOutcome = "complete" | "failure";
+const outcomeListeners = new Set<(id: string, outcome: RunOutcome) => void>();
+
+/** Only terminal events count, never a detach or a removed store row. */
+export function subscribeRunOutcomes(fn: (id: string, outcome: RunOutcome) => void): () => void {
+  outcomeListeners.add(fn);
+  return () => { outcomeListeners.delete(fn); };
+}
+
 const listeners = new Set<() => void>();
 /** Confirmed-live run ids. Replaced (never mutated) so snapshots stay stable. */
 let runningIds: ReadonlySet<string> = new Set();
@@ -90,9 +99,16 @@ async function confirmAndFollow(id: string) {
       // The run may have settled (or the row been deleted) while we waited.
       if (!isNominated(id)) return;
     }
-    // `fromSeq: 0` — we want the terminal event, not a replay; the payload is
-    // ignored, only `done` matters.
-    const watch = await reattachAgentRun(id, 0, () => {});
+    let terminalSeen = false;
+    const watch = await reattachAgentRun(id, 0, (event) => {
+      if (terminalSeen || (event.type !== "run_result" && event.type !== "run_error")) return;
+      terminalSeen = true;
+      const outcome = event.type === "run_error"
+        ? event.error.code === "aborted" ? null : "failure"
+        : event.result.status === "cancelled" ? null
+        : event.result.status === "done" ? "complete" : "failure";
+      if (outcome) for (const fn of outcomeListeners) fn(id, outcome);
+    });
     if (watched.has(id)) {
       watch.detach();
       return;

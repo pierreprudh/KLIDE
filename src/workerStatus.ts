@@ -17,6 +17,7 @@ import { dismissToast, notify, type ToastAction } from "./toast";
 import { canOpenConversation, openConversation } from "./conversationNavigation";
 import { listWorkerStatuses, resolvePermission } from "./agent/client";
 import { errMessage } from "./errors";
+import { playSound } from "./sound";
 import { isOnScreen, markNeedsYou } from "./runAttention";
 
 export type WorkerState = "working" | "asking" | "finished" | "failed";
@@ -108,6 +109,11 @@ export function applyWorkerStatus(status: WorkerStatus): void {
   // The conversation on screen already shows the worker's card on its row:
   // a toast would be a second copy of the same question.
   if (status.state === "asking" && isOnScreen(status.parentId)) return;
+  if (!isOnScreen(status.parentId)) {
+    if (status.state === "asking") playSound("attention");
+    else if (status.state === "finished") playSound("complete");
+    else if (status.state === "failed") playSound("failure");
+  }
   if (status.state === "asking" && requestId) {
     // Answered from here exactly as the row's card answers it: once, and a
     // refused answer says so (the card on the row is still there).

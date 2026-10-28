@@ -1,5 +1,6 @@
+import { playSound } from "../sound";
 import { SideQuestionToggle } from "./ai/SideQuestionToggle";
-import { showConversation } from "../runAttention";
+import { isOnScreen, showConversation } from "../runAttention";
 import { SubagentTray } from "./ai/SubagentTray";
 import { turnSubagents } from "./ai/turnSubagents";
 import { SideQuestionText } from "./ai/SideQuestionText";
@@ -3916,7 +3917,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       // Sending, and a fresh assistant turn, are the two places we yank the
       // user back to the bottom even if they were scrolled up reading
       // context: the action implies "I want to see the reply".
-      onTurnQueued: forceStickToBottom,
+      onTurnQueued: () => { forceStickToBottom(); playSound("send"); },
       onTurnStarted: forceStickToBottom,
       onMeasuredPromptTokens: setMeasuredPromptTokens,
       onMeasuredUsage: setMeasuredUsageTokens,
@@ -3957,6 +3958,10 @@ This user request requires workspace inspection. Before answering, you MUST call
         if (turn.provider === "mlx") mlxWarmedRef.current = null;
       },
       onTurnSettled: (turn, outcome) => {
+        if (!sideQuestionParent && !isOnScreen(conversationSessionRef.current.conversationId)) {
+          if (outcome === "done") playSound("complete");
+          else if (outcome === "failed") playSound("failure");
+        }
         if (isDelegateProvider(turn.provider)) onWorkspaceChanged?.();
         // Auto-summarize on a clean `run_result` (no harness error, not user-
         // cancelled, not a turn the panel stopped watching, harness feature

@@ -19,16 +19,21 @@ vi.mock("./klideConvos", () => ({ getKlideConvos: () => [{ id: "convo-1", title:
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 const live = new Set<string>();
 const liveListeners = new Set<() => void>();
+const outcomeListeners = new Set<(id: string, outcome: "complete" | "failure") => void>();
+vi.mock("./sound", () => ({ playSound: vi.fn() }));
 vi.mock("./runningConversations", () => ({
   getRunningConversationIds: () => live,
+  subscribeRunOutcomes: (fn: (id: string, outcome: "complete" | "failure") => void) => { outcomeListeners.add(fn); return () => outcomeListeners.delete(fn); },
   subscribeRunningConversations: (fn: () => void) => { liveListeners.add(fn); return () => liveListeners.delete(fn); },
 }));
 
+import { playSound } from "./sound";
 import { applyRunAttention, finishedUnseenNow, markNeedsYou, needsYouNow, resetRunAttention, showConversation, watchRunAttention } from "./runAttention";
 
 const ask = { runId: "convo-1", state: "asking" as const, kind: "permission" as const, requestId: "perm_1", summary: "Run npm test" };
 
 afterEach(() => {
+  vi.mocked(playSound).mockClear();
   resetRunAttention(); toasts.length = 0; dismissed.length = 0; answers.length = 0;
   live.clear(); rust.status = null; rust.events = [];
 });
@@ -149,4 +154,23 @@ it("requires opening the full card for an outside-folder approval, including rec
     expect(toasts[0].actions?.some((a) => a.label === "Allow")).not.toBe(true);
     expect(toasts[0].action?.label).toBe("Open");
   } finally { stop(); }
+});
+
+it("sounds once for an off-screen approval, and never repeats a duplicate request", () => {
+  applyRunAttention(ask);
+  applyRunAttention(ask);
+  expect(playSound).toHaveBeenCalledExactlyOnceWith("attention");
+});
+
+it("keeps a watched conversation quiet, including completion and failure", () => {
+  const release = showConversation("convo-1");
+  const stop = watchRunAttention();
+  applyRunAttention(ask);
+  for (const fn of outcomeListeners) fn("convo-1", "complete");
+  for (const fn of outcomeListeners) fn("convo-1", "failure");
+  expect(playSound).not.toHaveBeenCalled();
+  release();
+  for (const fn of outcomeListeners) fn("convo-1", "failure");
+  expect(playSound).toHaveBeenCalledExactlyOnceWith("failure");
+  stop();
 });

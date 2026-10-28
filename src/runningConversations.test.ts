@@ -119,7 +119,7 @@ describe("running conversations", () => {
     expect([...getRunningConversationIds()]).toEqual(["run-live"]);
 
     emitters.get("agent-run:run-live")?.({
-      payload: { seq: 7, event: { type: "run_result" } },
+      payload: { seq: 7, event: { type: "run_result", result: { status: "done" } } },
     });
     await settled();
 
@@ -181,7 +181,7 @@ describe("running conversations", () => {
     await settled();
 
     emitters.get("agent-run:run-a")?.({
-      payload: { seq: 3, event: { type: "run_error" } },
+      payload: { seq: 3, event: { type: "run_error", error: { code: "provider_unavailable" } } },
     });
     await settled();
 
@@ -205,4 +205,26 @@ describe("running conversations", () => {
     expect([...getRunningConversationIds()]).toEqual([]);
     expect(emitters.has("agent-run:run-live")).toBe(false);
   });
+});
+
+it.each([
+  ["run_result", { status: "done" }, "complete"],
+  ["run_result", { status: "cancelled" }, null],
+  ["run_error", { code: "aborted" }, null],
+  ["run_error", { code: "provider_unavailable" }, "failure"],
+])("publishes the outcome of %s %j, with cancellation silent", async (type, detail, expected) => {
+  invokeMock.mockResolvedValue({ status: "running", fromSeq: null });
+  const { subscribeRunningConversations, subscribeRunOutcomes } = await load();
+  subscribeRunningConversations(() => {});
+  const outcome = vi.fn();
+  const stop = subscribeRunOutcomes(outcome);
+  await publish("run-live", "running");
+  await settled();
+  emitters.get("agent-run:run-live")?.({ payload: {
+    seq: 7, event: { type, ...(type === "run_result" ? { result: detail } : { error: detail }) },
+  } });
+  await settled();
+  if (expected) expect(outcome).toHaveBeenCalledExactlyOnceWith("run-live", expected);
+  else expect(outcome).not.toHaveBeenCalled();
+  stop();
 });
