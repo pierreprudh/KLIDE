@@ -527,6 +527,11 @@ pub(super) struct Emitter<'a> {
     // repeats, no lost text if it does not.
     emitted_parts: HashMap<String, usize>,
     usage_steps: HashMap<String, (u64, Option<f64>)>,
+    // A new assistant message began after this one's prose, with no tool
+    // call between them to split the rows: the next delta opens a paragraph.
+    paragraph_due: bool,
+    // Whether the last thing streamed was prose (a call resets it).
+    prose_last: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -548,6 +553,8 @@ impl<'a> Emitter<'a> {
             saw_delta: false,
             emitted_parts: HashMap::new(),
             usage_steps: HashMap::new(),
+            paragraph_due: false,
+            prose_last: false,
         }
     }
 
@@ -560,6 +567,9 @@ impl<'a> Emitter<'a> {
 
     fn observe_call(&mut self, id: String, name: String, input: serde_json::Value, parent: Option<String>) {
         let summary = super::chat_stream::summarize_call(&name, &input);
+        if parent.is_none() {
+            self.prose_last = false;
+        }
         self.emitted.store(true, Ordering::Relaxed);
         let _ = self.on_chunk.send(StreamChunk {
             observed: Some(ObservedToolActivity::Call {
@@ -604,8 +614,17 @@ impl<'a> Emitter<'a> {
                 self.emitted.store(true, Ordering::Relaxed);
                 self.error = Some(message);
             }
+            StreamItem::MessageStart => {
+                self.paragraph_due = self.prose_last;
+            }
             StreamItem::TextDelta(text) => {
                 self.saw_delta = true;
+                let text = if std::mem::take(&mut self.paragraph_due) && !self.answer.ends_with(char::is_whitespace) {
+                    format!("\n\n{text}")
+                } else {
+                    text
+                };
+                self.prose_last = true;
                 self.answer.push_str(&text);
                 self.emitted.store(true, Ordering::Relaxed);
                 let _ = self.on_chunk.send(StreamChunk::text(text));
@@ -660,6 +679,12 @@ impl<'a> Emitter<'a> {
                 // turn's to show.
                 _ => {}
             },
+            StreamItem::Subagent { id, status, activity, tokens, steps } => {
+                let _ = self.on_chunk.send(StreamChunk {
+                    observed: Some(ObservedToolActivity::Subagent { id, status, activity, tokens, steps }),
+                    ..Default::default()
+                });
+            }
             // Remember what to continue next turn. Recorded even on a
             // turn that was itself a resume: a CLI may answer with a new
             // id (a fork, a compaction), and the newest one is the live
@@ -1023,6 +1048,29 @@ mod tests {
         assert!((usage["costUsd"].as_f64().unwrap() - 0.3).abs() < 1e-9);
         assert!(emitted.load(Ordering::Relaxed));
         assert_eq!(emitter.finish().unwrap(), "");
+    }
+
+    #[test]
+    fn two_messages_of_prose_in_a_row_are_two_paragraphs() {
+        // Seen 2026-10-28: "…once all three report back.The CONTEXT.md agent
+        // has finished." — the CLI's second message, after a background
+        // sub-agent woke it, ran straight on from the first.
+        use super::super::chat_stream::StreamItem;
+        let emitted = AtomicBool::new(false);
+        let channel = Channel::new(|_| Ok(()));
+        let mut emitter = Emitter::new(&super::super::ClaudeCode, "/tmp", None, &emitted, &channel);
+        emitter.handle(StreamItem::MessageStart);
+        emitter.handle(StreamItem::TextDelta("Three agents are running.".into()));
+        emitter.handle(StreamItem::MessageStart);
+        emitter.handle(StreamItem::TextDelta("The CONTEXT.md agent has finished.".into()));
+        // A call between them already splits the rows: no paragraph added.
+        emitter.handle(StreamItem::ToolCall { id: "t".into(), name: "Read".into(), input: serde_json::json!({}) });
+        emitter.handle(StreamItem::MessageStart);
+        emitter.handle(StreamItem::TextDelta(" Done.".into()));
+        assert_eq!(
+            emitter.finish().unwrap(),
+            "Three agents are running.\n\nThe CONTEXT.md agent has finished. Done."
+        );
     }
 
     #[test]

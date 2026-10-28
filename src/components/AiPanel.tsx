@@ -1,5 +1,7 @@
 import { SideQuestionToggle } from "./ai/SideQuestionToggle";
 import { showConversation } from "../runAttention";
+import { SubagentTray } from "./ai/SubagentTray";
+import { turnSubagents } from "./ai/turnSubagents";
 import { SideQuestionText } from "./ai/SideQuestionText";
 import { SideQuestionResize } from "./ai/SideQuestionResize";
 import "./ai/sideQuestions.css";
@@ -980,6 +982,7 @@ export function AiPanel({
     return -1;
   }, [msgs]);
   const streaming = conversationSession.run.active;
+  const turnSubagentRows = useMemo(() => turnSubagents(msgs, streaming), [msgs, streaming]);
   const hasSideMessages = msgs.length > 0;
   useEffect(() => {
     sideQuestion?.onActivityChange?.({ parentId: sideQuestion.parentId, active: streaming, hasContent: hasSideMessages });
@@ -5096,6 +5099,13 @@ This user request requires workspace inspection. Before answering, you MUST call
             onChoose={(picked) => void submitQuestion(picked)}
             onSkip={skipQuestion}
           />
+        )}
+        {/* The Delegate's own sub-agents of this turn wait here, not in the
+            conversation: a fan-out of explorers is what the answer is waiting
+            on, and as cards it pushed the answer off the screen. Keyed by
+            them so a new turn's tray opens fresh. */}
+        {turnSubagentRows.length > 0 && (
+          <SubagentTray key={turnSubagentRows[0].id} subagents={turnSubagentRows} />
         )}
         {/* The run's changed-files outcome lives in the final answer's
             MessageActions row (revert slot) — no standalone strip here. */}

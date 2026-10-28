@@ -16,6 +16,7 @@ import type {
   AgentMode,
   AgentTurnTiming,
   AgentUsage,
+  ObservedSubagentState,
   ProviderId,
 } from "./types";
 import type { Msg } from "../components/ai/types";
@@ -60,6 +61,8 @@ export type FoldedToolCall = {
    *  not the turn's, so they ride the call that started them — the row folds
    *  them through this same fold when it is opened. */
   nested?: AgentEvent[];
+  /** …and where that sub-agent is, from its `observed_subagent` reports. */
+  subagent?: ObservedSubagentState;
 };
 
 /** Per-message footer metrics. One type for both paces — a turn must read the
@@ -669,6 +672,22 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       }
     }
 
+    if (event.type === "observed_subagent") {
+      const host = findTool(event.toolCallId);
+      if (!host) return { changed: [] };
+      const was = host.call.subagent;
+      const settled = event.status !== "running";
+      host.call.subagent = {
+        status: event.status,
+        activity: settled ? undefined : event.activity ?? was?.activity,
+        tokens: event.tokens ?? was?.tokens,
+        steps: event.steps ?? was?.steps,
+        startedMs: was?.startedMs ?? event.ts,
+        endedMs: settled ? event.ts : undefined,
+      };
+      return { changed: [host.idx] };
+    }
+
     if (event.type === "observed_tool_call") {
       const idx = upsertTool(event.toolCallId, (t) => {
         t.name = event.name;
@@ -1049,6 +1068,7 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
             ...(t.observedBy ? { observedBy: t.observedBy } : {}),
             ...(t.nested ? { nested: t.nested } : {}),
             ...(t.observedBy && t.result?.ok === false ? { failed: true } : {}),
+            ...(t.subagent ? { subagent: t.subagent } : {}),
           }))
         : undefined,
       meta: row.meta

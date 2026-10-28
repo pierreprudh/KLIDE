@@ -1687,6 +1687,17 @@ pub(crate) enum ObservedToolActivity {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent: Option<String>,
     },
+    /// Where one of the CLI's own sub-agents is (see `StreamItem::Subagent`).
+    Subagent {
+        id: String,
+        status: crate::delegate::chat_stream::SubagentStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        steps: Option<u64>,
+    },
 }
 
 // Anthropic requires this header on every Messages API call; pinning a known

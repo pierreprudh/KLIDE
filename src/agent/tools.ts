@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentEvent, AgentMode } from "./types";
+import type { AgentEvent, AgentMode, ObservedSubagentState } from "./types";
 
 export type AgentToolCall = {
     id?: string;
@@ -12,6 +12,8 @@ export type AgentToolCall = {
     nested?: AgentEvent[];
     /** An observed call whose result the CLI marked as an error. */
     failed?: boolean;
+    /** A Delegate's own sub-agent: where it is, as the CLI reported it. */
+    subagent?: ObservedSubagentState;
 };
 
 // The Rust tool registry is the source of truth. The frontend fetches

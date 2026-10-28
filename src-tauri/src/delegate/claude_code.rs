@@ -301,6 +301,11 @@ impl Delegate for ClaudeCode {
                     }
                     items
                 }
+                // A sub-agent's lifecycle, keyed by the `Agent` call that
+                // started it: `task_started`, then `task_progress` per step
+                // ("Reading a.txt", running totals), then `task_notification`
+                // with how it ended.
+                Some("task_started" | "task_progress" | "task_notification") => subagent_status(&value).into_iter().collect(),
                 _ => Vec::new(),
             },
             Some("assistant") => message_blocks(&value)
@@ -316,6 +321,9 @@ impl Delegate for ClaudeCode {
             // a partial `input_json_delta` never has to be reassembled here.
             Some("stream_event") => {
                 let event = value.get("event");
+                if event.and_then(|e| e.get("type")).and_then(|v| v.as_str()) == Some("message_start") {
+                    return if parent.is_some() { Vec::new() } else { vec![StreamItem::MessageStart] };
+                }
                 let is_text_delta = event.and_then(|e| e.get("type")).and_then(|v| v.as_str())
                     == Some("content_block_delta")
                     && event
@@ -953,6 +961,38 @@ fn assistant_block(block: &serde_json::Value) -> Option<StreamItem> {
     }
 }
 
+/// A `system` `task_*` line → where that sub-agent is. A line without the
+/// `Agent` call's id, or with a status this does not know, is skipped.
+fn subagent_status(value: &serde_json::Value) -> Option<StreamItem> {
+    use super::chat_stream::SubagentStatus;
+    let id = value.get("tool_use_id").and_then(|v| v.as_str()).filter(|id| !id.is_empty())?;
+    let subtype = value.get("subtype").and_then(|v| v.as_str())?;
+    let status = if subtype == "task_notification" {
+        match value.get("status").and_then(|v| v.as_str())? {
+            "completed" => SubagentStatus::Completed,
+            "failed" | "error" => SubagentStatus::Failed,
+            "stopped" | "killed" | "cancelled" => SubagentStatus::Stopped,
+            _ => return None,
+        }
+    } else {
+        SubagentStatus::Running
+    };
+    // `task_started`'s description is the brief the call already carries;
+    // only a progress line's is the step in hand.
+    let activity = (subtype == "task_progress")
+        .then(|| value.get("description").and_then(|v| v.as_str()))
+        .flatten()
+        .map(str::to_string);
+    let usage = value.get("usage");
+    Some(StreamItem::Subagent {
+        id: id.to_string(),
+        status,
+        activity,
+        tokens: usage.and_then(|u| u.get("total_tokens")).and_then(|v| v.as_u64()),
+        steps: usage.and_then(|u| u.get("tool_uses")).and_then(|v| v.as_u64()),
+    })
+}
+
 /// One `tool_result` block → an item. `is_error` absent means it worked.
 fn tool_result_block(block: &serde_json::Value) -> Option<StreamItem> {
     if block.get("type").and_then(|v| v.as_str()) != Some("tool_result") {
@@ -1022,6 +1062,31 @@ mod tests {
         assert!(matches!(&ClaudeCode.parse_stream_line(report)[..], [StreamItem::ToolResult { id, .. }] if id == "toolu_A"));
     }
 
+    /// A background fan-out (2026-10-28): the `Agent` call returns at once,
+    /// so where the sub-agent is comes from the `task_*` lines.
+    #[test]
+    fn a_sub_agents_lifecycle_is_read_from_its_task_lines() {
+        use crate::delegate::chat_stream::SubagentStatus;
+        let started = r#"{"type":"system","subtype":"task_started","task_id":"a85","tool_use_id":"toolu_A","description":"Read a.txt contents","subagent_type":"general-purpose"}"#;
+        let progress = r#"{"type":"system","subtype":"task_progress","task_id":"a85","tool_use_id":"toolu_A","description":"Reading a.txt","usage":{"total_tokens":18869,"tool_uses":1,"duration_ms":1105},"last_tool_name":"Read"}"#;
+        let notified = r#"{"type":"system","subtype":"task_notification","task_id":"a85","tool_use_id":"toolu_A","status":"completed","summary":"apple","usage":{"total_tokens":22243,"tool_uses":1,"duration_ms":2670}}"#;
+        let updated = r#"{"type":"system","subtype":"task_updated","task_id":"a85","patch":{"status":"completed"}}"#;
+        assert_eq!(
+            ClaudeCode.parse_stream_line(started),
+            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
+        );
+        assert_eq!(
+            ClaudeCode.parse_stream_line(progress),
+            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Running, activity: Some("Reading a.txt".into()), tokens: Some(18869), steps: Some(1) }]
+        );
+        assert_eq!(
+            ClaudeCode.parse_stream_line(notified),
+            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Completed, activity: None, tokens: Some(22243), steps: Some(1) }]
+        );
+        // No call id: nothing to key it to.
+        assert!(ClaudeCode.parse_stream_line(updated).is_empty());
+    }
+
     #[test]
     fn init_names_the_commands_the_cli_answers_itself() {
         let init = r#"{"type":"system","subtype":"init","session_id":"abc","slash_commands":["compact","tdd","config"],"terminal_slash_commands":["config"]}"#;
@@ -1079,10 +1144,15 @@ mod tests {
             ClaudeCode.parse_stream_line(DELTA),
             vec![StreamItem::TextDelta("One".into())]
         );
-        // The frame around the deltas carries no text of its own. Emitting
+        // A message's start is only a boundary: no text, so nothing doubles,
+        // but the next message's prose opens a new paragraph.
+        assert_eq!(
+            ClaudeCode.parse_stream_line(r#"{"type":"stream_event","event":{"type":"message_start","message":{"role":"assistant"}}}"#),
+            vec![StreamItem::MessageStart]
+        );
+        // The rest of the frame around the deltas carries nothing. Emitting
         // anything for these would double the answer.
         for line in [
-            r#"{"type":"stream_event","event":{"type":"message_start","message":{"role":"assistant"}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#,
             r#"{"type":"stream_event","event":{"type":"message_stop"}}"#,

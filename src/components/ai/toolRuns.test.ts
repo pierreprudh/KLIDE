@@ -206,10 +206,11 @@ describe("groupToolRuns", () => {
 });
 
 describe("a delegate's own sub-agents", () => {
-  it("are a delegation, drawn on their own, never folded into the work", () => {
+  it("are a step of the work: the tray above the composer says where they are", () => {
+    // 2026-10-28: three sub-agent cards pushed the answer off the screen.
     const fanOut: Msg = { role: "assistant", content: "", toolCalls: [{ id: "A", name: "Agent", args: { description: "Map the fold" }, observedBy: "claude-code" }] };
     const runs = groupToolRuns([asks("improve the architecture"), call("Read"), result("Read"), fanOut, says("Here is what I found.")]);
-    expect(runs).toMatchObject([{ start: 1, end: 3 }]);
+    expect(runs).toMatchObject([{ start: 1, end: 4 }]);
     // Only when the CLI ran it: a name alone is not a delegation.
     expect(isObservedSubagent({ name: "Agent" })).toBe(false);
     expect(isObservedSubagent({ name: "Task", observedBy: "claude-code" })).toBe(true);

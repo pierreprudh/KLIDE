@@ -2749,6 +2749,17 @@ async fn loop_body(
                                 ts: now_ms(),
                             }
                         }
+                        crate::providers::ObservedToolActivity::Subagent { id, status, activity, tokens, steps } => {
+                            AgentEvent::ObservedSubagent {
+                                run_id: stream_run_id.clone(),
+                                tool_call_id: id,
+                                status,
+                                activity,
+                                tokens,
+                                steps,
+                                ts: now_ms(),
+                            }
+                        }
                     });
                     return Ok(());
                 }
