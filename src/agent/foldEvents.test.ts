@@ -513,6 +513,26 @@ describe("foldAgentEvents", () => {
       expect(assistant.toolCalls?.[0].subagent?.status).toBe("completed");
     });
 
+    it("keeps each sub-agent of a call that starts several apart, by its index", () => {
+      // omp's `task` takes a list; one call, two sub-agents.
+      const rows = foldAgentEvents([
+        { type: "observed_tool_call", runId: RUN, toolCallId: "T", provider: "omp", name: "task", input: { tasks: [{}, {}] }, summary: "task", ts: 1000 },
+        { type: "observed_subagent", runId: RUN, toolCallId: "T", status: "running", item: 0, ts: 1100 },
+        { type: "observed_subagent", runId: RUN, toolCallId: "T", status: "running", item: 1, activity: "Reading b.txt", ts: 1200 },
+        { type: "observed_subagent", runId: RUN, toolCallId: "T", status: "completed", item: 0, tokens: 54689, ts: 7400 },
+      ]);
+      const row = rows[0];
+      if (row.kind !== "assistant") throw new Error("expected one assistant row");
+      expect(row.toolCalls[0].subagent).toBeUndefined();
+      expect(row.toolCalls[0].subagentItems).toEqual({
+        0: { status: "completed", activity: undefined, tokens: 54689, steps: undefined, startedMs: 1100, endedMs: 7400 },
+        1: { status: "running", activity: "Reading b.txt", tokens: undefined, steps: undefined, startedMs: 1200, endedMs: undefined },
+      });
+      const assistant = foldedRowToMsgs(row).find((m) => m.role === "assistant");
+      if (assistant?.role !== "assistant") throw new Error("expected an assistant message");
+      expect(assistant.toolCalls?.[0].subagentItems?.[0]?.status).toBe("completed");
+    });
+
     it("does not repeat text the rows above a delegate's tool card already show", () => {
       // Reproduces a duplicated preamble seen in Focus with Claude Code. A
       // delegate interleaves its own tool calls with its prose inside ONE turn,

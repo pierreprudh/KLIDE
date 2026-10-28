@@ -223,6 +223,7 @@ impl Delegate for Copilot {
                     activity: None,
                     tokens: data.get("totalTokens").and_then(Value::as_u64),
                     steps: data.get("totalToolCalls").and_then(Value::as_u64),
+                    item: None,
                 }],
                 None => Vec::new(),
             },
@@ -576,7 +577,7 @@ mod tests {
         ));
         assert_eq!(
             parse(r#"{"type":"subagent.started","data":{"toolCallId":"call_A","agentName":"explore","agentDisplayName":"read-a-file"}}"#),
-            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None, item: None }]
         );
         assert_eq!(
             parse(r#"{"type":"tool.execution_start","data":{"toolCallId":"call_V","toolName":"view","arguments":{"path":"/ws/a.txt"},"parentToolCallId":"call_A"}}"#),
@@ -587,7 +588,7 @@ mod tests {
         assert!(parse(r#"{"type":"assistant.message","data":{"messageId":"m","content":"apple","parentToolCallId":"call_A"}}"#).is_empty());
         assert_eq!(
             parse(r#"{"type":"subagent.completed","data":{"toolCallId":"call_A","agentName":"explore","totalToolCalls":1,"totalTokens":7921,"durationMs":36143}}"#),
-            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Completed, activity: None, tokens: Some(7921), steps: Some(1) }]
+            [StreamItem::Subagent { id: "call_A".into(), status: SubagentStatus::Completed, activity: None, tokens: Some(7921), steps: Some(1), item: None }]
         );
         assert_eq!(parse(r#"{"type":"assistant.message_start","data":{"messageId":"c","parentToolCallId":"call_A"}}"#), []);
         assert_eq!(parse(r#"{"type":"assistant.message_start","data":{"messageId":"p"}}"#), [StreamItem::MessageStart]);

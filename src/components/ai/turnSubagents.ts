@@ -56,10 +56,29 @@ export function turnSubagents(msgs: Msg[], live: boolean): TraySubagent[] {
     for (const call of m.toolCalls ?? []) {
       if (!call.id || !call.observedBy || !isObservedSubagent(call)) continue;
       const args = (call.args ?? {}) as Record<string, unknown>;
-      // Claude Code names the type `subagent_type`, OpenCode `agent`,
+      // Claude Code names the type `subagent_type`, OpenCode and omp `agent`,
       // Copilot `agent_type`.
       const named = [args.subagent_type, args.agent, args.agent_type].find((v): v is string => typeof v === "string" && !!v.trim());
       const kind = named?.trim() ?? "sub-agent";
+      // omp's `task` starts a list, each item a sub-agent of its own; the
+      // call's reports name an item by its index there.
+      if (Array.isArray(args.tasks)) {
+        args.tasks.forEach((item: unknown, index: number) => {
+          const t = (item ?? {}) as Record<string, unknown>;
+          const brief = [t.description, t.assignment].find((v): v is string => typeof v === "string" && !!v.trim()) ?? "";
+          const state = call.subagentItems?.[index];
+          out.push({
+            id: `${call.id}#${index}`,
+            provider: call.observedBy!,
+            kind,
+            task: brief.replace(/\s+/g, " ").trim(),
+            status: statusOf(state, undefined, undefined, live),
+            state,
+            activity: state?.activity,
+          });
+        });
+        continue;
+      }
       const brief = typeof args.description === "string" && args.description.trim() ? args.description : typeof args.prompt === "string" ? args.prompt : "";
       out.push({
         id: call.id,

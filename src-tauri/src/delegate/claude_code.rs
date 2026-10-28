@@ -990,6 +990,7 @@ fn subagent_status(value: &serde_json::Value) -> Option<StreamItem> {
         activity,
         tokens: usage.and_then(|u| u.get("total_tokens")).and_then(|v| v.as_u64()),
         steps: usage.and_then(|u| u.get("tool_uses")).and_then(|v| v.as_u64()),
+        item: None,
     })
 }
 
@@ -1073,15 +1074,15 @@ mod tests {
         let updated = r#"{"type":"system","subtype":"task_updated","task_id":"a85","patch":{"status":"completed"}}"#;
         assert_eq!(
             ClaudeCode.parse_stream_line(started),
-            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None }]
+            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Running, activity: None, tokens: None, steps: None, item: None }]
         );
         assert_eq!(
             ClaudeCode.parse_stream_line(progress),
-            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Running, activity: Some("Reading a.txt".into()), tokens: Some(18869), steps: Some(1) }]
+            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Running, activity: Some("Reading a.txt".into()), tokens: Some(18869), steps: Some(1), item: None }]
         );
         assert_eq!(
             ClaudeCode.parse_stream_line(notified),
-            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Completed, activity: None, tokens: Some(22243), steps: Some(1) }]
+            vec![StreamItem::Subagent { id: "toolu_A".into(), status: SubagentStatus::Completed, activity: None, tokens: Some(22243), steps: Some(1), item: None }]
         );
         // No call id: nothing to key it to.
         assert!(ClaudeCode.parse_stream_line(updated).is_empty());

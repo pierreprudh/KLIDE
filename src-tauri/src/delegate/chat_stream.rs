@@ -71,8 +71,9 @@ pub(crate) enum StreamItem {
     /// Where one of those sub-agents is, as the CLI reports it: started, its
     /// current step, settled. A background sub-agent's call returns the moment
     /// it launches, so its own result says nothing about when it finishes;
-    /// this does.
-    Subagent { id: String, status: SubagentStatus, activity: Option<String>, tokens: Option<u64>, steps: Option<u64> },
+    /// this does. `item` is which one, when a single call starts several
+    /// (omp's `task` takes a list): its index in that list.
+    Subagent { id: String, status: SubagentStatus, activity: Option<String>, tokens: Option<u64>, steps: Option<u64>, item: Option<u32> },
     /// The terminating line: what the CLI thinks the turn cost.
     Finished {
         cost_usd: Option<f64>,

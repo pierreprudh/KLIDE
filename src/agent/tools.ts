@@ -14,6 +14,8 @@ export type AgentToolCall = {
     failed?: boolean;
     /** A Delegate's own sub-agent: where it is, as the CLI reported it. */
     subagent?: ObservedSubagentState;
+    /** …or, for a call that starts several, each one by its index. */
+    subagentItems?: Record<number, ObservedSubagentState>;
 };
 
 // The Rust tool registry is the source of truth. The frontend fetches
