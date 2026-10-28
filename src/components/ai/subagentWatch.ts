@@ -110,7 +110,7 @@ export function subagentActivity(events: AgentEvent[]): SubagentActivity {
         break;
       case "run_error":
         status = "failed";
-        error = event.error.message;
+        error = event.error.code === "aborted" ? `Cancelled: ${event.error.message}` : event.error.message;
         open.clear();
         pendingPermission = null;
         break;
@@ -124,10 +124,9 @@ export function subagentActivity(events: AgentEvent[]): SubagentActivity {
   return { status, startedMs, steps, turns, tokens, current, error, pendingPermission };
 }
 
-/** The activity of a child that never existed: a dispatch declined at its
- *  card, or one that failed before a Run was registered. Rust emits no
- *  `subagent_requested` for it, so the call has no Run id to watch and the
- *  row must say so rather than wait on a start that cannot come. */
+/** A dispatch that never reached execution: declined on its card (no child
+ *  address), or stopped during approved setup (addressed, but no model Run).
+ *  The row must not wait on a start that cannot come. */
 export function neverStarted(error: string): SubagentActivity {
   return { ...EMPTY, status: "failed", error };
 }

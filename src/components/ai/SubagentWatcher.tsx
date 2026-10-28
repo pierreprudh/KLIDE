@@ -17,9 +17,12 @@ import { useElapsed } from "./WorkingRow";
 import { subagentActivity, watchSubagentRun, type SubagentActivity } from "./subagentWatch";
 import { permissionCard } from "./permissionCard";
 import { InlineCommandReview } from "../InlineCommandReview";
-import { resolvePermission, setRunCommandPolicy } from "../../agent/client";
+import { resolvePermission, setRunCommandPolicy, stopAgentRun } from "../../agent/client";
 import { notify } from "../../toast";
 import { errMessage } from "../../errors";
+import { CloseIcon } from "../../icons";
+import { Tooltip } from "../Tooltip";
+import "./workerCancel.css";
 import type { AgentEvent, PermissionDecision, PermissionRequest } from "../../agent/types";
 
 export type SubagentWatchState = {
@@ -106,7 +109,7 @@ function stepVerb(name: string): string {
  *  or stopped by its own settlement. */
 function settledWord(error: string | undefined): string {
   if (error?.startsWith("Interrupted:")) return "Interrupted";
-  if (error?.startsWith("Cancelled")) return "Cancelled";
+  if (/cancelled/i.test(error ?? "")) return "Cancelled";
   if (error?.startsWith("Setup failed")) return "Setup failed";
   return "Stopped";
 }
@@ -201,6 +204,28 @@ export function SubagentWatchLine({
         </button>
       )}
     </div>
+  );
+}
+
+/** Hover-revealed header action; its label keeps the cancellation explicit. */
+export function WorkerCancelButton({ runId, active = true }: { runId?: string; active?: boolean }) {
+  const [cancelling, setCancelling] = useState(false);
+  if (!runId || !active) return null;
+  return (
+    <Tooltip label={cancelling ? "Cancelling worker…" : "Cancel worker"} delay={200}>
+    <button type="button" className="klide-worker-cancel" disabled={cancelling} aria-label={cancelling ? "Cancelling worker" : "Cancel worker"} aria-busy={cancelling}
+      onClick={(event) => {
+        event.stopPropagation();
+        setCancelling(true);
+        void stopAgentRun(runId).catch((error) => {
+          setCancelling(false);
+          notify(`Couldn't cancel the worker: ${errMessage(error)}`, { tone: "error" });
+        });
+      }}
+      >
+      <CloseIcon size={14} />
+    </button>
+    </Tooltip>
   );
 }
 

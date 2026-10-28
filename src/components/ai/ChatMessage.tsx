@@ -27,7 +27,7 @@ import { MissionCard, parsePlanMissionReceipt } from "./MissionCard";
 import { liftLetteredChoices } from "./QuestionCard";
 
 import { MIN_STACKED_CALLS, PLAN_MISSION_TOOL, USER_QUESTION_TOOL, isSpeakingCall, dropVerdictMark, gradeAnswer, questionArgs, toolCallKey, toolRunLabel, withoutAnswerKey, type QuestionVerdict } from "./toolRuns";
-import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
+import { SubagentPermissionCard, SubagentWatchBody, SubagentWatchLine, WorkerCancelButton, useSubagentWatch } from "./SubagentWatcher";
 import { WorkerBranchActions } from "./WorkerBranchActions";
 import { childTranscriptRows, isWatchable, neverStarted } from "./subagentWatch";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
@@ -202,6 +202,7 @@ function summarizeArgs(args: unknown): string {
 // are not drawn either, because the row above already says both.
 function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFailure, workspaceRoot }: { args: unknown; childRunId?: string; settled: boolean; receipt?: string; declined?: boolean; setupFailure?: string; workspaceRoot?: string | null }) {
   const setupFailed = setupFailure !== undefined;
+  const setupCancelled = /^(?:The worktree setup was cancelled|The worker dispatch was cancelled)/.test(setupFailure ?? "");
   // A failed setup keeps its worktree (agent/tool_handlers.rs says where);
   // the script's own output is everything after that first paragraph.
   const keptWorktree = setupFailure?.match(/kept at (\S+) for a look/)?.[1];
@@ -228,7 +229,7 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
   // cannot come — that is how "Starting…" and its clock ran forever.
   const started = !!childRunId;
   const background = o.background === true || !!receipt;
-  const live = !settled || (background && started);
+  const live = !setupFailed && (!settled || (background && started));
   // While the child works, its own Run is the only thing happening — watch it.
   // Once the report lands the parent shows that instead, and the child's rows
   // stay one click away (fetched only if that click comes).
@@ -243,7 +244,7 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
   // (agent/worker_slots.rs): "Queued: …" is its word until its first event.
   const stage = !childRunId
     ? rawStage
-    : rawStage?.startsWith("Queued") && watch.events.length === 0 && live ? rawStage : undefined;
+    : watch.events.length === 0 && live ? rawStage : undefined;
   const rows = useMemo(
     () => (revealed && watch.events.length ? childTranscriptRows(foldedToMsgs(foldAgentEvents(watch.events)), task) : []),
     [revealed, watch.events, task],
@@ -259,19 +260,23 @@ function SubagentCallRow({ args, childRunId, settled, receipt, declined, setupFa
   const sentLine = worker && !declined && !setupFailed
     ? `I'm sending a worker: ${providerName(worker)} will work on it${background ? " in the background, and I'll tell you when it reports" : ""}.`
     : null;
+  const activity = declined ? neverStarted("Cancelled at its dispatch card.")
+    : setupFailed ? neverStarted(setupCancelled ? "Cancelled during setup." : "Setup failed before the worker started.")
+    : !watch.loaded && !live ? { ...watch.activity, status: "done" as const } : watch.activity;
   return (
     <>
     {sentLine && <div style={{ marginTop: 8 }}>{renderMarkdown(sentLine)}</div>}
-    <div data-child-run={childRunId} style={{ margin: "8px 0", scrollMarginTop: 72, minWidth: 0, padding: "10px 12px" }}>
+    <div className="klide-worker" data-child-run={childRunId} style={{ margin: "8px 0", scrollMarginTop: 72, minWidth: 0, padding: "10px 12px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         {worker && <ProviderLogo id={worker} size={14} />}
         <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)" }}>{worker ? providerName(worker) : `@${subagent}`}</span>
         {worker && <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>{subagent}</span>}
+        <WorkerCancelButton key={childRunId} runId={live && !setupFailed && !declined ? childRunId : undefined} active={isWatchable(activity)} />
       </div>
       <div style={{ margin: "10px 0 0 7px", padding: "1px 0 2px 18px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
         {task && <div style={{ fontSize: 13, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: opened ? "normal" : "nowrap", overflowWrap: "anywhere" }}>{task}</div>}
         <SubagentWatchLine
-          activity={declined ? neverStarted("Cancelled at its dispatch card.") : setupFailed ? neverStarted("Setup failed before the worker started.") : !watch.loaded && !live ? { ...watch.activity, status: "done" } : watch.activity}
+          activity={activity}
           open={opened} onToggle={toggle} hasRows={started} stage={stage}
         />
         {/* Once the worker is done, its branch waits on the operator: merge
@@ -457,9 +462,10 @@ function BackgroundSubagentReport({
     [opened, watch.events],
   );
   return (
-    <div style={{ margin: "4px 0 8px" }}>
-      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", marginBottom: 4 }}>
-        @{role}
+    <div className="klide-worker" style={{ margin: "4px 0 8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", marginBottom: 4 }}>
+        <span>@{role}</span>
+        <WorkerCancelButton key={runId} runId={runId} active={pending && isWatchable(watch.activity)} />
         {/* Without a run id to watch there is still something to say. */}
         {pending && !runId && <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}> · working…</span>}
       </div>
@@ -666,7 +672,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
       // "Dispatched …" and "The user declined to dispatch …" are the tool's own
       // sentences (agent/tool_handlers.rs); the declined one is the card's
       // Cancel button, and no child Run exists behind it.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} setupFailure={result && !result.active && /^The worktree setup failed/.test(result.msg.content) ? result.msg.content : undefined} workspaceRoot={workspaceRoot} />
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} receipt={result && /^Dispatched /.test(result.msg.content) ? result.msg.content : undefined} declined={!!result && !result.active && /^The user declined to dispatch /.test(result.msg.content)} setupFailure={result && !result.active && /^(?:The worktree setup (?:failed|was cancelled)|The worker dispatch was cancelled)/.test(result.msg.content) ? result.msg.content : undefined} workspaceRoot={workspaceRoot} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (
@@ -676,7 +682,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId, workspaceRoot,
   // child has a Run id, the child's own activity after — so the tool
   // placeholder would repeat the same running animation underneath it.
   // Keep actual reports.
-  if (!result || (name === "spawn_subagent" && /^(Running |Dispatched |The worktree setup failed)/.test(result.msg.content))) return call;
+  if (!result || (name === "spawn_subagent" && /^(Running |Dispatched |The worktree setup (?:failed|was cancelled)|The worker dispatch was cancelled)/.test(result.msg.content))) return call;
   return (
     <>
       {call}

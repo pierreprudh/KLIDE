@@ -103,7 +103,10 @@ pub(super) fn admit(
     guard: impl FnOnce() -> Result<(), String>,
 ) -> Result<Admitted, String> {
     validate_run_id(id)?;
-    let cancel = CancellationToken::new();
+    let cancel = dispatch_cancel::token(id).unwrap_or_default();
+    if cancel.is_cancelled() {
+        return Err("Cancelled before the worker started.".into());
+    }
     let mut runs = runs
         .lock()
         .map_err(|_| "Agent state is unavailable".to_string())?;
@@ -224,6 +227,27 @@ pub(super) fn settle_backstop(
     let _ = on_event.send(event);
 }
 
+/// A dispatch can settle before it has a Run handle (setup or queue). Keep a
+/// terminal event at its announced address so reloads never show it starting
+/// forever. Its cancelled token fences admission, so there is no loop writer.
+pub(super) async fn finish_unstarted(sup: &dyn RunSupervisor, runs_dir: &Path, id: &str, message: &str, cancelled: bool) -> Result<(), String> {
+    let event = AgentEvent::RunError {
+        run_id: id.into(),
+        error: AgentError {
+            code: if cancelled { error_code::ABORTED } else { error_code::RUN_HOST_FAILED }.into(),
+            message: message.into(), detail: None, retryable: true,
+        }, ts: now_ms(),
+    };
+    let (dir, run_id, written) = (runs_dir.to_path_buf(), id.to_string(), event.clone());
+    let seq = crate::blocking::run(move || {
+        let seq = if transcript_path(&dir, &run_id).exists() { read_events(&dir, &run_id)?.len() as u64 } else { 0 };
+        append_event(&dir, &run_id, seq, &written)?;
+        Ok(seq)
+    }).await?;
+    sup.broadcast(id, seq, &event);
+    Ok(())
+}
+
 /// Answer a card — or Stop — on a live handle. One implementation for every
 /// host: the app's commands and the daemon's `ChatControl` both land here.
 /// `Ok(true)` when a pending card was answered.
@@ -272,6 +296,13 @@ pub(super) async fn control(
     id: &str,
     control: ChatControl,
 ) -> Result<bool, String> {
+    if matches!(&control, ChatControl::Stop) {
+        // Setup and slot admission have no Run handle yet. The admitted Run
+        // shares this token, including a cancel racing its creation.
+        let dispatch = dispatch_cancel::cancel(id);
+        let queued = worker_slots::api_slots().cancel_queued(id);
+        if dispatch || queued { return Ok(true); }
+    }
     {
         let state = app.state::<AgentSupervisorState>();
         let runs = state
@@ -295,6 +326,9 @@ pub(super) async fn state(app: &tauri::AppHandle, id: &str) -> Result<RunState, 
         .and_then(|runs| runs.get(id).map(|h| run_status_wire(&h.status).to_string()));
     if local.is_some() {
         return Ok(RunState { status: local, from_seq: None });
+    }
+    if dispatch_cancel::token(id).is_some() {
+        return Ok(RunState { status: Some("queued".into()), from_seq: None });
     }
     // A worker waiting for a slot has no Run yet, but it is not gone: a
     // watcher that read "no status" would call it interrupted.
@@ -403,6 +437,24 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("klide-run-host-{label}-{}", run_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_cancelled_dispatch_cannot_be_admitted_and_a_live_child_shares_its_token() {
+        let dir = sandbox("dispatch-cancel");
+        let runs = Mutex::new(HashMap::new());
+        let dispatch = dispatch_cancel::Dispatch::register("dispatch-admit-cancel").unwrap();
+        dispatch.cancel.cancel();
+        assert!(admit(&runs, &dir, "dispatch-admit-cancel", &request("openai"), || Ok(())).is_err());
+        assert!(runs.lock().unwrap().is_empty());
+
+        let live = dispatch_cancel::Dispatch::register("dispatch-admit-live").unwrap();
+        let admitted = admit(&runs, &dir, "dispatch-admit-live", &request("openai"), || Ok(())).unwrap();
+        assert!(!admitted.cancel.is_cancelled());
+        assert!(dispatch_cancel::cancel("dispatch-admit-live"));
+        assert!(admitted.cancel.is_cancelled());
+        assert!(live.cancel.is_cancelled());
+        assert!(runs.lock().unwrap()["dispatch-admit-live"].cancel.is_cancelled());
     }
 
     #[test]

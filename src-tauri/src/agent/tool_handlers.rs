@@ -355,6 +355,9 @@ where
         }
     }
     let request_id = format!("sub_{}_{}", ctx.id, call.id);
+    let dispatch = dispatch_cancel::Dispatch::register(&request_id)?;
+    let child_cancel = dispatch.cancel.clone();
+    let mut announced = false;
     let model_arg: Option<&str> = chosen_model.as_deref();
 
     // A worker is dispatched, not spawned: the user approves it first, and it
@@ -532,6 +535,15 @@ where
                     }));
                 }
             };
+            // The approved dispatch has an address before setup starts, so
+            // its Cancel button can target this worker without stopping Kit.
+            emit(AgentEvent::SubagentRequested {
+                run_id: ctx.id.to_string(), request_id: request_id.clone(),
+                subagent: def.id.to_string(), task: task.clone(),
+                worker: Some(worker.id().to_string()), branch: branch.clone(),
+                model: model_arg.map(str::to_string), background, ts: now_ms(),
+            })?;
+            announced = true;
             if let (Some(script), Some(dir), Some(on_branch)) = (setup_script.clone(), worktree_path.clone(), branch.clone()) {
                 emit(AgentEvent::ToolProgress {
                     run_id: ctx.id.to_string(),
@@ -540,13 +552,27 @@ where
                     ts: now_ms(),
                 })?;
                 let started = std::time::Instant::now();
-                let setup_root = root.clone();
-                let outcome = crate::blocking::run(move || run_approved_setup(&setup_root, &script, &dir, &on_branch, port)).await;
+                let setup = run_approved_setup(&root, &script, &dir, &on_branch, port, &child_cancel);
+                tokio::pin!(setup);
+                let outcome = tokio::select! {
+                    outcome = &mut setup => outcome,
+                    _ = ctx.cancel.cancelled() => {
+                        child_cancel.cancel();
+                        // Wait for process-group cleanup before settling the parent.
+                        let _ = setup.await;
+                        run_host::finish_unstarted(ctx.sup, ctx.runs_dir, &request_id,
+                            "Cancelled during setup when the parent stopped.", true).await?;
+                        return Ok(ToolOutcome::Cancelled);
+                    }
+                };
                 if let Err(output) = outcome {
+                    let state = if child_cancel.is_cancelled() { "was cancelled" } else { "failed" };
+                    run_host::finish_unstarted(ctx.sup, ctx.runs_dir, &request_id,
+                        &format!("Setup {state} before the worker started.\n{output}"), child_cancel.is_cancelled()).await?;
                     return Ok(ToolOutcome::Produced(ToolResult {
                         ok: false,
                         content: format!(
-                            "The worktree setup failed, so {label} was not started and no model \
+                            "The worktree setup {state}, so {label} was not started and no model \
                              tokens were spent. The worktree is kept at {} for a look.\n\n{output}",
                             worktree_path.as_deref().unwrap_or_default()
                         ),
@@ -563,7 +589,25 @@ where
         }
     }
 
-    emit(AgentEvent::SubagentRequested {
+    if ctx.cancel.is_cancelled() {
+        child_cancel.cancel();
+        if announced {
+            run_host::finish_unstarted(ctx.sup, ctx.runs_dir, &request_id,
+                "Cancelled before execution when the parent stopped.", true).await?;
+        }
+        return Ok(ToolOutcome::Cancelled);
+    }
+    if child_cancel.is_cancelled() {
+        run_host::finish_unstarted(ctx.sup, ctx.runs_dir, &request_id,
+            "Cancelled before the worker started.", true).await?;
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: format!("The worker dispatch was cancelled before execution.{}",
+                worktree_path.as_ref().map(|path| format!(" The worktree is kept at {path} for a look.")).unwrap_or_default()),
+            metadata: None,
+        }));
+    }
+    if !announced { emit(AgentEvent::SubagentRequested {
         run_id: ctx.id.to_string(),
         request_id: request_id.clone(),
         subagent: def.id.to_string(),
@@ -573,7 +617,7 @@ where
         model: worker.and(model_arg).map(str::to_string),
         background,
         ts: now_ms(),
-    })?;
+    })?; }
 
     // The worker's rung: the parent's, as it stands now, or the dispatch
     // card's own "Full auto" — either puts the worker on it.
@@ -704,10 +748,11 @@ where
         let child_id = request_id.clone();
         let role = def.id;
         tokio::spawn(async move {
+            let _dispatch = dispatch;
             let (ok, report) = settled_child(child.await, role);
             // The parent's Stop does not reach a background worker, so its
             // check runs to its own timeout too.
-            let (report, checkout, _) = outcome.describe(report, ok, &CancellationToken::new()).await;
+            let (report, checkout, _) = outcome.describe(report, ok, &_dispatch.cancel).await;
             workers::settle(&parent_id, &child_id, ok, report, observed_head(&checkout));
         });
         let where_now = match (branch.as_deref(), worktree_path.as_deref()) {
@@ -742,13 +787,23 @@ where
     let (ok, report) = tokio::select! {
         // Cancelling the parent must not leave the child running headless.
         _ = ctx.cancel.cancelled() => {
+            child_cancel.cancel();
             ctx.sup.with_handle(&request_id, &mut |handle| handle.cancel.cancel());
             return Ok(ToolOutcome::Cancelled);
         }
         result = child => settled_child(result, def.id),
     };
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
-    let (report, checkout, validation) = outcome.describe(report, ok, ctx.cancel).await;
+    let description = outcome.describe(report, ok, &child_cancel);
+    tokio::pin!(description);
+    let (report, checkout, validation) = tokio::select! {
+        result = &mut description => result,
+        _ = ctx.cancel.cancelled() => {
+            child_cancel.cancel();
+            let _ = description.await;
+            return Ok(ToolOutcome::Cancelled);
+        }
+    };
 
     emit(AgentEvent::SubagentResolved {
         run_id: ctx.id.to_string(),
@@ -963,17 +1018,30 @@ async fn available_worker_ids() -> Vec<String> {
 /// worktree, to completion. The recipe is read again first: if it changed
 /// between the card and now, the approval was for other text and nothing runs.
 /// Bounded by the recipe's `scriptTimeoutSecs`; `Err` carries the output tail.
-fn run_approved_setup(root: &str, approved: &str, worktree: &str, branch: &str, port: Option<u16>) -> Result<(), String> {
-    let toplevel = crate::git::git_output(root, &["rev-parse", "--show-toplevel"])?;
-    let toplevel = toplevel.trim();
-    if crate::worktree_setup::reviewable_script(toplevel)?.as_deref() != Some(approved) {
-        return Err("The setup script changed after the dispatch card was approved; nothing ran.".into());
-    }
-    let timeout = crate::worktree_setup::load(toplevel).script_timeout_secs;
+async fn run_approved_setup(root: &str, approved: &str, worktree: &str, branch: &str, port: Option<u16>, cancel: &CancellationToken) -> Result<(), String> {
+    let (root, verified_script, dir, branch) = (root.to_string(), approved.to_string(), worktree.to_string(), branch.to_string());
+    let (timeout, envs) = crate::blocking::run(move || {
+        let toplevel = crate::git::git_output(&root, &["rev-parse", "--show-toplevel"])?;
+        let toplevel = toplevel.trim();
+        if crate::worktree_setup::reviewable_script(toplevel)?.as_deref() != Some(verified_script.as_str()) {
+            return Err("The setup script changed after the dispatch card was approved; nothing ran.".into());
+        }
+        Ok((crate::worktree_setup::load(toplevel).script_timeout_secs,
+            crate::worktree_setup::script_env(toplevel, std::path::Path::new(&dir), &branch, port)))
+    }).await?;
+    if cancel.is_cancelled() { return Err("Cancelled before setup started.".into()); }
     let dir = std::path::Path::new(worktree);
-    let envs = crate::worktree_setup::script_env(toplevel, dir, branch, port);
-    let outcome = crate::worktree_setup::run_script(approved, dir, &envs, timeout);
-    if outcome.ok { Ok(()) } else { Err(outcome.output) }
+    let process = process::spawn_setup(process::SpawnSpec {
+        command: approved, cwd: dir, capture: process::Capture::Merged { cap: 16_000 },
+    }, &envs)?;
+    let result = process.wait_until(std::time::Duration::from_secs(timeout.max(1)), cancel).await;
+    let (output, _) = process.tail(2_000);
+    match result {
+        process::Waited::Exited(finished) if finished.exit == process::Exit::Code(0) => Ok(()),
+        process::Waited::Cancelled => Err(format!("Setup cancelled.\n{output}")),
+        process::Waited::TimedOut => Err(format!("Setup script killed after {timeout}s.\n{output}")),
+        _ => Err(output),
+    }
 }
 
 fn is_git_repository(root: &str) -> bool {
@@ -2354,22 +2422,22 @@ mod worker_setup_tests {
         (root.canonicalize().unwrap(), worktree.canonicalize().unwrap())
     }
 
-    #[test]
-    fn the_approved_script_runs_in_the_worktree_with_its_env() {
+    #[tokio::test]
+    async fn the_approved_script_runs_in_the_worktree_with_its_env() {
         let script = "echo \"$KLIDE_WORKTREE_BRANCH\" > made.txt";
         let (root, wt) = repo_with_recipe("ok", script);
-        run_approved_setup(root.to_str().unwrap(), script, wt.to_str().unwrap(), "klide/worker-x", None).unwrap();
+        run_approved_setup(root.to_str().unwrap(), script, wt.to_str().unwrap(), "klide/worker-x", None, &CancellationToken::new()).await.unwrap();
         assert_eq!(std::fs::read_to_string(wt.join("made.txt")).unwrap().trim(), "klide/worker-x");
     }
 
-    #[test]
-    fn a_failing_script_returns_its_output_and_a_changed_one_never_runs() {
+    #[tokio::test]
+    async fn a_failing_script_returns_its_output_and_a_changed_one_never_runs() {
         let (root, wt) = repo_with_recipe("fail", "echo broken-deps >&2; exit 4");
-        let err = run_approved_setup(root.to_str().unwrap(), "echo broken-deps >&2; exit 4", wt.to_str().unwrap(), "b", None).unwrap_err();
+        let err = run_approved_setup(root.to_str().unwrap(), "echo broken-deps >&2; exit 4", wt.to_str().unwrap(), "b", None, &CancellationToken::new()).await.unwrap_err();
         assert!(err.contains("broken-deps"), "{err}");
 
         let (root, wt) = repo_with_recipe("changed", "touch evil.txt");
-        let err = run_approved_setup(root.to_str().unwrap(), "touch fine.txt", wt.to_str().unwrap(), "b", None).unwrap_err();
+        let err = run_approved_setup(root.to_str().unwrap(), "touch fine.txt", wt.to_str().unwrap(), "b", None, &CancellationToken::new()).await.unwrap_err();
         assert!(err.contains("changed after the dispatch card"), "{err}");
         assert!(!wt.join("evil.txt").exists() && !wt.join("fine.txt").exists());
     }
