@@ -291,6 +291,22 @@ describe("a delegation row while the child works", () => {
     expect(failed).not.toContain("no model tokens were spent");
   });
 
+  it.each(["The worktree setup was cancelled", "The worker dispatch was cancelled"])("renders %s on the delegation", (prefix) => {
+    const message: Msg = { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "spawn_subagent", childRunId: "sub_run_c0", args: {
+      subagent: "implementer", worker: "codex", task: "Do it.", stage: "Running setup…", background: true,
+    } }] };
+    const live = renderToStaticMarkup(renderMessageBody(message, false));
+    expect(live).toContain("Running setup…");
+    expect(live).toContain('aria-label="Cancel worker"');
+    const result: AttachedResult = { msg: { role: "tool", toolName: "spawn_subagent", content: `${prefix}, so Codex was not started and no model tokens were spent. The worktree is kept at /tmp/worker for a look.\n\nSetup cancelled.` }, active: false };
+    const settled = renderToStaticMarkup(renderMessageBody(message, false, { results: new Map([["c0", result]]), workspaceRoot: "/tmp/project" }));
+    expect(settled).toContain("Cancelled");
+    expect(settled).toContain("Setup cancelled.");
+    expect(settled).not.toContain("subagent report");
+    expect(settled).not.toContain("Completed");
+    expect(settled).not.toContain('aria-label="Cancel worker"');
+  });
+
   it("keeps a background dispatch receipt behind the activity disclosure", () => {
     const receipt: AttachedResult = { msg: { role: "tool", content: "Dispatched Claude Code as implementer in the background as Run `sub_run_c0`", toolName: "spawn_subagent" }, active: false };
     const html = delegation(receipt);

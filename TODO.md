@@ -46,12 +46,25 @@ baseline; unchecked items below are verification or specific remaining gaps.
   screen (#324).
 - [x] A project names its own check (2026-10-28): `checkCommand` in
   `.klide/worktree.json`, shown on the dispatch card, Settings as fallback.
-- [ ] Small Worker gaps seen in the pass: a shell command Kit itself runs
-  can reach outside the workspace (it edited KIDE's README from the sandbox
-  conversation) and its card does not say so; give it the same "Outside its
-  working folder" note. Background subscription chats in `klide ptyd`
-  (`agent/remote.rs`) emit no `run:attention`, so they get no toast or rail
-  shimmer.
+- [x] Shell-command approval transparency (code reconciled 2026-10-28):
+  `preflight_command` surfaces recognizable outside-workspace paths in the
+  permission reason and `externalPaths`; the card and notification name them.
+  This is a best-effort argument scan, not containment of arbitrary shell code.
+- [x] Background subscription approval forwarding (code reconciled 2026-10-28):
+  `agent/remote.rs` passes forwarded events through `attention::emit`, shared
+  with app-hosted Runs. Asking/clearing and external-path payloads have tests
+  in `agent/attention.rs`; the real-app restart/hidden-conversation acceptance
+  above remains open.
+- [x] Cancel an individual Klide-dispatched worker from its activity row,
+  including setup, slot waiting and execution. Setup shares the command
+  process lifecycle: cancellation stops its process group before settling,
+  starts no model, and retains the worktree for inspection/discard. The parent
+  can continue after cancelling one worker. Automated coverage includes setup
+  cancellation, parent Stop during setup and cancellation at Run admission.
+- [ ] Verify worker Cancel in the real app: setup, queued API worker, running
+  Delegate/API worker and an approval pause; reopen the conversation and
+  confirm Cancelled and the retained worktree. The tray of a Delegate's own
+  internal sub-agents is separate from a Klide-dispatched worker.
 - [x] Worker capacity at admission (2026-10-27): API workers wait in a fair
   queue for one of 4 app-wide slots, in front of the child Run
   (`agent/worker_slots.rs`), "Queued behind N running API workers" on the
@@ -87,10 +100,9 @@ later work; notarization and other desktop platforms keep their own release scop
   evidence without treating remote paths as local. Keep destination credentials
   on that host and reuse Run host admission/control semantics. Extract the
   headless host as needed; `agent/remote.rs` currently means the local daemon.
-- [ ] Unified launch readiness: combine existing adapter, CLI, authentication,
-  model-capability and reachability checks into ready / unsupported / needs
-  login / offline / unknown, with reasons and observation times. Include the
-  minimal remote checks in the VPS slice and recheck before dispatch.
+- [ ] Extend the unified launch readiness item above with minimal remote
+  checks in the VPS slice. The local consolidation is the prerequisite;
+  existing individual checks do not yet form one readiness answer.
 - [ ] Local ↔ VPS transfer, after VPS execution: settle the source, show the
   inventory/exclusions, checkpoint, verify the destination, then activate with
   a durable receipt and one execution ownership generation. Preserve the
@@ -209,17 +221,22 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   registry). Inspect / cancel / read-result go through the coordination verbs
   the child is already registered for; no second door. Shipped 2026-10-13,
   in-app dogfood owed.
-- [ ] Aggregate capacity for dispatch (`capacityPlanner.ts` is a model, not in
-  the Rust admission path). A child's permission prompts reach the parent's
-  dispatch row since 2026-10-15; a conversation that is not on screen still
-  learns of one only by opening it.
+- [ ] Align the orchestration capacity display with live admission usage:
+  `OrchestratorConsole` currently constructs a fresh `createCapacityState()`
+  for each task, rather than reserving against shared live occupancy. Rust
+  already limits API workers to 4 with cancellable queuing (`worker_slots.rs`).
+  Delegate CLI workers deliberately have no limit. Other capacity kinds in
+  `capacityPlanner.ts` remain a planning model, not enforced admission limits.
+  Off-screen permission notifications are implemented (`attention.rs` and
+  `runAttention.ts`); keep their live verification in the acceptance pass.
 - [x] Make worker setup an approved, visible stage (2026-10-26). The dispatch
   card names the recipe's `setupScript`, the script runs to completion in the
   worker's worktree before the child Run exists (`ToolProgress` → "Running
   setup…" on the dispatch row), and a failure is the Tool's failed result: no
   worker, no tokens, worktree kept. Re-read at run time, a changed recipe
-  voids the approval. Not cancel-aware: Stop waits for the script or its
-  `scriptTimeoutSecs` (default 600 s).
+  voids the approval. Worker setup now responds to individual Cancel and
+  parent Stop through the shared command process lifecycle; its configured
+  `scriptTimeoutSecs` remains the timeout fallback (default 600 s).
 - [x] Join worker results to validation evidence and a review/apply action
   (2026-10-26). The parent's check command runs in the worker's worktree when
   it reports (`WorkerOutcome::describe`; result on the report and on the Tool
@@ -503,10 +520,10 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
 - [x] Background-shells review leftovers (2026-10-26): the observer list polls
   only while an observer runs or a follow-up waits (`agent/observerPoll.ts`),
   and a wake turn that fails toasts an error with Open, not "updated".
-- [ ] The "Background observers" guidance is in every Mode's system prompt,
-  Chat and Plan included, which have no `run_command`. Making the prompt
-  depend on the Mode would break the frozen-prefix cache on a Mode switch —
-  decide whether that is worth it, or word the block so it reads as inert.
+- [x] Observer guidance is explicitly conditional: "Background observers
+  (when run_command is available)" (`system-prompt.ts`). The block remains
+  stable across Mode changes, preserving the frozen prompt prefix; it does
+  not grant tools to Chat or Plan. Code reconciled 2026-10-28.
 - [x] Stop a degenerate reply: a small model looping on one line streamed for minutes until the window filled (lfm2.5 after a bad prompt). The shared stream loop now closes a reply whose tail is one unit repeated (≥ 2000 bytes, ≥ 10 copies), keeps it up to the first repeat and says so (2026-10-25). Live check on a looping local model owed.
 - [x] Record the exact fenced delivery in the transcript, with its position
   before the operator's message (2026-10-24). Peer mail, observer completions

@@ -17,7 +17,7 @@ import { useElapsed } from "./WorkingRow";
 import { subagentActivity, watchSubagentRun, type SubagentActivity } from "./subagentWatch";
 import { permissionCard } from "./permissionCard";
 import { InlineCommandReview } from "../InlineCommandReview";
-import { resolvePermission, setRunCommandPolicy } from "../../agent/client";
+import { resolvePermission, setRunCommandPolicy, stopAgentRun } from "../../agent/client";
 import { notify } from "../../toast";
 import { errMessage } from "../../errors";
 import type { AgentEvent, PermissionDecision, PermissionRequest } from "../../agent/types";
@@ -106,7 +106,7 @@ function stepVerb(name: string): string {
  *  or stopped by its own settlement. */
 function settledWord(error: string | undefined): string {
   if (error?.startsWith("Interrupted:")) return "Interrupted";
-  if (error?.startsWith("Cancelled")) return "Cancelled";
+  if (/cancelled/i.test(error ?? "")) return "Cancelled";
   if (error?.startsWith("Setup failed")) return "Setup failed";
   return "Stopped";
 }
@@ -117,6 +117,7 @@ export function SubagentWatchLine({
   onToggle,
   hasRows,
   stage,
+  runId,
 }: {
   activity: SubagentActivity;
   open: boolean;
@@ -125,6 +126,8 @@ export function SubagentWatchLine({
   hasRows: boolean;
   /** What the dispatch is doing before the child exists ("Running setup…"). */
   stage?: string;
+  /** A Klide-owned child Run (including its cancellable setup/queue). */
+  runId?: string;
 }) {
   const elapsed = useElapsed(activity.status === "starting" || activity.status === "working" ? activity.startedMs : undefined);
   const working = activity.status === "starting" || activity.status === "working";
@@ -200,7 +203,26 @@ export function SubagentWatchLine({
           <CaretRightIcon aria-hidden size={14} pointerEvents="none" className="klide-subagent-chevron" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
         </button>
       )}
+      {working && runId && <WorkerCancelButton key={runId} runId={runId} />}
     </div>
+  );
+}
+
+function WorkerCancelButton({ runId }: { runId: string }) {
+  const [cancelling, setCancelling] = useState(false);
+  return (
+    <button type="button" disabled={cancelling} aria-label="Cancel worker"
+      onClick={(event) => {
+        event.stopPropagation();
+        setCancelling(true);
+        void stopAgentRun(runId).catch((error) => {
+          setCancelling(false);
+          notify(`Couldn't cancel the worker: ${errMessage(error)}`, { tone: "error" });
+        });
+      }}
+      style={{ border: 0, background: "none", padding: "4px 2px", font: "inherit", fontSize: 11.5, color: "var(--fg-subtle)", cursor: cancelling ? "default" : "pointer", flexShrink: 0, opacity: cancelling ? 0.6 : 1 }}>
+      {cancelling ? "Cancelling…" : "Cancel"}
+    </button>
   );
 }
 

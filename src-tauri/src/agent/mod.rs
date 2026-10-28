@@ -3,6 +3,7 @@ pub(crate) mod skill_resources;
 pub(crate) mod daemon;
 mod remote;
 mod run_host;
+mod dispatch_cancel;
 mod side_questions;
 mod stream_log;
 mod artifacts;
@@ -710,13 +711,20 @@ impl RunSupervisor for TauriSupervisor {
             // Its parent giving up on it (a foreground Stop drops the receiver)
             // or a cancel while queued means it never starts.
             let _slot = if spec.takes_slot {
+                let cancel = dispatch_cancel::token(&spec.run_id).unwrap_or_default();
                 let taken = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Err(worker_slots::NotStarted::Cancelled),
                     taken = worker_slots::api_slots().take(&spec.run_id) => taken,
                     _ = tx.closed() => return,
                 };
                 match taken {
                     Ok(permit) => Some(permit),
                     Err(worker_slots::NotStarted::Cancelled) => {
+                        if let Ok(dir) = app_runs_dir(&app) {
+                            let _ = run_host::finish_unstarted(&TauriSupervisor::new(app.clone()), &dir, &spec.run_id,
+                                "Cancelled while waiting for a worker slot; it never started.", true).await;
+                        }
                         let _ = tx.send(Err(
                             "Cancelled while it waited for a free worker slot; it never started.".to_string(),
                         ));
@@ -796,7 +804,13 @@ async fn run_subagent_to_completion(
     };
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-    start_subagent_run(app, request, Some(done_tx)).await?;
+    if let Err(error) = start_subagent_run(app.clone(), request, Some(done_tx)).await {
+        if dispatch_cancel::token(&spec.run_id).is_some_and(|token| token.is_cancelled()) {
+            run_host::finish_unstarted(&TauriSupervisor::new(app), &runs_dir, &spec.run_id,
+                "Cancelled before the worker started.", true).await?;
+        }
+        return Err(error);
+    }
     // A dropped sender means the spawned loop task went away without settling.
     // Report that instead of hanging the parent forever.
     match done_rx.await {
@@ -1841,10 +1855,12 @@ impl ops::CoordinationHost for SupervisorHost<'_> {
     }
 
     fn signal_cancel(&self, run_id: &str) -> bool {
-        self.0
+        let dispatch = dispatch_cancel::cancel(run_id);
+        let running = self.0
             .with_handle(run_id, &mut |handle| handle.cancel.cancel())
             // A worker still queued for a slot has no Run handle yet.
-            || worker_slots::api_slots().cancel_queued(run_id)
+            || worker_slots::api_slots().cancel_queued(run_id);
+        dispatch || running
     }
 }
 
@@ -9820,6 +9836,10 @@ mod worker_dispatch_tests {
     use super::*;
     use std::process::Command;
 
+    // These independent fake supervisors reuse the global Run address `run`.
+    // Serialize their dispatches now that pre-start cancellation has an address.
+    static DISPATCH_FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[test]
     fn child_launcher_requires_a_distinct_parent() {
         let mut request = test_request("/tmp", &[]);
@@ -9920,8 +9940,95 @@ mod worker_dispatch_tests {
             .collect()
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelling_worker_setup_stops_its_processes_without_starting_a_child() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
+        use std::time::Duration;
+        for parent_stop in [false, true] {
+            let suffix = if parent_stop { "parent-stop" } else { "worker-stop" };
+            let root = git_repo(suffix);
+            let recipe = std::path::Path::new(&root).join(".klide");
+            std::fs::create_dir_all(&recipe).unwrap();
+            std::fs::write(recipe.join("worktree.json"), serde_json::json!({
+                "setupScript": "echo $$ > \"$KLIDE_MAIN_ROOT/setup.pid\"; sleep 30 & wait",
+                "scriptTimeoutSecs": 30,
+            }).to_string()).unwrap();
+            let sup = FakeSupervisor::with_run("run");
+            let cancel = CancellationToken::new();
+            let request = test_request(&root, &[]);
+            let runs = runs_dir(suffix);
+            let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: &runs };
+            let (events, mut emit) = event_log();
+            let call = subagent_call(suffix, serde_json::json!({
+                "subagent": "implementer", "worker": "codex", "task": "Implement cancellation"
+            }));
+            let child_id = format!("sub_run_{suffix}");
+            let stop = async {
+                let marker = std::path::Path::new(&root).join("setup.pid");
+                while !marker.exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+                if parent_stop { cancel.cancel(); }
+                else { assert!(dispatch_cancel::cancel(&child_id)); }
+            };
+            let (outcome, _, _, _) = tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::join!(process_subagent_tool(&ctx, &call, &mut emit),
+                    answer_question(&sup, "run", "default"),
+                    answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#), stop)
+            }).await.expect("Stop must not wait for the 30-second setup timeout");
+            if parent_stop { assert!(matches!(outcome.unwrap(), ToolOutcome::Cancelled)); }
+            else {
+                let result = produced(outcome);
+                assert!(!result.ok);
+                assert!(result.content.contains("was cancelled"), "{}", result.content);
+                assert!(!cancel.is_cancelled(), "cancelling one worker leaves the parent running");
+            }
+            assert!(sup.spawned.lock().unwrap().is_empty(), "a cancelled setup starts no model");
+            assert_eq!(requested_children(&events).len(), 1, "the setup had a cancellable address");
+            assert!(read_events(&runs, &child_id).unwrap().iter().any(|event| matches!(event,
+                AgentEvent::RunError { error, .. } if error.code == error_code::ABORTED)));
+            let pid: i32 = std::fs::read_to_string(std::path::Path::new(&root).join("setup.pid")).unwrap().trim().parse().unwrap();
+            // SAFETY: signal zero only checks whether the setup shell is alive.
+            assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "setup shell must be reaped before Stop settles");
+            assert!(dispatch_cancel::token(&child_id).is_none(), "dispatch token is released");
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_at_the_prepared_dispatch_handoff_keeps_the_worktree_and_starts_nothing() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
+        let root = git_repo("cancel-handoff");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("cancel-handoff");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: &runs };
+        let call = subagent_call("cancel-prepared", serde_json::json!({
+            "subagent": "implementer", "worker": "codex", "task": "Implement cancellation"
+        }));
+        let mut emit = |event: AgentEvent| -> Result<(), String> {
+            if let AgentEvent::SubagentRequested { request_id, .. } = &event {
+                assert!(dispatch_cancel::cancel(request_id));
+            }
+            Ok(())
+        };
+        let (outcome, _, _) = tokio::join!(process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "default"),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#));
+        let result = produced(outcome);
+        assert!(!result.ok);
+        assert!(result.content.starts_with("The worker dispatch was cancelled"), "{}", result.content);
+        assert!(result.content.contains("worktree is kept at"));
+        assert!(sup.spawned.lock().unwrap().is_empty());
+        assert!(!cancel.is_cancelled());
+        assert!(read_events(&runs, "sub_run_cancel-prepared").unwrap().iter().any(|event| matches!(event,
+            AgentEvent::RunError { error, .. } if error.code == error_code::ABORTED)));
+        let list = Command::new("git").args(["-C", &root, "worktree", "list"]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&list.stdout).lines().count(), 2, "cancel retains the worktree");
+    }
+
     #[tokio::test]
     async fn a_failed_child_is_a_failed_tool_result_with_its_run_identity() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("failed-result");
         let sup = FakeSupervisor::with_run("run");
         *sup.child_result.lock().unwrap() = Some(Err("provider unavailable".into()));
@@ -9945,6 +10052,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_tester_receives_the_implementers_commit_without_changing_the_parent() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("handoff");
         let implementation = crate::git::worktree_add_core(
             root.clone(), "klide/implementation".into(), None, None, Arc::new(|_| {}),
@@ -9986,6 +10094,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn an_invalid_worker_source_never_reaches_dispatch_or_falls_back_to_head() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         for (name, root, input) in [
             ("missing-ref", git_repo("missing-source"), serde_json::json!({"subagent":"tester", "task":"Test", "worker":"codex", "source_ref":"missing"})),
             ("no-git", plain_folder("source-no-git"), serde_json::json!({"subagent":"tester", "task":"Test", "worker":"codex", "source_ref":"HEAD"})),
@@ -10008,6 +10117,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn an_editing_role_without_a_worker_asks_which_one_and_skipping_is_the_users_no() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("no-worker");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10043,6 +10153,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn picking_an_agent_and_a_model_on_the_one_card_carries_on_to_the_gate() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("pick-worker");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10085,6 +10196,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_dispatch_the_user_spelled_out_asks_nothing_and_goes_straight_to_the_gate() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("user-named");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10107,6 +10219,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_cli_the_user_named_without_a_model_runs_on_its_default_unasked() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("user-named-cli");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10140,6 +10253,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn the_user_may_change_the_agent_kit_named_from_the_model_step() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("change-agent");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10162,6 +10276,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn an_api_worker_runs_klides_own_harness_on_that_house_without_review() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("api-worker");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10198,6 +10313,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn an_unknown_worker_is_answered_with_the_delegate_list() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("unknown-worker");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10220,6 +10336,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_read_only_role_without_a_worker_runs_on_the_parents_model_unprompted() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("explorer");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10244,6 +10361,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_worker_dispatch_asks_first_and_a_rejection_spawns_nothing() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("rejected");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10282,6 +10400,7 @@ mod worker_dispatch_tests {
     /// start this one worker on the rung, by saying so on the card.
     #[tokio::test]
     async fn a_dispatch_approved_as_full_auto_starts_the_worker_on_the_rung() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("card-rung");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10309,6 +10428,7 @@ mod worker_dispatch_tests {
     /// itself still asks — the rung silences commands and nothing else.
     #[tokio::test]
     async fn a_worker_inherits_the_parents_full_auto_rung_at_dispatch() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("inherit-rung");
         let sup = FakeSupervisor::with_run("run");
         sup.with_handle("run", &mut |h| h.trust.set_commands_policy(true));
@@ -10334,6 +10454,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn an_approved_worker_runs_the_delegate_as_itself_in_a_worktree() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("approved");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10391,6 +10512,7 @@ mod worker_dispatch_tests {
     /// appends) waits in `workers` for a turn to deliver it.
     #[tokio::test]
     async fn a_background_dispatch_returns_at_once_and_queues_its_report() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("background");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10451,6 +10573,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_background_dispatch_without_a_worker_is_refused() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = git_repo("background-no-worker");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10467,6 +10590,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_worker_in_a_plain_folder_works_there_and_the_gate_says_so() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("not-a-repo");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10509,6 +10633,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_worker_with_no_model_opens_the_card_on_its_model_step() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("ask-model");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10545,6 +10670,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn skipping_the_model_question_leaves_the_cli_its_default() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("skip-model");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -10565,6 +10691,7 @@ mod worker_dispatch_tests {
 
     #[tokio::test]
     async fn a_worker_and_model_kit_named_are_still_put_to_the_user_as_a_preselection() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
         let root = plain_folder("named-model");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();

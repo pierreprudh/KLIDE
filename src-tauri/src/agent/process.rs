@@ -175,17 +175,31 @@ pub struct ProcessHandle {
 /// The caller has already put the command through the permission gate — this
 /// starts a process and asks nothing. Must be called inside a tokio runtime.
 pub fn spawn(spec: SpawnSpec<'_>) -> Result<ProcessHandle, String> {
-    let mut cmd = tokio::process::Command::new("sh");
+    spawn_with_setup_env(spec, None)
+}
+
+/// Approved worktree setup keeps its login shell and recipe environment,
+/// while sharing command cancellation, process-group cleanup and bounded logs.
+pub(super) fn spawn_setup(spec: SpawnSpec<'_>, envs: &[(String, String)]) -> Result<ProcessHandle, String> {
+    spawn_with_setup_env(spec, Some(envs))
+}
+
+fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>) -> Result<ProcessHandle, String> {
+    let shell = if envs.is_some() {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into())
+    } else { "sh".into() };
+    let mut cmd = tokio::process::Command::new(shell);
+    if let Some(envs) = envs {
+        cmd.arg("-l").envs(envs.iter().cloned());
+    } else {
+        cmd.env_clear().envs(super::command_env::env_for(spec.cwd));
+    }
     #[cfg(unix)]
     cmd.process_group(0);
     let mut child = cmd
         .arg("-c")
         .arg(spec.command)
         .current_dir(spec.cwd)
-        // The login shell's environment, the project's .venv first, no
-        // secret-named variables — command_env.rs says why.
-        .env_clear()
-        .envs(super::command_env::env_for(spec.cwd))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -38,6 +38,14 @@ pub enum NotStarted {
     Cancelled,
 }
 
+/// A dropped wait future must retire its queue entry too.
+struct Queued<'a> { slots: &'a Slots, id: &'a str }
+impl Drop for Queued<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut queued) = self.slots.queued.lock() { queued.remove(self.id); }
+    }
+}
+
 impl Slots {
     pub fn new(max: usize) -> Self {
         Self { pool: Arc::new(Semaphore::new(max)), max, queued: Mutex::new(HashMap::new()) }
@@ -64,13 +72,11 @@ impl Slots {
         if let Ok(mut queued) = self.queued.lock() {
             queued.insert(child_id.to_string(), token.clone());
         }
+        let _queued = Queued { slots: self, id: child_id };
         let outcome = tokio::select! {
             permit = self.pool.clone().acquire_owned() => permit.map_err(|_| NotStarted::Cancelled),
             _ = token.cancelled() => Err(NotStarted::Cancelled),
         };
-        if let Ok(mut queued) = self.queued.lock() {
-            queued.remove(child_id);
-        }
         outcome
     }
 
@@ -95,6 +101,21 @@ pub fn api_slots() -> &'static Slots {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dropping_a_queued_wait_removes_its_status() {
+        let slots = Arc::new(Slots::new(1));
+        let _first = slots.take("queue-drop-first").await.unwrap();
+        let waiting = {
+            let slots = slots.clone();
+            tokio::spawn(async move { slots.take("queue-drop-waiting").await })
+        };
+        tokio::task::yield_now().await;
+        assert!(slots.is_queued("queue-drop-waiting"));
+        waiting.abort();
+        let _ = waiting.await;
+        assert!(!slots.is_queued("queue-drop-waiting"));
+    }
 
     #[tokio::test]
     async fn a_dispatch_over_the_limit_waits_and_starts_when_a_slot_frees() {
