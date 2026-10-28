@@ -3,6 +3,7 @@
 // the composer. Real tray, real fold; the events are the shape a real
 // `claude -p` background fan-out folds to (2026-10-28). `?state=done` shows
 // the turn after they all settled.
+import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import '@fontsource/atkinson-hyperlegible/400.css';
 import '@fontsource/atkinson-hyperlegible/700.css';
@@ -33,7 +34,7 @@ const events: AgentEvent[] = [
   { type: 'assistant_message', runId: RUN, messageId: 'm0', content: [{ type: 'text', text: "I'll map the codebase with three explorers in parallel." }], ts: at() },
   call('A', 'Agent', { description: 'Map src-tauri/src/agent', subagent_type: 'Explore', run_in_background: true }), sub('A', 'running'), res('A', LAUNCHED),
   call('B', 'Agent', { description: 'Map src/components/ai', subagent_type: 'Explore', run_in_background: true }), sub('B', 'running'), res('B', LAUNCHED),
-  call('C', 'Agent', { description: 'Read CONTEXT.md', subagent_type: 'Explore', run_in_background: true }), sub('C', 'running'), res('C', LAUNCHED),
+  call('C', 'Agent', { description: 'Read CONTEXT.md', subagent_type: params.get('mixed') ? 'general-purpose' : 'Explore', run_in_background: true }), sub('C', 'running'), res('C', LAUNCHED),
   call('a1', 'Grep', { pattern: 'fn run_agent_loop' }, 'A'), res('a1', 'mod.rs:2410', 'A'), sub('A', 'running', 'Reading mod.rs', 2),
   call('b1', 'Glob', { pattern: 'src/components/ai/*.ts' }, 'B'), sub('B', 'running', 'Searching src/components/ai', 1),
   call('c1', 'Read', { file_path: 'CONTEXT.md' }, 'C'), res('c1', '# Klide', 'C'), sub('C', 'completed', undefined, 1),
@@ -47,13 +48,27 @@ const events: AgentEvent[] = [
 const msgs: Msg[] = [{ role: 'user', content: 'Use the Agent tool to launch 3 Explore sub-agents in parallel…' }, ...foldAgentEvents(events).flatMap((row) => foldedRowToMsgs(row, { runningPlaceholders: true }))];
 const rows = turnSubagents(msgs, !done);
 
+// `?flip=1`: the last sub-agent is still working at first and finishes a
+// second in, so the mark's morph and the type folding away can be seen.
+function Tray() {
+  const flip = params.get('flip') === '1';
+  const [finished, setFinished] = useState(!flip);
+  useEffect(() => {
+    if (!flip) return;
+    const timer = setTimeout(() => setFinished(true), 1000);
+    return () => clearTimeout(timer);
+  }, [flip]);
+  const shown = finished ? rows : rows.map((r) => (r.id === 'C' ? { ...r, status: 'running' as const, state: { ...r.state, status: 'running' as const, activity: 'Reading CONTEXT.md' } } : r));
+  return <SubagentTray subagents={shown} />;
+}
+
 createRoot(document.getElementById('root')!).render(
   <main style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font-ui)', padding: '40px 48px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
     <div style={{ maxWidth: 760, width: '100%', margin: '0 auto', flex: 1, display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, fontSize: 14, lineHeight: 1.6 }}>
         {msgs.filter((m) => m.role === 'assistant').map((m, i) => <div key={i} style={{ marginBottom: 10 }}>{renderMessageBody(m, false)}</div>)}
       </div>
-      <SubagentTray subagents={rows} />
+      <Tray />
       <div className="klide-composer-surface" style={{ padding: '14px 16px 44px', color: 'var(--fg-dim)', fontSize: 14 }}>Queue another message…</div>
     </div>
   </main>

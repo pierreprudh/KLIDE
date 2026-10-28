@@ -23,6 +23,9 @@ export function SubagentTray({ subagents }: { subagents: TraySubagent[] }) {
   const open = pinned ?? running;
   const [opened, setOpened] = useState<string | null>(null);
   const provider = subagents[0]?.provider;
+  // The type only tells one row from another when the rows differ: three
+  // `Explore`s say "Explore" three times and nothing else.
+  const mixedKinds = new Set(subagents.map((s) => s.kind)).size > 1;
   return (
     <div
       className="ai-msg-in"
@@ -49,7 +52,7 @@ export function SubagentTray({ subagents }: { subagents: TraySubagent[] }) {
       {open && (
         <div style={{ maxHeight: 260, overflowY: "auto", padding: "0 0 6px" }}>
           {subagents.map((s) => (
-            <TrayRow key={s.id} subagent={s} open={opened === s.id} onToggle={() => setOpened((was) => (was === s.id ? null : s.id))} />
+            <TrayRow key={s.id} subagent={s} showKind={mixedKinds} open={opened === s.id} onToggle={() => setOpened((was) => (was === s.id ? null : s.id))} />
           ))}
         </div>
       )}
@@ -57,8 +60,9 @@ export function SubagentTray({ subagents }: { subagents: TraySubagent[] }) {
   );
 }
 
-function TrayRow({ subagent: s, open, onToggle }: { subagent: TraySubagent; open: boolean; onToggle: () => void }) {
+function TrayRow({ subagent: s, showKind, open, onToggle }: { subagent: TraySubagent; showKind: boolean; open: boolean; onToggle: () => void }) {
   const working = s.status === "running";
+  const done = s.status === "completed";
   const rows = useMemo(
     () => (open && s.nested?.length ? childTranscriptRows(foldedToMsgs(foldAgentEvents(s.nested)), s.task) : []),
     [open, s.nested, s.task],
@@ -74,9 +78,17 @@ function TrayRow({ subagent: s, open, onToggle }: { subagent: TraySubagent; open
         <SubagentMark status={s.status} />
         {/* One sweep across the name and the brief while it works — the
             Working row's shimmer, painted through the text. */}
-        <span className={working ? "ai-working-label" : undefined} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, ...(working ? {} : { color: "var(--fg-dim)" }), ...(s.status === "completed" ? { textDecoration: "line-through", textDecorationColor: "color-mix(in srgb, var(--fg-dim) 70%, transparent)" } : {}) }}>
-          <span style={{ fontWeight: 500, marginRight: 10, ...(working ? {} : { color: "var(--fg-subtle)" }) }}>{s.kind}</span>
-          {s.task}
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, ...(working ? {} : { color: "var(--fg-dim)" }) }}>
+          {/* The type goes once its sub-agent is done — folded away, never
+              struck: what was done is the brief, not the kind of helper. Its
+              own sweep, since a clip-to-text parent is dropped through a
+              child that clips its overflow (WebKit). */}
+          {showKind && (
+            <span className={`klide-subagent-kind${working ? " ai-working-label" : ""}`} data-gone={done} style={working ? undefined : { color: "var(--fg-subtle)" }}>
+              {s.kind}
+            </span>
+          )}
+          <span className={working ? "ai-working-label" : "klide-subagent-brief"} data-done={done}>{s.task}</span>
         </span>
         {/* Its own column, outside the sweep: a clip-to-text parent paints
             through its children's glyphs, so the step would shimmer too. */}

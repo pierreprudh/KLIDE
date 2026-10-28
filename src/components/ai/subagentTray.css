@@ -63,7 +63,34 @@
     stroke-dashoffset: 0;
   }
 }
+/* A row's type, when the tray shows types: it folds away once the
+   sub-agent is done (width and opacity, then the gap), and the brief is
+   struck — the line that was done. */
+.klide-subagent-kind {
+  display: inline-block;
+  vertical-align: bottom;
+  max-width: 14em;
+  margin-right: 10px;
+  overflow: hidden;
+  font-weight: 500;
+  transition:
+    max-width var(--motion-slower) var(--ease-soft),
+    margin-right var(--motion-slower) var(--ease-soft),
+    opacity var(--motion-slow) var(--ease-soft);
+}
+.klide-subagent-kind[data-gone="true"] {
+  max-width: 0;
+  margin-right: 0;
+  opacity: 0;
+}
+.klide-subagent-brief[data-done="true"] {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--fg-dim) 70%, transparent);
+}
 @media (prefers-reduced-motion: reduce) {
+  .klide-subagent-kind {
+    transition: none;
+  }
   .klide-subagent-mark-arc {
     animation: none;
   }
