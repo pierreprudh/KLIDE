@@ -183,7 +183,7 @@ mod tests {
     fn another_event_or_message_keeps_order_and_contiguous_seqs() {
         let (dir, log, seen) = log("order");
         log.push(delta("m", "before ")).unwrap();
-        log.push(AgentEvent::ObservedToolResult { run_id: "r".into(), tool_call_id: "t".into(), ok: true, content: String::new(), ts: 0 }).unwrap();
+        log.push(AgentEvent::ObservedToolResult { run_id: "r".into(), tool_call_id: "t".into(), ok: true, content: String::new(), parent_tool_call_id: None, ts: 0 }).unwrap();
         log.push(delta("m", "after")).unwrap();
         log.push(delta("n", "next message")).unwrap();
         log.flush().unwrap();

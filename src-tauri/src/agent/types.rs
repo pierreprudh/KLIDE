@@ -738,6 +738,10 @@ pub enum AgentEvent {
         name: String,
         input: serde_json::Value,
         summary: String,
+        /// Set when the step ran inside one of the delegate's own sub-agents:
+        /// the id of the observed call that started it (Claude Code's `Agent`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_tool_call_id: Option<String>,
         ts: i64,
     },
     ObservedToolResult {
@@ -745,6 +749,8 @@ pub enum AgentEvent {
         tool_call_id: String,
         ok: bool,
         content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_tool_call_id: Option<String>,
         ts: i64,
     },
     /// The delegate CLI named the conversation's session itself (OpenCode

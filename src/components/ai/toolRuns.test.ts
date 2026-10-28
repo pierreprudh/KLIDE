@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { groupToolRuns, pairToolResults, toolRunLabel, turnsAfterQuestions, questionVerdicts, dropVerdictMark, gradeAnswer, withoutAnswerKey, PLAN_MISSION_TOOL, USER_QUESTION_TOOL } from "./toolRuns";
+import { groupToolRuns, isObservedSubagent, pairToolResults, toolRunLabel, turnsAfterQuestions, questionVerdicts, dropVerdictMark, gradeAnswer, withoutAnswerKey, PLAN_MISSION_TOOL, USER_QUESTION_TOOL } from "./toolRuns";
 
 const call = (name: string): Msg => ({
   role: "assistant",
@@ -202,6 +202,17 @@ describe("groupToolRuns", () => {
     // Klide's own turns measure themselves; the answer's span is not theirs.
     const [own] = groupToolRuns([asks("go"), ...burst("Bash", 2), answer]);
     expect(own.workedMs).toBeUndefined();
+  });
+});
+
+describe("a delegate's own sub-agents", () => {
+  it("are a delegation, drawn on their own, never folded into the work", () => {
+    const fanOut: Msg = { role: "assistant", content: "", toolCalls: [{ id: "A", name: "Agent", args: { description: "Map the fold" }, observedBy: "claude-code" }] };
+    const runs = groupToolRuns([asks("improve the architecture"), call("Read"), result("Read"), fanOut, says("Here is what I found.")]);
+    expect(runs).toMatchObject([{ start: 1, end: 3 }]);
+    // Only when the CLI ran it: a name alone is not a delegation.
+    expect(isObservedSubagent({ name: "Agent" })).toBe(false);
+    expect(isObservedSubagent({ name: "Task", observedBy: "claude-code" })).toBe(true);
   });
 });
 

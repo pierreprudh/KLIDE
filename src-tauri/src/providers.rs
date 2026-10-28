@@ -1675,9 +1675,18 @@ pub(crate) enum ObservedToolActivity {
         name: String,
         input: serde_json::Value,
         summary: String,
+        /// The CLI's own sub-agent call this step ran inside, when it did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
     },
     /// …and this is what it got back.
-    Result { id: String, ok: bool, content: String },
+    Result {
+        id: String,
+        ok: bool,
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+    },
 }
 
 // Anthropic requires this header on every Messages API call; pinning a known

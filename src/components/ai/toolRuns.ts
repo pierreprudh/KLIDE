@@ -70,6 +70,18 @@ export const USER_QUESTION_TOOL = "userAnswerQuestion";
  *  calls ends a run the way a sentence does. */
 export const SPEAKING_TOOLS: ReadonlySet<string> = new Set([PLAN_MISSION_TOOL, "spawn_subagent", USER_QUESTION_TOOL]);
 
+/** A sub-agent a Delegate CLI started itself — Claude Code's `Agent` (`Task`
+ *  before it was renamed). Klide did not dispatch it, but it is a delegation
+ *  all the same: drawn as one, and never folded into "Worked for…". */
+export function isObservedSubagent(call: { name: string; observedBy?: string }): boolean {
+  return !!call.observedBy && (call.name === "Agent" || call.name === "Task");
+}
+
+/** A call that draws its own card and so speaks for the turn. */
+export function isSpeakingCall(call: { name: string; observedBy?: string }): boolean {
+  return SPEAKING_TOOLS.has(call.name) || isObservedSubagent(call);
+}
+
 /** What a turn would show the reader: its content with every reasoning
  *  encoding taken out — the structured `thinking` field is already absent,
  *  an inline <think> block and the plan-JSON fallback are not. */
@@ -149,7 +161,7 @@ function isCompactionMarker(m: Msg): boolean {
 function isToolWork(m: Msg): boolean {
   if (m.role === "tool") return true;
   if (m.role !== "assistant") return false;
-  if (m.toolCalls?.some((call) => SPEAKING_TOOLS.has(call.name))) return false;
+  if (m.toolCalls?.some(isSpeakingCall)) return false;
   if (m.toolCalls?.length) return true;
   return visibleProse(m) === "";
 }

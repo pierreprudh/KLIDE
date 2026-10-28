@@ -2728,6 +2728,7 @@ async fn loop_body(
                             name,
                             input,
                             summary,
+                            parent,
                         } => AgentEvent::ObservedToolCall {
                             run_id: stream_run_id.clone(),
                             tool_call_id: id,
@@ -2735,14 +2736,16 @@ async fn loop_body(
                             name,
                             input,
                             summary,
+                            parent_tool_call_id: parent,
                             ts: now_ms(),
                         },
-                        crate::providers::ObservedToolActivity::Result { id, ok, content } => {
+                        crate::providers::ObservedToolActivity::Result { id, ok, content, parent } => {
                             AgentEvent::ObservedToolResult {
                                 run_id: stream_run_id.clone(),
                                 tool_call_id: id,
                                 ok,
                                 content,
+                                parent_tool_call_id: parent,
                                 ts: now_ms(),
                             }
                         }

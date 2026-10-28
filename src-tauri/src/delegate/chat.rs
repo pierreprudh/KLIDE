@@ -558,8 +558,31 @@ impl<'a> Emitter<'a> {
         Ok(self.answer.trim().to_string())
     }
 
+    fn observe_call(&mut self, id: String, name: String, input: serde_json::Value, parent: Option<String>) {
+        let summary = super::chat_stream::summarize_call(&name, &input);
+        self.emitted.store(true, Ordering::Relaxed);
+        let _ = self.on_chunk.send(StreamChunk {
+            observed: Some(ObservedToolActivity::Call {
+                id,
+                name,
+                input,
+                provider: self.provider_id.to_string(),
+                summary,
+                parent,
+            }),
+            ..Default::default()
+        });
+    }
+
+    fn observe_result(&mut self, id: String, ok: bool, content: String, parent: Option<String>) {
+        let _ = self.on_chunk.send(StreamChunk {
+            observed: Some(ObservedToolActivity::Result { id, ok, content, parent }),
+            ..Default::default()
+        });
+    }
+
     pub(super) fn handle(&mut self, item: super::chat_stream::StreamItem) {
-        use super::chat_stream::{summarize_call, StreamItem};
+        use super::chat_stream::StreamItem;
         match item {
             StreamItem::Usage { id, prompt, completion, cost, context_window } => {
                 self.emitted.store(true, Ordering::Relaxed);
@@ -628,26 +651,15 @@ impl<'a> Emitter<'a> {
                 self.emitted.store(true, Ordering::Relaxed);
                 let _ = self.on_chunk.send(StreamChunk::text(format!("{text}\n")));
             }
-            StreamItem::ToolCall { id, name, input } => {
-                let summary = summarize_call(&name, &input);
-                self.emitted.store(true, Ordering::Relaxed);
-                let _ = self.on_chunk.send(StreamChunk {
-                    observed: Some(ObservedToolActivity::Call {
-                        id,
-                        name,
-                        input,
-                        provider: self.provider_id.to_string(),
-                        summary,
-                    }),
-                    ..Default::default()
-                });
-            }
-            StreamItem::ToolResult { id, ok, content } => {
-                let _ = self.on_chunk.send(StreamChunk {
-                    observed: Some(ObservedToolActivity::Result { id, ok, content }),
-                    ..Default::default()
-                });
-            }
+            StreamItem::ToolCall { id, name, input } => self.observe_call(id, name, input, None),
+            StreamItem::ToolResult { id, ok, content } => self.observe_result(id, ok, content, None),
+            StreamItem::Nested { parent, item } => match *item {
+                StreamItem::ToolCall { id, name, input } => self.observe_call(id, name, input, Some(parent)),
+                StreamItem::ToolResult { id, ok, content } => self.observe_result(id, ok, content, Some(parent)),
+                // Dialects nest only tool work; anything else is not this
+                // turn's to show.
+                _ => {}
+            },
             // Remember what to continue next turn. Recorded even on a
             // turn that was itself a resume: a CLI may answer with a new
             // id (a fork, a compaction), and the newest one is the live
