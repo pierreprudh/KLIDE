@@ -482,8 +482,10 @@ impl StdioPipe {
                 Ok(message) => message,
                 Err(mpsc::RecvTimeoutError::Timeout) => return Err(Failure::Transport(timed_out(&self.stderr))),
                 // The reader thread ended: the child closed stdout or died.
+                // Its last stderr line may still be in flight on the other
+                // reader thread, so wait for that one to end too.
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(Failure::Transport(match last_error(&self.stderr) {
+                    return Err(Failure::Transport(match final_words(&self.stderr, Duration::from_secs(1)) {
                         Some(line) => format!("The server stopped: {line}"),
                         None => "The server stopped before it answered".to_string(),
                     }))

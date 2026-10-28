@@ -17,7 +17,9 @@ impl Daemon {
     fn connect(&self) -> BufReader<UnixStream> {
         let stream = UnixStream::connect(klide_lib::pty_daemon::socket_path(&self.dir)).unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            // The same patience as `wait`: a busy macOS runner has taken
+            // longer than 5 s to answer the first `chat_start`.
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
         let mut reader = BufReader::new(stream);
         let token = std::fs::read_to_string(self.dir.join("ptyd.token")).unwrap();
@@ -33,7 +35,13 @@ impl Daemon {
         let mut reader = self.connect();
         writeln!(reader.get_mut(), "{value}").unwrap();
         let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
+        if let Err(e) = reader.read_line(&mut line) {
+            panic!(
+                "no answer to {}: {e}; log: {:?}",
+                value["type"],
+                std::fs::read_to_string(self.dir.join("ptyd.log"))
+            );
+        }
         serde_json::from_str(&line).unwrap()
     }
     fn wait(&self, predicate: impl Fn() -> bool) {
