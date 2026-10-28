@@ -12,7 +12,7 @@ import { ProviderLogo } from "./icons";
 import "./subagentTray.css";
 import { childTranscriptRows } from "./subagentWatch";
 import { traySummary, type TraySubagent } from "./turnSubagents";
-import { formatElapsed, useElapsed } from "./WorkingRow";
+import { useElapsed } from "./WorkingRow";
 
 export function SubagentTray({ subagents }: { subagents: TraySubagent[] }) {
   const running = subagents.some((s) => s.status === "running");
@@ -63,7 +63,6 @@ function TrayRow({ subagent: s, open, onToggle }: { subagent: TraySubagent; open
     () => (open && s.nested?.length ? childTranscriptRows(foldedToMsgs(foldAgentEvents(s.nested)), s.task) : []),
     [open, s.nested, s.task],
   );
-  const steps = s.state?.steps ?? s.nested?.filter((e) => e.type === "observed_tool_call").length ?? 0;
   return (
     <div style={{ minWidth: 0 }}>
       <button
@@ -75,7 +74,7 @@ function TrayRow({ subagent: s, open, onToggle }: { subagent: TraySubagent; open
         <SubagentMark status={s.status} />
         {/* One sweep across the name and the brief while it works — the
             Working row's shimmer, painted through the text. */}
-        <span className={working ? "ai-working-label" : undefined} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, ...(working ? {} : { color: "var(--fg-dim)" }) }}>
+        <span className={working ? "ai-working-label" : undefined} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, ...(working ? {} : { color: "var(--fg-dim)" }), ...(s.status === "completed" ? { textDecoration: "line-through", textDecorationColor: "color-mix(in srgb, var(--fg-dim) 70%, transparent)" } : {}) }}>
           <span style={{ fontWeight: 500, marginRight: 10, ...(working ? {} : { color: "var(--fg-subtle)" }) }}>{s.kind}</span>
           {s.task}
         </span>
@@ -84,7 +83,7 @@ function TrayRow({ subagent: s, open, onToggle }: { subagent: TraySubagent; open
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
           {working ? s.state?.activity : null}
         </span>
-        <TrayStatusWord subagent={s} steps={steps} />
+        <TrayStatusWord subagent={s} />
       </button>
       {open && (
         <div style={{ margin: "2px 12px 8px 36px", padding: "0 0 0 12px", borderLeft: "1px solid var(--border)", minWidth: 0 }}>
@@ -119,16 +118,13 @@ function SubagentMark({ status }: { status: TraySubagent["status"] }) {
   );
 }
 
-function TrayStatusWord({ subagent: s, steps }: { subagent: TraySubagent; steps: number }) {
+function TrayStatusWord({ subagent: s }: { subagent: TraySubagent }) {
   const elapsed = useElapsed(s.status === "running" ? s.state?.startedMs : undefined);
   const style = { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" as const };
   if (s.status === "running") return <span style={style}>{elapsed}</span>;
-  const took = s.state?.startedMs !== undefined && s.state.endedMs !== undefined ? formatElapsed(s.state.endedMs - s.state.startedMs) : null;
-  const word = s.status === "completed" ? "Done" : s.status === "failed" ? "Failed" : s.status === "stopped" ? "Stopped" : "Ended";
-  const detail = [steps > 0 ? `${steps} ${steps === 1 ? "step" : "steps"}` : null, took].filter(Boolean).join(" · ");
-  return (
-    <span style={{ ...style, color: s.status === "failed" ? "var(--danger, var(--fg-subtle))" : "var(--fg-dim)" }}>
-      {word}{detail ? ` · ${detail}` : ""}
-    </span>
-  );
+  // Done says itself: the check and the struck line. Only an outcome that
+  // is not "done" needs a word.
+  if (s.status === "completed") return null;
+  const word = s.status === "failed" ? "Failed" : s.status === "stopped" ? "Stopped" : "Ended";
+  return <span style={{ ...style, color: s.status === "failed" ? "var(--danger)" : "var(--fg-dim)" }}>{word}</span>;
 }
