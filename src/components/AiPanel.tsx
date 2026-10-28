@@ -128,7 +128,7 @@ import type {
   ProviderId,
   StartAgentRunInput,
 } from "../agent/types";
-import { enabledRunSkills, enabledSkillsPrompt, skillFolderOf, type Skill } from "../skills";
+import { enabledRunSkills, enabledSkillsPrompt, enabledSkillsPromptParts, skillFolderOf, type Skill } from "../skills";
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { formatClock, formatDayStamp } from "../time";
@@ -227,7 +227,7 @@ import {
   conversationCost,
   lastCompactionIndex,
   COMPACT_OFFER_RATIO,
-  conversationTokenEstimate,
+  conversationTokens,
 } from "./ai/contextBudget";
 import { TweenedNumber } from "./ai/TweenedNumber";
 import {
@@ -1273,6 +1273,9 @@ export function AiPanel({
   // The breakdown kind under the pointer — its segment and row stay lit, the
   // rest of the popover's kinds step back.
   const [contextFocusRow, setContextFocusRow] = useState<string | null>(null);
+  // The row whose parts the flyout beside the popover lists, and where that
+  // row sits in the popover so the flyout lines up with it.
+  const [contextDetail, setContextDetail] = useState<{ id: string; top: number } | null>(null);
   const {
     open: contextHover,
     pos: contextTooltipPos,
@@ -2077,7 +2080,8 @@ export function AiPanel({
   // number; before that the expectation mirrors the Rust rule. Everyone else
   // measures against the model's detected window, which no request can change.
   const ctxOverride = harnessSettings?.contextWindows?.[model];
-  const messageTokens = useMemo(() => conversationTokenEstimate(msgs), [msgs]);
+  const conversationBudget = useMemo(() => conversationTokens(msgs), [msgs]);
+  const messageTokens = conversationBudget.total;
   // `contextWindow.ts` reads 0 as "not detected"; `null` is that, typed.
   const effectiveContextLimit = resolveGaugeWindow({
     provider,
@@ -2208,14 +2212,17 @@ This user request requires workspace inspection. Before answering, you MUST call
   const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
   useEffect(() => setArtifactOutput(null), [currentId]);
   const skillsPrompt = useMemo(() => enabledSkillsPrompt(skills), [skills]);
+  const skillParts = useMemo(() => enabledSkillsPromptParts(skills), [skills]);
   const budget = useMemo(
     () =>
       computeContextBudget({
         msgs,
         messageTokens,
+        messageDetails: conversationBudget.details,
         draft: input,
         systemPrompt: systemPromptForDraft,
         skillsPrompt,
+        skillParts,
         projectRules,
         lens: lensProjectContext,
         toolSchemaTokens,
@@ -2227,9 +2234,11 @@ This user request requires workspace inspection. Before answering, you MUST call
     [
       msgs,
       messageTokens,
+      conversationBudget,
       input,
       systemPromptForDraft,
       skillsPrompt,
+      skillParts,
       projectRules,
       lensProjectContext,
       toolSchemaTokens,
@@ -5420,7 +5429,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // The pointer can cross from the ring into the panel and
                     // stay there (its Compact button); leaving it closes it.
                     onMouseEnter={holdContextPanel}
-                    onMouseLeave={() => { setContextFocusRow(null); releaseContextPanel(); }}
+                    onMouseLeave={() => { setContextFocusRow(null); setContextDetail(null); releaseContextPanel(); }}
                     // A React child of the ring: keep its clicks from
                     // reaching the ring.
                     onClick={(e) => e.stopPropagation()}
@@ -5455,8 +5464,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                         const dimmed = contextFocusRow !== null && !focused;
                         return (
                           <div key={row.id}
-                            onMouseEnter={() => setContextFocusRow(row.id)}
-                            onMouseLeave={() => setContextFocusRow(null)}
+                            onMouseEnter={(e) => {
+                              setContextFocusRow(row.id);
+                              setContextDetail(row.details && row.details.length > 1 ? { id: row.id, top: e.currentTarget.offsetTop } : null);
+                            }}
+                            onMouseLeave={() => { setContextFocusRow(null); setContextDetail(null); }}
                             style={{ display: "grid", gridTemplateColumns: contextTooltipPos.compact ? "12px minmax(0, 1fr) 58px 42px" : "14px minmax(0, 1fr) 70px 54px", alignItems: "center", gap: contextTooltipPos.compact ? 6 : 8, opacity: dimmed ? 0.35 : row.muted ? 0.72 : 1, transition: "opacity var(--motion-fast) var(--ease-out)" }}>
                             <span style={{ width: 8, height: 8, borderRadius: 2, background: row.color, boxShadow: row.id === "free" ? "inset 0 0 0 1px var(--border)" : undefined }} />
                             <span style={{ color: focused ? "var(--fg-strong)" : row.id === "free" ? "var(--fg-dim)" : "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
@@ -5466,6 +5478,32 @@ This user request requires workspace inspection. Before answering, you MUST call
                         );
                       })}
                     </div>
+                    {(() => {
+                      // What the hovered row is made of, beside the popover —
+                      // on the right when the window has room, else the left.
+                      const row = contextDetail && contextBreakdownRows.find((r) => r.id === contextDetail.id);
+                      if (!contextDetail || !row?.details) return null;
+                      const flyoutWidth = 216;
+                      const onRight = contextTooltipPos.left + contextTooltipPos.width + 8 + flyoutWidth <= window.innerWidth - 8;
+                      const pct = effectiveContextLimit > 0 ? (row.tokens / effectiveContextLimit) * 100 : 0;
+                      return (
+                        <div key={row.id} className="popover-enter" aria-hidden="true"
+                          style={{ position: "absolute", top: contextDetail.top - 9, ...(onRight ? { left: "calc(100% + 8px)" } : { right: "calc(100% + 8px)" }), width: flyoutWidth, padding: "8px 11px 9px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", pointerEvents: "none", display: "grid", gap: 6, fontSize: 12, lineHeight: 1.25 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "14px minmax(0, 1fr) auto auto", alignItems: "center", gap: 8 }}>
+                            <span style={{ width: 10, height: 3, borderRadius: 2, background: row.color }} />
+                            <span style={{ color: "var(--fg-strong)" }}>{row.label}</span>
+                            <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg-strong)" }}>{formatContextTokens(row.tokens)}</span>
+                            <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg-dim)" }}>{formatPercentRow(pct)}%</span>
+                          </div>
+                          {row.details.map((d) => (
+                            <div key={d.label} style={{ display: "flex", justifyContent: "space-between", gap: 12, color: "var(--fg-subtle)" }}>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.label}</span>
+                              <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{formatContextTokens(d.tokens)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                     <div style={{ height: 1, background: "var(--border)", margin: "10px 0 8px" }} />
                     <div style={{ display: "grid", gap: 4, color: "var(--fg-dim)", fontSize: 10.5, lineHeight: 1.35 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>

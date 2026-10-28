@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enabledFirst, enabledRunSkills, enabledSkillsPrompt, skillFolderOf } from "./skills";
+import { enabledFirst, enabledRunSkills, enabledSkillsPrompt, enabledSkillsPromptParts, skillFolderOf } from "./skills";
 
 describe("enabledFirst", () => {
   it("moves the enabled skills ahead and keeps each side's own order", () => {
@@ -56,5 +56,18 @@ describe("skillFolderOf", () => {
     expect(skillFolderOf(".agents/skills/software-factory/RUNNERS.md")).toBeNull();
     expect(skillFolderOf("docs/skills/x/SKILL.md")).toBeNull();
     expect(skillFolderOf(".agents/skills/SKILL.md")).toBeNull();
+  });
+});
+
+describe("enabledSkillsPromptParts", () => {
+  it("is the prompt in pieces — joined, it is the prompt", () => {
+    const skills = [
+      { id: "v", name: "visualise", description: "Draw it.", instructions: "Use svg.", tools: [], enabled: true },
+      { id: "h", name: "Handoff", description: "Hand it off.", instructions: "x", tools: [], enabled: true },
+    ];
+    const parts = enabledSkillsPromptParts(skills)!;
+    expect(parts.lines.map((l) => l.command)).toEqual(["/visualise", "/handoff"]);
+    expect(`${parts.preamble}\n${parts.lines.map((l) => l.line).join("\n")}`).toBe(enabledSkillsPrompt(skills));
+    expect(enabledSkillsPromptParts([])).toBeNull();
   });
 });
