@@ -370,6 +370,7 @@ function NavRow({
       aria-current={active ? "page" : undefined}
       aria-expanded={expanded}
       className="klide-focus-nav-row"
+      data-sound="tap"
       data-active={active || undefined}
     >
       <span className="klide-focus-nav-icon">{icon}</span>
@@ -1773,6 +1774,7 @@ export function WorkspaceRail({
               <button
                 type="button"
                 className="klide-rail-profile"
+                data-sound="tap"
                 aria-label={`Open ${profileDest.label.toLowerCase()}`}
                 title={profileDest.label}
                 onClick={() => {

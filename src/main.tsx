@@ -19,6 +19,7 @@ import { fetchRunOrigins } from "./runs";
 import { verifyProviderCatalog } from "./agent/providerCatalog";
 import { listProviders } from "./ipc/aiProviders";
 import { notify } from "./toast";
+import { installTapSound } from "./sound";
 
 // Dev only: the picker reads the generated Provider catalog mirror at first
 // paint; `cargo test` fails when it is stale, but a `tauri dev` that skipped
@@ -48,6 +49,8 @@ const syncMotion = () =>
   document.documentElement.toggleAttribute("data-motion-still", document.visibilityState !== "visible");
 syncMotion();
 document.addEventListener("visibilitychange", syncMotion);
+
+installTapSound();
 
 // The conversation index lives on disk and every surface reads it
 // synchronously, so it is loaded before anything renders. A short local read;

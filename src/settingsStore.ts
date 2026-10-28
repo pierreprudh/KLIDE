@@ -308,6 +308,15 @@ export const SETTINGS = {
       keywords: "startup launch reopen restore last project welcome",
     },
   } as SettingDef<boolean>,
+  uiSounds: {
+    key: "klide-ui-sounds",
+    fallback: () => true,
+    search: {
+      label: "Sounds",
+      section: "general",
+      keywords: "sound sounds audio click tap mute noise feedback",
+    },
+  } as SettingDef<boolean>,
   autoSaveMode: {
     key: "klide-autosave",
     fallback: () => "off" as "off" | "delay" | "blur",

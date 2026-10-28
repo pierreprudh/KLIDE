@@ -221,6 +221,7 @@ export function Segmented({
               onChange(opt.value);
             }}
             className="klide-seg-option"
+            data-sound="tap"
             data-option={opt.label}
             data-active={active}
           >
