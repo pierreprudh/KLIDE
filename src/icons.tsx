@@ -32,6 +32,7 @@ import { Code } from "@phosphor-icons/react/dist/csr/Code";
 import { DotsThree } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PushPinSimple } from "@phosphor-icons/react/dist/csr/PushPinSimple";
 import { Copy } from "@phosphor-icons/react/dist/csr/Copy";
+import { Sparkle } from "@phosphor-icons/react/dist/csr/Sparkle";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
 import { CheckCircle } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ArrowsOut } from "@phosphor-icons/react/dist/csr/ArrowsOut";
@@ -337,6 +338,8 @@ export function DownloadIcon(p: GlyphProps) { return <Icon as={DownloadSimple} {
 export function CodeIcon(p: GlyphProps) { return <Icon as={Code} {...p} />; }
 export function OpenInEditorIcon(p: GlyphProps) { return <Icon as={ArrowSquareOut} {...p} />; }
 export function CopyIcon(p: GlyphProps) { return <Icon as={Copy} {...p} />; }
+/** "Save as skill" — the AI panel names a reusable pattern it noticed. */
+export function SparkleIcon(p: GlyphProps) { return <Icon as={Sparkle} {...p} />; }
 export function CheckIcon(p: GlyphProps) { return <Icon as={Check} {...p} />; }
 
 /* The four notification tones — one mark each, coloured by the toast. */

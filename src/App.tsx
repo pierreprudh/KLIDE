@@ -1740,6 +1740,7 @@ function App() {
             : undefined
         }
         onForkConversationInWorktree={forkConversationInWorktree}
+        onOpenInFocus={opts?.variant === "focus" ? undefined : (conversationId) => openPanelConversationInFocus(panelId, conversationId)}
         onClose={opts?.closable ? () => release(panelId) : undefined}
         resumeConversation={resumeConversationFor(panelId, resumeTarget)}
         onResumeConsumed={() => consumeResume(panelId)}
@@ -1768,6 +1769,24 @@ function App() {
         onSkillGenerated={() => void reloadFilesystemSkills()}
       />
     );
+  }
+
+  /** A workbench panel's "Open in Focus": the same landing as a rail click in
+   *  Focus, from wherever the panel is. A panel other than Focus's own is
+   *  closed behind it — left open, two panels would be on one conversation. */
+  function openPanelConversationInFocus(panelId: string, conversationId: string) {
+    const convo = loadConversations<Conversation>().find(
+      (c) => c.id === conversationId && Array.isArray(c.msgs)
+    );
+    if (!convo) {
+      notify("This conversation isn't saved yet.", { tone: "warn" });
+      return;
+    }
+    setFocusSelectedConvoId(convo.id);
+    setFocusConvoError(null);
+    openFocusConversation(convo, "primary");
+    enterFocus();
+    if (panelId !== primaryPanelId) release(panelId);
   }
 
   /** Accept a conversation dropped onto one half of the Focus canvas. The
