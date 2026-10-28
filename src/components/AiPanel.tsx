@@ -137,7 +137,7 @@ import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } fr
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon, CompactIcon, MissionWorkflowIcon } from "../icons";
+import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
 import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, RunFailedRow, WorkingSince } from "./ai/ChatMessage";
@@ -444,6 +444,9 @@ type Props = {
   projectContext?: ProjectContextSnapshot | null;
   harnessSettings?: AiHarnessSettings;
   onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
+  /** Take this conversation to Focus's canvas — offered where the panel is
+   *  not Focus's own. The host resumes it there by id once it is saved. */
+  onOpenInFocus?: (conversationId: string) => void;
   onForkConversationInWorktree?: (conversation: Conversation, baseRoot: string | null) => void;
   /** Open (or raise) another conversation this thread is talking to — the
    *  peer link's card offers the peer thread as a link. Same landing as a
@@ -538,6 +541,8 @@ type Props = {
    *  filesystem-skill list. */
   onSkillGenerated?: (skill: { relPath: string; name: string }) => void;
 };
+
+const ACTIONS_MENU_WIDTH = 218;
 
 const menuActionIconStyle: CSSProperties = {
   width: 18,
@@ -740,6 +745,7 @@ export function AiPanel({
   projectContext,
   harnessSettings,
   onDuplicate,
+  onOpenInFocus,
   onForkConversationInWorktree,
   onOpenPeerConversation,
   onOpenRunInMissionControl,
@@ -1084,7 +1090,6 @@ export function AiPanel({
   // with the mode + reflection menus below) — same names, so render is unchanged.
   const [summarizing, setSummarizing] = useState(false);
   const [generatingSkill, setGeneratingSkill] = useState(false);
-  const [actionsOpen, setActionsOpen] = useState(false);
   // Subtle inline "Auto-saved to memory" line under the composer. Surfaces for
   // ~4s after a run completes, then fades. Cleared on the next send or abort.
   const [autoMemoryNotice, setAutoMemoryNotice] = useState<string | null>(null);
@@ -1269,6 +1274,26 @@ export function AiPanel({
       return {
         bottom: Math.round(window.innerHeight - rect.top + 8),
         left: Math.round(Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)),
+      };
+    },
+    closeOnOutsideClick: true,
+  });
+  // The header's "More actions" menu. Portalled: a narrow floating panel
+  // clips anything that hangs past its edge, and the menu is wider than the
+  // space left of its button.
+  const {
+    open: actionsOpen,
+    pos: actionsMenuPos,
+    triggerRef: actionsTriggerRef,
+    menuRef: actionsMenuRef,
+    openMenu: openActionsMenu,
+    close: closeActionsMenu,
+  } = usePortalMenu({
+    computePos: (rect) => {
+      const width = ACTIONS_MENU_WIDTH;
+      return {
+        top: Math.round(rect.bottom + 6),
+        left: Math.round(Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8)),
       };
     },
     closeOnOutsideClick: true,
@@ -2523,7 +2548,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     onComposerInsertionConsumed?.();
   }, [composerInsertion, onComposerInsertionConsumed]);
   const historyRef = useRef<HTMLDivElement>(null);
-  const actionsRef = useRef<HTMLDivElement>(null);
 
   // Smart auto-scroll: only follow the latest token when the user is
   // already at (or within a few pixels of) the bottom. If they've scrolled
@@ -2604,17 +2628,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     controller.leave("unmount");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!actionsOpen) return;
-    function onDown(e: MouseEvent) {
-      if (actionsRef.current && !actionsRef.current.contains(e.target as Node)) {
-        setActionsOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [actionsOpen]);
 
   function newConversation() {
     if (delegateSession) { void stopDelegatePty(delegateSessionId(currentId, provider)); }
@@ -4142,95 +4155,107 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
         ) : null}
         <div style={{ display: "flex", alignItems: "center", gap: 2, textTransform: "none", letterSpacing: 0 }}>
-          <div ref={actionsRef} style={{ position: "relative" }}>
-            <button
-              onClick={() => setActionsOpen((open) => !open)}
-              title="More actions"
-              aria-label="More actions"
-              aria-haspopup="menu"
-              aria-expanded={actionsOpen}
-              style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: actionsOpen ? "var(--fg-strong)" : "var(--fg-subtle)", background: actionsOpen ? "var(--bg-hover)" : "transparent" }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-              onMouseLeave={(e) => { if (!actionsOpen) { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; } }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <circle cx="5" cy="12" r="1.6" />
-                <circle cx="12" cy="12" r="1.6" />
-                <circle cx="19" cy="12" r="1.6" />
-              </svg>
-            </button>
-            {actionsOpen && (
-              <div
-                role="menu"
-                className="popover-enter"
-                style={{
-                  position: "absolute",
-                  right: 0,
-                  top: "calc(100% + 8px)",
-                  width: 218,
-                  padding: 5,
-                  borderRadius: "var(--radius-md)",
-                  border: "1px solid var(--border-strong)",
-                  background: "var(--bg-elevated)",
-                  boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)",
-                  zIndex: 35,
-                }}
+          {(() => {
+            // What this panel can do with its conversation. A CLI's own
+            // terminal session keeps its words in the terminal, not in
+            // `msgs`, so the actions that read the conversation are not
+            // offered there rather than shown and never enabled.
+            const readsConversation = !delegateSession;
+            const canSummarize = readsConversation && !!workspaceRoot && !!onMemoryWritten;
+            const canSaveSkill = readsConversation && !!workspaceRoot;
+            const canOpenInFocus = readsConversation && !!onOpenInFocus;
+            if (!onDuplicate && !canSummarize && !canSaveSkill && !canOpenInFocus) return null;
+            const item = (opts: { label: string; icon: ReactNode; disabled?: boolean; busy?: boolean; title?: string; onSelect: () => void }) => (
+              <button
+                role="menuitem"
+                disabled={opts.disabled}
+                title={opts.title}
+                onClick={() => { if (opts.disabled) return; closeActionsMenu(); opts.onSelect(); }}
+                style={menuActionStyle(!!opts.disabled)}
+                onMouseEnter={(e) => { if (!opts.disabled) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
               >
-                {onDuplicate && (
-                  <button
-                    role="menuitem"
-                    onClick={() => { onDuplicate({ provider, model }); setActionsOpen(false); }}
-                    style={menuActionStyle(false)}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                <span style={{ ...menuActionIconStyle, color: opts.busy ? "var(--accent)" : "currentColor" }}>{opts.icon}</span>
+                <span style={{ flex: 1 }}>{opts.label}</span>
+              </button>
+            );
+            return (
+              <>
+                <button
+                  ref={actionsTriggerRef}
+                  onClick={() => (actionsOpen ? closeActionsMenu() : openActionsMenu())}
+                  title="More actions"
+                  aria-label="More actions"
+                  aria-haspopup="menu"
+                  aria-expanded={actionsOpen}
+                  style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: actionsOpen ? "var(--fg-strong)" : "var(--fg-subtle)", background: actionsOpen ? "var(--bg-hover)" : "transparent" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                  onMouseLeave={(e) => { if (!actionsOpen) { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; } }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="5" cy="12" r="1.6" />
+                    <circle cx="12" cy="12" r="1.6" />
+                    <circle cx="19" cy="12" r="1.6" />
+                  </svg>
+                </button>
+                {actionsOpen && actionsMenuPos && createPortal(
+                  <div
+                    ref={actionsMenuRef}
+                    role="menu"
+                    className="popover-enter"
+                    style={{
+                      position: "fixed",
+                      top: actionsMenuPos.top,
+                      left: actionsMenuPos.left,
+                      width: ACTIONS_MENU_WIDTH,
+                      padding: 5,
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid var(--border-strong)",
+                      background: "var(--bg-elevated)",
+                      boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)",
+                      zIndex: Z.popover,
+                    }}
                   >
-                    <span style={menuActionIconStyle}>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" /></svg>
-                    </span>
-                    <span style={{ flex: 1 }}>Duplicate panel</span>
-                  </button>
+                    {canOpenInFocus && item({
+                      label: "Open in Focus",
+                      icon: <ExpandIcon size={15} />,
+                      disabled: msgs.length === 0,
+                      title: msgs.length === 0 ? "Start a conversation first" : "Continue this conversation on Focus's canvas",
+                      onSelect: () => {
+                        // Save now rather than on the debounce, so Focus
+                        // resumes the conversation as it stands.
+                        const snapshot = snapshotConversationSession(conversationSessionRef.current);
+                        if (snapshot) setConversations(persistConversation(snapshot));
+                        onOpenInFocus!(currentId);
+                      },
+                    })}
+                    {onDuplicate && item({
+                      label: "Duplicate panel",
+                      icon: <CopyIcon size={15} />,
+                      onSelect: () => onDuplicate({ provider, model }),
+                    })}
+                    {canSummarize && item({
+                      label: summarizing ? "Writing memory..." : "Summarize to Memory",
+                      icon: <MemoryIcon size={15} />,
+                      busy: summarizing,
+                      disabled: summarizing || msgs.length === 0,
+                      title: msgs.length === 0 ? "Start a conversation first" : "Summarize and write to .klide/memory/",
+                      onSelect: () => void runSummarize(),
+                    })}
+                    {canSaveSkill && item({
+                      label: generatingSkill ? "Generating skill..." : "Save as skill",
+                      icon: <SparkleIcon size={15} />,
+                      busy: generatingSkill,
+                      disabled: generatingSkill || msgs.length < 2,
+                      title: msgs.length < 2 ? "Need at least one exchange to detect a pattern" : "Save this session as a reusable skill",
+                      onSelect: () => void runGenerateSkill(),
+                    })}
+                  </div>,
+                  document.body,
                 )}
-                {workspaceRoot && onMemoryWritten && (
-                  <button
-                    role="menuitem"
-                    disabled={summarizing || msgs.length === 0}
-                    title={msgs.length === 0 ? "Start a conversation first" : "Summarize and write to .klide/memory/"}
-                    onClick={() => { if (msgs.length === 0 || summarizing) return; setActionsOpen(false); void runSummarize(); }}
-                    style={menuActionStyle(summarizing || msgs.length === 0)}
-                    onMouseEnter={(e) => { if (msgs.length > 0 && !summarizing) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <span style={{ ...menuActionIconStyle, color: summarizing ? "var(--accent)" : "currentColor" }}>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
-                        <path d="M9 8h6" />
-                        <path d="M9 12h4" />
-                      </svg>
-                    </span>
-                    <span style={{ flex: 1 }}>{summarizing ? "Writing memory..." : "Summarize to Memory"}</span>
-                  </button>
-                )}
-                {workspaceRoot && (
-                  <button
-                    role="menuitem"
-                    disabled={generatingSkill || msgs.length < 2}
-                    title={msgs.length < 2 ? "Need at least one exchange to detect a pattern" : "Save this session as a reusable skill"}
-                    onClick={() => { if (msgs.length < 2 || generatingSkill) return; setActionsOpen(false); void runGenerateSkill(); }}
-                    style={menuActionStyle(generatingSkill || msgs.length < 2)}
-                    onMouseEnter={(e) => { if (msgs.length >= 2 && !generatingSkill) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <span style={{ ...menuActionIconStyle, color: generatingSkill ? "var(--accent)" : "currentColor" }}>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M12 3l1.8 4.2L18 9l-3.3 2.9L15.7 16 12 13.6 8.3 16l1-4.1L6 9l4.2-1.8z" />
-                      </svg>
-                    </span>
-                    <span style={{ flex: 1 }}>{generatingSkill ? "Generating skill..." : "Save as skill"}</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+              </>
+            );
+          })()}
           <ConversationHistory conversations={conversations} currentId={currentId} historyOpen={historyOpen} setHistoryOpen={setHistoryOpen} onSelect={loadConversation} onDelete={deleteConversation} />
           <button onClick={newConversation} title="New conversation" aria-label="New conversation" style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: "var(--fg-subtle)", background: "transparent" }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
