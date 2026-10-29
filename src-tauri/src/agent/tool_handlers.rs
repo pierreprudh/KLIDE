@@ -264,7 +264,7 @@ where
         user_named_dispatch(&ctx.request.initial_text, w, chosen_model.as_deref())
     });
     if (needs_worker || worker.is_some()) && !settled_by_user {
-        let mut options = available_worker_ids().await;
+        let mut options = available_worker_ids(ctx.request.workspace_root.as_deref()).await;
         if options.is_empty() {
             options = subagents::worker_ids().into_iter().map(str::to_string).collect();
         }
@@ -352,6 +352,23 @@ where
                     metadata: None,
                 }));
             }
+        }
+    }
+    // Rechecked now, with the model it will run on: the card may have been
+    // open long enough for a login to lapse or a server to stop.
+    if let Some(worker) = worker {
+        let readiness = crate::launch_readiness::check(
+            worker.id(),
+            chosen_model.as_deref(),
+            ctx.request.workspace_root.as_deref().map(std::path::Path::new),
+        )
+        .await;
+        if readiness.blocks_dispatch() {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: format!("{} cannot start: {} No worker was started.", worker.label(), readiness.reason),
+                metadata: None,
+            }));
         }
     }
     let request_id = format!("sub_{}_{}", ctx.id, call.id);
@@ -988,28 +1005,27 @@ pub(super) fn parse_dispatch_answer(answer: &str) -> (Option<String>, Option<Str
     (Some(answer.to_string()), None)
 }
 
-/// The workers that can actually take a task on this machine: Delegates whose
-/// CLI resolves, and API providers with a key. Probed off the async runtime —
-/// a login-shell PATH walk and a keychain read both block.
-async fn available_worker_ids() -> Vec<String> {
-    crate::blocking::run_infallible(|| {
-        let mut ids = Vec::new();
-        for id in subagents::delegate_worker_ids() {
-            let installed = crate::providers::lookup(id)
-                .and_then(|p| p.subscription)
-                .is_some_and(|spec| crate::models::subscription_models(&spec).is_ok());
-            if installed {
-                ids.push(id.to_string());
-            }
-        }
-        for id in subagents::api_worker_ids() {
-            if crate::providers::key_status(id).is_ok_and(|k| k.has_key) {
-                ids.push(id.to_string());
-            }
-        }
-        ids
-    })
-    .await
+/// The workers that can actually take a task on this machine: every worker
+/// whose launch readiness is not a definite no. Checked at once — a CLI's
+/// login check is a subprocess each.
+async fn available_worker_ids(scope: Option<&str>) -> Vec<String> {
+    let mut checks = tokio::task::JoinSet::new();
+    for (index, id) in subagents::worker_ids().into_iter().enumerate() {
+        let scope = scope.map(std::path::PathBuf::from);
+        checks.spawn(async move {
+            let readiness = crate::launch_readiness::check(id, None, scope.as_deref()).await;
+            (index, id, readiness.blocks_dispatch())
+        });
+    }
+    let mut ready: Vec<(usize, &str)> = checks
+        .join_all()
+        .await
+        .into_iter()
+        .filter(|(_, _, blocked)| !blocked)
+        .map(|(index, id, _)| (index, id))
+        .collect();
+    ready.sort_unstable();
+    ready.into_iter().map(|(_, id)| id.to_string()).collect()
 }
 
 /// Whether `root` is inside a Git working tree — the one question that decides

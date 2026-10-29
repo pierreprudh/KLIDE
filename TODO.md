@@ -71,9 +71,14 @@ baseline; unchecked items below are verification or specific remaining gaps.
   row, cancellable while queued. Verified in the app with a 2-CLI limit, then
   Pierre dropped the CLI limit (a CLI runs on its own subscription); bring it
   back as a second `Slots` if needed.
-- [ ] Consolidate local launch readiness from the existing checks: ready /
+- [x] Consolidate local launch readiness from the existing checks: ready /
   unsupported / needs login / offline / unknown, with a reason and observation
-  time. Recheck before dispatch; extend the same answer for VPS later.
+  time (`launch_readiness.rs`, 2026-10-29). The worker card lists only workers
+  that are not a definite no; a worker and a Mission attempt are rechecked
+  with their model right before they start, and a definite no is refused with
+  its reason (Mission: a recorded dispatch failure). A routed Delegate is
+  judged on its source, not its own login. Unknown never blocks. Not yet on a
+  picker or Settings row; extend the same answer for VPS later.
 - [x] Reconcile README/TODO claims with acceptance evidence (2026-10-28),
   leaving unverified or unsupported behavior explicit. Results and remaining
   live checks: [acceptance evidence audit](#acceptance-evidence-audit--2026-10-28).
@@ -132,8 +137,8 @@ state and the retained worktree.
   on that host and reuse Run host admission/control semantics. Extract the
   headless host as needed; `agent/remote.rs` currently means the local daemon.
 - [ ] Extend the unified launch readiness item above with minimal remote
-  checks in the VPS slice. The local consolidation is the prerequisite;
-  existing individual checks do not yet form one readiness answer.
+  checks in the VPS slice, reusing `launch_readiness::Readiness` as the
+  shape a remote host reports.
 - [ ] Local ↔ VPS transfer, after VPS execution: settle the source, show the
   inventory/exclusions, checkpoint, verify the destination, then activate with
   a durable receipt and one execution ownership generation. Preserve the
