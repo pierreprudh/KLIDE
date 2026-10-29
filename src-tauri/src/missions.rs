@@ -1627,6 +1627,24 @@ async fn dispatch_task_for(
         (attempt_run_id, launch, parent)
     };
 
+    // Approval froze the provider and model; whether they can start is a
+    // fact about this machine now. A definite no is a recorded dispatch
+    // failure with its reason, not a spawn error further down.
+    let launch = match launch {
+        Ok(launch) => {
+            let (provider, model) = match &launch {
+                MissionLaunch::Harness(request) => (&request.provider, &request.model),
+                MissionLaunch::Delegate { provider, model, .. } => (provider, model),
+            };
+            let readiness = crate::launch_readiness::check(provider, Some(model), Some(Path::new(workspace_root))).await;
+            if readiness.blocks_dispatch() {
+                Err(format!("{provider} cannot start: {}", readiness.reason))
+            } else {
+                Ok(launch)
+            }
+        }
+        Err(error) => Err(error),
+    };
     let launch = match launch {
         Ok(launch) => launch,
         Err(error) => {

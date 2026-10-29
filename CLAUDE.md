@@ -300,6 +300,7 @@ Klide/
     │   ├── git/                  mod.rs: git shell-outs · github.rs: gh seam, PRs, avatars, pinned identity
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
+    │   ├── launch_readiness.rs   Can this provider+model start here now — ready / unsupported / needs login / offline / unknown, from the existing checks; rechecked before a worker or Mission attempt starts
     │   ├── gateway.rs            opencodex proxy process — install check, start/stop, Codex un-inject
     │   ├── conversation_store.rs The Stored conversation index in SQLite under app data — metadata + ordered messages, one-time JSON import; the renderer holds it in memory
     │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config + `${VAR}` resolution + the GitHub preset
