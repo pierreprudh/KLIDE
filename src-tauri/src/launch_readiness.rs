@@ -179,10 +179,12 @@ async fn source(id: &str, scope: Option<&Path>) -> (State, String) {
 }
 
 /// A self-hosted endpoint's `/models` answer: any HTTP reply means it is up,
-/// except one refusing the token.
+/// except one refusing the token, or a proxy in front of it (Cloudflare,
+/// nginx) saying the server behind it is down.
 fn from_probe(label: &str, probe: Result<u16, String>) -> (State, String) {
     match probe {
         Ok(401 | 403) => (State::NeedsLogin, format!("{label} refused the token.")),
+        Ok(code @ (502 | 503 | 504)) => (State::Offline, format!("{label}'s gateway answered {code}: the model server behind it is down.")),
         Ok(_) => (State::Ready, format!("{label} answered.")),
         Err(error) => (State::Offline, format!("{label} did not answer: {error}")),
     }
@@ -215,10 +217,11 @@ mod tests {
     }
 
     #[test]
-    fn an_endpoint_that_answers_is_up_unless_it_refuses_the_token() {
+    fn an_endpoint_that_answers_is_up_unless_it_refuses_the_token_or_its_gateway_says_down() {
         assert_eq!(from_probe("Box", Ok(200)).0, State::Ready);
         assert_eq!(from_probe("Box", Ok(404)).0, State::Ready);
         assert_eq!(from_probe("Box", Ok(401)).0, State::NeedsLogin);
+        assert_eq!(from_probe("Box", Ok(502)).0, State::Offline);
         assert_eq!(from_probe("Box", Err("connection refused".into())).0, State::Offline);
     }
 
