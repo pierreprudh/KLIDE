@@ -582,11 +582,12 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
 - [x] Refresh base list prices in `pricing.rs`. The GPT-5 family is current
   (2026-10-22); Mistral and xAI per model from their own endpoints on
   OpenRouter, DeepSeek from its pricing page (peak rates), 2026-10-25.
-- [ ] DeepSeek's docs now name only `deepseek-flash` and `deepseek-v4-pro`;
-  the provider row still defaults to `deepseek-chat` / `deepseek-reasoner`.
-  Probe with a key whether the old names are still served, then move the row.
-- [ ] xAI's row defaults to bare `grok-4`; check it still resolves, and
-  whether the ladder should name `grok-4.7`.
+- [x] DeepSeek row moved to the documented names (2026-10-29): default and
+  light/standard `deepseek-flash`, strong `deepseek-v4-pro`. Checked against
+  DeepSeek's pricing page, not a key (none on this Mac); whether the old names
+  still answer is moot for new picks.
+- [x] xAI row moved to `grok-4.7` (default + standard rung, 2026-10-29); xAI's
+  model list names no bare `grok-4`. Docs-checked, no key on this Mac.
 - [ ] Dogfood Auto in the app (the Rust side was probed live 2026-10-21,
   `auto_on_this_bench`): picker row, the meta line names the routed model, a
   follow-up stays on it, stars reorder the pick, reopen restores the thread,
