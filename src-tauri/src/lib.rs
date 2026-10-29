@@ -1301,6 +1301,7 @@ pub fn run() {
             agent::agent_start_run,
             agent::agent_resolve_permission,
             agent::agent_set_command_policy,
+            agent::worker_slots::agent_worker_capacity,
             agent::agent_resolve_diff,
             agent::agent_resolve_question,
             agent::agent_compact_conversation,

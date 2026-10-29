@@ -90,6 +90,31 @@ impl Slots {
     pub fn is_queued(&self, child_id: &str) -> bool {
         self.queued.lock().is_ok_and(|queued| queued.contains_key(child_id))
     }
+
+    /// Children waiting for a slot right now.
+    pub fn queued_count(&self) -> usize {
+        self.queued.lock().map(|queued| queued.len()).unwrap_or(0)
+    }
+
+    pub fn usage(&self) -> Usage {
+        Usage { limit: self.max, running: self.running(), queued: self.queued_count() }
+    }
+}
+
+/// What a pool holds right now — what the orchestration console shows
+/// instead of a fresh, empty planning state.
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    pub limit: usize,
+    pub running: usize,
+    pub queued: usize,
+}
+
+/// Live API worker occupancy. Counters only, nothing blocks.
+#[tauri::command]
+pub async fn agent_worker_capacity() -> Usage {
+    api_slots().usage()
 }
 
 /// The app's API worker pool.
@@ -133,9 +158,11 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(slots.is_queued("c"));
         assert!(!waiting.is_finished());
+        assert_eq!(slots.usage(), Usage { limit: 2, running: 2, queued: 1 });
         drop(a);
         assert_eq!(waiting.await.unwrap(), Ok(()));
         assert!(!slots.is_queued("c"));
+        assert_eq!(slots.usage().queued, 0);
     }
 
     #[tokio::test]

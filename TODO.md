@@ -258,8 +258,12 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   the child is already registered for; no second door. Shipped 2026-10-13,
   foreground/background Claude Code acceptance recorded 2026-10-26/27 above.
   Individual Cancel and desktop restart recovery remain open.
-- [ ] Align the orchestration capacity display with live admission usage:
-  `OrchestratorConsole` currently constructs a fresh `createCapacityState()`
+- [x] Align the orchestration capacity display with live admission usage
+  (2026-10-29): `OrchestratorConsole` routes the whole plan against one
+  capacity state carrying Rust's live API worker pool (`agent_worker_capacity`,
+  polled every 3 s) and shows "API workers running n/4" (+ "· k waiting").
+  The TS defaults now match Rust: 4 API workers, Delegate CLIs unlimited.
+  Mission attempts still take no API worker slot. Previously it constructed a fresh `createCapacityState()`
   for each task, rather than reserving against shared live occupancy. Rust
   already limits API workers to 4 with cancellable queuing (`agent/worker_slots.rs`).
   Delegate CLI workers deliberately have no limit. Other capacity kinds in
