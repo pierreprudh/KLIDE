@@ -18,6 +18,8 @@ import {
   approveDurableMission,
   compileDurableMissionBundle,
   listDurableMissions,
+  missionBranchOf,
+  attemptCheckoutOf,
   reviewDurableMissionAttempt,
   saveDurableMissionTask,
   requestDurableMissionTask,
@@ -40,6 +42,7 @@ import { Tooltip } from "../Tooltip";
 import { MissionTaskEditor } from "./MissionTaskEditor";
 import { GOAL_POLICIES, nextGoalPolicy, type GoalPolicy } from "./autonomyLadder";
 import { QuestionCard } from "./QuestionCard";
+import { MissionBranchActions } from "./MissionBranchActions";
 import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 
@@ -216,6 +219,7 @@ function MissionCardBody({ receipt, workspaceRoot, onOpenRun, variant = "convers
   const nextPolicy = nextGoalPolicy(currentPolicy);
 
   const completed = view.terminal?.event.type === "mission_completed";
+  const missionBranch = missionBranchOf(bundle.events);
   const compact = variant === "sidebar" && gates.length === 0 && (!completed || !expanded);
   const detailsToggle = variant === "sidebar" && completed && gates.length === 0 ? <button type="button" aria-label={compact ? "Expand Mission details" : "Compact Mission"} aria-expanded={!compact} title={compact ? "Expand Mission details" : "Compact Mission"} onClick={() => setExpanded(!expanded)} style={{ marginLeft: "auto", flexShrink: 0, display: "grid", placeItems: "center", width: 24, height: 24, padding: 0, border: 0, background: "transparent", color: "var(--fg-dim)", cursor: "pointer" }}><ChevronIcon size={14} open={!compact} /></button> : undefined;
   if (compact) return <Frame title={bundle.mission.title} variant={variant} action={detailsToggle}>
@@ -279,6 +283,14 @@ function MissionCardBody({ receipt, workspaceRoot, onOpenRun, variant = "convers
               <button className="klide-button" disabled={busy} onClick={() => void review(selectedRow, false)}>Reject</button>
             </div>
           )}
+          {selectedRow?.status === "review" && selectedRow.lastAttempt && (() => {
+            const checkout = attemptCheckoutOf(bundle.events, selectedRow.lastAttempt.runId);
+            return checkout && (
+              <Line dim>
+                Worked on <code style={{ fontFamily: "var(--font-mono)" }}>{checkout.branch}</code> in {checkout.path}. Accept commits what it left and adds it to the Mission branch.
+              </Line>
+            );
+          })()}
         </div>
       )}
 
@@ -335,6 +347,7 @@ function MissionCardBody({ receipt, workspaceRoot, onOpenRun, variant = "convers
         </button>
       </div>
       {bundle.report && <section aria-label="Mission report" style={{ padding: "4px 14px 16px", fontSize: 13, lineHeight: 1.6, overflowWrap: "anywhere" }}>{renderMarkdown(bundle.report.markdown)}</section>}
+      {workspaceRoot && missionBranch && <MissionBranchActions workspaceRoot={workspaceRoot} branch={missionBranch} refreshKey={bundle.events.length} />}
     </Frame>
   );
 }

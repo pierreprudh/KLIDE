@@ -37,6 +37,9 @@ pub struct SpawnRequest {
     /// Mission linkage — valid only as a pair (see [`spawn_spec_for`]).
     pub mission_id: Option<String>,
     pub mission_task_id: Option<String>,
+    /// Where the Mission lives when the attempt runs in its own worktree;
+    /// `None` means `cwd`.
+    pub mission_root: Option<String>,
     /// A bounded one-shot Mission dispatch instead of the interactive TUI.
     pub one_shot: bool,
     /// This session's private status-hook callback URL, when the hook server
@@ -141,7 +144,7 @@ pub fn spawn_spec_for(mut req: SpawnRequest) -> Result<SpawnSpec, String> {
 
     let mission_link = match (req.mission_id, req.mission_task_id) {
         (Some(mission_id), Some(task_id)) => {
-            let workspace_root = req.cwd.clone().ok_or_else(|| {
+            let workspace_root = req.mission_root.clone().or_else(|| req.cwd.clone()).ok_or_else(|| {
                 "A durable Delegate Mission attempt requires a workspace.".to_string()
             })?;
             Some(DelegateMissionLink {
@@ -231,6 +234,7 @@ mod tests {
             resume_session_id: None,
             mission_id: None,
             mission_task_id: None,
+            mission_root: None,
             one_shot: false,
             hook_url: None,
             custom_cli: None,
@@ -643,6 +647,18 @@ mod tests {
         // No linkage requested → none recorded.
         let spec = spawn_spec_for(request("codex")).unwrap();
         assert_eq!(spec.mission_link, None);
+    }
+
+    #[test]
+    fn an_isolated_attempt_links_to_the_mission_root_not_its_worktree() {
+        let mut req = request("codex");
+        req.cwd = Some("/tmp/ws-worktrees/attempt".to_string());
+        req.mission_root = Some("/tmp/ws".to_string());
+        req.mission_id = Some("m-1".to_string());
+        req.mission_task_id = Some("t-1".to_string());
+        let spec = spawn_spec_for(req).unwrap();
+        assert_eq!(spec.cwd.as_deref(), Some("/tmp/ws-worktrees/attempt"));
+        assert_eq!(spec.mission_link.unwrap().workspace_root, "/tmp/ws");
     }
 
     // ── Env assembly ──────────────────────────────────────────────────────

@@ -126,7 +126,7 @@ pub fn plan_tool() -> Value {
 pub fn tool() -> Value {
     json!({
         "name": "mission_orchestrate",
-        "description": "Coordinate approved Mission tasks. list discovers tasks and exact attempt Run ids. dispatch starts an unattempted ready task using its approved provider/model; repeating dispatch returns the existing attempt, never retries failed work. inspect reads or waits up to 120 seconds for that exact attempt's settlement and validation. Use agent_send for reviewed follow-ups. Only the operator can approve a plan, retry a task, accept Delegate work or integrate changes. Tasks currently share the Mission checkout; checkout evidence is not proof of exclusive ownership.",
+        "description": "Coordinate approved Mission tasks. list discovers tasks and exact attempt Run ids. dispatch starts an unattempted ready task using its approved provider/model; repeating dispatch returns the existing attempt, never retries failed work. inspect reads or waits up to 120 seconds for that exact attempt's settlement and validation. Use agent_send for reviewed follow-ups. Only the operator can approve a plan, retry a task, accept Delegate work or merge the Mission branch. In a Git project each attempt works in its own worktree and an accepted attempt fast-forwards the Mission branch klide/mission-<id>; older Missions and non-Git folders share the checkout, whose evidence is not proof of exclusive ownership.",
         "outputSchema": serde_json::from_str::<Value>(include_str!("../../../schemas/klide-mission-orchestration.schema.json")).expect("valid Mission receipt schema"),
         // No `oneOf` at the top level: Anthropic's API refuses a tool whose
         // input schema unions there, and one refused tool fails the whole
@@ -387,13 +387,47 @@ pub async fn execute(
                         .map(|s| json!(s))
                         .unwrap_or(Value::Null);
                     let checkout_root = root.clone();
-                    value["checkout"] =
-                        crate::blocking::run(move || Ok(checkout_evidence(&checkout_root))).await?;
+                    let events = load_bundle(&root, &mission_id)?.events;
+                    let attempt = super::isolation::checkout_for(&events, &run_id);
+                    let integrated = integrated_commit(&events, &run_id);
+                    value["checkout"] = crate::blocking::run(move || Ok(match attempt {
+                        Some(attempt) => attempt_checkout_evidence(&checkout_root, &attempt, integrated.as_deref()),
+                        None => checkout_evidence(&checkout_root),
+                    })).await?;
                     return Ok(value);
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
         }
+    }
+}
+
+fn integrated_commit(events: &[super::MissionEventLine], run_id: &str) -> Option<String> {
+    events.iter().find_map(|line| match &line.event {
+        super::MissionEvent::AttemptIntegrated { run_id: id, commit, .. } if id == run_id => Some(commit.clone()),
+        _ => None,
+    })
+}
+
+/// An isolated attempt's own change: its worktree against the commit it
+/// started from, or — once integrated — that commit range on the Mission
+/// branch. Exclusive: nothing else wrote there.
+fn attempt_checkout_evidence(root: &str, attempt: &super::isolation::AttemptCheckout, integrated: Option<&str>) -> Value {
+    let (at, diff) = match integrated {
+        Some(commit) => (root, crate::git::git_output(root, &["diff", "--no-ext-diff", "--no-textconv", "--stat", &attempt.base_commit, commit, "--"])),
+        None => (attempt.path.as_str(), crate::git::git_output(&attempt.path, &["diff", "--no-ext-diff", "--no-textconv", "--stat", &attempt.base_commit, "--"])),
+    };
+    match diff {
+        Ok(diff) => json!({
+            "path": at, "exclusive": true, "baseCommit": attempt.base_commit,
+            "branch": attempt.branch, "missionBranch": attempt.mission_branch, "integratedCommit": integrated,
+            "diffScope": if integrated.is_some() { "base_to_integrated_commit" } else { "attempt_worktree_vs_base" },
+            "diffFormat": "stat", "diff": diff.chars().take(24000).collect::<String>(),
+            "diffTruncated": diff.chars().count() > 24000,
+            "note": "This attempt's own worktree; untracked files are committed when it is accepted."
+        }),
+        Err(error) => json!({"path": at, "exclusive": true, "error": error,
+            "note": "Attempt evidence is unavailable; do not infer a clean diff."}),
     }
 }
 

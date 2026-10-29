@@ -1032,6 +1032,7 @@ pub fn delegate_pty_spawn(
     mission_id: Option<String>,
     mission_task_id: Option<String>,
     one_shot: Option<bool>,
+    mission_root: Option<String>,
 ) -> Result<(), String> {
     let cwd = crate::pty_spawn::validated_cwd(workspace_root)?;
 
@@ -1102,6 +1103,7 @@ pub fn delegate_pty_spawn(
         resume_session_id,
         mission_id,
         mission_task_id,
+        mission_root,
         one_shot: one_shot.unwrap_or(false),
         hook_url,
         custom_cli: if adapter.is_none() {
