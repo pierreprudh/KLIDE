@@ -24,7 +24,7 @@ import {
   type WorkerAssignment,
 } from "../agent/routingPolicy";
 import { BUDGET_PRESETS, createBudgetLedger, type BudgetPreset } from "../agent/budgetLedger";
-import { createCapacityState } from "../agent/capacityPlanner";
+import { createCapacityState, withLiveWorkerUsage, type LiveWorkerUsage } from "../agent/capacityPlanner";
 import {
   approveDurableMission,
   compileDurableMissionBundle,
@@ -43,7 +43,7 @@ import { wouldCreateCycle, type GraphTask } from "../agent/missionGraph";
 import { presentMissionBoard, type LiveCard, type MissionTaskRow } from "../agent/missionBoard";
 import type { MissionTaskStatus } from "../agent/missionHarness";
 import type { AgentEvent, DiffProposal, PermissionRequest, ProviderId } from "../agent/types";
-import { readAgentRunEvents, reattachAgentRun, resolveDiff, resolvePermission } from "../agent/client";
+import { readAgentRunEvents, readWorkerCapacity, reattachAgentRun, resolveDiff, resolvePermission } from "../agent/client";
 import { DiffModal } from "./DiffModal";
 import { MissionGraph, type MissionGraphMeta } from "./MissionGraph";
 import { planGoal, resolvePlannerModel, stubPlan, type PlannedTask } from "../agent/planner";
@@ -100,15 +100,19 @@ type Routed = { task: PlannedTask; assignment: WorkerAssignment };
 // Routing is synchronous and cheap, so it re-runs on every mode flip over the
 // CURRENT plan — keeping the toggle instant and the cascade animation alive.
 // Planning (the model call) is separate and explicit; see the Plan action.
-function useOrchestratorModel(tasks: PlannedTask[], mode: ModeKey) {
+// One capacity state for the whole plan, carrying what Rust's API worker pool
+// holds right now — not a fresh, empty state per task.
+function useOrchestratorModel(tasks: PlannedTask[], mode: ModeKey, live: LiveWorkerUsage | null) {
   return useMemo(() => {
     const { policy, preset } = MODES[mode];
+    const planned = createCapacityState();
+    const capacity = live ? withLiveWorkerUsage(planned, live) : planned;
     const routed: Routed[] = tasks.map((task) => {
       const decision = routeTask({
         task,
         policy,
         budget: createBudgetLedger({ missionId: "console", preset }),
-        capacity: createCapacityState(),
+        capacity,
       });
       const assignment = decision.ok ? decision.assignment : decision.suggestedAssignment!;
       return { task, assignment };
@@ -119,7 +123,34 @@ function useOrchestratorModel(tasks: PlannedTask[], mode: ModeKey) {
     const byTier: Record<ModelTier, Routed[]> = { local: [], cheap: [], strong: [], specialist: [] };
     for (const r of routed) byTier[r.assignment.modelTier].push(r);
     return { routed, totalCost, totalMs, envelope, byTier };
-  }, [tasks, mode]);
+  }, [tasks, mode, live]);
+}
+
+// The API worker pool, polled while the console is open. Counters only on the
+// Rust side, so a short interval costs nothing; identity changes only with
+// the numbers so routing does not recompute on every tick.
+function useLiveWorkerUsage(): LiveWorkerUsage | null {
+  const [live, setLive] = useState<LiveWorkerUsage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const read = () => {
+      readWorkerCapacity()
+        .then((next) => {
+          if (!alive) return;
+          setLive((prev) =>
+            prev && prev.limit === next.limit && prev.running === next.running && prev.queued === next.queued ? prev : next,
+          );
+        })
+        .catch(() => {});
+    };
+    read();
+    const timer = window.setInterval(read, 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  return live;
 }
 
 // ── Real dispatch (slice-1 seam) ─────────────────────────────────────────────
@@ -877,7 +908,8 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
   // Board = model-routing lanes; Graph = the dependency DAG. Both project the
   // same tasks — the graph is a view, not a second state model.
   const [viewMode, setViewMode] = useState<"board" | "graph">("graph");
-  const { routed, byTier, totalCost, totalMs } = useOrchestratorModel(tasks, mode);
+  const liveWorkers = useLiveWorkerUsage();
+  const { routed, byTier, totalCost, totalMs } = useOrchestratorModel(tasks, mode, liveWorkers);
   const durableState = useMemo(
     () => durableBundle ? compileDurableMissionBundle(durableBundle) : null,
     [durableBundle]
@@ -1274,6 +1306,12 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
           <div style={{ display: "flex", alignItems: "flex-end", gap: 40 }}>
             <Kpi label="Estimated budget" value={fmtUsd(totalCost)} />
             <Kpi label="Estimated time" value={<DurationValue ms={totalMs} />} />
+            {liveWorkers && (
+              <Kpi
+                label={liveWorkers.queued > 0 ? `API workers · ${liveWorkers.queued} waiting` : "API workers running"}
+                value={`${liveWorkers.running}/${liveWorkers.limit}`}
+              />
+            )}
           </div>
         </div>
         )}

@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { LiveWorkerUsage } from "./capacityPlanner";
 import type {
   AgentEvent,
   AgentMode,
@@ -149,6 +150,11 @@ export async function resolveUserQuestion(input: {
   answer: string;
 }): Promise<void> {
   await invoke("agent_resolve_question", { decision: input });
+}
+
+/** Live API worker pool occupancy — the one capacity Rust enforces. */
+export async function readWorkerCapacity(): Promise<LiveWorkerUsage> {
+  return invoke<LiveWorkerUsage>("agent_worker_capacity");
 }
 
 export async function readAgentRunEvents(runId: string): Promise<AgentEvent[]> {

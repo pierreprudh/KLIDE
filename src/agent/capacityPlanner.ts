@@ -48,10 +48,12 @@ export const DEFAULT_CAPACITY_SLOTS: Record<CapacitySlotKind, CapacitySlot> = {
   "api-worker": {
     kind: "api-worker",
     label: "API workers",
-    limit: 2,
+    // Rust's admission limit (agent/worker_slots.rs API_WORKERS); a dispatch
+    // over it waits in a fair queue, it is never refused.
+    limit: 4,
     used: 0,
     queued: 0,
-    reason: "Allow a little parallelism without losing control of spend.",
+    reason: "Four run at once app-wide; the next one waits for a slot.",
   },
   "local-model": {
     kind: "local-model",
@@ -64,10 +66,11 @@ export const DEFAULT_CAPACITY_SLOTS: Record<CapacitySlotKind, CapacitySlot> = {
   "delegate-cli": {
     kind: "delegate-cli",
     label: "Delegate CLIs",
-    limit: 2,
+    // Not limited: a CLI runs on its own subscription (decided 2026-10-27).
+    limit: Number.POSITIVE_INFINITY,
     used: 0,
     queued: 0,
-    reason: "Delegate agents can run in parallel when they do not write the same worktree.",
+    reason: "Not limited — each CLI runs on its own subscription.",
   },
   "worktree-writer": {
     kind: "worktree-writer",
@@ -102,6 +105,19 @@ export function createCapacityState(input?: {
   return {
     slots,
     updatedMs: input?.nowMs ?? Date.now(),
+  };
+}
+
+/** What Rust's API worker pool holds right now (`agent_worker_capacity`). */
+export type LiveWorkerUsage = { limit: number; running: number; queued: number };
+
+/** Lay the live API worker pool over a planning state: the one slot kind
+ *  Rust actually admits against reads its real occupancy, not zero. */
+export function withLiveWorkerUsage(state: CapacityState, live: LiveWorkerUsage, nowMs = Date.now()): CapacityState {
+  const slot = state.slots["api-worker"];
+  return {
+    slots: { ...state.slots, "api-worker": { ...slot, limit: live.limit, used: live.running, queued: live.queued } },
+    updatedMs: nowMs,
   };
 }
 
