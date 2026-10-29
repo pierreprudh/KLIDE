@@ -2481,6 +2481,12 @@ async fn loop_body(
             .map(|caps| caps.window_for_planning())
             .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW),
     };
+    // Every turn asks for the window compaction plans against. A request that
+    // brought no `num_ctx` (a subagent child, a headless attempt) used to let
+    // Ollama fall back to its own 32k ceiling while compaction waited for the
+    // model's full window — the start of a long prompt was silently dropped.
+    // Only Ollama reads `num_ctx`; every other wire ignores it.
+    let num_ctx = Some(context_window);
     let reply_reserve = request.num_predict.unwrap_or(4096);
     let compact_threshold = compaction_threshold(context_window, reply_reserve).min(
         context_window.saturating_sub(reply_reserve)
@@ -2566,7 +2572,7 @@ async fn loop_body(
                     delegate_session: None,
                     allowed_commands: Vec::new(),
                     mcp: None,
-                    num_ctx: request.num_ctx,
+                    num_ctx,
                     num_predict: request.num_predict,
                     reflection_level: request.reflection_level.clone(),
                     cache_hour: request.parent_id.is_none() && request.mission_id.is_none(),
@@ -3043,7 +3049,7 @@ async fn loop_body(
                     delegate_session: request.delegate_session.clone(),
                     allowed_commands: allowed_commands.clone(),
                     mcp: mcp.clone(),
-                    num_ctx: request.num_ctx,
+                    num_ctx,
                     num_predict: reply_budget_override.or(request.num_predict),
                     reflection_level: request.reflection_level.clone(),
                     // A person's conversation, not a Mission attempt or a
@@ -5771,6 +5777,8 @@ pub(crate) mod test_support {
         pub(super) seen_tools: Arc<Mutex<Vec<bool>>>,
         /// The model each call was sent to, and the router pool it carried.
         pub(super) seen_models: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+        /// The `num_ctx` each call asked for.
+        pub(super) seen_num_ctx: Arc<Mutex<Vec<Option<usize>>>>,
     }
 
     impl ScriptedProviderCaller {
@@ -5781,6 +5789,7 @@ pub(crate) mod test_support {
                 seen_messages: Arc::new(Mutex::new(Vec::new())),
                 seen_tools: Arc::new(Mutex::new(Vec::new())),
                 seen_models: Arc::new(Mutex::new(Vec::new())),
+                seen_num_ctx: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -5795,8 +5804,10 @@ pub(crate) mod test_support {
             let seen_messages = self.seen_messages.clone();
             let seen_tools = self.seen_tools.clone();
             let seen_models = self.seen_models.clone();
+            let seen_num_ctx = self.seen_num_ctx.clone();
             Box::pin(async move {
                 seen_models.lock().unwrap().push((request.model.clone(), request.allowed_models.clone()));
+                seen_num_ctx.lock().unwrap().push(request.num_ctx);
                 seen_messages.lock().unwrap().push(request.messages.clone());
                 seen_tools.lock().unwrap().push(request.tools.is_some());
                 seen.lock().unwrap().push(
@@ -6929,6 +6940,23 @@ mod run_loop_tests {
         drive_loop(sup.clone(), &runs_dir, "thread", follow_up, second.clone()).await;
         let next = second.seen_messages.lock().unwrap().first().unwrap().clone();
         assert_eq!(&next[..after.len()], &after[..], "replay rebuilds the compacted prompt byte for byte");
+    }
+
+    /// A Run that brought no `num_ctx` (a subagent child) must still send the
+    /// provider the window compaction plans against — never `None`, which let
+    /// Ollama cap the prompt at 32k while compaction waited for the full window.
+    #[tokio::test]
+    async fn a_run_without_num_ctx_sends_the_window_it_plans_against() {
+        let (runs_dir, root) = sandbox("planned-window");
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Done.", vec![])]);
+        let mut request = test_request(&root, &[]);
+        request.num_ctx = None;
+        let planned = crate::model_capabilities::capabilities(&request.provider, &request.model, false)
+            .await
+            .map(|caps| caps.window_for_planning())
+            .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW);
+        drive_loop(Arc::new(FakeSupervisor::with_run("thread")), &runs_dir, "thread", request, caller.clone()).await;
+        assert_eq!(*caller.seen_num_ctx.lock().unwrap(), vec![Some(planned)]);
     }
 
     #[tokio::test]
