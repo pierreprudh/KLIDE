@@ -24,6 +24,7 @@ function session(overrides: Partial<ConversationSession> = {}): ConversationSess
     branch: "feature/a",
     worktree: "a",
     delegateSession: null,
+    carriedHistory: null,
     forkedFrom: null,
     run: { active: false, activity: null },
     ...overrides,
@@ -83,6 +84,7 @@ describe("restoreConversationSession", () => {
       branch: "feature/saved",
       worktree: "saved-tree",
       delegateSession: null,
+      carriedHistory: null,
       forkedFrom: saved.forkedFrom,
       run: { active: false, activity: null },
     });
@@ -515,6 +517,7 @@ describe("snapshotConversationSession", () => {
       branch: "feature/a",
       worktree: "a",
       delegateSession: null,
+      carriedHistory: null,
       forkedFrom: null,
     });
   });
@@ -728,5 +731,23 @@ describe("side conversation persistence", () => {
     expect(restored.sideQuestionOf).toBe("parent");
     const continued = conversationSessionReducer(restored, { type: "messages-replaced", messages: [...restored.messages, { role: "user", content: "another question" }] });
     expect(snapshotConversationSession(continued)?.sideQuestionOf).toBe("parent");
+  });
+});
+
+describe("carried history awaiting its first turn", () => {
+  it("survives save and restore before sending, then is consumed once", () => {
+    const resumed = conversationSessionReducer(session(), {
+      type: "resumed",
+      conversation: { id: "cross-agent", title: "t", msgs: [userMessage], updatedAt: 1, provider: "opencode", carriedHistory: "Claude Code" },
+    });
+    const saved = snapshotConversationSession(resumed, 5)!;
+    expect(saved.carriedHistory).toBe("Claude Code");
+    localStorage.setItem("klide-conversations", JSON.stringify([saved]));
+    const restored = restoreConversationSession({ initialConversationId: saved.id, provider: "opencode", model: "default", workspaceRoot: "/workspace" });
+    expect(restored.carriedHistory).toBe("Claude Code");
+    const sent = conversationSessionReducer(restored, { type: "carried-history-consumed" });
+    expect(snapshotConversationSession(sent, 6)?.carriedHistory).toBeNull();
+    expect(conversationSessionReducer(restored, { type: "fresh-started", conversationId: "n" }).carriedHistory).toBeNull();
+    expect(conversationSessionReducer(sent, { type: "resumed", conversation: { ...saved, id: "other", carriedHistory: null } }).carriedHistory).toBeNull();
   });
 });
