@@ -137,6 +137,19 @@ export type DurableMissionEvent =
   | { type: "plan_approved" }
   | { type: "attempt_attached"; taskId: string; runId: string }
   | { type: "attempt_dispatch_failed"; taskId: string; runId: string; message: string }
+  /** The attempt's own worktree, forked from the Mission branch (Rust
+   *  `missions/isolation.rs`). */
+  | {
+      type: "attempt_checkout_prepared";
+      taskId: string;
+      runId: string;
+      path: string;
+      branch: string;
+      missionBranch: string;
+      baseCommit: string;
+    }
+  /** An accepted attempt's commit, now the Mission branch's tip. */
+  | { type: "attempt_integrated"; taskId: string; runId: string; missionBranch: string; commit: string }
   | { type: "attempt_interrupted"; taskId: string; runId: string; reason: string }
   | { type: "attempt_settled"; taskId: string; runId: string; exitCode: number; signal?: string }
   | {
@@ -255,6 +268,11 @@ export function compileDurableMissionBundle(bundle: DurableMissionBundle): Missi
       case "mission_completed":
       case "mission_parked":
         break;
+      // Where an attempt worked and where its accepted commit landed are Git
+      // facts, read with `missionBranchOf` — they move no task status.
+      case "attempt_checkout_prepared":
+      case "attempt_integrated":
+        break;
       case "plan_approved":
         state = missionReducer(state, {
           type: "mission_plan_approved",
@@ -316,6 +334,28 @@ export function compileDurableMissionBundle(bundle: DurableMissionBundle): Missi
   }
 
   return state;
+}
+
+/** The branch an isolated Mission's accepted work lands on, once any attempt
+ *  ran in its own worktree. `null`: the Mission shares the checkout. */
+export function missionBranchOf(events: DurableMissionEventLine[]): string | null {
+  for (const line of events) {
+    if (line.event.type === "attempt_checkout_prepared") return line.event.missionBranch;
+  }
+  return null;
+}
+
+/** Where an isolated attempt worked: its worktree and branch. */
+export function attemptCheckoutOf(
+  events: DurableMissionEventLine[],
+  runId: string,
+): { path: string; branch: string } | null {
+  for (const line of events) {
+    if (line.event.type === "attempt_checkout_prepared" && line.event.runId === runId) {
+      return { path: line.event.path, branch: line.event.branch };
+    }
+  }
+  return null;
 }
 
 export async function createDurableMission(

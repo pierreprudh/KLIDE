@@ -168,6 +168,11 @@ pub struct StartRunRequest {
     pub mission_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission_task_id: Option<String>,
+    /// Where the Mission lives when the attempt works elsewhere — an
+    /// isolated attempt runs in its own worktree (`missions/isolation.rs`).
+    /// `None`: the Mission is in `workspace_root`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_root: Option<String>,
     /// The user's starred models, sent only when the Provider is `auto`. Stars
     /// live in the renderer's storage (`favModels.ts`), so the request carries
     /// the preference while the routing policy stays in Rust

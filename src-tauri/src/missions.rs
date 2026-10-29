@@ -24,6 +24,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+pub(crate) mod isolation;
 pub(crate) mod orchestration;
 
 const MISSION_SCHEMA_VERSION: u8 = 1;
@@ -259,6 +260,23 @@ pub enum MissionEvent {
         task_id: String,
         run_id: String,
         message: String,
+    },
+    /// The attempt's own worktree, made before it launched
+    /// (`missions/isolation.rs`).
+    AttemptCheckoutPrepared {
+        task_id: String,
+        run_id: String,
+        path: String,
+        branch: String,
+        mission_branch: String,
+        base_commit: String,
+    },
+    /// An accepted attempt's work, now the Mission branch's tip.
+    AttemptIntegrated {
+        task_id: String,
+        run_id: String,
+        mission_branch: String,
+        commit: String,
     },
     AttemptInterrupted {
         task_id: String,
@@ -674,6 +692,11 @@ fn finalize_mission_report(dir: &Path, bundle: &DurableMissionBundle, runs_dir: 
     if read_mission_report(dir)?.is_some() { return Ok(()); }
     let runtime = fold_runtime(bundle);
     let mut markdown = format!("## Mission completed: {}\n", bundle.mission.title);
+    if let Some(branch) = isolation::recorded_mission_branch(&bundle.events) {
+        markdown.push_str(&format!(
+            "\nThe accepted work is on branch `{branch}`; your checkout is unchanged. Merge the branch when you want it.\n"
+        ));
+    }
     for task in &bundle.tasks {
         let run = runtime.tasks.get(&task.id).and_then(|task| task.accepted_run_id.as_deref())
             .ok_or_else(|| format!("Task `{}` has no accepted attempt for its report.", task.id))?;
@@ -1022,6 +1045,7 @@ fn start_request_for(
         parent_id: bundle.mission.coordinator_run_id.clone(),
         mission_id: Some(bundle.mission.id.clone()),
         mission_task_id: Some(task.id.clone()),
+        mission_root: None,
         // Approval froze a concrete provider and model into the task file, so a
         // Mission attempt never arrives as `auto` and has no stars to carry.
         preferred_models: vec![],
@@ -1564,6 +1588,80 @@ fn record_dispatch_failure(
     )
 }
 
+fn record_checkout(
+    app: &tauri::AppHandle,
+    workspace_root: &str,
+    mission_id: &str,
+    task_id: &str,
+    run_id: &str,
+    checkout: &isolation::AttemptCheckout,
+) -> Result<(), String> {
+    let state = app.state::<MissionStoreState>();
+    let _guard = state
+        .write_gate
+        .lock()
+        .map_err(|_| "Mission store is unavailable.".to_string())?;
+    let dir = mission_dir(workspace_root, mission_id, true)?;
+    append_event(
+        &dir,
+        mission_id,
+        MissionEvent::AttemptCheckoutPrepared {
+            task_id: task_id.to_string(),
+            run_id: run_id.to_string(),
+            path: checkout.path.clone(),
+            branch: checkout.branch.clone(),
+            mission_branch: checkout.mission_branch.clone(),
+            base_commit: checkout.base_commit.clone(),
+        },
+    )
+}
+
+/// Before an acceptance is recorded, an isolated attempt's work moves onto
+/// the Mission branch. When it cannot, the attempt is not accepted, and the
+/// validation says why — acceptance never claims work the branch lacks.
+fn integrate_accepted(
+    dir: &Path,
+    workspace_root: &str,
+    mission_id: &str,
+    bundle: &DurableMissionBundle,
+    task_id: &str,
+    run_id: &str,
+    validation: &mut AgentValidationSummary,
+) -> Result<bool, String> {
+    let Some(checkout) = isolation::checkout_for(&bundle.events, run_id) else {
+        return Ok(true);
+    };
+    let check = |status: &str, evidence: String| AgentValidationCheckSummary {
+        id: "mission-integration".into(),
+        label: format!("Integrated into {}", checkout.mission_branch),
+        status: status.into(),
+        required: true,
+        evidence: Some(evidence),
+    };
+    match isolation::integrate(workspace_root, &checkout, run_id) {
+        Ok(commit) => {
+            validation.checks.push(check("passed", commit.clone()));
+            append_event(
+                dir,
+                mission_id,
+                MissionEvent::AttemptIntegrated {
+                    task_id: task_id.to_string(),
+                    run_id: run_id.to_string(),
+                    mission_branch: checkout.mission_branch.clone(),
+                    commit,
+                },
+            )?;
+            Ok(true)
+        }
+        Err(error) => {
+            validation.checks.push(check("failed", error.clone()));
+            validation.status = "failed".into();
+            validation.warnings.push(error);
+            Ok(false)
+        }
+    }
+}
+
 async fn dispatch_task(
     app: &tauri::AppHandle,
     workspace_root: &str,
@@ -1580,7 +1678,9 @@ async fn dispatch_task_for(
     task_id: &str,
     coordinator: Option<&str>,
 ) -> Result<String, String> {
-    let (run_id, launch, parent_run_id) = {
+    let probe_root = workspace_root.to_string();
+    let is_repo = crate::blocking::run_infallible(move || isolation::is_repository(&probe_root)).await;
+    let (run_id, launch, parent_run_id, isolate, first_isolated) = {
         let state = app.state::<MissionStoreState>();
         let _guard = state
             .write_gate
@@ -1624,7 +1724,13 @@ async fn dispatch_task_for(
         let parent = coordinator
             .map(str::to_string)
             .or_else(|| bundle.mission.coordinator_run_id.clone());
-        (attempt_run_id, launch, parent)
+        (
+            attempt_run_id,
+            launch,
+            parent,
+            isolation::isolates(&bundle.events, is_repo),
+            isolation::recorded_mission_branch(&bundle.events).is_none(),
+        )
     };
 
     // Approval froze the provider and model; whether they can start is a
@@ -1652,9 +1758,34 @@ async fn dispatch_task_for(
             return Err(error);
         }
     };
+    // The attempt's own worktree, recorded before anything runs in it.
+    let work_root = if isolate {
+        match isolation::prepare(workspace_root, mission_id, task_id, &run_id, first_isolated).await {
+            Ok(checkout) => {
+                record_checkout(app, workspace_root, mission_id, task_id, &run_id, &checkout)?;
+                Some(checkout.path)
+            }
+            Err(error) => {
+                let error = format!("Could not make the attempt's worktree: {error}");
+                record_dispatch_failure(app, workspace_root, mission_id, task_id, &run_id, &error)?;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    let mission_root = work_root.as_ref().map(|_| workspace_root.to_string());
+    let cwd = work_root.clone().unwrap_or_else(|| workspace_root.to_string());
     let result = match launch {
         MissionLaunch::Harness(mut request) => {
             request.parent_id = parent_run_id.clone();
+            if let Some(path) = &work_root {
+                request.workspace_root = Some(path.clone());
+                if let Some(context) = request.context.as_mut() {
+                    context.workspace_root = Some(path.clone());
+                }
+                request.mission_root = mission_root.clone();
+            }
             let started = if request.parent_id.is_some() {
                 crate::agent::start_subagent_run(app.clone(), request, None).await
             } else {
@@ -1698,7 +1829,7 @@ async fn dispatch_task_for(
             app.state::<crate::delegate::status::DelegateStatusState>(),
             run_id.clone(),
             provider,
-            Some(workspace_root.to_string()),
+            Some(cwd),
             Some(prompt),
             Some(model),
             // Approval freezes worker kind, provider and model into the task
@@ -1710,6 +1841,7 @@ async fn dispatch_task_for(
             Some(mission_id.to_string()),
             Some(task_id.to_string()),
             Some(true),
+            mission_root,
         ),
     };
     if let Err(error) = result {
@@ -2085,12 +2217,17 @@ fn delegate_review_validation(
 #[tauri::command]
 pub async fn mission_review_attempt(
     app: tauri::AppHandle,
-    state: tauri::State<'_, MissionStoreState>,
     workspace_root: String,
     mission_id: String,
     input: ReviewMissionAttemptInput,
 ) -> Result<DurableMissionBundle, String> {
-    {
+    // Accepting may commit and move the Mission branch (isolation.rs): git
+    // work, so it runs on the blocking door, under the same writer lock.
+    let review_app = app.clone();
+    let (root, id) = (workspace_root.clone(), mission_id.clone());
+    let reviewed = crate::blocking::run(move || {
+        let (workspace_root, mission_id) = (root, id);
+        let state = review_app.state::<MissionStoreState>();
         let _guard = state
             .write_gate
             .lock()
@@ -2108,7 +2245,7 @@ pub async fn mission_review_attempt(
                 } if task_id == &input.task_id && run_id == &input.run_id
             )
         }) {
-            return Ok(bundle);
+            return Ok(Some(bundle));
         }
         let outcome = bundle
             .events
@@ -2133,20 +2270,24 @@ pub async fn mission_review_attempt(
                     input.run_id
                 )
             })?;
+        let mut validation = delegate_review_validation(&outcome, input.accepted, input.note.as_deref());
+        let accepted = input.accepted
+            && integrate_accepted(&dir, &workspace_root, &mission_id, &bundle, &input.task_id, &input.run_id, &mut validation)?;
         append_event(
             &dir,
             &mission_id,
             MissionEvent::AttemptValidationRecorded {
                 task_id: input.task_id,
                 run_id: input.run_id,
-                accepted: input.accepted,
-                validation: delegate_review_validation(
-                    &outcome,
-                    input.accepted,
-                    input.note.as_deref(),
-                ),
+                accepted,
+                validation,
             },
         )?;
+        Ok(None)
+    })
+    .await?;
+    if let Some(bundle) = reviewed {
+        return Ok(bundle);
     }
     drive_mission(app, workspace_root.clone(), mission_id.clone()).await?;
     load_bundle(&workspace_root, &mission_id)
@@ -2189,10 +2330,11 @@ fn validate_attempt_from_runs_dir(
     if !matches!(summary.status.as_str(), "done" | "error" | "cancelled") {
         return Err(format!("Run `{run_id}` has not settled yet."));
     }
-    let validation = summary
+    let mut validation = summary
         .validation
         .ok_or_else(|| format!("Run `{run_id}` has no Harness validation summary."))?;
-    let accepted = validation_accepts(&summary.status, &validation);
+    let accepted = validation_accepts(&summary.status, &validation)
+        && integrate_accepted(&dir, workspace_root, mission_id, &bundle, task_id, run_id, &mut validation)?;
     append_event(
         &dir,
         mission_id,
@@ -2506,20 +2648,28 @@ pub(crate) fn record_linked_attempt_validation(
     task_id: &str,
     run_id: &str,
 ) -> Result<(), String> {
-    {
-        let state = app.state::<MissionStoreState>();
-        let _guard = state
-            .write_gate
-            .lock()
-            .map_err(|_| "Mission store is unavailable.".to_string())?;
-        let runs_dir = app_runs_dir(app)?;
-        validate_attempt_from_runs_dir(&runs_dir, workspace_root, mission_id, task_id, run_id)?;
-    }
-    let mission_app = app.clone();
-    let root = workspace_root.to_string();
-    let linked_mission_id = mission_id.to_string();
+    // Validation may integrate the attempt — commits and a branch move — so it
+    // runs on a blocking thread, never the async worker that settled the Run.
+    let (app, root, mission_id, task_id, run_id) =
+        (app.clone(), workspace_root.to_string(), mission_id.to_string(), task_id.to_string(), run_id.to_string());
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = drive_mission(mission_app, root, linked_mission_id).await {
+        let validate_app = app.clone();
+        let (validate_root, validate_mission) = (root.clone(), mission_id.clone());
+        let validated = crate::blocking::run(move || {
+            let state = validate_app.state::<MissionStoreState>();
+            let _guard = state
+                .write_gate
+                .lock()
+                .map_err(|_| "Mission store is unavailable.".to_string())?;
+            let runs_dir = app_runs_dir(&validate_app)?;
+            validate_attempt_from_runs_dir(&runs_dir, &validate_root, &validate_mission, &task_id, &run_id).map(|_| ())
+        })
+        .await;
+        if let Err(error) = validated {
+            eprintln!("mission attempt validation failed: {error}");
+            return;
+        }
+        if let Err(error) = drive_mission(app, root, mission_id).await {
             eprintln!("mission supervisor could not continue: {error}");
         }
     });
@@ -3808,5 +3958,119 @@ src/agent/durableMissions.ts — update both"
             Some("run-accepted")
         );
         assert!(task_is_ready(&bundle, &runtime, "implement").unwrap());
+    }
+
+    fn git_repo_workspace(name: &str) -> PathBuf {
+        let root = temp_workspace(name);
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "user.email", "t@t"]);
+        std::fs::write(root.join("README.md"), "base\n").unwrap();
+        git(&["add", "README.md"]);
+        git(&["commit", "-qm", "base"]);
+        root
+    }
+
+    fn write_done_summary(runs_dir: &Path, run_id: &str, cwd: &str) {
+        std::fs::create_dir_all(runs_dir).unwrap();
+        let summary = serde_json::json!({
+            "id": run_id, "path": runs_dir.join(format!("{run_id}.jsonl")).to_string_lossy(),
+            "source": "klide", "title": "Inspect", "status": "done", "provider": "mock",
+            "model": "mock-model", "cwd": cwd, "project": "test", "gitBranch": null,
+            "createdMs": 1, "updatedMs": 2, "messageCount": 2, "inputTokens": 0,
+            "outputTokens": 0, "filesTouched": 0,
+            "validation": { "status": "skipped", "checks": [], "filesChanged": 0, "commandsRun": 0,
+                "commandsFailed": 0, "diffReviews": 0, "permissionsApproved": 0,
+                "permissionsDenied": 0, "warnings": [] }
+        });
+        std::fs::write(runs_dir.join(format!("{run_id}.summary.json")), summary.to_string()).unwrap();
+    }
+
+    /// Attach an isolated attempt the way dispatch does: attached, then its
+    /// worktree prepared and recorded.
+    async fn attach_isolated(root: &Path, task_id: &str, run_id: &str) -> isolation::AttemptCheckout {
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        assert!(isolation::isolates(&bundle.events, true));
+        append_event(&dir, "mission-one", MissionEvent::AttemptAttached { task_id: task_id.into(), run_id: run_id.into() }).unwrap();
+        let first = isolation::recorded_mission_branch(&bundle.events).is_none();
+        let checkout = isolation::prepare(root.to_str().unwrap(), "mission-one", task_id, run_id, first).await.unwrap();
+        append_event(&dir, "mission-one", MissionEvent::AttemptCheckoutPrepared {
+            task_id: task_id.into(), run_id: run_id.into(), path: checkout.path.clone(),
+            branch: checkout.branch.clone(), mission_branch: checkout.mission_branch.clone(),
+            base_commit: checkout.base_commit.clone(),
+        }).unwrap();
+        checkout
+    }
+
+    #[tokio::test]
+    async fn an_accepted_isolated_attempt_lands_on_the_mission_branch_not_the_checkout() {
+        let root = git_repo_workspace("isolated-accept");
+        let root_str = root.to_str().unwrap();
+        do_create(root_str, sample_input()).unwrap();
+        let dir = mission_dir(root_str, "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+
+        let checkout = attach_isolated(&root, "inspect", "run-iso").await;
+        std::fs::write(Path::new(&checkout.path).join("found.txt"), "found\n").unwrap();
+        let runs_dir = root.join("runs");
+        write_done_summary(&runs_dir, "run-iso", &checkout.path);
+
+        let bundle = validate_attempt_from_runs_dir(&runs_dir, root_str, "mission-one", "inspect", "run-iso").unwrap();
+        let runtime = fold_runtime(&bundle);
+        assert_eq!(runtime.tasks["inspect"].accepted_run_id.as_deref(), Some("run-iso"));
+        let integrated = bundle.events.iter().find_map(|line| match &line.event {
+            MissionEvent::AttemptIntegrated { commit, mission_branch, .. } => Some((commit.clone(), mission_branch.clone())),
+            _ => None,
+        });
+        let (commit, branch) = integrated.expect("an AttemptIntegrated event");
+        assert_eq!(branch, "klide/mission-mission-one");
+        let shown = crate::git::git_output(root_str, &["show", &format!("{commit}:found.txt")]).unwrap();
+        assert_eq!(shown.trim(), "found");
+        assert!(!root.join("found.txt").exists(), "the checkout is never written to");
+
+        // The dependent task starts from the accepted commit.
+        let next = attach_isolated(&root, "implement", "run-next").await;
+        assert_eq!(next.base_commit, commit);
+        assert!(Path::new(&next.path).join("found.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn an_attempt_that_cannot_integrate_is_not_accepted_and_says_why() {
+        let root = git_repo_workspace("isolated-moved");
+        let root_str = root.to_str().unwrap();
+        do_create(root_str, sample_input()).unwrap();
+        let dir = mission_dir(root_str, "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        let checkout = attach_isolated(&root, "inspect", "run-moved").await;
+        std::fs::write(Path::new(&checkout.path).join("a.txt"), "a\n").unwrap();
+        // Something else moves the Mission branch meanwhile.
+        std::fs::write(root.join("other.txt"), "o\n").unwrap();
+        crate::git::git_output(root_str, &["add", "other.txt"]).unwrap();
+        crate::git::git_output(root_str, &["commit", "-qm", "other"]).unwrap();
+        crate::git::git_output(root_str, &["branch", "-f", &checkout.mission_branch, "HEAD"]).unwrap();
+
+        let runs_dir = root.join("runs");
+        write_done_summary(&runs_dir, "run-moved", &checkout.path);
+        let bundle = validate_attempt_from_runs_dir(&runs_dir, root_str, "mission-one", "inspect", "run-moved").unwrap();
+        assert_eq!(fold_runtime(&bundle).tasks["inspect"].accepted_run_id, None);
+        let validation = bundle.events.iter().find_map(|line| match &line.event {
+            MissionEvent::AttemptValidationRecorded { validation, accepted: false, .. } => Some(validation.clone()),
+            _ => None,
+        }).expect("a rejected validation");
+        let check = validation.checks.iter().find(|c| c.id == "mission-integration").unwrap();
+        assert_eq!(check.status, "failed");
+        assert!(check.evidence.as_deref().unwrap().contains("moved"));
+        assert!(Path::new(&checkout.path).exists(), "kept for the operator");
     }
 }

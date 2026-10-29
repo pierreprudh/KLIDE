@@ -33,7 +33,7 @@ describe("Provider catalog", () => {
       group: "hosted",
       runtime: "hosted",
       available: true,
-      defaultModel: "deepseek-chat",
+      defaultModel: "deepseek-flash",
     });
     expect(isDelegateProvider("deepseek")).toBe(false);
     expect(selectableProviders({ includeDelegates: false }).some((p) => p.id === "deepseek")).toBe(

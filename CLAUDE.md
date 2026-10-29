@@ -316,7 +316,7 @@ Klide/
     │   ├── run_documents.rs      Recover read-only document references from older transcripts
     │   ├── preview.rs            A picture of what Klide can't render (deck, PDF) via macOS `qlmanage`
     │   ├── storage.rs            Where the runs dir lives — user-choosable folder, validated moves, cache accounting
-    │   ├── missions.rs           Durable Missions — authored specs, append-only events, drive loop
+    │   ├── missions.rs           Durable Missions — authored specs, append-only events, drive loop (missions/isolation.rs: each attempt in its own worktree off `klide/mission-<id>`, fast-forwarded on acceptance)
     │   ├── durable.rs            Atomic + append-only write primitives for on-disk state
     │   ├── file_memo.rs          Parsed-file memo keyed on (mtime, len, epoch) — Delegate runs, Harness summaries, scrollback metas
     │   ├── blocking.rs           The one door for blocking work — spawn_blocking behind async commands + the sync-command drift test
@@ -518,7 +518,11 @@ replaying them. The Board/Graph switch reads and edits the same task Markdown
 dependencies; Rust rejects dependency cycles at the write boundary
 (`first_dependency_cycle`). Approved Delegate tasks dispatch as bounded
 one-shot CLI commands behind the Delegate seam; exit moves the attempt to
-explicit operator review, never auto-acceptance.
+explicit operator review, never auto-acceptance. In a Git project each attempt
+runs in its own worktree forked from the Mission branch `klide/mission-<id>`;
+acceptance first commits and fast-forwards that branch (or is refused, with
+the reason, when it cannot), so the checkout is never written to and the
+operator merges the Mission branch (`missions/isolation.rs`).
 
 Durability itself is a module: `durable.rs` owns atomic replace and flushed
 append-only writes, and both the Mission log and the run Transcript go through

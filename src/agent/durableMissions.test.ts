@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  attemptCheckoutOf,
   compileDurableMissionBundle,
+  missionBranchOf,
   plannedTaskToSpecInput,
   specToPlannedTask,
   terminalOutcome,
@@ -298,6 +300,33 @@ describe("durable Mission projection", () => {
 
     expect(state.tasks.inspect.acceptedRunId).toBe("run-a");
     expect(state.tasks.implement.status).toBe("ready");
+  });
+});
+
+describe("isolated attempts", () => {
+  const events: DurableMissionBundle["events"] = [
+    { schemaVersion: 1, missionId: "mission-one", seq: 0, ts: 1, event: { type: "plan_approved" } },
+    { schemaVersion: 1, missionId: "mission-one", seq: 1, ts: 2, event: { type: "attempt_attached", taskId: "inspect", runId: "run-a" } },
+    {
+      schemaVersion: 1, missionId: "mission-one", seq: 2, ts: 3,
+      event: {
+        type: "attempt_checkout_prepared", taskId: "inspect", runId: "run-a", path: "/repo-worktrees/a",
+        branch: "klide/mission-mission-one-inspect-run-a", missionBranch: "klide/mission-mission-one", baseCommit: "c0",
+      },
+    },
+    { schemaVersion: 1, missionId: "mission-one", seq: 3, ts: 4, event: { type: "attempt_integrated", taskId: "inspect", runId: "run-a", missionBranch: "klide/mission-mission-one", commit: "c1" } },
+  ];
+
+  it("folds checkout and integration events without moving task status", () => {
+    const state = compileDurableMissionBundle(bundle(events));
+    expect(state.tasks.inspect.attempts.map((attempt) => attempt.runId)).toEqual(["run-a"]);
+  });
+
+  it("names the Mission branch and each attempt's worktree", () => {
+    expect(missionBranchOf(events)).toBe("klide/mission-mission-one");
+    expect(missionBranchOf(events.slice(0, 2))).toBeNull();
+    expect(attemptCheckoutOf(events, "run-a")).toEqual({ path: "/repo-worktrees/a", branch: "klide/mission-mission-one-inspect-run-a" });
+    expect(attemptCheckoutOf(events, "run-b")).toBeNull();
   });
 });
 

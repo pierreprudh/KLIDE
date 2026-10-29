@@ -295,6 +295,13 @@ Research and benchmark plan: `docs/workers-comparison-2026-09-21.md` (local note
 
 - [ ] Make a Mission the primary outcome object: intent, task graph, acceptance
   criteria, worker Runs, and final evidence.
+- [x] Mission attempts in worktrees of their own (2026-10-29,
+  `missions/isolation.rs`): the Mission branch `klide/mission-<id>` starts at
+  HEAD, each attempt forks from its tip, acceptance commits and fast-forwards
+  it (refused with a failed `mission-integration` check when it cannot), the
+  checkout is never written to and the Mission card offers Merge. Open: the
+  recipe's setup script in attempt worktrees (needs plan approval to show it),
+  a live run of an isolated Mission in the app (Harness + Delegate attempt).
 - [ ] Add visible budget and capacity controls for dispatch, queues, retries,
   escalation, and stop conditions.
 - [ ] Route bounded work by capability between the native Harness, local

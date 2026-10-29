@@ -801,6 +801,7 @@ async fn run_subagent_to_completion(
         side_question_of: None,
         mission_id: None,
         mission_task_id: None,
+        mission_root: None,
     };
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
@@ -1968,7 +1969,7 @@ async fn start_run(
     side_questions::enforce(&runs_dir, &id, &mut request)?;
     route_auto(&runs_dir, &id, &mut request).await?;
     let mission_link = match (
-        request.workspace_root.clone(),
+        request.mission_root.clone().or_else(|| request.workspace_root.clone()),
         request.mission_id.clone(),
         request.mission_task_id.clone(),
     ) {

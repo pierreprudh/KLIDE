@@ -621,6 +621,7 @@ mod tests {
             parent_id: None,
             mission_id: None,
             mission_task_id: None,
+            mission_root: None,
             preferred_models: Vec::new(),
             eyes: None,
             naming: None,

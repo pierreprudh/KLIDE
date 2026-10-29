@@ -135,12 +135,41 @@ sequenceDiagram
 
 ## Remaining orchestration work
 
+## Isolated attempts
+
+In a Git project, each Mission attempt works in a worktree of its own
+(`src-tauri/src/missions/isolation.rs`, 2026-10-29). The first dispatch makes
+the Mission branch `klide/mission-<id>` at the checkout's HEAD; each attempt
+forks `klide/mission-<id>-<task>-<run>` from that branch's tip, and the journal
+records it as `attempt_checkout_prepared` before anything runs there.
+
+Acceptance integrates before it is recorded. A Harness attempt that validates,
+or a Delegate attempt the operator accepts, has whatever it left uncommitted
+committed, then fast-forwards the Mission branch (`attempt_integrated` with the
+commit), and its worktree and branch are removed. Because the supervisor runs
+one attempt at a time and only acceptance moves the Mission branch, the
+fast-forward holds; if the branch moved anyway, the attempt is not accepted, a
+failed `mission-integration` check says why, and its worktree is kept. A
+dependent task therefore starts from the exact commit its dependencies were
+accepted at, and `inspect` reports the attempt's own diff against its base
+commit (`exclusive: true`).
+
+The checkout is never written to by a Mission. The completion report names the
+Mission branch, and the Mission card offers **Merge into <branch>** while the
+branch holds work the checkout lacks.
+
+Not isolated: folders that are not Git repositories, and Missions that had
+already run an attempt in the checkout before this change (their accepted work
+may be uncommitted there). The recipe's copy and link steps run in an attempt
+worktree; its setup script does not, because plan approval does not show it
+yet. A rejected attempt's worktree stays until the operator discards it.
+
+## Remaining orchestration work
+
 This interface connects the durable workflow; it does not yet reproduce the
 full isolated-worker workflow documented by
-[Superset](https://docs.superset.sh/orchestration). Durable Mission dispatch still
-uses the Mission checkout. The interactive launch path's worktree-per-run policy
-has not been moved into Mission dispatch; doing that also needs explicit
-handling of dependency branches and review evidence tied to immutable commits.
+[Superset](https://docs.superset.sh/orchestration): no parallel attempts within
+one Mission, and no setup script in attempt worktrees.
 
 Delegate messages remain pull-based through `agent_wait`. Automatic wakeups,
 recoverable delivery acknowledgements, and automatic integration are unchanged.

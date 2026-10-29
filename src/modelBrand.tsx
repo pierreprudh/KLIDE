@@ -116,7 +116,7 @@ const BRAND_RULES: { pattern: RegExp; brand: ModelBrand }[] = [
   { pattern: /grok/i, brand: { name: "xAI", href: "https://x.ai/grok", Logo: GrokLogo } },
   { pattern: /llama/i, brand: { name: "Llama", href: "https://www.llama.com/", Logo: LlamaLogo } },
   { pattern: /mistral|mixtral|codestral|ministral|magistral|devstral|pixtral|voxtral|leanstral/i, brand: { name: "Mistral AI", href: "https://mistral.ai/", Logo: MistralLogo } },
-  // Covers the hosted ids (deepseek-chat / deepseek-reasoner), the Ollama pulls
+  // Covers the hosted ids (deepseek-flash / deepseek-v4-pro), the Ollama pulls
   // (deepseek-r1:8b, deepseek-coder:6.7b) and OpenRouter's `deepseek/…` slugs.
   { pattern: /deepseek/i, brand: { name: "DeepSeek", href: "https://www.deepseek.com/", Logo: DeepSeekLogo } },
   // OpenRouter serves these as `sakana/<model>`, and the model half names no
