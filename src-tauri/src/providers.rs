@@ -572,11 +572,13 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
-        default_model: Some("grok-4"),
+        // xAI's model list (2026-10-29) names grok-4.7 / 4.6 / 4.5 / 4.3 /
+        // 4.20-*, and no bare `grok-4`; name the newest it documents.
+        default_model: Some("grok-4.7"),
         presets: NO_PRESETS,
         auto: AutoLadder {
             light: None,
-            standard: Some("grok-4"),
+            standard: Some("grok-4.7"),
             strong: None,
         },
         brand: "xai",
@@ -592,7 +594,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         short_label: None,
         group: ProviderGroup::Hosted,
         // DeepSeek's platform is OpenAI-wire (`/v1/chat/completions`, function
-        // calling, `stream_options.include_usage`). `deepseek-reasoner` streams
+        // calling, `stream_options.include_usage`). A thinking model streams
         // its chain-of-thought in `reasoning_content`, which the shared OpenAI
         // adapter already routes to the thinking channel — no per-provider code.
         wire: WireFormat::OpenAi(OpenAiConfig {
@@ -613,12 +615,15 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
-        default_model: Some("deepseek-chat"),
+        // DeepSeek's docs (2026-10-29) name two models, `deepseek-flash` and
+        // `deepseek-v4-pro`; `deepseek-chat` / `deepseek-reasoner` are no
+        // longer listed. A remembered older pick is the picker's to forget.
+        default_model: Some("deepseek-flash"),
         presets: NO_PRESETS,
         auto: AutoLadder {
-            light: Some("deepseek-chat"),
-            standard: Some("deepseek-chat"),
-            strong: Some("deepseek-reasoner"),
+            light: Some("deepseek-flash"),
+            standard: Some("deepseek-flash"),
+            strong: Some("deepseek-v4-pro"),
         },
         brand: "deepseek",
         credits: CreditsSource::DeepSeek,

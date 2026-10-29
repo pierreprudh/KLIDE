@@ -319,7 +319,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── DeepSeek ──
     Family {
-        // Hosted ids (`deepseek-chat` / `deepseek-reasoner`) and the Ollama
+        // Hosted ids (`deepseek-flash` / `deepseek-v4-pro`) and the Ollama
         // pulls (`deepseek-r1:8b`) alike: the hosted API serves 128k.
         #[cfg(test)]
         name: "deepseek",
