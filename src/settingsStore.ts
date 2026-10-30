@@ -287,6 +287,18 @@ export const SETTINGS = {
       keywords: "avatar profile picture photo conversation message mark chat me",
     },
   } as SettingDef<boolean>,
+  /** A long paste into a composer stages as a "Pasted text" file card
+   *  instead of landing in the draft (`pastedTextAttachment`). Off → every
+   *  paste is typing. */
+  pasteLongTextAsFile: {
+    key: "klide.pasteLongTextAsFile",
+    fallback: () => true,
+    search: {
+      label: "Paste long text as a file",
+      section: "appearance",
+      keywords: "paste pasted long text clipboard attachment file card composer log",
+    },
+  } as SettingDef<boolean>,
   /** The Welcome screen's nature film: a fresh deal of the five landscapes
    *  each launch (default), the authored order, or one landscape pinned. */
   welcomeFilm: {

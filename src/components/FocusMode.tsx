@@ -67,7 +67,7 @@ import { relativeTime, isSubsequence } from "./ai/utils";
 import type { Conversation } from "./ai/types";
 import type { AgentAttachment as Attachment, AgentMode, ProviderId } from "../agent/types";
 import type { Skill } from "../skills";
-import { stageFiles, stagedImageBytes } from "./ai/attachments";
+import { pastedTextAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { extractPdfText } from "../ipc/pdf";
 import { eyesSettingOf, photoGate as photoGateOf, type Eyes } from "./ai/sight";
 import { SETTINGS, useSetting } from "../settingsStore";
@@ -1590,6 +1590,7 @@ function FocusComposer({
   // can (see ./ai/sight.ts). Asked only for a blind wire model.
   const [eyes, setEyes] = useState<Eyes | null>(null);
   const [harnessSettings] = useSetting(SETTINGS.harnessSettings);
+  const [pasteLongTextAsFile] = useSetting(SETTINGS.pasteLongTextAsFile);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => initialMode(localStorage.getItem("klide.agentMode"))
   );
@@ -2121,6 +2122,14 @@ function FocusComposer({
             if (files.length && canAttachFiles) {
               e.preventDefault();
               void addFiles(files);
+              return;
+            }
+            const pasted = canAttachFiles && pasteLongTextAsFile
+              ? pastedTextAttachment(e.clipboardData?.getData("text/plain") ?? "", attachments)
+              : null;
+            if (pasted) {
+              e.preventDefault();
+              setAttachments((prev) => [...prev, pasted]);
             }
           }}
           onKeyDown={(e) => {

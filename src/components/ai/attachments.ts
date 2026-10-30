@@ -42,6 +42,15 @@ export const MAX_PDF_BYTES = 25_000_000;
  *  usually the whole point of the turn — a paper, a spec, an invoice — and
  *  about ten pages of prose fit, roughly 10k tokens. Cut at a page boundary. */
 export const MAX_PDF_CHARS = 40_000;
+/** A paste past either line stages as a text file instead of flooding the
+ *  draft — the "Pasted text" card Claude Code and Codex show for a log or a
+ *  long spec. Below both, it's typing and lands in the draft as usual. */
+export const PASTE_AS_FILE_CHARS = 2_000;
+export const PASTE_AS_FILE_LINES = 40;
+/** A pasted file's text budget. Not MAX_DOC_CHARS: typed into the draft, the
+ *  same text would have gone whole, so filing it must not cut it shorter than
+ *  Rust's own document clamp (`workspace::AGENT_MAX_READ_BYTES`) would. */
+export const MAX_PASTE_CHARS = 200_000;
 /** How many files one drop/paste may stage at once. */
 export const MAX_FILES_PER_DROP = 8;
 /** How many attachments may sit staged on a composer. */
@@ -319,4 +328,32 @@ export async function stageFiles(
     notices.push({ text: `Only ${room} more attachment${room === 1 ? "" : "s"} fit on this turn.`, tone: "info" });
   }
   return { attachments: staged.slice(0, room), notices };
+}
+
+/** True when a paste is long enough to stage as a file. */
+export function isLongPaste(text: string): boolean {
+  if (text.length >= PASTE_AS_FILE_CHARS) return true;
+  let lines = 1;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10 && ++lines >= PASTE_AS_FILE_LINES) return true;
+  }
+  return false;
+}
+
+const PASTED_NAME = /^Pasted text(?: (\d+))?\.txt$/;
+
+/** A long paste as a staged text attachment — `Pasted text.txt`, then
+ *  `Pasted text 2.txt`, numbered past whatever is already staged so two
+ *  pastes never share a name in the prompt. Null when the paste is short or
+ *  the tray is full: the caller lets the text land in the draft instead, so a
+ *  paste is never lost. */
+export function pastedTextAttachment(text: string, staged: readonly Attachment[]): Attachment | null {
+  if (!isLongPaste(text) || staged.length >= MAX_STAGED) return null;
+  const taken = staged
+    .map((a) => PASTED_NAME.exec(a.path))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => Number(m[1] ?? 1));
+  const n = taken.length ? Math.max(...taken) + 1 : 1;
+  const content = text.length > MAX_PASTE_CHARS ? text.slice(0, MAX_PASTE_CHARS) + "\n…(truncated)" : text;
+  return { path: n === 1 ? "Pasted text.txt" : `Pasted text ${n}.txt`, content };
 }
