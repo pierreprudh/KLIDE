@@ -452,6 +452,50 @@ pub struct AgentTurnTiming {
     /// non-streaming turn (no delta ever arrived).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ttft_ms: Option<u64>,
+    /// Opt-in logical-input diagnostics, never sent to the model.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub diagnostics: Option<AgentRequestDiagnostics>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPromptChange {
+    NoBaseline, Unchanged, Appended, Configuration, Tools, Message, MessagesRemoved,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPromptComparison {
+    pub change: AgentPromptChange,
+    /// Equal logical messages at the start, independent of config/tool changes.
+    pub unchanged_messages: usize,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub first_changed_message: Option<usize>,
+}
+
+/// Selected one-time setup spans, present on the first successful provider turn
+/// of each Harness invocation (including resumed Conversations). Not cumulative.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSetupTiming {
+    pub context_gather_ms: u64,
+    pub tool_catalog_ms: u64,
+    pub history_replay_ms: u64,
+    pub capabilities_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRequestDiagnostics {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub setup: Option<AgentSetupTiming>,
+    /// Cloning neutral inputs into ProviderTurnRequest; excludes wire encoding.
+    pub input_build_ms: u64,
+    /// Diagnostics' own hashing time, excluded from input_build_ms.
+    pub inspection_ms: u64,
+    pub prompt: AgentPromptComparison,
+    /// Attempts for this turn, including a retried pre-stream failure.
+    pub attempts: u32,
 }
 
 /// One button on a permission card. `option_id` goes out as `optionId` — the
@@ -1196,12 +1240,16 @@ mod tests {
             timing: Some(AgentTurnTiming {
                 model_ms: 4_200,
                 ttft_ms: Some(310),
+                diagnostics: None,
             }),
             ts: 0,
         };
         let v = serde_json::to_value(&event).expect("serialize");
         assert_eq!(v["timing"]["modelMs"], 4_200);
         assert_eq!(v["timing"]["ttftMs"], 310);
+        assert!(v["timing"].get("diagnostics").is_none());
+        let old: AgentTurnTiming = serde_json::from_value(serde_json::json!({"modelMs": 10})).unwrap();
+        assert!(old.diagnostics.is_none(), "old transcripts stay readable");
 
         // Harness-authored messages made no provider call, so the key stays off
         // the wire rather than reporting a zero-length turn.
