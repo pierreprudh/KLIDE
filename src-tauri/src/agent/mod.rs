@@ -52,6 +52,7 @@ pub mod todo;
 pub mod tools;
 pub mod transcripts;
 pub mod types;
+mod diagnostics;
 
 #[cfg(test)]
 use self::run_core::KEEP_RECENT_TOOL_RESULTS;
@@ -2355,6 +2356,9 @@ async fn loop_body(
     // in the system prompt — the system prompt opens every request and must
     // stay byte-identical for the prompt cache to serve it — and both are
     // recorded before the message itself, so replay puts them back in order.
+    let diagnostics_enabled = diagnostics::enabled(&request.provider);
+    let mut setup_timing = types::AgentSetupTiming::default();
+    let context_clock = diagnostics_enabled.then(std::time::Instant::now);
     let mut opening_context: Vec<serde_json::Value> = Vec::new();
     let mut shared_notes_context = None;
     if let Some(root) = request.workspace_root.clone() {
@@ -2417,6 +2421,10 @@ async fn loop_body(
     // context the user does on screen. Without this, every follow-up
     // turn would arrive as a fresh chat — the "agent has no memory"
     // bug the user kept hitting.
+    if let Some(clock) = context_clock {
+        setup_timing.context_gather_ms = diagnostics::elapsed_ms(clock);
+    }
+    let catalog_clock = diagnostics_enabled.then(std::time::Instant::now);
     let subject = permission::GateSubject::from_request(&request);
     let mut tools = schemas_for_mode(&subject, request.workspace_root.as_deref());
     // The user's connectors, fixed for this Run: two Tools whatever is
@@ -2437,6 +2445,10 @@ async fn loop_body(
     // stored value back: without `peek_value` in this run's tool list, a
     // stub would be a dead end, so results ride in context verbatim and
     // replay carries prior results in full too.
+    if let Some(clock) = catalog_clock {
+        setup_timing.tool_catalog_ms = diagnostics::elapsed_ms(clock);
+    }
+    let replay_clock = diagnostics_enabled.then(std::time::Instant::now);
     let retention_enabled = tools::tools_include(&tools, "peek_value");
     if resuming {
         // Preserve the live tool exchange. Native wire differences belong
@@ -2457,6 +2469,9 @@ async fn loop_body(
     // order the transcript recorded it in.
     let operator_at = if wake { messages.len() } else { messages.len() - 1 };
     messages.splice(operator_at..operator_at, opening_context);
+    if let Some(clock) = replay_clock {
+        setup_timing.history_replay_ms = diagnostics::elapsed_ms(clock);
+    }
     // Count this turn's user message on top of the turns already on disk so
     // the Mission Control "Messages" tally reflects the whole conversation.
     let mut message_count = prior_turns as u32 + 1;
@@ -2482,6 +2497,7 @@ async fn loop_body(
     // window plans as its named default) — and only trim once the prompt
     // actually crowds it. A probe that cannot be reached is not fatal here:
     // the turn itself will report that, with a better message.
+    let capabilities_clock = diagnostics_enabled.then(std::time::Instant::now);
     let context_window = match request.num_ctx {
         Some(n) => n,
         None => crate::model_capabilities::capabilities(&request.provider, &request.model, false)
@@ -2494,6 +2510,11 @@ async fn loop_body(
     // Ollama fall back to its own 32k ceiling while compaction waited for the
     // model's full window — the start of a long prompt was silently dropped.
     // Only Ollama reads `num_ctx`; every other wire ignores it.
+    if let Some(clock) = capabilities_clock {
+        setup_timing.capabilities_ms = diagnostics::elapsed_ms(clock);
+    }
+    let mut diagnostic_setup = diagnostics_enabled.then_some(setup_timing);
+    let mut prompt_monitor = diagnostics::PromptMonitor::default();
     let num_ctx = Some(context_window);
     let reply_reserve = request.num_predict.unwrap_or(4096);
     let compact_threshold = compaction_threshold(context_window, reply_reserve).min(
@@ -3037,34 +3058,56 @@ async fn loop_body(
         // try — nothing to undo on screen, nothing streamed twice — bounded
         // per call and per Run, so a provider that keeps failing costs one
         // extra request, not a loop.
-        let mut request_started_ms = now_ms();
+        let mut request_diagnostics = if diagnostics_enabled {
+            let clock = std::time::Instant::now();
+            let configuration = serde_json::json!({
+                "provider": request.provider, "model": request.model,
+                "allowedModels": router_pool(&request), "numCtx": num_ctx,
+                "numPredict": reply_budget_override.or(request.num_predict),
+                "reflectionLevel": request.reflection_level,
+                "cacheHour": request.parent_id.is_none() && request.mission_id.is_none(),
+            });
+            let prompt = prompt_monitor.observe(&configuration, &turn_tools, &messages);
+            Some(types::AgentRequestDiagnostics {
+                setup: diagnostic_setup.take(), input_build_ms: 0,
+                inspection_ms: diagnostics::elapsed_ms(clock), prompt, attempts: 0,
+            })
+        } else { None };
+        let mut request_started_ms;
         let mut retried_this_call = false;
         let provider_result = loop {
+            let build_clock = diagnostics_enabled.then(std::time::Instant::now);
+            let provider_request = ProviderTurnRequest {
+                provider: request.provider.clone(),
+                model: request.model.clone(),
+                allowed_models: router_pool(&request),
+                messages: messages.clone(),
+                tools: turn_tools.clone(),
+                workspace_root: request.workspace_root.clone(),
+                run_id: Some(id.clone()),
+                delegate_session: request.delegate_session.clone(),
+                allowed_commands: allowed_commands.clone(),
+                mcp: mcp.clone(),
+                num_ctx,
+                num_predict: reply_budget_override.or(request.num_predict),
+                reflection_level: request.reflection_level.clone(),
+                // A person's conversation, not a Mission attempt or a
+                // worker: someone reads, reviews and replies between turns.
+                cache_hour: request.parent_id.is_none() && request.mission_id.is_none(),
+                stream: stream.clone(),
+            };
+            if let Some(diagnostic) = &mut request_diagnostics {
+                diagnostic.input_build_ms += build_clock.map(diagnostics::elapsed_ms).unwrap_or(0);
+                diagnostic.attempts += 1;
+            }
+            request_started_ms = now_ms();
             let result = tokio::select! {
                 _ = cancel.cancelled() => {
                     flush_stream(&stream_failure);
                     finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                     return Ok(());
                 }
-                result = provider_caller.call(ProviderTurnRequest {
-                    provider: request.provider.clone(),
-                    model: request.model.clone(),
-                    allowed_models: router_pool(&request),
-                    messages: messages.clone(),
-                    tools: turn_tools.clone(),
-                    workspace_root: request.workspace_root.clone(),
-                    run_id: Some(id.clone()),
-                    delegate_session: request.delegate_session.clone(),
-                    allowed_commands: allowed_commands.clone(),
-                    mcp: mcp.clone(),
-                    num_ctx,
-                    num_predict: reply_budget_override.or(request.num_predict),
-                    reflection_level: request.reflection_level.clone(),
-                    // A person's conversation, not a Mission attempt or a
-                    // worker: someone reads, reviews and replies between turns.
-                    cache_hour: request.parent_id.is_none() && request.mission_id.is_none(),
-                    stream: stream.clone(),
-                }) => result,
+                result = provider_caller.call(provider_request) => result,
             };
             let nothing_streamed = first_token_ms.load(std::sync::atomic::Ordering::Relaxed) == 0;
             match &result {
@@ -3090,7 +3133,6 @@ async fn loop_body(
                         }
                         _ = tokio::time::sleep(PROVIDER_RETRY_PAUSE) => {}
                     }
-                    request_started_ms = now_ms();
                 }
                 _ => break result,
             }
@@ -3167,6 +3209,7 @@ async fn loop_body(
         // event's `ts`. Everything after this point (tool execution, waiting on
         // a diff review) belongs to the run, not to the model.
         let turn_timing = Some(AgentTurnTiming {
+            diagnostics: request_diagnostics,
             model_ms: (now_ms() - request_started_ms).max(0) as u64,
             ttft_ms: match first_token_ms.load(std::sync::atomic::Ordering::Relaxed) {
                 0 => None,
@@ -6888,6 +6931,47 @@ mod run_loop_tests {
         assert!(later.iter().any(|m| m["role"] == "tool" && m["content"].as_str().unwrap().contains("alpha")));
     }
 
+    // Run this with and without KLIDE_HARNESS_DIAGNOSTICS=1. No environment
+    // mutation inside the test process: other Harness tests run concurrently.
+    #[tokio::test]
+    async fn request_diagnostics_survive_transcript_replay_without_entering_the_prompt() {
+        let (runs_dir, root) = sandbox("request-diagnostics");
+        std::fs::write(Path::new(&root).join("a.txt"), "alpha").unwrap();
+        let mut request = test_request(&root, &[]);
+        request.provider = "ollama".into();
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Reading.", vec![scripted_tool_call("read", "read_file", serde_json::json!({"path": "a.txt"}))]),
+            scripted_turn("Alpha.", vec![]),
+        ]);
+        drive_loop(Arc::new(FakeSupervisor::with_run("diagnostic")), &runs_dir, "diagnostic", request.clone(), caller.clone()).await;
+        let resumed = ScriptedProviderCaller::new(vec![scripted_turn("Still alpha.", vec![])]);
+        request.initial_text = "What was in the file?".into();
+        drive_loop(Arc::new(FakeSupervisor::with_run("diagnostic")), &runs_dir, "diagnostic", request, resumed.clone()).await;
+        let events = read_events(&runs_dir, "diagnostic").unwrap();
+        let timings: Vec<_> = events.iter().filter_map(|event| match event {
+            AgentEvent::AssistantMessage { timing, .. } => *timing,
+            _ => None,
+        }).collect();
+        assert_eq!(timings.len(), 3);
+        if diagnostics::enabled("ollama") {
+            let values: Vec<_> = timings.iter().map(|timing| timing.diagnostics.unwrap()).collect();
+            assert!(values[0].setup.is_some());
+            assert!(values[1].setup.is_none());
+            assert!(values[2].setup.is_some());
+            assert_eq!(values[0].prompt.change, types::AgentPromptChange::NoBaseline);
+            assert_eq!(values[1].prompt.change, types::AgentPromptChange::Appended);
+            assert_eq!(values[2].prompt.change, types::AgentPromptChange::NoBaseline);
+            assert!(values.iter().all(|value| value.attempts == 1));
+        } else {
+            assert!(timings.iter().all(|timing| timing.diagnostics.is_none()));
+        }
+        let first = caller.seen_messages.lock().unwrap();
+        let last = resumed.seen_messages.lock().unwrap();
+        assert_eq!(&last[0][..first[1].len()], first[1].as_slice());
+        assert!(!serde_json::to_string(&*last).unwrap().contains("inspectionMs"));
+        eprintln!("diagnostics fixture transcript: {}", transcript_path(&runs_dir, "diagnostic").display());
+    }
+
     /// A Run that outgrows its window folds its older turns into a summary
     /// on its own — no panel involved — keeps the newest turn verbatim, and
     /// the follow-up turn opens with exactly the prompt the compacted turn sent.
@@ -7578,6 +7662,13 @@ mod run_loop_tests {
         assert_eq!(caller.seen_messages.lock().unwrap().len(), 2);
         assert_eq!(retry_notices(&runs_dir, id), 1, "the retry is on the record");
         assert_eq!(run_errors(&runs_dir, id), 0);
+        if diagnostics::enabled("openrouter") {
+            let attempts: Vec<_> = read_events(&runs_dir, id).unwrap().iter().filter_map(|event| match event {
+                AgentEvent::AssistantMessage { timing: Some(timing), .. } => timing.diagnostics.map(|value| value.attempts),
+                _ => None,
+            }).collect();
+            assert_eq!(attempts, vec![2]);
+        }
     }
 
     #[tokio::test]

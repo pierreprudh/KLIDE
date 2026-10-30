@@ -12,6 +12,10 @@ and pauses for the user whenever a Tool would cross a trust line.
 
 UI surfaces observe the Harness. They do not reimplement the run loop.
 
+Opt-in [request diagnostics](HARNESS_DIAGNOSTICS.md) record selected preparation
+spans and logical prompt stability alongside existing timing and usage fields.
+They never enter the Provider messages or change permission decisions.
+
 ## Modes
 
 Modes are capability tiers. The wire and the Transcript use the ids below;

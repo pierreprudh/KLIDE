@@ -1,5 +1,19 @@
 # Hermes / KIDE harness comparison
 
+Native request diagnostics are a separate, opt-in measurement tool. See
+[Harness diagnostics](../../docs/HARNESS_DIAGNOSTICS.md) for collection boundaries
+and `report_diagnostics.py` for a local report from existing Transcripts.
+
+## Removed read-script experiment
+
+The read-only programmatic Tool prototype, optional QuickJS dependency, feature
+flags and executable comparison driver were removed after evaluation on
+2026-10-30. [Results and decision](READ_SCRIPT_RESULTS.md) and the
+[archived fixtures and trial data](read-script-2026-10-30-data.json) preserve the
+evidence. Native request diagnostics and the Hermes comparison remain available.
+
+## Hermes comparison
+
 This small synthetic benchmark compares the real KIDE Rust Harness with Hermes's
 one-shot CLI. It does not recreate either agent loop. Three tasks cover a data
 transformation, a code regression, and a change across two files. Each trial gets

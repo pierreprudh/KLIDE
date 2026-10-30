@@ -113,6 +113,30 @@ export type AgentTurnTiming = {
   /** Provider request → first streamed token, ms. Absent when the turn never
    *  streamed a delta (non-streaming providers). */
   ttftMs?: number;
+  /** Opt-in diagnostics of neutral Harness inputs, before Provider encoding. */
+  diagnostics?: AgentRequestDiagnostics;
+};
+
+export type AgentSetupTiming = {
+  contextGatherMs: number;
+  toolCatalogMs: number;
+  historyReplayMs: number;
+  capabilitiesMs: number;
+};
+
+export type AgentRequestDiagnostics = {
+  /** Selected setup spans, only on the first successful turn of an invocation. */
+  setup?: AgentSetupTiming;
+  /** Input cloning only; excludes Provider wire serialization. */
+  inputBuildMs: number;
+  inspectionMs: number;
+  attempts: number;
+  prompt: {
+    change: "no_baseline" | "unchanged" | "appended" | "configuration" | "tools" | "message" | "messages_removed";
+    unchangedMessages: number;
+    /** Zero-based logical message index. */
+    firstChangedMessage?: number;
+  };
 };
 
 export type PermissionOption = {

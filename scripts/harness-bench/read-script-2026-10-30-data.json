@@ -1,0 +1,972 @@
+{
+  "status": "experiment removed after evaluation",
+  "date": "2026-10-30",
+  "manifest": {
+    "benchmark": "read-script-v1",
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "repeats": 3,
+    "seed": 42,
+    "timeoutSeconds": 120,
+    "mode": "plan",
+    "maxTurns": 12,
+    "maxParallelDirectTools": 4,
+    "numPredict": 2048,
+    "reflectionLevel": "off",
+    "contextWindow": 65536,
+    "tasks": [
+      {
+        "id": "single-read",
+        "fixtureSha256": "dc1d844dfe4fcd21dc7a72befbfe9607f9f532db3131841373d988d82485e6a3"
+      },
+      {
+        "id": "multi-read-rollup",
+        "fixtureSha256": "d16bfd3efbfe3d7d4cfcc14a52acd815837d7f43e98636356d532b679e2b699f"
+      },
+      {
+        "id": "dependent-chain",
+        "fixtureSha256": "b2e314b36aa244c5db1672090bcc3568516fed46dfde47324d05a8227796e8a9"
+      }
+    ],
+    "limits": [
+      "Synthetic read-only tasks, not general coding quality",
+      "Same prompt and model; script arm adds one Tool schema and permits natural script selection",
+      "Natural Provider cache conditions; randomized arm order, no cache reset or forced cache equivalence",
+      "Failure trials retained; aggregate medians include failures",
+      "Final answers independently graded; no model-generated tests trusted"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "single-read",
+      "files": {
+        "rows.json": "[{\"active\": true, \"cents\": 13}, {\"active\": false, \"cents\": 900}, {\"active\": true, \"cents\": -2}, {\"active\": true, \"cents\": 0}]"
+      },
+      "prompt": "Read rows.json. Return exactly {\"active_count\":N,\"active_cents\":N}: count and sum cents only for rows whose active is true, including zero and negative values.",
+      "expected": {
+        "active_count": 3,
+        "active_cents": 11
+      }
+    },
+    {
+      "id": "multi-read-rollup",
+      "files": {
+        "batch-0.json": "[\n  {\n    \"id\": \"record-0-0\",\n    \"active\": false,\n    \"cents\": -20,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-1\",\n    \"active\": true,\n    \"cents\": -13,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-2\",\n    \"active\": true,\n    \"cents\": -6,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-3\",\n    \"active\": false,\n    \"cents\": 1,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-4\",\n    \"active\": true,\n    \"cents\": 8,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-5\",\n    \"active\": true,\n    \"cents\": 15,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-6\",\n    \"active\": false,\n    \"cents\": 22,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-7\",\n    \"active\": true,\n    \"cents\": 29,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-8\",\n    \"active\": true,\n    \"cents\": 36,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-9\",\n    \"active\": false,\n    \"cents\": 43,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-10\",\n    \"active\": true,\n    \"cents\": 50,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-0-11\",\n    \"active\": true,\n    \"cents\": 57,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "batch-1.json": "[\n  {\n    \"id\": \"record-1-0\",\n    \"active\": true,\n    \"cents\": -1,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-1\",\n    \"active\": true,\n    \"cents\": 6,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-2\",\n    \"active\": false,\n    \"cents\": 13,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-3\",\n    \"active\": true,\n    \"cents\": 20,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-4\",\n    \"active\": true,\n    \"cents\": 27,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-5\",\n    \"active\": false,\n    \"cents\": 34,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-6\",\n    \"active\": true,\n    \"cents\": 41,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-7\",\n    \"active\": true,\n    \"cents\": 48,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-8\",\n    \"active\": false,\n    \"cents\": 55,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-9\",\n    \"active\": true,\n    \"cents\": 62,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-10\",\n    \"active\": true,\n    \"cents\": 69,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-1-11\",\n    \"active\": false,\n    \"cents\": 76,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "batch-2.json": "[\n  {\n    \"id\": \"record-2-0\",\n    \"active\": true,\n    \"cents\": 18,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-1\",\n    \"active\": false,\n    \"cents\": 25,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-2\",\n    \"active\": true,\n    \"cents\": 32,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-3\",\n    \"active\": true,\n    \"cents\": 39,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-4\",\n    \"active\": false,\n    \"cents\": 46,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-5\",\n    \"active\": true,\n    \"cents\": 53,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-6\",\n    \"active\": true,\n    \"cents\": 60,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-7\",\n    \"active\": false,\n    \"cents\": 67,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-8\",\n    \"active\": true,\n    \"cents\": 74,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-9\",\n    \"active\": true,\n    \"cents\": -20,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-10\",\n    \"active\": false,\n    \"cents\": -13,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-2-11\",\n    \"active\": true,\n    \"cents\": -6,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "batch-3.json": "[\n  {\n    \"id\": \"record-3-0\",\n    \"active\": false,\n    \"cents\": 37,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-1\",\n    \"active\": true,\n    \"cents\": 44,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-2\",\n    \"active\": true,\n    \"cents\": 51,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-3\",\n    \"active\": false,\n    \"cents\": 58,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-4\",\n    \"active\": true,\n    \"cents\": 65,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-5\",\n    \"active\": true,\n    \"cents\": 72,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-6\",\n    \"active\": false,\n    \"cents\": 79,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-7\",\n    \"active\": true,\n    \"cents\": -15,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-8\",\n    \"active\": true,\n    \"cents\": -8,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-9\",\n    \"active\": false,\n    \"cents\": -1,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-10\",\n    \"active\": true,\n    \"cents\": 6,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-3-11\",\n    \"active\": true,\n    \"cents\": 13,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "batch-4.json": "[\n  {\n    \"id\": \"record-4-0\",\n    \"active\": true,\n    \"cents\": 56,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-1\",\n    \"active\": true,\n    \"cents\": 63,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-2\",\n    \"active\": false,\n    \"cents\": 70,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-3\",\n    \"active\": true,\n    \"cents\": 77,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-4\",\n    \"active\": true,\n    \"cents\": -17,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-5\",\n    \"active\": false,\n    \"cents\": -10,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-6\",\n    \"active\": true,\n    \"cents\": -3,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-7\",\n    \"active\": true,\n    \"cents\": 4,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-8\",\n    \"active\": false,\n    \"cents\": 11,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-9\",\n    \"active\": true,\n    \"cents\": 18,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-10\",\n    \"active\": true,\n    \"cents\": 25,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-4-11\",\n    \"active\": false,\n    \"cents\": 32,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "batch-5.json": "[\n  {\n    \"id\": \"record-5-0\",\n    \"active\": true,\n    \"cents\": 75,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-1\",\n    \"active\": false,\n    \"cents\": -19,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-2\",\n    \"active\": true,\n    \"cents\": -12,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-3\",\n    \"active\": true,\n    \"cents\": -5,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-4\",\n    \"active\": false,\n    \"cents\": 2,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-5\",\n    \"active\": true,\n    \"cents\": 9,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-6\",\n    \"active\": true,\n    \"cents\": 16,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-7\",\n    \"active\": false,\n    \"cents\": 23,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-8\",\n    \"active\": true,\n    \"cents\": 30,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-9\",\n    \"active\": true,\n    \"cents\": 37,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-10\",\n    \"active\": false,\n    \"cents\": 44,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-5-11\",\n    \"active\": true,\n    \"cents\": 51,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "batch-6.json": "[\n  {\n    \"id\": \"record-6-0\",\n    \"active\": false,\n    \"cents\": -7,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-1\",\n    \"active\": true,\n    \"cents\": 0,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-2\",\n    \"active\": true,\n    \"cents\": 7,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-3\",\n    \"active\": false,\n    \"cents\": 14,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-4\",\n    \"active\": true,\n    \"cents\": 21,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-5\",\n    \"active\": true,\n    \"cents\": 28,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-6\",\n    \"active\": false,\n    \"cents\": 35,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-7\",\n    \"active\": true,\n    \"cents\": 42,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-8\",\n    \"active\": true,\n    \"cents\": 49,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-9\",\n    \"active\": false,\n    \"cents\": 56,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-10\",\n    \"active\": true,\n    \"cents\": 63,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-6-11\",\n    \"active\": true,\n    \"cents\": 70,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "batch-7.json": "[\n  {\n    \"id\": \"record-7-0\",\n    \"active\": true,\n    \"cents\": 12,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-1\",\n    \"active\": true,\n    \"cents\": 19,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-2\",\n    \"active\": false,\n    \"cents\": 26,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-3\",\n    \"active\": true,\n    \"cents\": 33,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-4\",\n    \"active\": true,\n    \"cents\": 40,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-5\",\n    \"active\": false,\n    \"cents\": 47,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-6\",\n    \"active\": true,\n    \"cents\": 54,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-7\",\n    \"active\": true,\n    \"cents\": 61,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-8\",\n    \"active\": false,\n    \"cents\": 68,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-9\",\n    \"active\": true,\n    \"cents\": 75,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-10\",\n    \"active\": true,\n    \"cents\": -19,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  },\n  {\n    \"id\": \"record-7-11\",\n    \"active\": false,\n    \"cents\": -12,\n    \"note\": \"Synthetic irrelevant description Synthetic irrelevant description Synthetic irrelevant description \"\n  }\n]",
+        "index.json": "{\"batches\": [\"batch-0.json\", \"batch-1.json\", \"batch-2.json\", \"batch-3.json\", \"batch-4.json\", \"batch-5.json\", \"batch-6.json\", \"batch-7.json\"]}"
+      },
+      "prompt": "Read index.json and every batch it lists. Return exactly {\"files\":N,\"active_count\":N,\"active_cents\":N}: number of listed batches, count and sum cents for rows whose active is true across those batches. Include zero and negative values. Ignore notes. Inspect every listed file.",
+      "expected": {
+        "files": 8,
+        "active_count": 64,
+        "active_cents": 1905
+      }
+    },
+    {
+      "id": "dependent-chain",
+      "files": {
+        "start.json": "{\"next\": \"part-0.json\"}",
+        "part-0.json": "{\n  \"name\": \"part-0\",\n  \"status\": \"ready\",\n  \"value\": -3,\n  \"next\": \"part-1.json\",\n  \"notes\": [\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\"\n  ]\n}",
+        "part-1.json": "{\n  \"name\": \"part-1\",\n  \"status\": \"pending\",\n  \"value\": -2,\n  \"next\": \"part-2.json\",\n  \"notes\": [\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\"\n  ]\n}",
+        "part-2.json": "{\n  \"name\": \"part-2\",\n  \"status\": \"ready\",\n  \"value\": 1,\n  \"next\": \"part-3.json\",\n  \"notes\": [\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\"\n  ]\n}",
+        "part-3.json": "{\n  \"name\": \"part-3\",\n  \"status\": \"pending\",\n  \"value\": 6,\n  \"next\": \"part-4.json\",\n  \"notes\": [\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\"\n  ]\n}",
+        "part-4.json": "{\n  \"name\": \"part-4\",\n  \"status\": \"ready\",\n  \"value\": 13,\n  \"next\": \"part-5.json\",\n  \"notes\": [\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\"\n  ]\n}",
+        "part-5.json": "{\n  \"name\": \"part-5\",\n  \"status\": \"pending\",\n  \"value\": 22,\n  \"next\": \"part-6.json\",\n  \"notes\": [\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\"\n  ]\n}",
+        "part-6.json": "{\n  \"name\": \"part-6\",\n  \"status\": \"ready\",\n  \"value\": 33,\n  \"next\": null,\n  \"notes\": [\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\",\n    \"Unrelated fixture text\"\n  ]\n}"
+      },
+      "prompt": "Read start.json, then follow each next path until null. Do not guess filenames or skip nodes. Return exactly {\"visited\":N,\"ready_names\":[...],\"ready_total\":N}: visited part nodes (excluding start.json), names in traversal order whose status is ready, and sum their value. Inspect every node.",
+      "expected": {
+        "visited": 7,
+        "ready_names": [
+          "part-0",
+          "part-2",
+          "part-4",
+          "part-6"
+        ],
+        "ready_total": 44
+      }
+    }
+  ],
+  "trials": [
+    {
+      "task": "single-read",
+      "repeat": 0,
+      "arm": "script",
+      "elapsedSeconds": 2.680915375,
+      "error": null,
+      "cacheReadTokens": 2432,
+      "costUsd": 0.000163726,
+      "finalAnswer": "{\"active_count\":3,\"active_cents\":11}",
+      "inputTokens": 2991,
+      "modelRequests": 3,
+      "nestedToolCalls": 2,
+      "outputTokens": 181,
+      "permissionRequests": 0,
+      "scriptCalls": 2,
+      "toolCalls": 2,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "active_count": 3,
+          "active_cents": 11
+        },
+        "expected": {
+          "active_count": 3,
+          "active_cents": 11
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "single-read",
+      "repeat": 0,
+      "arm": "direct",
+      "elapsedSeconds": 1.578648458,
+      "error": null,
+      "cacheReadTokens": 1152,
+      "costUsd": 7.1036e-05,
+      "finalAnswer": "{\"active_count\":3,\"active_cents\":11}",
+      "inputTokens": 1416,
+      "modelRequests": 2,
+      "nestedToolCalls": 0,
+      "outputTokens": 74,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 1,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "active_count": 3,
+          "active_cents": 11
+        },
+        "expected": {
+          "active_count": 3,
+          "active_cents": 11
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "multi-read-rollup",
+      "repeat": 0,
+      "arm": "script",
+      "elapsedSeconds": 27.65029925,
+      "error": null,
+      "cacheReadTokens": 2176,
+      "costUsd": 0.0005266400000000001,
+      "finalAnswer": "{\"files\":8,\"active_count\":64,\"active_cents\":1905}",
+      "inputTokens": 6946,
+      "modelRequests": 5,
+      "nestedToolCalls": 28,
+      "outputTokens": 669,
+      "permissionRequests": 0,
+      "scriptCalls": 3,
+      "toolCalls": 4,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        },
+        "expected": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "multi-read-rollup",
+      "repeat": 0,
+      "arm": "direct",
+      "elapsedSeconds": 12.531494625,
+      "error": null,
+      "cacheReadTokens": 896,
+      "costUsd": 0.000750236,
+      "finalAnswer": "{\"files\":8,\"active_count\":64,\"active_cents\":1905}",
+      "inputTokens": 8508,
+      "modelRequests": 3,
+      "nestedToolCalls": 0,
+      "outputTokens": 913,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 9,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        },
+        "expected": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "dependent-chain",
+      "repeat": 0,
+      "arm": "direct",
+      "elapsedSeconds": 26.85143975,
+      "error": null,
+      "cacheReadTokens": 11648,
+      "costUsd": 0.00060648,
+      "finalAnswer": "{\"visited\":7,\"ready_names\":[\"part-0\",\"part-2\",\"part-4\",\"part-6\"],\"ready_total\":44}",
+      "inputTokens": 16546,
+      "modelRequests": 9,
+      "nestedToolCalls": 0,
+      "outputTokens": 415,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 8,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        },
+        "expected": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "dependent-chain",
+      "repeat": 0,
+      "arm": "script",
+      "elapsedSeconds": 39.536463875,
+      "error": null,
+      "cacheReadTokens": 17280,
+      "costUsd": 0.00081797,
+      "finalAnswer": "{\"visited\":7,\"ready_names\":[\"part-0\",\"part-2\",\"part-4\",\"part-6\"],\"ready_total\":44}",
+      "inputTokens": 22305,
+      "modelRequests": 10,
+      "nestedToolCalls": 8,
+      "outputTokens": 748,
+      "permissionRequests": 0,
+      "scriptCalls": 1,
+      "toolCalls": 9,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        },
+        "expected": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "single-read",
+      "repeat": 1,
+      "arm": "script",
+      "elapsedSeconds": 4.445381667,
+      "error": null,
+      "cacheReadTokens": 2304,
+      "costUsd": 0.000205182,
+      "finalAnswer": "{\"active_count\":3,\"active_cents\":11}",
+      "inputTokens": 3064,
+      "modelRequests": 3,
+      "nestedToolCalls": 2,
+      "outputTokens": 229,
+      "permissionRequests": 0,
+      "scriptCalls": 2,
+      "toolCalls": 2,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "active_count": 3,
+          "active_cents": 11
+        },
+        "expected": {
+          "active_count": 3,
+          "active_cents": 11
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "single-read",
+      "repeat": 1,
+      "arm": "direct",
+      "elapsedSeconds": 2.034391041,
+      "error": null,
+      "cacheReadTokens": 1024,
+      "costUsd": 7.9702e-05,
+      "finalAnswer": "{\"active_count\":3,\"active_cents\":11}",
+      "inputTokens": 1416,
+      "modelRequests": 2,
+      "nestedToolCalls": 0,
+      "outputTokens": 73,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 1,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "active_count": 3,
+          "active_cents": 11
+        },
+        "expected": {
+          "active_count": 3,
+          "active_cents": 11
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "multi-read-rollup",
+      "repeat": 1,
+      "arm": "script",
+      "elapsedSeconds": 15.0737265,
+      "error": null,
+      "cacheReadTokens": 7808,
+      "costUsd": 0.00046928,
+      "finalAnswer": "{\"files\":8,\"active_count\":64,\"active_cents\":1905}",
+      "inputTokens": 9538,
+      "modelRequests": 6,
+      "nestedToolCalls": 44,
+      "outputTokens": 729,
+      "permissionRequests": 0,
+      "scriptCalls": 4,
+      "toolCalls": 5,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        },
+        "expected": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "multi-read-rollup",
+      "repeat": 1,
+      "arm": "direct",
+      "elapsedSeconds": 10.1128515,
+      "error": null,
+      "cacheReadTokens": 2176,
+      "costUsd": 0.0007607240000000001,
+      "finalAnswer": "{\"files\":8,\"active_count\":64,\"active_cents\":1905}",
+      "inputTokens": 8514,
+      "modelRequests": 3,
+      "nestedToolCalls": 0,
+      "outputTokens": 1018,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 9,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        },
+        "expected": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "dependent-chain",
+      "repeat": 1,
+      "arm": "script",
+      "elapsedSeconds": 5.514620334,
+      "error": null,
+      "cacheReadTokens": 2944,
+      "costUsd": 0.00024474,
+      "finalAnswer": "{\"visited\":7,\"ready_names\":[\"part-0\",\"part-2\",\"part-4\",\"part-6\"],\"ready_total\":44}",
+      "inputTokens": 4188,
+      "modelRequests": 3,
+      "nestedToolCalls": 8,
+      "outputTokens": 287,
+      "permissionRequests": 0,
+      "scriptCalls": 1,
+      "toolCalls": 2,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        },
+        "expected": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "dependent-chain",
+      "repeat": 1,
+      "arm": "direct",
+      "elapsedSeconds": 6.67499825,
+      "error": null,
+      "cacheReadTokens": 13440,
+      "costUsd": 0.0005048559999999999,
+      "finalAnswer": "{\"visited\":7,\"ready_names\":[\"part-0\",\"part-2\",\"part-4\",\"part-6\"],\"ready_total\":44}",
+      "inputTokens": 16546,
+      "modelRequests": 9,
+      "nestedToolCalls": 0,
+      "outputTokens": 425,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 8,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        },
+        "expected": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "single-read",
+      "repeat": 2,
+      "arm": "script",
+      "elapsedSeconds": 3.582081666,
+      "error": null,
+      "cacheReadTokens": 2432,
+      "costUsd": 0.000200396,
+      "finalAnswer": "{\"active_count\":3,\"active_cents\":11}",
+      "inputTokens": 3085,
+      "modelRequests": 3,
+      "nestedToolCalls": 2,
+      "outputTokens": 234,
+      "permissionRequests": 0,
+      "scriptCalls": 2,
+      "toolCalls": 2,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "active_count": 3,
+          "active_cents": 11
+        },
+        "expected": {
+          "active_count": 3,
+          "active_cents": 11
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "single-read",
+      "repeat": 2,
+      "arm": "direct",
+      "elapsedSeconds": 1.6504617499999998,
+      "error": null,
+      "cacheReadTokens": 1024,
+      "costUsd": 7.9702e-05,
+      "finalAnswer": "{\"active_count\":3,\"active_cents\":11}",
+      "inputTokens": 1416,
+      "modelRequests": 2,
+      "nestedToolCalls": 0,
+      "outputTokens": 73,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 1,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "active_count": 3,
+          "active_cents": 11
+        },
+        "expected": {
+          "active_count": 3,
+          "active_cents": 11
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "multi-read-rollup",
+      "repeat": 2,
+      "arm": "script",
+      "elapsedSeconds": 9.161207333,
+      "error": null,
+      "cacheReadTokens": 3456,
+      "costUsd": 0.00026012999999999996,
+      "finalAnswer": "{\"files\":8,\"active_count\":64,\"active_cents\":1905}",
+      "inputTokens": 5531,
+      "modelRequests": 4,
+      "nestedToolCalls": 19,
+      "outputTokens": 328,
+      "permissionRequests": 0,
+      "scriptCalls": 3,
+      "toolCalls": 3,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        },
+        "expected": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "multi-read-rollup",
+      "repeat": 2,
+      "arm": "direct",
+      "elapsedSeconds": 10.02174125,
+      "error": null,
+      "cacheReadTokens": 768,
+      "costUsd": 0.0007530359999999999,
+      "finalAnswer": "{\"files\":8,\"active_count\":64,\"active_cents\":1905}",
+      "inputTokens": 8510,
+      "modelRequests": 3,
+      "nestedToolCalls": 0,
+      "outputTokens": 910,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 9,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        },
+        "expected": {
+          "files": 8,
+          "active_count": 64,
+          "active_cents": 1905
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "dependent-chain",
+      "repeat": 2,
+      "arm": "direct",
+      "elapsedSeconds": 19.245675667,
+      "error": null,
+      "cacheReadTokens": 18944,
+      "costUsd": 0.00048294999999999995,
+      "finalAnswer": "{\"visited\":7,\"ready_names\":[\"part-0\",\"part-2\",\"part-4\",\"part-6\"],\"ready_total\":44}",
+      "inputTokens": 19873,
+      "modelRequests": 10,
+      "nestedToolCalls": 0,
+      "outputTokens": 597,
+      "permissionRequests": 0,
+      "scriptCalls": 0,
+      "toolCalls": 9,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        },
+        "expected": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        }
+      },
+      "passed": true
+    },
+    {
+      "task": "dependent-chain",
+      "repeat": 2,
+      "arm": "script",
+      "elapsedSeconds": 16.348078583,
+      "error": null,
+      "cacheReadTokens": 6528,
+      "costUsd": 0.000568012,
+      "finalAnswer": "{\"visited\":7,\"ready_names\":[\"part-0\",\"part-2\",\"part-4\",\"part-6\"],\"ready_total\":44}",
+      "inputTokens": 9408,
+      "modelRequests": 6,
+      "nestedToolCalls": 13,
+      "outputTokens": 671,
+      "permissionRequests": 0,
+      "scriptCalls": 2,
+      "toolCalls": 5,
+      "grading": {
+        "passed": true,
+        "answerCorrect": true,
+        "workspaceUnchanged": true,
+        "actual": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        },
+        "expected": {
+          "visited": 7,
+          "ready_names": [
+            "part-0",
+            "part-2",
+            "part-4",
+            "part-6"
+          ],
+          "ready_total": 44
+        }
+      },
+      "passed": true
+    }
+  ],
+  "summary": {
+    "recordedCostUsd": 0.007544797999999999,
+    "results": {
+      "dependent-chain": {
+        "direct": {
+          "trials": 3,
+          "passed": 3,
+          "elapsedSeconds": {
+            "samples": 3,
+            "median": 19.245675667
+          },
+          "inputTokens": {
+            "samples": 3,
+            "median": 16546
+          },
+          "outputTokens": {
+            "samples": 3,
+            "median": 425
+          },
+          "costUsd": {
+            "samples": 3,
+            "median": 0.0005048559999999999
+          },
+          "modelRequests": {
+            "samples": 3,
+            "median": 9
+          },
+          "toolCalls": {
+            "samples": 3,
+            "median": 8
+          },
+          "nestedToolCalls": {
+            "samples": 3,
+            "median": 0
+          },
+          "scriptCalls": {
+            "samples": 3,
+            "median": 0
+          }
+        },
+        "script": {
+          "trials": 3,
+          "passed": 3,
+          "elapsedSeconds": {
+            "samples": 3,
+            "median": 16.348078583
+          },
+          "inputTokens": {
+            "samples": 3,
+            "median": 9408
+          },
+          "outputTokens": {
+            "samples": 3,
+            "median": 671
+          },
+          "costUsd": {
+            "samples": 3,
+            "median": 0.000568012
+          },
+          "modelRequests": {
+            "samples": 3,
+            "median": 6
+          },
+          "toolCalls": {
+            "samples": 3,
+            "median": 5
+          },
+          "nestedToolCalls": {
+            "samples": 3,
+            "median": 8
+          },
+          "scriptCalls": {
+            "samples": 3,
+            "median": 1
+          }
+        }
+      },
+      "multi-read-rollup": {
+        "direct": {
+          "trials": 3,
+          "passed": 3,
+          "elapsedSeconds": {
+            "samples": 3,
+            "median": 10.1128515
+          },
+          "inputTokens": {
+            "samples": 3,
+            "median": 8510
+          },
+          "outputTokens": {
+            "samples": 3,
+            "median": 913
+          },
+          "costUsd": {
+            "samples": 3,
+            "median": 0.0007530359999999999
+          },
+          "modelRequests": {
+            "samples": 3,
+            "median": 3
+          },
+          "toolCalls": {
+            "samples": 3,
+            "median": 9
+          },
+          "nestedToolCalls": {
+            "samples": 3,
+            "median": 0
+          },
+          "scriptCalls": {
+            "samples": 3,
+            "median": 0
+          }
+        },
+        "script": {
+          "trials": 3,
+          "passed": 3,
+          "elapsedSeconds": {
+            "samples": 3,
+            "median": 15.0737265
+          },
+          "inputTokens": {
+            "samples": 3,
+            "median": 6946
+          },
+          "outputTokens": {
+            "samples": 3,
+            "median": 669
+          },
+          "costUsd": {
+            "samples": 3,
+            "median": 0.00046928
+          },
+          "modelRequests": {
+            "samples": 3,
+            "median": 5
+          },
+          "toolCalls": {
+            "samples": 3,
+            "median": 4
+          },
+          "nestedToolCalls": {
+            "samples": 3,
+            "median": 28
+          },
+          "scriptCalls": {
+            "samples": 3,
+            "median": 3
+          }
+        }
+      },
+      "single-read": {
+        "direct": {
+          "trials": 3,
+          "passed": 3,
+          "elapsedSeconds": {
+            "samples": 3,
+            "median": 1.6504617499999998
+          },
+          "inputTokens": {
+            "samples": 3,
+            "median": 1416
+          },
+          "outputTokens": {
+            "samples": 3,
+            "median": 73
+          },
+          "costUsd": {
+            "samples": 3,
+            "median": 7.9702e-05
+          },
+          "modelRequests": {
+            "samples": 3,
+            "median": 2
+          },
+          "toolCalls": {
+            "samples": 3,
+            "median": 1
+          },
+          "nestedToolCalls": {
+            "samples": 3,
+            "median": 0
+          },
+          "scriptCalls": {
+            "samples": 3,
+            "median": 0
+          }
+        },
+        "script": {
+          "trials": 3,
+          "passed": 3,
+          "elapsedSeconds": {
+            "samples": 3,
+            "median": 3.582081666
+          },
+          "inputTokens": {
+            "samples": 3,
+            "median": 3064
+          },
+          "outputTokens": {
+            "samples": 3,
+            "median": 229
+          },
+          "costUsd": {
+            "samples": 3,
+            "median": 0.000200396
+          },
+          "modelRequests": {
+            "samples": 3,
+            "median": 3
+          },
+          "toolCalls": {
+            "samples": 3,
+            "median": 2
+          },
+          "nestedToolCalls": {
+            "samples": 3,
+            "median": 2
+          },
+          "scriptCalls": {
+            "samples": 3,
+            "median": 2
+          }
+        }
+      }
+    }
+  },
+  "limitations": [
+    "Historical data; the runtime and comparison driver were removed.",
+    "No quality advantage established: both configurations passed all synthetic tasks.",
+    "Provider caches were uncontrolled; results concern one model and prototype."
+  ]
+}
