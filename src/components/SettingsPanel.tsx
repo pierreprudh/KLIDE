@@ -496,6 +496,7 @@ export function SettingsPanel({
   const [showHiddenFiles, onShowHiddenFilesChange] = useSetting(SETTINGS.showHiddenFiles);
   const [confirmCloseDirty, onConfirmCloseDirtyChange] = useSetting(SETTINGS.confirmCloseDirty);
   const [showAskerAvatar, onShowAskerAvatarChange] = useSetting(SETTINGS.showAskerAvatar);
+  const [pasteLongTextAsFile, onPasteLongTextAsFileChange] = useSetting(SETTINGS.pasteLongTextAsFile);
   const [welcomeFilm, onWelcomeFilmChange] = useSetting(SETTINGS.welcomeFilm);
   const isSectionId = (value: string | null | undefined): value is SectionId =>
     sections.some((section) => section.id === value);
@@ -1251,6 +1252,17 @@ export function SettingsPanel({
                         checked={showAskerAvatar}
                         onChange={onShowAskerAvatarChange}
                         label="Your profile picture"
+                      />
+                    }
+                  />
+                  <Row
+                    title="Paste long text as a file"
+                    description="A long paste into the composer becomes an attached text file instead of filling the message."
+                    control={
+                      <Toggle
+                        checked={pasteLongTextAsFile}
+                        onChange={onPasteLongTextAsFileChange}
+                        label="Paste long text as a file"
                       />
                     }
                   />

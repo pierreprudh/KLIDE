@@ -171,7 +171,7 @@ import { agentPickForConversation, routedModelString } from "../agent/harnessSou
 import { readHarnessSourceSupport } from "../ipc/hermes";
 import { conversationMark } from "../modelIdentity";
 import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
-import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
+import { ATTACH_ACCEPT, isPhotoAttachment, pastedTextAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { extractPdfText } from "../ipc/pdf";
 import { AttachmentCard, AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
@@ -967,6 +967,7 @@ export function AiPanel({
   // …unless you'd rather not look at yourself. Off, the mark and its gutter
   // both go: the bubbles keep the right edge to themselves.
   const [showAskerAvatar] = useSetting(SETTINGS.showAskerAvatar);
+  const [pasteLongTextAsFile] = useSetting(SETTINGS.pasteLongTextAsFile);
   /** The mark for one response: what produced THAT turn. A thread continued on
    *  another model shows both, each against the turn it actually ran.
    *
@@ -2082,6 +2083,14 @@ export function AiPanel({
     if (files.length && canAttachFiles) {
       e.preventDefault();
       void addFiles(files);
+      return;
+    }
+    const pasted = canAttachFiles && pasteLongTextAsFile
+      ? pastedTextAttachment(e.clipboardData?.getData("text/plain") ?? "", pendingAttachments)
+      : null;
+    if (pasted) {
+      e.preventDefault();
+      setPendingAttachments((prev) => [...prev, pasted]);
     }
   }
 

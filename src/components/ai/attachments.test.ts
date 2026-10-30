@@ -11,6 +11,10 @@ import {
   classifyFile,
   isPhotoAttachment,
   markupPreviewUri,
+  MAX_PASTE_CHARS,
+  PASTE_AS_FILE_CHARS,
+  PASTE_AS_FILE_LINES,
+  pastedTextAttachment,
   pdfContent,
   stageFiles,
   type StageableFile,
@@ -281,5 +285,35 @@ describe("pdfContent", () => {
 
   it("leaves a PDF that fits whole", () => {
     expect(pdfContent(["only page"])).toBe("[page 1]\nonly page");
+  });
+});
+
+describe("pastedTextAttachment", () => {
+  it("leaves a short paste to the draft", () => {
+    expect(pastedTextAttachment("a sentence", [])).toBeNull();
+  });
+
+  it("files a paste past either the character or the line threshold", () => {
+    expect(pastedTextAttachment("x".repeat(PASTE_AS_FILE_CHARS), [])?.path).toBe("Pasted text.txt");
+    const lines = Array.from({ length: PASTE_AS_FILE_LINES }, (_, i) => `l${i}`).join("\n");
+    expect(pastedTextAttachment(lines, [])).toEqual({ path: "Pasted text.txt", content: lines });
+  });
+
+  it("numbers past what is already staged", () => {
+    const long = "x".repeat(PASTE_AS_FILE_CHARS);
+    const staged = [{ path: "Pasted text.txt", content: long }, { path: "notes.md", content: "" }];
+    expect(pastedTextAttachment(long, staged)?.path).toBe("Pasted text 2.txt");
+    expect(pastedTextAttachment(long, [{ path: "Pasted text 3.txt", content: long }])?.path).toBe("Pasted text 4.txt");
+  });
+
+  it("keeps far more than a dropped document, and says where it cut", () => {
+    const out = pastedTextAttachment("x".repeat(MAX_PASTE_CHARS + 10), []);
+    expect(out?.content.length).toBe(MAX_PASTE_CHARS + "\n…(truncated)".length);
+    expect(out?.content.endsWith("…(truncated)")).toBe(true);
+  });
+
+  it("returns null when the tray is full, so the paste lands in the draft", () => {
+    const full = Array.from({ length: MAX_STAGED }, (_, i) => ({ path: `f${i}.txt`, content: "" }));
+    expect(pastedTextAttachment("x".repeat(PASTE_AS_FILE_CHARS), full)).toBeNull();
   });
 });
