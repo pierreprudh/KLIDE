@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
+import { listProviderModelMetadata, listProviderModels, modelChats, readProviderKeyStatus } from "../../ipc/aiProviders";
 import { Z } from "../../zLayers";
 import { resolveModelLogo } from "../../modelIdentity";
 import { ChevronDown, ProviderLogo } from "../ai/icons";
@@ -25,6 +25,49 @@ import {
 } from "../../customCli";
 import { GhostButton, IconButton, LinkButton, Panel, PencilIcon, Row, StatusText, TrashIcon } from "./controls";
 import type { KeyStatus } from "./apiKeys";
+
+/** The words a non-chat model's row ends on. */
+const TASK_WORD: Record<string, string> = { embedding: "Embedding", ocr: "OCR" };
+
+/** One short wave: each row a beat behind the last, capped so a long list
+ *  doesn't keep arriving after the reader has started on it. */
+function riseDelay(i: number): CSSProperties {
+  return { "--enter-delay": `${Math.min(i, 12) * 22}ms` } as CSSProperties;
+}
+
+/** A listed model: its maker's mark (or an empty slot of the same width, so
+ *  the names stay on one column), the name, and the tag after the colon. */
+function EndpointModelName({ model, tone }: { model: string; tone: string }) {
+  const colon = model.indexOf(":");
+  const name = colon >= 0 ? model.slice(0, colon) : model;
+  const tag = colon >= 0 ? model.slice(colon + 1) : null;
+  return (
+    <>
+      <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, display: "grid", placeItems: "center" }}>
+        {resolveModelLogo(model, 16)}
+      </span>
+      <span style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 7, flex: 1 }}>
+        <span
+          style={{
+            fontFamily: "var(--font-mono, monospace)",
+            fontSize: 12,
+            color: tone,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {name}
+        </span>
+        {tag && (
+          <span style={{ flexShrink: 0, fontSize: 10.5, color: "var(--fg-subtle)", fontFamily: "var(--font-mono, monospace)" }}>
+            {tag}
+          </span>
+        )}
+      </span>
+    </>
+  );
+}
 
 // Self-hosted (custom) OpenAI-compatible endpoints. Config (label, base URL,
 // default model) persists to the Rust store; the bearer token rides the same
@@ -52,6 +95,11 @@ export function CustomEndpointRow({
   const [error, setError] = useState<string | null>(null);
   const [keyStatus, setKeyStatus] = useState<KeyStatus>({ hasKey: false, source: "none" });
   const [hoveredModel, setHoveredModel] = useState<string | null>(null);
+  // What each model is for, when the endpoint says (`task`). Embedding and
+  // OCR models are listed apart and can't be the default.
+  const [tasks, setTasks] = useState<Record<string, string>>({});
+  // Bumped on every open so the rows rise in again, not only the first time.
+  const [openCount, setOpenCount] = useState(0);
 
   const loadDetail = useCallback(async () => {
     setLoading(true);
@@ -62,6 +110,11 @@ export function CustomEndpointRow({
       );
       setKeyStatus(ks);
       const m = await listProviderModels(endpoint.id);
+      // The listing just filled Rust's metadata cache; this reads it back.
+      const meta = await listProviderModelMetadata(endpoint.id).catch(() => []);
+      const byId: Record<string, string> = {};
+      for (const row of meta) if (!modelChats(row) && row.task) byId[row.id] = row.task;
+      setTasks(byId);
       setModels(m);
     } catch (e) {
       setError(String(e));
@@ -74,6 +127,7 @@ export function CustomEndpointRow({
   function toggle() {
     const next = !open;
     setOpen(next);
+    if (next) setOpenCount((n) => n + 1);
     // Lazy-load the detail the first time it opens.
     if (next && models === null && !loading) void loadDetail();
   }
@@ -86,6 +140,8 @@ export function CustomEndpointRow({
     /* keep raw */
   }
   const count = models?.length ?? 0;
+  const chatModels = models?.filter((m) => !tasks[m]) ?? [];
+  const otherModels = models?.filter((m) => tasks[m]) ?? [];
 
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
@@ -136,7 +192,11 @@ export function CustomEndpointRow({
         </div>
       </div>
 
-      {open && (
+      {/* The detail opens the way the Settings subpages do: the track grows
+          from 0fr while the content fades, and the model rows rise in one
+          short wave behind it. */}
+      <div className="klide-reveal" data-open={open ? "true" : "false"} aria-hidden={!open}>
+        <div className="klide-reveal-clip">
         <div style={{ padding: "0 18px 14px 40px", display: "grid", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {loading ? (
@@ -168,31 +228,30 @@ export function CustomEndpointRow({
               {error}
             </div>
           )}
-          {models && models.length > 0 && (
-            <div style={{ display: "grid", gap: 7 }}>
+          {chatModels.length > 0 && (
+            <div key={openCount} style={{ display: "grid", gap: 7 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
                 <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg-dim)", letterSpacing: "0.02em" }}>
                   Models{" "}
-                  <span style={{ fontWeight: 400, color: "var(--fg-subtle)" }}>{count}</span>
+                  <span style={{ fontWeight: 400, color: "var(--fg-subtle)" }}>{chatModels.length}</span>
                 </span>
                 <span style={{ fontSize: 10.5, color: "var(--fg-subtle)" }}>click to set default</span>
               </div>
               <div style={{ display: "grid", gap: 2 }}>
-                {models.map((m) => {
+                {chatModels.map((m, i) => {
                   const isDefault = m === endpoint.defaultModel;
                   const hovered = hoveredModel === m;
-                  const colon = m.indexOf(":");
-                  const name = colon >= 0 ? m.slice(0, colon) : m;
-                  const tag = colon >= 0 ? m.slice(colon + 1) : null;
                   return (
                     <button
                       key={m}
+                      className="klide-enter-rise"
                       disabled={busy}
                       onClick={() => onSetDefault(m)}
                       onMouseEnter={() => setHoveredModel(m)}
                       onMouseLeave={() => setHoveredModel((cur) => (cur === m ? null : cur))}
                       title={isDefault ? "Default model" : "Set as default"}
                       style={{
+                        ...riseDelay(i),
                         display: "flex",
                         alignItems: "center",
                         gap: 10,
@@ -206,38 +265,7 @@ export function CustomEndpointRow({
                         transition: "background 0.12s ease, border-color 0.12s ease",
                       }}
                     >
-                      {/* The maker's mark, or an empty slot of the same width so
-                          the names stay on one column. The default is said by the
-                          row's tint and its label, not by a radio. */}
-                      <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, display: "grid", placeItems: "center" }}>
-                        {resolveModelLogo(m, 16)}
-                      </span>
-                      <span style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 7, flex: 1 }}>
-                        <span
-                          style={{
-                            fontFamily: "var(--font-mono, monospace)",
-                            fontSize: 12,
-                            color: isDefault ? "var(--accent)" : "var(--fg-strong)",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {name}
-                        </span>
-                        {tag && (
-                          <span
-                            style={{
-                              flexShrink: 0,
-                              fontSize: 10.5,
-                              color: "var(--fg-subtle)",
-                              fontFamily: "var(--font-mono, monospace)",
-                            }}
-                          >
-                            {tag}
-                          </span>
-                        )}
-                      </span>
+                      <EndpointModelName model={m} tone={isDefault ? "var(--accent)" : "var(--fg-strong)"} />
                       {isDefault ? (
                         <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
                           Default
@@ -253,11 +281,42 @@ export function CustomEndpointRow({
               </div>
             </div>
           )}
+          {otherModels.length > 0 && (
+            <div key={`other-${openCount}`} style={{ display: "grid", gap: 7, marginTop: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg-dim)", letterSpacing: "0.02em" }}>
+                Not for chat{" "}
+                <span style={{ fontWeight: 400, color: "var(--fg-subtle)" }}>{otherModels.length}</span>
+              </span>
+              <div style={{ display: "grid", gap: 2 }}>
+                {otherModels.map((m, i) => (
+                  <div
+                    key={m}
+                    className="klide-enter-rise"
+                    style={{
+                      ...riseDelay(chatModels.length + i),
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "7px 10px",
+                      border: "1px solid transparent",
+                      opacity: 0.62,
+                    }}
+                  >
+                    <EndpointModelName model={m} tone="var(--fg-dim)" />
+                    <span style={{ flexShrink: 0, fontSize: 10.5, color: "var(--fg-subtle)" }}>
+                      {TASK_WORD[tasks[m]] ?? tasks[m]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <LinkButton onClick={() => void loadDetail()}>Refresh</LinkButton>
           </div>
         </div>
-      )}
+        </div>
+      </div>
     </div>
   );
 }

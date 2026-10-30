@@ -1382,7 +1382,10 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-settings-nav-item[aria-expanded="true"] .klide-settings-chevron {
   transform: rotate(90deg);
 }
-.klide-settings-subpages-reveal {
+/* Also `.klide-reveal`: the same opening for any row whose detail unfolds
+   beneath it (a self-hosted endpoint's models). */
+.klide-settings-subpages-reveal,
+.klide-reveal {
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
@@ -1390,14 +1393,16 @@ textarea.klide-diff-comment-input:focus-visible {
   transition: grid-template-rows 300ms var(--ease-out),
     opacity 180ms var(--ease-out), visibility 0s 300ms;
 }
-.klide-settings-subpages-reveal[data-open="true"] {
+.klide-settings-subpages-reveal[data-open="true"],
+.klide-reveal[data-open="true"] {
   grid-template-rows: 1fr;
   opacity: 1;
   visibility: visible;
   transition: grid-template-rows 300ms var(--ease-out),
     opacity 220ms var(--ease-out), visibility 0s;
 }
-.klide-settings-subpages-clip {
+.klide-settings-subpages-clip,
+.klide-reveal-clip {
   min-height: 0;
   overflow: hidden;
 }
@@ -1405,7 +1410,8 @@ textarea.klide-diff-comment-input:focus-visible {
   .klide-settings-nav-item,
   .klide-settings-nav-item::before,
   .klide-settings-chevron,
-  .klide-settings-subpages-reveal[data-open] {
+  .klide-settings-subpages-reveal[data-open],
+  .klide-reveal[data-open] {
     transition: none;
   }
 }

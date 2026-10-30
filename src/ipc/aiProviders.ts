@@ -20,7 +20,16 @@ export type ProviderModelMetadata = {
   supportsTools?: boolean | null;
   inputPerMillion?: number | null;
   outputPerMillion?: number | null;
+  /** What the endpoint says the model is for — `chat`, `embedding`, `ocr`.
+   *  Absent when it didn't say (most endpoints); such a model is offered. */
+  task?: string | null;
 };
+
+/** False only when the endpoint listed the model as for something other than
+ *  chat — an embedding or OCR model served beside the chat ones. */
+export function modelChats(meta: ProviderModelMetadata | undefined): boolean {
+  return meta?.task !== "embedding" && meta?.task !== "ocr";
+}
 
 /** What a run on this pair costs the user — the Provider's call, never the
  *  model name's (`model_capabilities::PriceClass`). */
