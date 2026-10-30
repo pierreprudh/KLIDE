@@ -43,6 +43,7 @@ fn run_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>, String> {
     let paths = vec![
         root.join(format!("{id}.jsonl")),
         root.join(format!("{id}.summary.json")),
+        root.join(format!("{id}.history.json")),
         root.join(id).join("checkpoints"),
         root.join(format!("{id}.values")),
     ];
@@ -100,7 +101,7 @@ fn delete_stored_run(root: &Path, id: &str) -> Result<(), String> {
     // A valid summary proves this is a known run, rather than an arbitrary id.
     crate::agent::transcripts::read_summary(root, id)?;
     // Delete the index last, leaving a discoverable row if cleanup fails.
-    for index in [2, 3, 0, 1] {
+    for index in (2..paths.len()).chain([0, 1]) {
         let path = &paths[index];
         let meta = match std::fs::symlink_metadata(path) {
             Ok(meta) => meta,
@@ -378,7 +379,7 @@ fn is_transcript_file(name: &std::ffi::OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
-    name.ends_with(".jsonl") || name.ends_with(".summary.json")
+    name.ends_with(".jsonl") || name.ends_with(".summary.json") || name.ends_with(".history.json")
 }
 
 /// Is this a run's folder? A Run keeps its file checkpoints in
@@ -706,15 +707,18 @@ mod tests {
         std::fs::create_dir_all(&to).unwrap();
         std::fs::write(from.join("run_a.jsonl"), b"12345").unwrap();
         std::fs::write(from.join("run_a.summary.json"), b"123").unwrap();
+        std::fs::write(from.join("run_a.history.json"), b"original history").unwrap();
         // A run id already present at the destination keeps the destination's
         // copy — that is the one the app reads from now.
         std::fs::write(from.join("run_b.jsonl"), b"old").unwrap();
         std::fs::write(to.join("run_b.jsonl"), b"kept").unwrap();
 
         let (moved, bytes, left) = move_runs(&from, &to).unwrap();
-        assert_eq!((moved, bytes, left), (2, 8, 0));
+        assert_eq!((moved, bytes, left), (3, 24, 0));
         assert!(to.join("run_a.jsonl").exists());
         assert!(!from.join("run_a.jsonl").exists());
+        assert_eq!(std::fs::read(to.join("run_a.history.json")).unwrap(), b"original history");
+        assert!(!from.join("run_a.history.json").exists());
         assert_eq!(std::fs::read(to.join("run_b.jsonl")).unwrap(), b"kept");
 
         // Moving from a folder that was never created is not an error.
@@ -912,14 +916,16 @@ mod conversation_storage_tests {
         std::fs::write(root.join("large/unrelated"), "keep").unwrap();
         std::fs::create_dir_all(root.join("large.values")).unwrap();
         std::fs::write(root.join("large.values/result"), "output").unwrap();
+        std::fs::write(root.join("large.history.json"), "original history").unwrap();
         let rows = stored_runs(&root).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "large");
         assert_eq!(rows[0].transcript_bytes, 1000);
-        assert!(rows[0].supporting_bytes >= 12);
+        assert!(rows[0].supporting_bytes >= 28);
         delete_stored_run(&root, "large").unwrap();
         assert!(!root.join("large.jsonl").exists());
         assert!(!root.join("large.summary.json").exists());
+        assert!(!root.join("large.history.json").exists());
         assert!(!root.join("large/checkpoints").exists());
         assert!(!root.join("large.values").exists());
         assert!(root.join("large/unrelated").exists());

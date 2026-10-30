@@ -179,11 +179,22 @@ impl RunHost {
         let operations = live.clone();
         let changes = live.clone();
         let permissions = live.clone();
+        let history = live.clone();
         let endpoint = self.data_dir.join("chat-coordination-endpoint.json");
         if let Err(e) = self.bridge.ensure_server(
             &endpoint,
             self.store.clone(),
             BridgeHooks {
+                history: Some(Box::new(move |session, tool, input| {
+                    let host = history.upgrade().ok_or("Background host stopped")?;
+                    let runs = {
+                        let handles = host.runs.lock().map_err(|_| "Run state unavailable")?;
+                        let handle = handles.get(&session.run_id).ok_or("No active conversation")?;
+                        let port = handle.out_of_band.lock().map_err(|_| "Conversation port unavailable")?;
+                        port.as_ref().ok_or("Conversation history port unavailable")?.runs_dir.clone()
+                    };
+                    crate::coordination_bridge::execute_history(&runs, session, tool, input)
+                })),
                 orchestrate: Some(Box::new(move |session, request| {
                     let host = operations.upgrade().ok_or("Background host stopped")?;
                     host.queue_operation(

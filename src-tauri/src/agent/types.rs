@@ -70,9 +70,24 @@ pub struct AgentContextSnapshot {
     pub omitted: Vec<serde_json::Value>,
 }
 
+/// Imported prose, persisted separately from provider messages.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ConversationHistory {
+    pub source: String,
+    pub messages: Vec<HistoryMessage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HistoryMessage {
+    pub role: String,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRunRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_history: Option<ConversationHistory>,
     /// Client-supplied run id. When present, the harness keys the transcript,
     /// supervisor handle, and events under this id instead of minting its own —
     /// so the AI panel's conversation id, the on-disk transcript, and the

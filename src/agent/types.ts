@@ -432,7 +432,14 @@ export type CheckpointEntry = {
   ts: number;
 };
 
+export type ConversationHistory = {
+  source: string;
+  messages: { role: "user" | "assistant"; text: string }[];
+};
+
 export type StartAgentRunInput = {
+  /** Stored locally for retrieval; never inserted into provider messages. */
+  conversationHistory?: ConversationHistory;
   /** Client-supplied run id. The AI panel passes its conversation id so the
    *  on-disk transcript shares the convo id and Mission Control can dedupe. */
   runId?: string;

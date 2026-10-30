@@ -127,7 +127,7 @@ impl Bridge for HttpBridge {
 pub fn tool_list() -> Value {
     let mut tools = vec![crate::missions::orchestration::tool()];
     for tool in crate::agent::tools::list_tools(&crate::agent::types::AgentMode::Plan)
-        .into_iter().filter(|t| matches!(t["function"]["name"].as_str(), Some("memory_search" | "memory_read" | "memory_propose"))) {
+        .into_iter().filter(|t| matches!(t["function"]["name"].as_str(), Some("memory_search" | "memory_read" | "memory_propose" | "search_conversations" | "read_conversation"))) {
         tools.push(json!({ "name": tool["function"]["name"], "description": tool["function"]["description"], "inputSchema": tool["function"]["parameters"] }));
     }
     let skill = crate::agent::tools::list_tools(&crate::agent::types::AgentMode::Plan)
@@ -185,6 +185,8 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, String> {
     let timeout = args.get("timeoutSeconds").and_then(Value::as_u64);
     match name {
+        "search_conversations" => Ok(BridgeRequest::SearchConversations { input: args.clone() }),
+        "read_conversation" => Ok(BridgeRequest::ReadConversation { input: args.clone() }),
         "memory_search" => Ok(BridgeRequest::MemorySearch { input: args.clone() }),
         "memory_read" => Ok(BridgeRequest::MemoryRead { input: args.clone() }),
         "memory_propose" => Ok(BridgeRequest::MemoryPropose { input: args.clone() }),
@@ -411,7 +413,7 @@ mod tests {
     fn memory_catalog_matches_native_tools_and_has_no_publication_tool() {
         use super::*;
         let tools = tool_list();
-        for name in ["memory_search", "memory_read", "memory_propose"] {
+        for name in ["memory_search", "memory_read", "memory_propose", "search_conversations", "read_conversation"] {
             let native = crate::agent::tools::list_tools(&crate::agent::types::AgentMode::Plan)
                 .into_iter().find(|t| t["function"]["name"] == name).unwrap();
             let mcp = tools.as_array().unwrap().iter().find(|t| t["name"] == name).unwrap();
@@ -539,7 +541,7 @@ mod tests {
         // looks the prompt tool up on tools/list like any other.
         assert_eq!(
             names,
-            ["mission_orchestrate", "memory_propose", "memory_search", "memory_read", "read_skill", "permission", "agent_list", "agent_send", "agent_wait", "agent_cancel", "agent_read_result", "agent_publish_result"]
+            ["mission_orchestrate", "search_conversations", "read_conversation", "memory_propose", "memory_search", "memory_read", "read_skill", "permission", "agent_list", "agent_send", "agent_wait", "agent_cancel", "agent_read_result", "agent_publish_result"]
         );
     }
 
@@ -1226,6 +1228,7 @@ mod chain {
                 &first.endpoint,
                 restarted_workspace.store.clone(),
                 BridgeHooks {
+                    history: None,
                     orchestrate: None,
                     permission: None,
                     on_change: Box::new(|_, _| {}),

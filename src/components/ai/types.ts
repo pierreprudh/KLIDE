@@ -191,9 +191,9 @@ export type Conversation = {
   delegateSession?: string | null;
   /** Set when `msgs` were carried in from another transcript (a run opened
    *  in another agent, continued with Kit, forked) and the Harness holds none
-   *  of them: who held them ("Claude Code"). The first turn sent carries the
-   *  history as context (`carriedHistory.ts`); after that the Run's own
-   *  Transcript has it. */
+   *  of them: who held them ("Claude Code"). The first turn sent carries
+   *  a short handoff and three recent messages (`carriedHistory.ts`); the
+   *  full imported prose is archived locally for search/read tools. */
   carriedHistory?: string | null;
   forkedFrom?: {
     conversationId: string;

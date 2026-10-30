@@ -753,6 +753,7 @@ async fn run_subagent_to_completion(
 ) -> Result<String, String> {
     let runs_dir = app_runs_dir(&app)?;
     let request = StartRunRequest {
+        conversation_history: None,
         run_id: Some(spec.run_id.clone()),
         workspace_root: spec.workspace_root.clone(),
         mode: spec.mode.clone(),
@@ -1966,6 +1967,12 @@ async fn start_run(
         .unwrap_or_else(run_id);
     // The id names the transcript file — refuse anything path-shaped.
     validate_run_id(&id)?;
+    if let Some(history) = request.conversation_history.take() {
+        let root = request.workspace_root.clone().ok_or("A workspace is required for imported conversation retrieval.")?;
+        let archive_runs = runs_dir.clone();
+        let archive_id = id.clone();
+        crate::blocking::run(move || conversation_search::store_history(&archive_runs, std::path::Path::new(&root), &archive_id, history)).await?;
+    }
     side_questions::enforce(&runs_dir, &id, &mut request)?;
     route_auto(&runs_dir, &id, &mut request).await?;
     let mission_link = match (

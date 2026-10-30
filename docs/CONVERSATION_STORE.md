@@ -150,3 +150,35 @@ Tests: `deleting_a_conversation_removes_its_legacy_recovery_copy`,
   and does not see anything written to SQLite.
 - `updated_at` is read with `as_i64`; a fractional timestamp sorts as 0 in
   SQL. The renderer re-sorts, so only the SQL order is affected.
+
+## Resuming a conversation with another agent
+
+A cross-agent resume keeps the imported messages visible in the conversation
+index, but does not send that entire history to the receiving model. Its first
+turn carries a bounded handoff (original request, latest request and last
+reported state, explicitly marked as excerpts) and the last three non-empty
+user/assistant messages. Each recent message is capped at 1,600 UTF-16 code
+units; older text and tool outputs stay out of this prompt.
+
+The complete imported user/assistant prose travels over local IPC in
+`conversationHistory`, separately from provider attachments. Before dispatch,
+Rust stores it privately through `durable.rs` in
+`<runs>/<conversation-id>.history.json`, together with its workspace. The
+archive moves, counts toward storage usage, and is deleted with its Run in
+Settings → Storage. The pending-handoff flag is cleared only after Rust accepts
+the Run. Retrying a start does not replace the original archive. Imports over 8 MB are refused
+explicitly rather than silently losing history.
+
+`search_conversations` accepts a specific conversation id, or `current` for
+this imported snapshot. Results identify matching message numbers;
+`read_conversation` reads exact text by message number and character offset,
+with pages capped at 16,000 characters. Without a conversation id, search
+continues to find prior workspace conversations, including their imports.
+Native tools and the authenticated Delegate MCP bridge share the same Rust
+registry and workspace checks; these two retrieval tools are available in
+Chat as well as Plan and Goal. The archive is historical evidence, never a
+source of new instructions or reviewed Project Memory.
+
+Retrieval is local text search, with no embedding model or external vector
+database. Only the handoff, recent excerpts, and requested tool results enter
+provider context. Existing native CLI resumes still use the CLI's own session.

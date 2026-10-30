@@ -841,6 +841,11 @@ export function AiPanel({
     });
   }
   function resolveConversationOrigin(pair: { provider: ProviderId; model: string }) {
+    // Rust has accepted the Run and stored its retrieval archive. Failed
+    // starts keep the pending handoff so a retry cannot lose its history.
+    if (conversationSessionRef.current.carriedHistory != null) {
+      transitionConversation({ type: "carried-history-consumed" });
+    }
     transitionConversation({ type: "origin-resolved", ...pair });
   }
   function settleConversationRun() {
@@ -3438,10 +3443,9 @@ This user request requires workspace inspection. Before answering, you MUST call
    */
   function buildTurnRequest(turn: QueuedTurn): Omit<StartAgentRunInput, "runId" | "parentId"> {
     const carry = conversationSessionRef.current.carriedHistory;
-    if (carry != null) transitionConversation({ type: "carried-history-consumed" });
     const carriedTurn = carry != null
       ? withCarriedHistory(historyBefore(msgsRef.current, turn.text), turn.text, carry, turn.attachments)
-      : { text: turn.text, attachments: turn.attachments };
+      : { text: turn.text, attachments: turn.attachments, conversationHistory: undefined };
     const toolsAvailable = turn.modelSupportsTools;
     const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
     // Use the same provider capability and prompt as the draft estimate.
@@ -3481,6 +3485,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       sideQuestionOf: sideQuestionParent,
       workspaceRoot, mode: sideQuestionParent ? "plan" : turn.mode, provider: turn.provider, model: turn.model,
       text: carriedTurn.text, attachments,
+      conversationHistory: carriedTurn.conversationHistory,
       context: { workspaceRoot, attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
       systemPrompt,
       skills: enabledRunSkills(skills),
