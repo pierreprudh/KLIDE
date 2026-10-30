@@ -37,6 +37,29 @@ pub(crate) struct ModelMeta {
     pub(crate) output_per_million: Option<f64>,
     pub(crate) supports_vision: Option<bool>,
     pub(crate) reasoning_levels: Option<Vec<String>>,
+    /// What the model is for, when the endpoint says: `chat`, `embedding`,
+    /// `ocr`. Read from a row's `task` (ontraak-llm-api writes it), else from
+    /// an Ollama-style `capabilities` *array* — `embedding` without
+    /// `completion` is an embedding model. `None` = the endpoint didn't say.
+    pub(crate) task: Option<String>,
+}
+
+impl ModelMeta {
+    /// False only when the endpoint said the model is for something other
+    /// than chat — an embedding or OCR model offered beside the chat ones.
+    pub(crate) fn chats(&self) -> bool {
+        !matches!(self.task.as_deref(), Some("embedding" | "ocr"))
+    }
+}
+
+/// A row's task, from its explicit `task` field or its Ollama capabilities.
+fn listed_task(row: &serde_json::Value) -> Option<String> {
+    if let Some(task) = row.get("task").and_then(|v| v.as_str()) {
+        return Some(task.to_ascii_lowercase());
+    }
+    let caps = row.get("capabilities").and_then(|v| v.as_array())?;
+    let has = |name: &str| caps.iter().any(|c| c.as_str() == Some(name));
+    Some(if has("embedding") && !has("completion") { "embedding" } else { "chat" }.to_string())
 }
 
 /// Cached `/models` metadata, keyed by provider id. OpenRouter's listing is
@@ -363,7 +386,7 @@ pub(crate) fn parse_anthropic_model(row: &serde_json::Value) -> ModelMeta {
     let capabilities = row.get("capabilities");
     let supported = |name: &str| capabilities.and_then(|c| c.get(name)).and_then(|v| v.get("supported")).and_then(|v| v.as_bool());
     let reasoning_levels = capabilities.and_then(|c| c.get("effort")).and_then(|e| e.as_object()).map(|e| e.iter().filter(|(key, value)| key.as_str() != "supported" && value.get("supported").and_then(|v| v.as_bool()).unwrap_or(false)).map(|(key, _)| key.clone()).collect());
-    ModelMeta { context_length: row.get("max_input_tokens").and_then(|v| v.as_u64()).map(|v| v as usize), supports_tools: None, input_per_million: None, output_per_million: None, supports_vision: supported("image_input"), reasoning_levels }
+    ModelMeta { context_length: row.get("max_input_tokens").and_then(|v| v.as_u64()).map(|v| v as usize), supports_tools: None, input_per_million: None, output_per_million: None, supports_vision: supported("image_input"), reasoning_levels, task: None }
 }
 
 async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
@@ -418,6 +441,13 @@ async fn fetch_openai_compatible_models(
         return Err(response_error(provider, status, &body));
     }
     let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    // The same response is the metadata listing: keep it, so a self-hosted
+    // endpoint (no registry row for `fetch_openai_model_meta` to read) has
+    // its per-model facts too.
+    OPENAI_MODEL_META_CACHE
+        .lock()
+        .unwrap()
+        .insert(provider.to_string(), (Instant::now(), parse_openai_models_meta(&value)));
     Ok(normalize_model_ids(&value))
 }
 
@@ -484,6 +514,7 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
                 output_per_million: price("completion"),
                 supports_vision: capability("vision"),
                 reasoning_levels: crate::harness_source::gateway_efforts(m),
+                task: listed_task(m),
             },
         );
     }
@@ -512,7 +543,18 @@ pub(crate) async fn openai_model_meta(provider: &str) -> HashMap<String, ModelMe
 /// The network half of `openai_model_meta`: fetch, parse, and fill the cache.
 pub(crate) async fn fetch_openai_model_meta(provider: &str) -> HashMap<String, ModelMeta> {
     let Some(entry) = providers::lookup(provider) else {
-        return HashMap::new();
+        // A self-hosted endpoint: its model listing fills the cache.
+        let Some(cp) = crate::custom_providers::get(provider) else {
+            return HashMap::new();
+        };
+        let key = providers::custom_token(&cp.id, None);
+        let _ = fetch_openai_compatible_models(&cp.id, &cp.models_url(), key).await;
+        return OPENAI_MODEL_META_CACHE
+            .lock()
+            .unwrap()
+            .get(provider)
+            .map(|(_, meta)| meta.clone())
+            .unwrap_or_default();
     };
     let url = match entry.wire {
         providers::WireFormat::OpenAi(cfg) => cfg.models_url,
@@ -555,6 +597,7 @@ pub(crate) struct ModelMetaWire {
     pub supports_tools: Option<bool>,
     pub input_per_million: Option<f64>,
     pub output_per_million: Option<f64>,
+    pub task: Option<String>,
 }
 
 /// Per-model metadata for a provider's picker. Empty for providers whose
@@ -571,6 +614,7 @@ pub(crate) async fn ai_provider_model_meta(provider: String) -> Result<Vec<Model
             supports_tools: m.supports_tools,
             input_per_million: m.input_per_million,
             output_per_million: m.output_per_million,
+            task: m.task,
         })
         .collect())
 }
@@ -1302,6 +1346,31 @@ mod tests {
         assert_eq!(meta["mistral-large-latest"].supports_vision, Some(true));
         assert_eq!(meta["mistral-embed"].supports_tools, Some(false));
         assert_eq!(meta["mistral-embed"].supports_vision, Some(false));
+        // An object of booleans is Mistral's shape, not Ollama's list: no task.
+        assert_eq!(meta["mistral-large-latest"].task, None);
+    }
+
+    #[test]
+    fn parse_openai_models_meta_reads_what_a_model_is_for() {
+        // ontraak-llm-api writes `task`; a bare Ollama listing only has the
+        // capabilities array. A row that says neither is assumed to chat.
+        let value = serde_json::json!({
+            "data": [
+                { "id": "qwen3.8:27b-mlx", "task": "chat", "capabilities": ["completion", "tools"] },
+                { "id": "bge-m3:latest", "task": "embedding", "capabilities": ["embedding"] },
+                { "id": "glm-ocr:latest", "task": "ocr", "capabilities": ["completion", "vision"] },
+                { "id": "nomic-embed-text", "capabilities": ["embedding"] },
+                { "id": "gpt-oss:20b" }
+            ]
+        });
+        let meta = parse_openai_models_meta(&value);
+        assert!(meta["qwen3.8:27b-mlx"].chats());
+        assert_eq!(meta["bge-m3:latest"].task.as_deref(), Some("embedding"));
+        assert!(!meta["bge-m3:latest"].chats());
+        assert!(!meta["glm-ocr:latest"].chats());
+        assert_eq!(meta["nomic-embed-text"].task.as_deref(), Some("embedding"));
+        assert_eq!(meta["gpt-oss:20b"].task, None);
+        assert!(meta["gpt-oss:20b"].chats());
     }
 
     #[test]

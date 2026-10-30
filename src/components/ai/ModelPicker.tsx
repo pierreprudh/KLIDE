@@ -18,6 +18,7 @@ import { providerGroup, providerPresets } from "../../agent/providerCatalog";
 import type { ProviderId } from "../../agent/types";
 import {
   listProviderModelMetadata,
+  modelChats,
   type ProviderModelMetadata,
 } from "../../ipc/aiProviders";
 import { ProviderLogo } from "./icons";
@@ -172,9 +173,14 @@ function StandardModelPicker({
     };
   }, [provider]);
 
+  // An embedding or OCR model its endpoint lists beside the chat ones is not
+  // a choice here — unless it is already the thread's model.
   const allOptions = useMemo(
-    () => modelOptionsFor(provider, model, availableModels),
-    [provider, model, availableModels]
+    () =>
+      modelOptionsFor(provider, model, availableModels).filter(
+        (m) => m === model || modelChats(modelMeta[m])
+      ),
+    [provider, model, availableModels, modelMeta]
   );
 
   const filtered = useMemo(() => {

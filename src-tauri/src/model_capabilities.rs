@@ -83,7 +83,9 @@ pub struct ModelCapabilities {
     pub max_output_tokens: Option<usize>,
     pub supports_tools: bool,
     /// False only for a model that cannot answer a message at all — an
-    /// Ollama embedding model, which reports `embedding` and no `completion`.
+    /// Ollama embedding model, which reports `embedding` and no `completion`
+    /// — or one its endpoint lists as for something else (`task`: embedding,
+    /// OCR).
     pub supports_chat: bool,
     pub supports_vision: bool,
     /// The reasoning efforts the pair accepts, weakest first. Empty = no dial.
@@ -844,6 +846,11 @@ async fn resolve_uncached(
             .await
             .get(model)
             .cloned(),
+        // A self-hosted endpoint has no registry row, but its `/models` is
+        // the same OpenAI listing — and may say a model can't chat.
+        None if crate::custom_providers::get(provider).is_some() => {
+            crate::models::openai_model_meta(provider).await.get(model).cloned()
+        }
         _ => None,
     };
     let context_window = listing
@@ -879,7 +886,7 @@ async fn resolve_uncached(
 
             context_window,
             supports_tools,
-            supports_chat: true,
+            supports_chat: listing.as_ref().is_none_or(|m| m.chats()),
             supports_vision,
             reasoning_levels: api_reasoning_levels.unwrap_or_else(|| wire_levels_if(reasons)),
             price_class,
