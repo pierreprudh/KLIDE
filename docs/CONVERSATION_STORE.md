@@ -164,8 +164,9 @@ The complete imported user/assistant prose travels over local IPC in
 `conversationHistory`, separately from provider attachments. Before dispatch,
 Rust stores it privately through `durable.rs` in
 `<runs>/<conversation-id>.history.json`, together with its workspace. The
-pending-handoff flag is cleared only after Rust accepts the Run. Retrying a
-start does not replace the original archive. Imports over 8 MB are refused
+archive moves, counts toward storage usage, and is deleted with its Run in
+Settings → Storage. The pending-handoff flag is cleared only after Rust accepts
+the Run. Retrying a start does not replace the original archive. Imports over 8 MB are refused
 explicitly rather than silently losing history.
 
 `search_conversations` accepts a specific conversation id, or `current` for
