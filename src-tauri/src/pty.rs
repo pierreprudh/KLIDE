@@ -1137,7 +1137,12 @@ fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHoo
     let recover_app = app.clone();
     let mission_app = app.clone();
     let permission_app = app.clone();
+    let history_app = app.clone();
     crate::coordination_bridge::BridgeHooks {
+        history: Some(Box::new(move |session, tool, input| {
+            let runs = crate::agent::transcripts::app_runs_dir(&history_app)?;
+            crate::coordination_bridge::execute_history(&runs, session, tool, input)
+        })),
         // A Delegate's `agent_cancel` reaches a Harness Run's live token the
         // way the Harness's own does; the journal already holds the request.
         // A Delegate target has no token here — its PTY is the operator's to

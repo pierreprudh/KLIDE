@@ -116,7 +116,7 @@ impl GateSubject {
     /// May this Tool run in this Run at all? `kind` is `None` for a name the
     /// registry does not know; that call goes on to the unknown-tool path.
     pub fn permits(&self, name: &str, kind: Option<ToolKind>) -> Result<(), BlockReason> {
-        if self.read_only_side_question && !matches!(kind, Some(ToolKind::ReadOnly | ToolKind::ConversationHistory | ToolKind::ProjectMemory)) {
+        if self.read_only_side_question && !matches!(kind, Some(ToolKind::ReadOnly | ToolKind::ConversationHistory | ToolKind::ConversationRetrieval | ToolKind::ProjectMemory)) {
             return Err(BlockReason::Disabled);
         }
         if self.disabled.contains(name) {

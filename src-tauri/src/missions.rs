@@ -1003,6 +1003,7 @@ fn start_request_for(
     }
     let prompt = task_prompt(bundle, task);
     Ok(StartRunRequest {
+        conversation_history: None,
         side_question_of: None,
         run_id: Some(attempt_run_id.to_string()),
         workspace_root: Some(workspace_root.to_string()),

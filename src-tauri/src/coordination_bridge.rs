@@ -137,6 +137,8 @@ pub type SessionMap = Arc<Mutex<HashMap<String, BridgeSession>>>;
 pub enum BridgeRequest {
     List,
     ReadSkill { command: String },
+    SearchConversations { input: serde_json::Value },
+    ReadConversation { input: serde_json::Value },
     MemorySearch { input: serde_json::Value },
     MemoryRead { input: serde_json::Value },
     MemoryPropose { input: serde_json::Value },
@@ -234,7 +236,17 @@ pub type PermissionHook = Box<
         + Sync,
 >;
 
+pub type HistoryHook = Box<dyn Fn(&BridgeSession, &str, serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync>;
+
+pub(crate) fn execute_history(runs: &std::path::Path, session: &BridgeSession, tool: &str, input: serde_json::Value) -> Result<serde_json::Value, String> {
+    let result = crate::agent::tools::execute_read_only_tool_with_runs_dir(&session.workspace_root,
+        &crate::agent::tools::NormalizedToolCall { id: "delegate-history".into(), name: tool.into(), input }, &session.run_id, runs);
+    if !result.ok { return Err(result.content); }
+    Ok(serde_json::json!({"text": result.content, "metadata": result.metadata}))
+}
+
 pub struct BridgeHooks {
+    pub history: Option<HistoryHook>,
     pub orchestrate: Option<OrchestrationHook>,
     pub permission: Option<PermissionHook>,
     pub on_change: Box<dyn Fn(&str, &CoordinationCommandOutcome) + Send + Sync>,
@@ -254,6 +266,7 @@ pub struct BridgeHooks {
 impl BridgeHooks {
     pub fn silent() -> Self {
         Self {
+            history: None,
             orchestrate: None,
             permission: None,
             on_change: Box::new(|_, _| {}),
@@ -346,7 +359,11 @@ fn execute_inner(
         BridgeRequest::MemoryPropose { .. } => "memory_propose",
         _ => "memory_search",
     };
+    let history_tool = if matches!(&request, BridgeRequest::ReadConversation { .. }) { "read_conversation" } else { "search_conversations" };
     let operation = match request {
+        BridgeRequest::SearchConversations { input } | BridgeRequest::ReadConversation { input } => {
+            return hooks.history.as_ref().ok_or("Conversation history is unavailable in this host.")?(session, history_tool, input);
+        }
         BridgeRequest::MemorySearch { input } | BridgeRequest::MemoryRead { input } | BridgeRequest::MemoryPropose { input } => {
             // Identity and workspace come from the authenticated session. Reuse
             // the native registry's validation, inactive policy and provenance.
@@ -1281,6 +1298,7 @@ mod tests {
         let (dir, root) = sandbox("list");
         let (store, _bridge, session) = bound(&root);
         let hooks = BridgeHooks {
+            history: None,
             orchestrate: None,
             permission: None,
             on_change: Box::new(|_, _| {}),
@@ -1306,6 +1324,7 @@ mod tests {
         let changes = Arc::new(Mutex::new(0usize));
         let counter = changes.clone();
         let hooks = BridgeHooks {
+            history: None,
             orchestrate: None,
             permission: None,
             on_change: Box::new(move |_, _| *counter.lock().unwrap() += 1),
@@ -1580,7 +1599,8 @@ mod tests {
             // Deterministic: the recipient acts immediately after the send is
             // journaled, before the bridge starts waiting. No model or sleeps.
             let hooks = BridgeHooks {
-                orchestrate: None,
+                history: None,
+            orchestrate: None,
                 permission: None,
                 on_change: Box::new(move |root, outcome| {
                     let Some(line) = &outcome.appended else {
@@ -1867,6 +1887,7 @@ mod tests {
         let asked = Arc::new(Mutex::new(0usize));
         let counted = asked.clone();
         let hooks = BridgeHooks {
+            history: None,
             orchestrate: None,
             permission: None,
             on_change: Box::new(|_, _| {}),
@@ -2059,6 +2080,7 @@ mod tests {
         harness_peer(&store, &root, "convo-1");
         let hooks_root = root.clone();
         let hooks = BridgeHooks {
+            history: None,
             orchestrate: None,
             permission: None,
             on_change: Box::new(|_, _| {}),
@@ -2109,6 +2131,7 @@ mod tests {
         .unwrap();
         let hooks_root = root.clone();
         let hooks = BridgeHooks {
+            history: None,
             orchestrate: None,
             permission: None,
             on_change: Box::new(|_, _| {}),
