@@ -43,6 +43,8 @@ export type ConversationSession = {
   worktree: string | null;
   /** The CLI session this thread continues, when it was carried in from one. */
   delegateSession: string | null;
+  /** Imported history not yet delivered to the Harness. Persisted across remounts. */
+  carriedHistory?: string | null;
   forkedFrom: Conversation["forkedFrom"];
   run: {
     active: boolean;
@@ -67,6 +69,7 @@ export type RestoreConversationSessionInput = {
 };
 
 export type ConversationSessionAction =
+  | { type: "carried-history-consumed" }
   | { type: "messages-replaced"; messages: Msg[] }
   | {
       type: "configured";
@@ -127,6 +130,7 @@ export function restoreConversationSession({
       branch: workspaceBranch,
       worktree: null,
       delegateSession: null,
+      carriedHistory: null,
       forkedFrom: null,
       run: { active: false, activity: null },
     };
@@ -193,6 +197,7 @@ export function restoreConversationSession({
     branch: saved ? saved.branch ?? null : workspaceBranch,
     worktree: saved?.worktree ?? null,
     delegateSession: saved?.delegateSession ?? null,
+    carriedHistory: saved?.carriedHistory ?? null,
     forkedFrom: saved?.forkedFrom ?? null,
     run: { active: false, activity: null },
   };
@@ -224,6 +229,7 @@ export function conversationSessionReducer(
         branch: action.branch ?? null,
         worktree: null,
         delegateSession: null,
+        carriedHistory: null,
         forkedFrom: null,
         run: { active: false, activity: null },
       };
@@ -252,6 +258,7 @@ export function conversationSessionReducer(
         branch: conversation.branch ?? null,
         worktree: conversation.worktree ?? null,
         delegateSession: conversation.delegateSession ?? null,
+        carriedHistory: conversation.carriedHistory ?? null,
         forkedFrom: conversation.forkedFrom ?? null,
         run: { active: false, activity: null },
       };
@@ -264,6 +271,7 @@ export function conversationSessionReducer(
         // A branch keeps part of the thread; the CLI's session holds all of
         // it, so continuing that session here would answer the wrong history.
         delegateSession: null,
+        carriedHistory: session.carriedHistory ?? null,
         forkedFrom: {
           conversationId: session.conversationId,
           title: deriveTitle(session.messages),
@@ -297,6 +305,8 @@ export function conversationSessionReducer(
       return session.originProvider && session.originModel !== OPENROUTER_ROUTER
         ? session
         : { ...session, originProvider: action.provider, originModel: action.model };
+    case "carried-history-consumed":
+      return { ...session, carriedHistory: null };
     case "run-settled":
       return { ...session, run: { active: false, activity: null } };
   }
@@ -350,6 +360,7 @@ function transitionRebindsPanel(action: ConversationSessionAction): boolean {
       return true;
     case "configured":
       return action.provider !== undefined || action.workspaceRoot !== undefined;
+    case "carried-history-consumed":
     case "messages-replaced":
     case "branch-captured":
     case "run-settled":
@@ -404,6 +415,7 @@ export function snapshotConversationSession(
     branch: session.branch,
     worktree: session.worktree,
     delegateSession: session.delegateSession ?? null,
+    carriedHistory: session.carriedHistory ?? null,
     forkedFrom: session.forkedFrom ?? null,
   };
 }

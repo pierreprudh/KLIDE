@@ -6,30 +6,47 @@ const user = (content: string): Msg => ({ role: "user", content });
 const assistant = (content: string): Msg => ({ role: "assistant", content });
 
 describe("withCarriedHistory — the first turn of a carried conversation", () => {
-  it("puts the earlier prose ahead of the request, tool rows left out", () => {
+  it("keeps the real request as the user text and carries earlier prose as context", () => {
     const history: Msg[] = [
       user("map the agent folder"),
       { role: "tool", content: "ls output", toolName: "Bash" } as Msg,
       assistant("It has 44 files."),
     ];
-    const text = withCarriedHistory(history, "first message in this conv ?", "Claude Code");
-    expect(text).toContain("began earlier with Claude Code");
-    expect(text).toContain("[user]\nmap the agent folder");
-    expect(text).toContain("[assistant]\nIt has 44 files.");
-    expect(text).not.toContain("ls output");
-    expect(text.endsWith("first message in this conv ?")).toBe(true);
+    const turn = withCarriedHistory(history, "first message in this conv ?", "Claude Code");
+    // The transcript and Mission Control title must see the person's request,
+    // not the synthetic history preamble shown in the reported OpenCode run.
+    expect(turn.text).toBe("first message in this conv ?");
+    expect(turn.attachments).toHaveLength(1);
+    const context = turn.attachments[0].content;
+    expect(context).toContain("began earlier with Claude Code");
+    expect(context).toContain("[user]\nmap the agent folder");
+    expect(context).toContain("[assistant]\nIt has 44 files.");
+    expect(context).not.toContain("ls output");
+    expect(context).not.toContain("first message in this conv ?");
+    expect(context).toContain("attached to");
   });
 
-  it("sends the text alone when nothing was carried", () => {
-    expect(withCarriedHistory([], "yo")).toBe("yo");
+  it("keeps existing attachments alongside the imported history", () => {
+    const attachments = [{ path: "error.txt", content: "failure" }];
+    const turn = withCarriedHistory([user("earlier request")], "fix this", "Claude Code", attachments);
+    expect(turn.text).toBe("fix this");
+    expect(turn.attachments).toContainEqual(attachments[0]);
+    expect(turn.attachments).toHaveLength(2);
+    expect(attachments).toHaveLength(1);
+  });
+
+  it("sends the text and attachments alone when nothing was carried", () => {
+    const attachments = [{ path: "error.txt", content: "failure" }];
+    expect(withCarriedHistory([], "yo", undefined, attachments)).toEqual({ text: "yo", attachments });
   });
 
   it("drops the oldest turns first past the budget", () => {
     const big = "x".repeat(40_000);
-    const text = withCarriedHistory([user(`old ${big}`), assistant(`new ${big}`)], "next");
-    expect(text).not.toContain("old x");
-    expect(text).toContain("new x");
-    expect(text).toContain("(1 older turn left out)");
+    const turn = withCarriedHistory([user(`old ${big}`), assistant(`new ${big}`)], "next");
+    const context = turn.attachments[0].content;
+    expect(context).not.toContain("old x");
+    expect(context).toContain("new x");
+    expect(context).toContain("(1 older turn left out)");
   });
 });
 
