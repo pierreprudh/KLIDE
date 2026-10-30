@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } 
 import { createPortal } from "react-dom";
 import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
 import { Z } from "../../zLayers";
+import { resolveModelLogo } from "../../modelIdentity";
 import { ChevronDown, ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import {
@@ -205,24 +206,11 @@ export function CustomEndpointRow({
                         transition: "background 0.12s ease, border-color 0.12s ease",
                       }}
                     >
-                      <span
-                        aria-hidden
-                        style={{
-                          width: 15,
-                          height: 15,
-                          flexShrink: 0,
-                          borderRadius: "50%",
-                          display: "grid",
-                          placeItems: "center",
-                          border: `1px solid ${isDefault ? "var(--accent)" : "var(--border)"}`,
-                          background: isDefault ? "var(--accent)" : "transparent",
-                        }}
-                      >
-                        {isDefault && (
-                          <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
-                            <path d="M2.5 6.2l2.3 2.3 4.7-5" stroke="var(--bg)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
-                        )}
+                      {/* The maker's mark, or an empty slot of the same width so
+                          the names stay on one column. The default is said by the
+                          row's tint and its label, not by a radio. */}
+                      <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, display: "grid", placeItems: "center" }}>
+                        {resolveModelLogo(m, 16)}
                       </span>
                       <span style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 7, flex: 1 }}>
                         <span
