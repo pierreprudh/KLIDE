@@ -12,9 +12,12 @@
    the same 15px corners, and the evidence opens *inside* it — under the plan
    it came from, where the reader is already looking. The column only carries
    geometry, so the card takes its own clicks back. */
-.klide-result-island { pointer-events: auto; display: flex; flex-direction: column; overflow: hidden; padding: 0 16px; border: 1px solid var(--composer-border); border-radius: 15px; background: var(--composer-glass); backdrop-filter: var(--composer-blur); -webkit-backdrop-filter: var(--composer-blur); color: var(--fg-strong); font-size: 12px; line-height: 1.5; }
-.klide-result-island-header { display: flex; align-items: center; gap: 10px; min-height: 42px; color: var(--fg-subtle); cursor: pointer; }
-.klide-result-island:hover .klide-result-island-header, .klide-result-island[data-open="1"] .klide-result-island-header { color: var(--fg-strong); }
+.klide-result-island { pointer-events: auto; display: flex; flex-direction: column; overflow: hidden; padding: 0; border: 1px solid var(--composer-border); border-radius: 15px; background: var(--composer-glass); backdrop-filter: var(--composer-blur); -webkit-backdrop-filter: var(--composer-blur); color: var(--fg-strong); font-size: 12px; line-height: 1.5; }
+/* The Git island's header, to the pixel: 35px, a 12px title at 550, the count
+   in small mono on the right, and a hairline under it that is always there. */
+/* The Git Review recap line: 44px, the count in 13px at 600, the diffstat at
+   the far end. */
+.klide-result-island-header { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 14px 0 16px; border-bottom: 1px solid var(--border); color: var(--fg-strong); }
 /* Attention rides the mark's colour rather than a dot beside it. */
 .klide-result-island-header[data-attention="1"] .klide-result-island-title { color: var(--warning); }
 /* A closed column is icons only, so the entry becomes the same pill the plan
@@ -33,9 +36,10 @@
 .klide-result-app-stack { display: inline-flex; align-items: center; flex-shrink: 0; }
 .klide-result-app-disc { display: inline-grid; place-items: center; width: 16px; height: 16px; }
 .klide-result-app-disc + .klide-result-app-disc { margin-left: -5px; }
-.klide-result-island-title { font-size: 13px; }
+.klide-result-island-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 600; }
+.klide-result-island-spacer { flex: 1; }
 /* The count sits at the far end, the way the plan's does. */
-.klide-result-island-header .klide-result-meta { margin-left: auto; font-variant-numeric: tabular-nums; }
+.klide-result-island-header .klide-result-meta { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--fg-dim); font-family: var(--font-mono); font-size: 9.5px; }
 .klide-result-island-header .klide-result-document-count { margin-left: auto; white-space: nowrap; }
 .klide-result-island-header .klide-result-meta + .klide-result-document-count { margin-left: 7px; }
 /* Shown on hover or once open — the row idiom the plan's steps already use.
@@ -62,21 +66,22 @@
 .klide-result-island-header:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
 .klide-result-island-rule { height: 1px; background: var(--border); transform: scaleX(0); transform-origin: left; transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1); }
 .klide-result-island-rule[data-shown="1"] { transform: scaleX(1); }
-/* Open, the card is the height of what it holds — three folded rows and the
-   footer is a short card, not a column of blank paper with a button at the
-   bottom. It only gives ground: when the evidence is taller than the side, it
-   shrinks to fit and the body scrolls inside, down to a height that still
-   reads as a panel; a question arriving under it takes the rest and the column
-   scrolls past that. The entry is what the column lays out, so the entry is
-   what shrinks. */
-.klide-result-entry[data-variant="island"][data-open="1"] { display: flex; flex: 0 1 auto; min-height: min(200px, 100%); }
-.klide-result-entry[data-variant="island"][data-open="1"] .klide-result-island { flex: 1; min-height: 0; }
+/* The recap is the height of what it holds — two rows and a footer is a short
+   card, never a panel padded with blank space. A long one stops at a cap and
+   its body scrolls inside, so the plan above and a question below keep their
+   room. */
+.klide-result-entry[data-variant="island"][data-open="1"] { display: flex; flex: 0 0 auto; }
+.klide-result-entry[data-variant="island"][data-open="1"] .klide-result-island { flex: 1; min-height: 0; max-height: min(560px, 60vh); }
 .klide-result-island-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: klide-result-panel-in 200ms ease-out; }
 /* A wheel that runs out of evidence carries on to the column, so the plan
    above and a question below stay reachable from inside the card. */
-.klide-result-island .klide-result-body { padding: 12px 0 4px; overscroll-behavior: auto; }
-.klide-result-island .klide-result-body section + section { margin-top: 20px; }
-.klide-result-island .klide-result-footer { padding: 12px 0 14px; }
+.klide-result-island .klide-result-body { padding: 5px 7px 4px; overscroll-behavior: auto; }
+.klide-result-island .klide-result-body section + section { margin-top: 2px; }
+/* The one action is a quiet line at the foot, not a button bar: the recap is
+   read far more often than it is answered. */
+.klide-result-island .klide-result-footer { flex-direction: row; justify-content: flex-end; gap: 4px; padding: 4px 7px 7px; border-top: 0; }
+.klide-result-island .klide-result-footer button { padding: 3px 7px; border-radius: var(--radius-sm); font-size: 10.5px; color: var(--fg-subtle); }
+.klide-result-island .klide-result-footer button:hover { color: var(--fg-strong); }
 @keyframes klide-result-panel-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) {
   .klide-result-island-panel { animation: none; }
@@ -175,8 +180,12 @@
    output, the statuses and the hairlines all recede together — and it does not
    lift on open, because opening is not a reason for the receipts to shout. A
    failed command cancels the dimming outright. */
-.klide-result-commands { opacity: 0.62; transition: opacity var(--motion-med) var(--ease-out); }
-.klide-result-commands[data-failed="1"] { opacity: 1; }
+.klide-result-commands .klide-result-fold-summary .klide-result-fold-title { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.klide-result-commands .klide-result-fold-chevron { width: 13px; }
+.klide-result-commands .klide-result-fold-chevron svg { width: 13px; height: 13px; }
+.klide-result-fold-meta { margin-left: auto; color: var(--fg-dim); font-family: var(--font-mono); font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.klide-result-commands[data-failed="1"] .klide-result-fold-meta { color: var(--warning); }
+.klide-result-commands .klide-result-fold-inner { padding: 0 5px 0 14px; }
 /* The fold: one row that names the stack and how many are in it, and the
    app's chevron turning over on open. The changes and the commands share it,
    so the two stacks in a result open the same way. */
@@ -198,16 +207,18 @@
 .klide-result-fold-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; margin-right: 6px; color: var(--fg); }
 .klide-result-fold-chevron { display: grid; place-items: center; color: var(--fg-dim); }
 
-.klide-result-command { border-bottom: 1px solid var(--border); }
-.klide-result-command summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 11px 0; cursor: pointer; list-style: none; }
+/* One line per command, cut at the column's edge — the whole command is in
+   its tooltip and at the head of its output. No hairline between them: the
+   rows are short enough to read as a list without rules. */
+.klide-result-command summary { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; cursor: pointer; list-style: none; min-width: 0; }
 .klide-result-command summary::-webkit-details-marker { display: none; }
-.klide-result-command summary code { font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
-.klide-result-command summary > span { flex-shrink: 0; font-size: 10px; }
-.klide-result-command summary > span::after { content: ' +'; color: var(--fg-subtle); }
-.klide-result-command[open] summary > span::after { content: ' −'; }
-.klide-result-command pre { margin: 0 0 10px; padding: 10px; border-radius: 6px; background: var(--bg); font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
-.klide-result-status-passed { color: var(--accent); }
-.klide-result-status-failed { color: var(--danger); }
+.klide-result-command summary code { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 10px; color: var(--fg-subtle); }
+.klide-result-command summary:hover code { color: var(--fg-strong); }
+.klide-result-command summary > span { flex-shrink: 0; font-size: 10.5px; }
+.klide-result-command pre { margin: 2px 0 8px; padding: 9px 10px; border-radius: 6px; background: var(--bg); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+.klide-result-command-echo { color: var(--fg-subtle); }
+.klide-result-status-passed { color: var(--success); }
+.klide-result-status-failed { color: var(--warning); }
 .klide-result-status-unknown, .klide-result-notes p { color: var(--fg-subtle); }
 .klide-result-footer { display: flex; flex-direction: column; gap: 8px; padding: 16px 22px 22px; border-top: 1px solid var(--border); }
 .klide-result-footer button { display: flex; justify-content: center; gap: 10px; padding: 9px 12px; border-radius: 7px; border: 0; background: transparent; }
@@ -249,6 +260,64 @@
 .klide-result-artifacts button.klide-result-document-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* History has one summary row; keep its receipts compact. */
-.klide-result-body[data-history="1"] .klide-result-command summary { padding: 7px 0; gap: 8px; }
-.klide-result-body[data-history="1"] .klide-result-command:last-child { border-bottom: 0; }
 .klide-result-body[data-history="1"] .klide-result-fold-summary { margin-bottom: 2px; }
+
+/* The recap rows, at the Git island's density: one line each — the name, its
+   folder dimmer beside it, how much changed, and the way in. Commands use the same row, so the card reads as
+   one list. */
+.klide-result-changes { display: flex; flex-direction: column; }
+.klide-result-file-row, .klide-result-commands .klide-result-fold-summary { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 24px; box-sizing: border-box; margin: 0; padding: 0 5px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg); font: inherit; font-size: 11px; text-align: left; transition: background var(--motion-med) var(--ease-out); }
+button.klide-result-file-row { cursor: pointer; }
+button.klide-result-file-row:hover, .klide-result-commands .klide-result-fold-summary:hover { background: color-mix(in srgb, var(--bg-hover) 65%, transparent); color: var(--fg); }
+button.klide-result-file-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.klide-result-file-text { flex: 1; display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.klide-result-file-text .klide-result-filename { flex-shrink: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--fg-strong); }
+.klide-result-file-text .klide-result-directory { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-dim); }
+.klide-result-stat { flex-shrink: 0; display: inline-flex; gap: 5px; font-family: var(--font-mono); font-size: 9.5px; font-variant-numeric: tabular-nums; }
+.klide-result-stat-add { color: var(--diff-add); }
+.klide-result-stat-del { color: var(--diff-remove); }
+.klide-result-file-go { flex-shrink: 0; display: grid; place-items: center; width: 13px; color: var(--fg-dim); }
+.klide-result-file-row:hover .klide-result-file-go { color: var(--fg-strong); }
+/* The diff in place: the column is narrow, so lines scroll sideways inside
+   their own box rather than wrapping into something that no longer reads as
+   code, and a long diff scrolls inside its own height. */
+.klide-result-diff { margin: 2px 0 6px 0; padding: 6px 0; max-height: 320px; overflow: auto; border-radius: 6px; background: var(--bg); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; animation: klide-result-thumb-in 200ms ease-out; }
+/* Every row as wide as the widest, so a tint runs to the end when the diff
+   is scrolled sideways rather than stopping where its own line does. */
+.klide-result-diff-lines { width: max-content; min-width: 100%; }
+.klide-result-diff-line { display: flex; padding-right: 10px; }
+.klide-result-diff-line > span { flex-shrink: 0; width: 18px; text-align: center; color: var(--fg-dim); user-select: none; }
+.klide-result-diff-line code { font: inherit; white-space: pre; color: var(--fg); }
+.klide-result-diff-line[data-kind="add"] { background: var(--diff-add-bg); }
+.klide-result-diff-line[data-kind="add"] > span { color: var(--diff-add); }
+.klide-result-diff-line[data-kind="del"] { background: var(--diff-remove-bg); }
+.klide-result-diff-line[data-kind="del"] > span { color: var(--diff-remove); }
+.klide-result-diff-line[data-kind="context"] code { color: var(--fg-subtle); }
+.klide-result-diff-gap { padding: 2px 0 2px 18px; color: var(--fg-dim); font-family: var(--font-ui); font-size: 10px; }
+@media (prefers-reduced-motion: reduce) { .klide-result-diff { animation: none; } }
+
+/* In the column the recap takes the Git island's row exactly: 22px, 10.5px
+   text, the value in small mono on the right, and no chevron at rest — the
+   row's hover is the affordance, and the chevron only shows on hover or while
+   a row is open, so the resting card reads as a list, not a set of controls. */
+.klide-result-island .klide-result-file-row,
+.klide-result-island .klide-result-commands .klide-result-fold-summary { min-height: 22px; padding: 0 4px; font-size: 10.5px; color: var(--fg-subtle); }
+.klide-result-island .klide-result-file-text .klide-result-filename { color: var(--fg); }
+.klide-result-island .klide-result-file-text .klide-result-directory { font-size: 10px; }
+.klide-result-island .klide-result-stat,
+.klide-result-island .klide-result-fold-meta { font-size: 9px; }
+.klide-result-island .klide-result-file-go,
+.klide-result-island .klide-result-commands .klide-result-fold-chevron { width: 0; margin-left: -7px; overflow: hidden; opacity: 0; transition: opacity 140ms var(--ease-soft), width 220ms cubic-bezier(0.32, 0.72, 0, 1), margin-left 220ms cubic-bezier(0.32, 0.72, 0, 1); }
+.klide-result-island .klide-result-file-row:hover .klide-result-file-go,
+.klide-result-island .klide-result-file[data-open="1"] .klide-result-file-go,
+.klide-result-island .klide-result-commands .klide-result-fold-summary:hover .klide-result-fold-chevron,
+.klide-result-island .klide-result-commands[data-open="1"] .klide-result-fold-chevron { width: 13px; margin-left: 0; opacity: 1; }
+.klide-result-island .klide-result-body { padding: 5px 10px 6px 12px; }
+.klide-result-island .klide-result-footer { padding: 2px 10px 8px; }
+.klide-result-island .klide-result-footer button { padding: 2px 4px; font-size: 10px; color: var(--fg-dim); }
+@media (prefers-reduced-motion: reduce) {
+  .klide-result-island .klide-result-file-go, .klide-result-island .klide-result-commands .klide-result-fold-chevron { transition: none; }
+}
+/* A long diff line scrolls inside its box; it never widens the card. */
+.klide-result-entry[data-variant="island"], .klide-result-island, .klide-result-island-panel, .klide-result-island .klide-result-body, .klide-result-file { min-width: 0; }
+.klide-result-diff { max-width: 100%; }

@@ -80,18 +80,18 @@ describe("CompletionCard", () => {
 describe("the island card", () => {
   const withFiles = { ...completion, files: ["src/app.tsx", "src/time.ts"] };
 
-  it("waits in the column as a header, with no sheet to open", () => {
+  // "Just add this design": the Git Review recap line — "N files changed" and
+  // its diffstat — over rows that are always there.
+  it("heads its rows with the Git Review recap line, no sheet", () => {
     const html = renderIsland(withFiles);
     expect(html).toContain("klide-result-island");
     expect(html).not.toContain("klide-result-scrim");
     expect(html).not.toMatch(/<dialog/);
     expect(html).toContain("Result");
-    expect(html).toContain("2 files");
-    // Closed, the card is only its header — the evidence mounts on open, so
-    // the column carries one row until the reader asks for the rest.
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain("klide-result-island-panel");
-    expect(html).not.toContain("Review changes");
+    expect(html).toContain("2 files changed");
+    expect(html).toContain("klide-result-changes");
+    expect(html).toContain("app.tsx");
+    expect(html).not.toContain("aria-expanded=\"false\" aria-controls");
   });
   // "On sidepanel open, each should be full width and when closed only icons."
   // Open, the entry is a window with its words and its own dismiss.
@@ -107,7 +107,7 @@ describe("the island card", () => {
         onReview={() => {}} onRequestChanges={() => {}} />,
     );
     expect(html).toContain("klide-result-island-title");
-    expect(html).toContain("2 files");
+    expect(html).toContain("2 files changed");
     expect(html).not.toContain("klide-result-mark");
   });
 
@@ -120,7 +120,7 @@ describe("the island card", () => {
         onReview={() => {}} onRequestChanges={() => {}} />,
     );
     expect(html).toContain("klide-result-island-title");
-    expect(html).toContain("2 files");
+    expect(html).toContain("2 files changed");
     expect(html).not.toContain('data-compact="1"');
   });
 
@@ -224,17 +224,29 @@ describe("ResultEvidence", () => {
     expect(html).toContain('data-failed="1"');
   });
 
-  it("lists changed files with a way into each one, folded until asked", () => {
+  // "I don't like the result design and I don't get the point": the files are
+  // the result, so they lead the card, open — not behind a "Changes" fold.
+  it("lists changed files first, each with its own way in", () => {
     const html = renderEvidence({ ...completion, files: ["src/app.tsx", "src/time.ts"] });
-    // Closed by default: one row saying how many, and the list behind a click
-    // — the same fold the commands use.
     expect(html).toContain("klide-result-changes");
-    expect(html).not.toMatch(/klide-result-changes"[^>]*data-open/);
-    expect(html).toContain('klide-result-fold-title">Changes<');
-    expect(html).not.toContain("2</span><span>changes");
-    expect(html).toContain("app.tsx");
+    expect(html).not.toContain('klide-result-fold-title">Changes<');
+    expect(html).toContain('title="Review src/app.tsx"');
+    expect(html).toContain("time.ts");
     expect(html).toContain("Review changes");
     expect(html).not.toContain("Command results");
+  });
+  // One line says what was checked; a passing command carries no status word,
+  // since that line already said how many passed.
+  it("sums the commands up on one Checks line", () => {
+    const html = renderEvidence({ ...completion, files: ["a.ts"], commands: [
+      { id: "1", label: "npm test", status: "passed" },
+      { id: "2", label: "npm run lint", status: "failed" },
+    ] });
+    expect(html).toContain("Checks");
+    expect(html).toContain("1 passed · 1 failed");
+    expect(html).not.toContain("klide-result-command-summary");
+    expect(html).not.toContain(">Passed<");
+    expect(html).toContain(">Failed<");
   });
   it.each(["failed", "unknown"] as const)("keeps %s command evidence accessible without edits", (status) => {
     const html = renderEvidence({ ...completion, commands: [{ id: "c", label: "npm test", status, output: "<script>bad</script>" }] });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createFold, foldedToMsgs } from "./foldEvents";
-import { completionDocuments, hasCompletionReview, latestReviewCompletion } from "./completion";
+import { completionDocuments, hasCompletionReview, latestReviewCompletion, netFileChanges } from "./completion";
 import type { AgentEvent, AgentMode } from "./types";
 import { createTurnDriver } from "../components/ai/turnDriver";
 import type { Msg } from "../components/ai/types";
@@ -202,4 +202,16 @@ it("shows verified documents for legacy conversations without completion rows", 
   const messages = [{role: "assistant", content: "Saved the workbook."}];
   expect(completionDocuments(latestReviewCompletion(messages, recovered, "legacy")!)).toHaveLength(1);
   expect(latestReviewCompletion(messages, recovered, "other")).toBeUndefined();
+});
+
+describe("netFileChanges", () => {
+  it("folds a file's writes into its first before and last after", () => {
+    const changes = netFileChanges([
+      { path: "a.ts", oldContent: "two", newContent: "three", isCreate: false, ts: 2 },
+      { path: "a.ts", oldContent: "one", newContent: "two", isCreate: false, ts: 1 },
+      { path: "b.ts", oldContent: "", newContent: "new", isCreate: true, ts: 3 },
+    ]);
+    expect(changes.get("a.ts")).toEqual({ path: "a.ts", before: "one", after: "three", created: false });
+    expect(changes.get("b.ts")).toMatchObject({ before: "", after: "new", created: true });
+  });
 });

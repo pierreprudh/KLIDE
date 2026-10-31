@@ -72,7 +72,7 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunState, reattachAgentRun } from "../agent/client";
+import { acceptRunCheckpoints, listCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunState, reattachAgentRun } from "../agent/client";
 import { createRunController, type GateDecision, type RunClient, type RunControllerDeps, type CliSessionRef } from "./ai/runController";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { resolveAdvisor } from "../agent/advisor";
@@ -4429,6 +4429,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: completion.runId, path, documents: documentSet(completion) }) : undefined}
               onPreviewArtifact={onPreviewArtifact}
               onRequestChanges={() => requestCompletionChanges(completion)}
+              loadChanges={listCheckpoints}
             />;
           }
           // "Last" means the tail of the *exchange*, not of the array. Turns
@@ -5120,6 +5121,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: latestCompletion.runId, path, documents: documentSet(latestCompletion) }) : undefined}
               onPreviewArtifact={onPreviewArtifact}
               onRequestChanges={() => requestCompletionChanges(latestCompletion)}
+              loadChanges={listCheckpoints}
             />
           )}
           {latestVisuals && (
