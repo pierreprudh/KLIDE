@@ -520,10 +520,12 @@ function App() {
     },
     // Where a single-session admission lands. On a one-slot surface that is
     // the panel already on screen — appending there is what made Resume look
-    // like a no-op. `race-watch` and `fresh` mean "another panel" by
-    // definition, and an empty fleet has no slot to reuse.
+    // like a no-op, and what made "New Run in Worktree" open a pinned panel
+    // the anchored column never drew while the visible one kept writing to
+    // the main checkout. `race-watch` means "another panel" by definition,
+    // and an empty fleet has no slot to reuse.
     slotForAdmission: (intent) => {
-      if (intent.kind === "race-watch" || intent.kind === "fresh") return null;
+      if (intent.kind === "race-watch") return null;
       if (aiPanels.length === 0) return null;
       const surface = admissionSurface(
         admissionNeedsWorkbench(intent),

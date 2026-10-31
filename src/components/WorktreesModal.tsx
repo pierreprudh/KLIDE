@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Z } from "../zLayers";
+import { CloseIcon, GitIcon, ReplayIcon } from "../icons";
 import type { WorktreeInfo } from "../worktrees";
 import { gitWorktreeList, gitWorktreeMerge, gitWorktreeRemove } from "../ipc/git";
 
@@ -90,106 +91,65 @@ export function WorktreesModal({ open, workspaceRoot, onOpenWorktree, onNotice, 
   // rest are linked worktrees. Only linked ones get branch actions.
   const isMain = (w: Worktree) => w.path === workspaceRoot;
 
-  const btn = {
-    height: 26,
-    padding: "0 10px",
-    fontSize: 11.5,
-    borderRadius: "var(--radius-sm)",
-    border: "1px solid var(--border)",
-    background: "var(--bg-elevated)",
-    color: "var(--fg-strong)",
-    cursor: "pointer",
-  } as const;
+  const linked = worktrees.filter((w) => !isMain(w)).length;
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Worktrees"
+      className="klide-worktrees-scrim"
       onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: Z.modal,
-        display: "grid",
-        placeItems: "center",
-        background: "rgba(0,0,0,0.30)",
-        backdropFilter: "blur(3px)",
-        WebkitBackdropFilter: "blur(3px)",
-      }}
+      style={{ zIndex: Z.modal }}
     >
-      <div
-        className="floating-panel"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(640px, calc(100vw - 96px))",
-          maxHeight: "min(560px, calc(100vh - 96px))",
-          borderRadius: "var(--radius-lg)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-      >
-        <header
-          style={{
-            height: 50,
-            flexShrink: 0,
-            padding: "0 12px 0 16px",
-            borderBottom: "1px solid var(--border)",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-          }}
-        >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--fg-strong)", fontSize: 13.5, fontWeight: 600 }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M6 9v6" /><path d="M18 6a9 9 0 0 1-9 9" /><circle cx="18" cy="6" r="3" /></svg>
-            Worktrees
-          </span>
-          <div style={{ flex: 1 }} />
-          <button onClick={() => void refresh()} style={{ ...btn, height: 28 }} aria-label="Refresh">Refresh</button>
-          <button onClick={onClose} aria-label="Close" style={{ width: 30, height: 30, display: "grid", placeItems: "center", color: "var(--fg-subtle)", background: "transparent", border: "none", borderRadius: "var(--radius-sm)", cursor: "pointer" }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      <div className="klide-worktrees" onClick={(e) => e.stopPropagation()}>
+        <header className="klide-worktrees-header">
+          <div className="klide-worktrees-heading">
+            <span>
+              <GitIcon size={15} />
+              Worktrees
+            </span>
+            {workspaceRoot && (
+              <small>
+                {linked === 0 ? "No isolated branches" : `${linked} isolated ${linked === 1 ? "branch" : "branches"}`}
+              </small>
+            )}
+          </div>
+          <button className="klide-worktrees-icon-btn" onClick={() => void refresh()} aria-label="Refresh">
+            <ReplayIcon size={14} />
+          </button>
+          <button className="klide-worktrees-icon-btn" onClick={onClose} aria-label="Close">
+            <CloseIcon size={14} />
           </button>
         </header>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-          {!workspaceRoot && <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: 12 }}>Open a workspace folder first.</div>}
-          {workspaceRoot && loading && worktrees.length === 0 && <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: 12 }}>Loading…</div>}
+        <div className="klide-worktrees-list">
+          {!workspaceRoot && <div className="klide-worktrees-empty">Open a workspace folder first.</div>}
+          {workspaceRoot && loading && worktrees.length === 0 && <div className="klide-worktrees-empty">Loading…</div>}
           {workspaceRoot && !loading && worktrees.length <= 1 && (
-            <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: 12, lineHeight: 1.5 }}>
-              No worktrees yet. Use <strong style={{ color: "var(--fg-strong)" }}>Agent: New Run in Worktree</strong> (⌘⇧P) to run an agent on an isolated branch.
+            <div className="klide-worktrees-empty">
+              No worktrees yet. <strong>Agent: New Run in Worktree</strong> (⌘⇧P) runs an agent on an isolated branch.
             </div>
           )}
           {worktrees.map((w) => {
             const main = isMain(w);
             const busy = busyPath === w.path;
             return (
-              <div
-                key={w.path}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 12px",
-                  borderRadius: "var(--radius-md)",
-                  border: "1px solid var(--border)",
-                  background: "var(--bg-surface)",
-                  opacity: busy ? 0.6 : 1,
-                }}
-              >
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--fg-strong)", fontWeight: 600 }}>
+              <div key={w.path} className="klide-worktrees-row" data-busy={busy || undefined}>
+                <GitIcon size={14} />
+                <div className="klide-worktrees-copy">
+                  <span>
                     {w.branch || "(detached)"}
-                    {main && <span style={{ fontSize: 10, fontWeight: 500, color: "var(--fg-subtle)" }}>· main checkout</span>}
-                  </div>
-                  <div style={{ fontSize: 10.5, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.path}</div>
+                    {main && <em>main checkout</em>}
+                  </span>
+                  <small>{w.path}</small>
                 </div>
                 {!main && (
-                  <>
-                    <button disabled={busy} style={btn} onClick={() => { onOpenWorktree(w.path); onClose(); }}>Open</button>
-                    <button disabled={busy || !w.branch} style={btn} title="Merge this branch into the main checkout's current branch" onClick={() => void merge(w.branch, w.path)}>Merge</button>
-                    <button disabled={busy} style={{ ...btn, color: "var(--danger)" }} title="Remove this worktree (fails if it has uncommitted changes)" onClick={() => void remove(w.path)}>Remove</button>
-                  </>
+                  <div className="klide-worktrees-actions">
+                    <button className="klide-worktrees-action" disabled={busy} onClick={() => { onOpenWorktree(w.path); onClose(); }}>Open</button>
+                    <button className="klide-worktrees-action" disabled={busy || !w.branch} onClick={() => void merge(w.branch, w.path)}>Merge</button>
+                    <button className="klide-worktrees-action" data-tone="danger" disabled={busy} onClick={() => void remove(w.path)}>Remove</button>
+                  </div>
                 )}
               </div>
             );
