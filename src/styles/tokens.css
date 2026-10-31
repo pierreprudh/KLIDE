@@ -7149,6 +7149,234 @@ button:focus-visible .menu-leadout {
   font-size: 11px;
 }
 
+/* Worktrees — the same glass window as the Git preview above: composer glass,
+   18px corners, a lit header band, hairline rows that lift on hover. The scrim
+   carries no blur of its own so the card's backdrop-filter is never nested. */
+.klide-worktrees-scrim {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--modal-scrim);
+  animation: klide-worktrees-fade 180ms var(--ease-out) backwards;
+}
+
+.klide-worktrees {
+  width: min(600px, calc(100vw - 96px));
+  max-height: min(540px, calc(100vh - 96px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--composer-border);
+  border-radius: 18px;
+  background: var(--composer-glass);
+  color: var(--fg);
+  backdrop-filter: var(--composer-blur);
+  -webkit-backdrop-filter: var(--composer-blur);
+  transform: translateZ(0);
+  animation: klide-focus-git-island-in 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@keyframes klide-worktrees-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.klide-worktrees-header {
+  min-height: 50px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--panel-highlight) 22%, transparent);
+}
+
+.klide-worktrees-heading {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.klide-worktrees-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--fg-strong);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.klide-worktrees-heading small {
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-worktrees-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  transition:
+    color 160ms var(--ease-out),
+    background 160ms var(--ease-out),
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.klide-worktrees-icon-btn:hover,
+.klide-worktrees-icon-btn:focus-visible {
+  color: var(--fg-strong);
+  background: var(--menu-row-hover);
+  outline: none;
+}
+
+.klide-worktrees-icon-btn:active {
+  transform: scale(0.92);
+}
+
+.klide-worktrees-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.klide-worktrees-row {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 6px 0 10px;
+  border-radius: 10px;
+  transition: background 160ms var(--ease-out), opacity 160ms var(--ease-out);
+}
+
+.klide-worktrees-row:hover {
+  background: var(--menu-row-hover);
+}
+
+.klide-worktrees-row[data-busy="true"] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.klide-worktrees-row > svg {
+  flex-shrink: 0;
+  color: var(--fg-dim);
+}
+
+.klide-worktrees-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.klide-worktrees-copy > span {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-worktrees-copy > span > em {
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.klide-worktrees-copy small {
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-worktrees-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.klide-worktrees-action {
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-subtle);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition:
+    color 160ms var(--ease-out),
+    background 160ms var(--ease-out);
+}
+
+.klide-worktrees-action:hover,
+.klide-worktrees-action:focus-visible {
+  color: var(--fg-strong);
+  background: var(--menu-row-hover);
+  outline: none;
+}
+
+.klide-worktrees-action[data-tone="danger"]:hover,
+.klide-worktrees-action[data-tone="danger"]:focus-visible {
+  color: var(--danger);
+}
+
+.klide-worktrees-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.klide-worktrees-empty {
+  padding: 28px 16px;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.klide-worktrees-empty strong {
+  color: var(--fg-strong);
+  font-weight: 550;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-worktrees-scrim,
+  .klide-worktrees {
+    animation: none;
+  }
+}
+
 .klide-focus-current-surface {
   flex: 1;
   min-width: 0;

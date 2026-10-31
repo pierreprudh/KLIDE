@@ -545,12 +545,18 @@ export function createFleetController(
         });
         return tabs[0]?.panelId ?? "";
       }
-      case "fresh":
-        return deps.createPanel({
+      case "fresh": {
+        // On a one-slot surface the panel on screen is repointed rather than
+        // a hidden one appended; the seat bump remounts it, so its session
+        // restores for the new folder (a new worktree starts a new thread).
+        const { panelId, reused } = takeSeat(intent, {
           provider: intent.provider,
           model: intent.model,
           cwd: intent.cwd,
         });
+        if (reused) dispatch({ type: "seat-bumped", panelId });
+        return panelId;
+      }
     }
   };
 

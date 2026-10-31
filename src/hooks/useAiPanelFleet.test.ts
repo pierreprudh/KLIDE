@@ -464,10 +464,23 @@ describe("admission into a surface with one AI slot", () => {
     expect(fleet.state.seatByPanel["ai-main"]).toBeUndefined();
   });
 
-  it("still opens a new panel for a race and a duplicate", () => {
+  it("repoints the panel on screen for a new worktree run instead of a hidden one", () => {
     const fleet = oneSlot();
 
-    fleet.admit({ kind: "fresh", provider: "ollama" });
+    const panelId = fleet.admit({ kind: "fresh", cwd: "/repo-worktrees/wt-1" });
+
+    expect(panelId).toBe("ai-main");
+    expect(fleet.open).toEqual([]);
+    expect(fleet.reseated).toEqual([
+      { panelId: "ai-main", seed: { provider: undefined, model: undefined, cwd: "/repo-worktrees/wt-1" } },
+    ]);
+    // Remounted, so its session restores for the worktree, not the old thread.
+    expect(fleet.state.seatByPanel["ai-main"]).toBe(1);
+  });
+
+  it("still opens new panels for a race", () => {
+    const fleet = oneSlot();
+
     fleet.admit({
       kind: "race-watch",
       focusActive: true,
@@ -477,7 +490,7 @@ describe("admission into a surface with one AI slot", () => {
       ],
     });
 
-    expect(fleet.open).toEqual(["panel-1", "panel-2", "panel-3"]);
+    expect(fleet.open).toEqual(["panel-1", "panel-2"]);
     expect(fleet.reseated).toEqual([]);
   });
 });
