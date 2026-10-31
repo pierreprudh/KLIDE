@@ -1029,6 +1029,22 @@ fn settle_run(
 /// an auto-commit. A no-op when the tree is clean. Best-effort: a git failure
 /// here must not turn a successful run into an error, so results are ignored
 /// and the worst case is the pre-existing "branch has no commit" state.
+/// The newest `ConversationTitled` name recorded in a transcript, if any.
+/// Best-effort like its caller: an unreadable file or line yields `None`.
+fn conversation_title(transcript: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(transcript).ok()?;
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            let event = line.get("event")?;
+            (event.get("type")?.as_str()? == "conversation_titled")
+                .then(|| event.get("title")?.as_str().map(str::to_string))
+                .flatten()
+        })
+        .filter(|title| !title.trim().is_empty())
+        .last()
+}
+
 fn commit_worktree_on_done(summary: &AgentRunSummary) {
     let Some(cwd) = summary.cwd.as_deref() else {
         return;
@@ -1045,7 +1061,11 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
     if !dirty {
         return;
     }
-    let subject = format!("klide: {}", title_from_text(&summary.title));
+    // The conversation's name, not this turn's prompt: a continuation's
+    // summary title is its newest message ("finish on pls"), which made a
+    // useless commit subject on the branch the operator merges.
+    let title = conversation_title(Path::new(&summary.path)).unwrap_or_else(|| summary.title.clone());
+    let subject = format!("klide: {}", title_from_text(&title));
     // A Delegate worker on the CLI's own default model records "default" as
     // its model; the co-author line should name who wrote the code, so fall
     // back to the provider's label ("Claude Code"), then to the provider id.
@@ -4412,6 +4432,28 @@ mod worktree_commit_tests {
             validation: None,
             parent_id: None,
         }
+    }
+
+    #[test]
+    fn the_commit_subject_is_the_conversation_name_not_the_latest_prompt() {
+        let (base, _main, wt) = repo_with_worktree("titled-worktree");
+        std::fs::write(wt.join("c.txt"), "agent wrote this\n").unwrap();
+        let transcript = base.join("run-1.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                r#"{"schemaVersion":1,"runId":"run-1","seq":0,"ts":1,"event":{"type":"conversation_titled","runId":"run-1","title":"Add max character option","ts":1}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let mut done = summary(&wt, "finish on pls");
+        done.path = transcript.to_string_lossy().to_string();
+
+        commit_worktree_on_done(&done);
+
+        let subject = git(&wt, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject.trim(), "klide: Add max character option");
     }
 
     #[test]

@@ -65,7 +65,16 @@ export function WorktreesModal({ open, workspaceRoot, onOpenWorktree, onNotice, 
     setBusyPath(path);
     try {
       const msg = await gitWorktreeMerge(workspaceRoot, branch);
-      onNotice(msg);
+      // Landed, so the checkout and its branch have nothing left to give —
+      // tear both down, as a race merge does. A dirty worktree refuses the
+      // removal and stays, with the reason, so nothing unmerged is lost.
+      try {
+        await gitWorktreeRemove(workspaceRoot, path, { deleteBranch: branch });
+        onNotice(`${msg} Removed its worktree and branch.`);
+      } catch (err) {
+        onNotice(`${msg} Kept its worktree: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await refresh();
     } catch (err) {
       onNotice(err instanceof Error ? err.message : String(err));
     } finally {
