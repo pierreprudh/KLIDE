@@ -23,6 +23,17 @@ baseline; unchecked items below are verification or specific remaining gaps.
   Diff and validation evidence, then merge or reject and explicitly clean up.
   Exercise a native hosted model, a local model and a supported Delegate;
   record which combinations passed and any limitations.
+  **Parked 2026-10-31, in progress.** Sandbox `~/Documents/Private/klide-acceptance`,
+  entry ⌘⇧P → Agent: New Run in Worktree, Work mode, Review policy, prompt
+  "Add a `--max N` option to slug.sh … add two cases to test.sh, then run
+  `sh test.sh`". DeepSeek Flash (OpenRouter) passed: isolated in its worktree,
+  Stop then a follow-up resumed the same Run, 3 diffs + 2 commands waited for
+  approval, Merge landed and `sh test.sh` passed on main. Restart-and-recover
+  was not exercised. Fixed on the way: the worktree run opened a panel the
+  one-slot surfaces never draw, so the visible panel wrote to main (#386, plus
+  the Worktrees window in the Git preview's glass); the auto-commit subject was
+  the latest prompt and Merge left the branch behind (#387). Remaining: restart
+  leg, then Ollama `qwen3.5:9b`, then a Delegate (Claude Code).
 - [x] Foreground Worker acceptance in the app (2026-10-26, sandbox repo
   `~/Documents/Private/klide-acceptance`, DeepSeek Flash parent, Claude Code
   worker): setup stage ran and was shown, the worker committed on its branch,

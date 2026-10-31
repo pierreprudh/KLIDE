@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { readWorkspaceTextFile } from "../workspaceFs";
 import { isSpreadsheetPath } from "../spreadsheets/paths";
 import { Z } from "../zLayers";
 import { fileMatchRank } from "../fileSearch";
+import { SearchIcon } from "../icons";
+import { Kbd } from "./Kbd";
+import { FileTypeIcon } from "./fileMarks";
 
 type CommandItem = {
   id: string;
@@ -24,6 +27,53 @@ type Props = {
   onOpenFile: (path: string, content: string) => void;
   initialQuery?: string;
 };
+
+type Row =
+  | { kind: "heading"; key: string; label: string }
+  | {
+      kind: "item";
+      key: string;
+      index: number;
+      title: string;
+      /** A file row's name, for its type icon. */
+      file?: string;
+      detail?: string;
+      hint?: string;
+      keys?: string[];
+    };
+
+/** "View: Git Review" → category "View", name "Git Review". */
+export function splitCommandLabel(label: string): { category: string | null; name: string } {
+  const at = label.indexOf(": ");
+  if (at <= 0) return { category: null, name: label };
+  return { category: label.slice(0, at), name: label.slice(at + 2) };
+}
+
+/** "⌘⇧F" → ["⌘", "⇧", "F"]; a named key ("Esc") stays whole. */
+export function splitShortcut(shortcut: string): string[] {
+  const keys: string[] = [];
+  let i = 0;
+  while (i < shortcut.length && "⌘⇧⌥⌃".includes(shortcut[i])) keys.push(shortcut[i++]);
+  const rest = shortcut.slice(i);
+  if (rest) keys.push(rest);
+  return keys;
+}
+
+/** Stable grouping: categories in order of first appearance, commands kept
+ *  in the host's order within each. */
+export function groupByCategory<T extends { label: string }>(commands: T[]): T[] {
+  const order: string[] = [];
+  const byCategory = new Map<string, T[]>();
+  for (const cmd of commands) {
+    const category = splitCommandLabel(cmd.label).category ?? "";
+    if (!byCategory.has(category)) {
+      byCategory.set(category, []);
+      order.push(category);
+    }
+    byCategory.get(category)!.push(cmd);
+  }
+  return order.flatMap((category) => byCategory.get(category)!);
+}
 
 const RECENT_FILES_KEY = "klide.recentFiles";
 
@@ -96,7 +146,15 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
         .slice(0, 15)
     : [];
 
-  const totalResults = isCommandMode ? filteredCommands.length : recentFiles.length > 0 ? recentFiles.length : filteredFiles.length;
+  // Commands read "Category: Name". With nothing typed they are grouped under
+  // their category in the order the host lists them; a search ranks them flat
+  // and names the category beside each row instead.
+  const groupCommands = isCommandMode && searchQuery.length === 0;
+  const orderedCommands = groupCommands ? groupByCategory(filteredCommands) : filteredCommands;
+  const showRecent = !isCommandMode && recentFiles.length > 0 && query.length === 0;
+  const fileItems = showRecent ? recentFiles : filteredFiles;
+
+  const totalResults = isCommandMode ? orderedCommands.length : fileItems.length;
 
   const selectedIdxSafe = Math.max(0, Math.min(selectedIdx, Math.max(totalResults - 1, 0)));
 
@@ -109,12 +167,11 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
   // selectedIdxSafe here would act on the previous selection.
   const execute = useCallback((idx?: number) => {
     const at = idx ?? selectedIdxSafe;
-    if (isCommandMode && filteredCommands.length > 0) {
-      filteredCommands[at]?.action();
+    if (isCommandMode && orderedCommands.length > 0) {
+      orderedCommands[at]?.action();
     } else if (!isCommandMode) {
-      const items = recentFiles.length > 0 && query.length === 0 ? recentFiles : filteredFiles;
-      if (items.length > 0) {
-        const f = items[at] ?? items[0];
+      if (fileItems.length > 0) {
+        const f = fileItems[at] ?? fileItems[0];
         saveRecentFile(f.path);
         void (async () => {
           try {
@@ -126,182 +183,169 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
         })();
       }
     }
-  }, [isCommandMode, filteredCommands, filteredFiles, recentFiles, query, selectedIdxSafe, workspaceRoot, onOpenFile]);
+  }, [isCommandMode, orderedCommands, fileItems, selectedIdxSafe, workspaceRoot, onOpenFile]);
+
+  const close = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("command-palette-close"));
+  }, []);
+
+  // The card's height follows its content: measured from the inner column,
+  // animated only after the first measurement so it opens at its size.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | null>(null);
+  const [sized, setSized] = useState(false);
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => setHeight(el.offsetHeight + 2);
+    measure();
+    const frame = requestAnimationFrame(() => setSized(true));
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, []);
+
+  // One highlight that slides to the selected row; it only animates once it
+  // has been placed, so it never sweeps in from the top on open.
+  const listRef = useRef<HTMLDivElement>(null);
+  const rowEls = useRef<(HTMLDivElement | null)[]>([]);
+  const [indicator, setIndicator] = useState<{ top: number; height: number } | null>(null);
+  const [ready, setReady] = useState(false);
+
+  // One row model for the list: headings carry no index, items carry the
+  // index Enter and click act on.
+  const rows: Row[] = [];
+  if (isCommandMode) {
+    let group: string | null = null;
+    orderedCommands.forEach((cmd, index) => {
+      const { category, name } = splitCommandLabel(cmd.label);
+      if (groupCommands && category && category !== group) {
+        group = category;
+        rows.push({ kind: "heading", key: `h:${category}`, label: category });
+      }
+      rows.push({
+        kind: "item",
+        key: `c:${cmd.id}`,
+        index,
+        title: name,
+        hint: groupCommands ? undefined : category ?? undefined,
+        keys: cmd.shortcut ? splitShortcut(cmd.shortcut) : undefined,
+      });
+    });
+  } else if (fileItems.length > 0) {
+    rows.push({ kind: "heading", key: "h:files", label: showRecent ? "Recent" : "Files" });
+    fileItems.forEach((f, index) => {
+      rows.push({ kind: "item", key: `f:${f.path}`, index, file: f.base, title: f.base, detail: f.dir || undefined });
+    });
+  }
+  const rowsKey = rows.map((row) => row.key).join("|");
+
+  useLayoutEffect(() => {
+    const el = rowEls.current[selectedIdxSafe];
+    if (!el || totalResults === 0) {
+      setIndicator(null);
+      return;
+    }
+    setIndicator({ top: el.offsetTop, height: el.offsetHeight });
+    el.scrollIntoView({ block: "nearest" });
+  }, [selectedIdxSafe, rowsKey, totalResults]);
+  useEffect(() => {
+    if (!indicator || ready) return;
+    const frame = requestAnimationFrame(() => setReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, [indicator, ready]);
+
+  const emptyText = isCommandMode
+    ? searchQuery ? "No matching commands" : null
+    : !filesLoaded
+      ? "Indexing workspace…"
+      : query.length > 0 ? `No files matching "${query}"` : null;
 
   return (
     <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: Z.popover,
-        display: "flex",
-        justifyContent: "center",
-        paddingTop: "18vh",
-        background: "color-mix(in srgb, var(--bg) 60%, transparent)",
-        backdropFilter: "blur(2px) saturate(1.4)",
-      }}
+      className="klide-cmd-scrim"
+      style={{ zIndex: Z.popover }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) {
-          window.dispatchEvent(new CustomEvent("command-palette-close"));
-        }
+        if (e.target === e.currentTarget) close();
       }}
     >
       <div
-        style={{
-          width: "min(560px, 90vw)",
-          maxHeight: "min(420px, 60vh)",
-          display: "flex",
-          flexDirection: "column",
-          border: "1px solid var(--border-strong)",
-          borderRadius: "var(--radius-lg)",
-          background: "var(--bg-elevated)",
-          boxShadow: "var(--panel-shadow)",
-          overflow: "hidden",
-        }}
+        className="klide-cmd"
+        role="dialog"
+        aria-label={isCommandMode ? "Commands" : "Go to file"}
+        data-sized={sized || undefined}
+        data-ready={ready || undefined}
+        style={{ height: height ?? undefined }}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 14px",
-            borderBottom: "1px solid var(--border)",
-          }}
-        >
-          <svg
-            width="15" height="15" viewBox="0 0 24 24"
-            fill="none" stroke="var(--fg-dim)" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
-            style={{ flexShrink: 0 }}
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="M21 21l-4.35-4.35" />
-          </svg>
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setSelectedIdx((i) => Math.min(i + 1, Math.max(totalResults - 1, 0)));
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setSelectedIdx((i) => Math.max(i - 1, 0));
-              } else if (e.key === "Enter") {
-                e.preventDefault();
-                execute();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                window.dispatchEvent(new CustomEvent("command-palette-close"));
-              }
-            }}
-            placeholder={isCommandMode ? "Type a command…" : filesLoaded ? "Search files by name…" : "Loading files…"}
-            spellCheck={false}
-            autoComplete="off"
-            style={{
-              flex: 1,
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              color: "var(--fg-strong)",
-              font: "inherit",
-              fontSize: 14,
-            }}
-          />
-          {!isCommandMode && (
-            <span
-              style={{
-                fontSize: 10,
-                color: "var(--fg-dim)",
-                flexShrink: 0,
-                letterSpacing: "0.04em",
+        <div ref={rootRef} className="klide-cmd-root">
+          <div className="klide-cmd-header">
+            <SearchIcon size={15} />
+            <input
+              ref={inputRef}
+              className="klide-cmd-input"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSelectedIdx((i) => Math.min(i + 1, Math.max(totalResults - 1, 0)));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSelectedIdx((i) => Math.max(i - 1, 0));
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  execute();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  close();
+                }
               }}
-            >
-              {query.length === 0 ? "recent" : "&gt; for commands"}
-            </span>
-          )}
-        </div>
+              placeholder={isCommandMode ? "Type a command…" : filesLoaded ? "Search files by name…" : "Loading files…"}
+              spellCheck={false}
+              autoComplete="off"
+              aria-activedescendant={totalResults > 0 ? `klide-cmd-${selectedIdxSafe}` : undefined}
+            />
+            {!isCommandMode && <span className="klide-cmd-mode">&gt; commands</span>}
+            <button className="klide-cmd-esc" onClick={close} aria-label="Close">Esc</button>
+          </div>
 
-        <div style={{ flex: 1, overflow: "auto", overscrollBehavior: "contain", padding: 4 }}>
-          {/* Recent files (shown when query is empty) */}
-          {!isCommandMode && recentFiles.length > 0 && (
-            <>
-              <div style={{ padding: "4px 12px 2px", color: "var(--fg-dim)", fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600 }}>
-                Recent
-              </div>
-              {recentFiles.map((f, i) => (
+          {(rows.length > 0 || emptyText) && (
+            <div ref={listRef} className="klide-cmd-list" role="listbox">
+              {indicator && rows.length > 0 && (
                 <div
-                  key={`recent-${f.path}`}
-                  onMouseEnter={() => setSelectedIdx(i)}
-                  onClick={() => { setSelectedIdx(i); execute(i); }}
-                  style={{
-                    display: "flex", alignItems: "baseline", gap: 4, padding: "7px 12px",
-                    borderRadius: "var(--radius-sm)", cursor: "pointer", overflow: "hidden",
-                    background: i === selectedIdxSafe ? "var(--bg-hover)" : "transparent",
-                  }}
-                >
-                  <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 500, flexShrink: 0 }}>{f.base}</span>
-                  {f.dir && <span style={{ color: "var(--fg-dim)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.dir}</span>}
-                </div>
-              ))}
-            </>
-          )}
-
-          {/* Commands */}
-          {isCommandMode && filteredCommands.length === 0 && searchQuery && (
-            <div style={{ padding: "14px 12px", color: "var(--fg-subtle)", fontSize: 12, textAlign: "center" }}>
-              No matching commands
-            </div>
-          )}
-          {isCommandMode && filteredCommands.map((cmd, i) => (
-            <div
-              key={cmd.id}
-              onMouseEnter={() => setSelectedIdx(i)}
-              onClick={() => { setSelectedIdx(i); execute(i); }}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                padding: "7px 12px", borderRadius: "var(--radius-sm)", cursor: "pointer",
-                background: i === selectedIdxSafe ? "var(--bg-hover)" : "transparent",
-                color: "var(--fg-strong)", fontSize: 13,
-              }}
-            >
-              <span>{cmd.label}</span>
-              {cmd.shortcut && (
-                <span style={{ fontSize: 11, color: "var(--fg-dim)", letterSpacing: "0.03em" }}>{cmd.shortcut}</span>
+                  className="klide-cmd-indicator"
+                  style={{ transform: `translateY(${indicator.top}px)`, height: indicator.height }}
+                />
               )}
-            </div>
-          ))}
-
-          {/* File results */}
-          {!isCommandMode && (recentFiles.length === 0 || query.length > 0) &&
-            filteredFiles.map((f, i) => (
-              <div
-                key={f.path}
-                onMouseEnter={() => setSelectedIdx(i)}
-                onClick={() => { setSelectedIdx(i); execute(i); }}
-                style={{
-                  display: "flex", alignItems: "baseline", gap: 4, padding: "7px 12px",
-                  borderRadius: "var(--radius-sm)", cursor: "pointer", overflow: "hidden",
-                  background: i === selectedIdxSafe ? "var(--bg-hover)" : "transparent",
-                }}
-              >
-                <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 500, flexShrink: 0 }}>{f.base}</span>
-                {f.dir && <span style={{ color: "var(--fg-dim)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.dir}</span>}
-              </div>
-            ))}
-
-          {/* Loading state */}
-          {!isCommandMode && !filesLoaded && (
-            <div style={{ padding: "14px 12px", color: "var(--fg-subtle)", fontSize: 12, textAlign: "center" }}>
-              Indexing workspace…
-            </div>
-          )}
-
-          {/* No results */}
-          {!isCommandMode && filesLoaded && query.length > 0 && filteredFiles.length === 0 && recentFiles.length === 0 && (
-            <div style={{ padding: "14px 12px", color: "var(--fg-subtle)", fontSize: 12, textAlign: "center" }}>
-              No files matching "{query}"
+              {rows.map((row) =>
+                row.kind === "heading" ? (
+                  <div key={row.key} className="klide-cmd-heading">{row.label}</div>
+                ) : (
+                  <div
+                    key={row.key}
+                    id={`klide-cmd-${row.index}`}
+                    ref={(el) => { rowEls.current[row.index] = el; }}
+                    className="klide-cmd-option"
+                    role="option"
+                    aria-selected={row.index === selectedIdxSafe}
+                    data-active={row.index === selectedIdxSafe || undefined}
+                    onMouseMove={() => { if (row.index !== selectedIdxSafe) setSelectedIdx(row.index); }}
+                    onClick={() => { setSelectedIdx(row.index); execute(row.index); }}
+                  >
+                    {row.file && <FileTypeIcon name={row.file} size={15} />}
+                    <div className="klide-cmd-label">
+                      <span>{row.title}</span>
+                      {row.detail && <small>{row.detail}</small>}
+                    </div>
+                    {row.hint && <span className="klide-cmd-hint">{row.hint}</span>}
+                    {row.keys && <Kbd keys={row.keys} />}
+                  </div>
+                ),
+              )}
+              {rows.length === 0 && emptyText && <div className="klide-cmd-empty">{emptyText}</div>}
             </div>
           )}
         </div>
