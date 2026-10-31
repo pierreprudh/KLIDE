@@ -119,6 +119,21 @@ audit. Next follow-up: verify worker Cancel during setup, API queueing, active
 Delegate/API execution and an approval pause, then reopen and inspect Cancelled
 state and the retained worktree.
 
+## Harness follow-ups
+
+- [x] Strengthen native compaction continuity (2026-10-31): opening goal and
+  latest request verbatim, latest recorded TODO state even after an empty
+  summary, explicit tool outcomes, and summary guidance for constraints,
+  blockers, verification and the next action. Repeated compaction and durable
+  replay are covered without inference; real-model adherence remains unmeasured.
+  Contract and limits: [Task continuity](docs/COMPACTION_CONTINUITY.md).
+- [ ] Clean coding-quality benchmark baseline (deferred by Pierre 2026-10-31,
+  alongside the VPS backlog): use the independent multi-file quality graders,
+  fixed harness/model versions and repeated trials. Compare correctness,
+  elapsed time and cost with cold/warm cache conditions separated; retain
+  failures and sample counts. Grader tests passing is not a measured model
+  quality gain. Run when the environment and representative tasks are ready.
+
 ## Orb follow-ups — remote work and continuity
 
 - [x] `/btw` read-only side questions: reuse the conversation panel, transcript
