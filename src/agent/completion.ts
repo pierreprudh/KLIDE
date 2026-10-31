@@ -81,3 +81,19 @@ export function latestReviewCompletion(
   }
   return undefined;
 }
+
+/** What a run did to each file, from its checkpoints: the file as it was
+ *  before the run's first write and as the run's last write left it. A run
+ *  that edits one file three times is one change, not three. Accepted runs
+ *  have no checkpoints left, so an empty map is a normal answer. */
+export type NetFileChange = { path: string; before: string; after: string; created: boolean };
+
+export function netFileChanges(entries: readonly { path: string; oldContent: string; newContent: string; isCreate: boolean; ts: number }[]): Map<string, NetFileChange> {
+  const changes = new Map<string, NetFileChange>();
+  for (const entry of [...entries].sort((a, b) => a.ts - b.ts)) {
+    const seen = changes.get(entry.path);
+    if (seen) seen.after = entry.newContent;
+    else changes.set(entry.path, { path: entry.path, before: entry.isCreate ? "" : entry.oldContent, after: entry.newContent, created: entry.isCreate });
+  }
+  return changes;
+}

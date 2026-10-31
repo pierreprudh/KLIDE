@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { commandStatusSummary, completionDocumentCount, completionDocuments, hasCompletionReview, isCommandHistory, type RunCompletion } from "../../agent/completion";
+import { commandStatusSummary, completionDocumentCount, completionDocuments, hasCompletionReview, isCommandHistory, netFileChanges, type RunCompletion } from "../../agent/completion";
+import type { CheckpointEntry } from "../../agent/types";
+import { buildDiffRows, type DiffRow } from "../../lineDiff";
+import { DiffStat } from "../diffView";
 import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
 import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon } from "../../icons";
@@ -34,10 +37,15 @@ type Props = {
    *  which is a different act from opening the evidence. */
   folded?: boolean;
   onUnfold?: () => void;
+  /** The run's file checkpoints, for the +/− counts and the in-place diff.
+   *  Absent, the changed files are a plain list. */
+  loadChanges?: (runId: string) => Promise<CheckpointEntry[]>;
 };
 
-type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "onRequestChanges"> & {
+type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "onRequestChanges" | "loadChanges"> & {
   onDone: () => void;
+  /** Diffs a host already loaded (the island reads them for its header). */
+  diffs?: Map<string, FileDiff> | null;
 };
 
 /** The evidence itself — the same sections and the same two actions wherever
@@ -75,37 +83,99 @@ function Fold({ name, open, onToggle, title, label, failed, children }: {
   );
 }
 
-export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone }: EvidenceProps) {
+/** A changed file as the card reads it: the hunk rows and the two counts. */
+type FileDiff = { rows: DiffRow[]; added: number; removed: number; created: boolean };
+
+/** The run's checkpoints, read once per completion and turned into one diff per
+ *  file. Null while loading or when the host cannot read them; an accepted run
+ *  has none left, and its files stay a plain list. */
+function useFileDiffs(completion: RunCompletion, load?: (runId: string) => Promise<CheckpointEntry[]>): Map<string, FileDiff> | null {
+  const [diffs, setDiffs] = useState<Map<string, FileDiff> | null>(null);
+  useEffect(() => {
+    if (!load || completion.files.length === 0) return;
+    let live = true;
+    void load(completion.runId).then((entries) => {
+      if (!live) return;
+      const next = new Map<string, FileDiff>();
+      for (const change of netFileChanges(entries).values()) {
+        next.set(change.path, { ...buildDiffRows(change.before, change.after), created: change.created });
+      }
+      setDiffs(next);
+    }).catch(() => {});
+    return () => { live = false; };
+    // The loader is a fresh closure every render; the run is what identifies the data.
+  }, [completion.runId, completion.completedAt, completion.files.length]);
+  return diffs;
+}
+
+/** The hunks of one file, small enough for the column: a gutter sign, the
+ *  line, and a gap where unchanged lines were folded away. */
+function InlineDiff({ rows }: { rows: DiffRow[] }) {
+  return (
+    <div className="klide-result-diff" role="group" aria-label="Diff">
+      <div className="klide-result-diff-lines">
+      {rows.map((row, index) => row.kind === "gap"
+        ? <div key={index} className="klide-result-diff-gap">{row.hidden} unchanged</div>
+        : <div key={index} className="klide-result-diff-line" data-kind={row.kind}>
+            <span aria-hidden="true">{row.kind === "add" ? "+" : row.kind === "del" ? "−" : " "}</span>
+            <code>{row.text || " "}</code>
+          </div>)}
+      </div>
+    </div>
+  );
+}
+
+export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone, loadChanges, diffs: given }: EvidenceProps) {
   const history = isCommandHistory(completion);
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(history && failed > 0);
-  const [changesOpen, setChangesOpen] = useState(false);
+  const [openFile, setOpenFile] = useState<string | null>(null);
   // The documents are what the run made, so they start open; the fold is
   // there to put them away while reading the rest.
   const [documentsOpen, setDocumentsOpen] = useState(true);
   const review = (path?: string) => { onDone(); onReview?.(path); };
+  const loaded = useFileDiffs(completion, given === undefined ? loadChanges : undefined);
+  const diffs = given === undefined ? loaded : given;
   // The icon opens the document; its preview stays visible below.
   const artifacts = completionDocuments(completion);
+  const checks = commandStatusSummary(completion);
   return (
     <>
       <div className="klide-result-body" data-history={history ? "1" : undefined}>
         {completion.files.length > 0 && <section aria-label="Changed files">
-          {/* The changed files fold the way the commands do: closed, one row
-              that says how many — "2 changes" — and opens on a click. The
-              result's first screen is what the run made and said, and the
-              footer's "Review changes" already leads to the diff; the list is
-              for the reader who wants to pick one file out of it. */}
-          {/* The word alone: the count is in the footer's button and in the
-              list a click away, and a number before "changes" made the row
-              read as a receipt. */}
-          <Fold name="changes" open={changesOpen} onToggle={() => setChangesOpen((was) => !was)} title="Changes">
-          <div className="klide-result-files">{completion.files.map((path) => {
+          {/* A recap: a row per file — the name and folder on one line, and
+              how much changed — with no mark in front of it. The row opens its diff in place, or
+              — where the host has a diff viewer — goes there. */}
+          <div className="klide-result-changes">{completion.files.map((path) => {
             const name = path.split("/").pop() || path;
             const directory = path.slice(0, -name.length).replace(/\/$/, "");
-            const label = <><span className="klide-result-filename">{name}</span>{directory && <span className="klide-result-directory">{directory}</span>}</>;
-            return onReview ? <button key={path} type="button" title={`Review ${path}`} onClick={() => review(path)}>{label}<span aria-hidden="true">↗</span></button> : <div key={path}>{label}</div>;
+            const diff = diffs?.get(path);
+            const inline = !onReview && !!diff && diff.rows.length > 0;
+            const open = inline && openFile === path;
+            const label = <>
+              <span className="klide-result-file-text">
+                <span className="klide-result-filename">{name}</span>
+                {directory && <span className="klide-result-directory">{directory}</span>}
+              </span>
+              {diff && (diff.added > 0 || diff.removed > 0) && <span className="klide-result-stat">
+                {diff.added > 0 && <span className="klide-result-stat-add">+{diff.added}</span>}
+                {diff.removed > 0 && <span className="klide-result-stat-del">−{diff.removed}</span>}
+              </span>}
+              {onReview
+                ? <span className="klide-result-file-go" aria-hidden="true">↗</span>
+                : inline && <span className="klide-result-file-go" aria-hidden="true"><ChevronIcon open={open} size={13} /></span>}
+            </>;
+            return (
+              <div key={path} className="klide-result-file" data-open={open ? "1" : undefined}>
+                {onReview
+                  ? <button type="button" className="klide-result-file-row" title={`Review ${path}`} onClick={() => review(path)}>{label}</button>
+                  : inline
+                    ? <button type="button" className="klide-result-file-row" aria-expanded={open} title={path} onClick={() => setOpenFile(open ? null : path)}>{label}</button>
+                    : <div className="klide-result-file-row" title={path}>{label}</div>}
+                {open && diff && <InlineDiff rows={diff.rows} />}
+              </div>
+            );
           })}</div>
-          </Fold>
         </section>}
         {artifacts.length > 0 && <section aria-label="Documents produced">
           {/* Not "Changes": these came from a command, so there is no diff
@@ -138,22 +208,20 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
           </Fold>
         </section>}
         {completion.commands.length > 0 && <section aria-label="Command results">
-          {!history && <p className="klide-result-command-summary">{commandStatusSummary(completion)}</p>}
-          {/* The commands are the run's receipts: evidence you check when
-              something looks wrong, not something to read every time. So they
-              arrive as one stack — a heading that opens — and stay quiet even
-              when opened. A failure is the exception: nothing dims while a
-              command has failed. */}
-          {/* The count leads, on the left, as part of what the row is called —
-              "3 commands" — rather than sitting on the right where it competed
-              with the disclosure. The disclosure itself is the app's chevron,
-              turning over on open instead of swapping a + for a −: one mark
-              that moves, not two that replace each other. */}
+          {/* The commands are the run's receipts, so they are one line — what
+              was checked and how it went — that opens onto the list. Each
+              command is one line too, cut at the column's edge (the whole of
+              it is in the opened output and the tooltip); a status word appears
+              only when it is not a pass, since the summary already said how
+              many passed. */}
           <Fold name="commands" open={commandsOpen} onToggle={() => setCommandsOpen((was) => !was)} failed={failed > 0}
-            title={history ? commandStatusSummary(completion) : <><span className="klide-result-fold-count">{completion.commands.length}</span><span>command{completion.commands.length === 1 ? "" : "s"}</span></>}>
-          {completion.commands.map((command) => <details key={command.id} className="klide-result-command">
-            <summary><code>{command.label}</code><span className={`klide-result-status-${command.status}`}>{command.status === "unknown" ? "No result" : command.status === "passed" ? "Passed" : "Failed"}</span></summary>
-            <pre>{command.output || "No output recorded."}</pre>
+            title={<>
+              <span>{history ? "Commands" : "Checks"}</span>
+              <span className="klide-result-fold-meta">{checks}</span>
+            </>}>
+          {completion.commands.map((command) => <details key={command.id} className="klide-result-command" data-status={command.status}>
+            <summary title={command.label}><code>{command.label}</code>{command.status !== "passed" && <span className={`klide-result-status-${command.status}`}>{command.status === "unknown" ? "No result" : "Failed"}</span>}</summary>
+            <pre><span className="klide-result-command-echo">$ {command.label}</span>{"\n"}{command.output || "No output recorded."}</pre>
           </details>)}
           </Fold>
         </section>}
@@ -182,11 +250,12 @@ function ArtifactThumb({ path, load }: { path: string; load?: (path: string) => 
 
 /** A quiet entry point. On the canvas the evidence opens inside the card, in
  *  the column the plan already lives in; in a transcript it opens as a sheet. */
-export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, variant = "inline", compact = false, folded = false, onUnfold }: Props) {
+export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, variant = "inline", compact = false, folded = false, onUnfold, loadChanges }: Props) {
   const island = variant === "island";
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const id = useId();
+  const islandDiffs = useFileDiffs(completion, island && !folded ? loadChanges : undefined);
 
   // The sheet is modal, so Escape closes it and focus goes back to the row
   // that opened it. The island is part of the page — Escape belongs to the
@@ -249,60 +318,41 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
   }
 
   if (island) {
-    // One window in the canvas column, built like the plan above it: a header
-    // that is the whole hit target, a hairline that appears with the body, and
-    // the body growing into the column rather than over the app.
+    // The Git island's sibling: a header that names it and counts what is in
+    // it, a hairline, and the recap rows — always there, nothing to open
+    // before the reader learns what the run changed and whether it held.
+    // The Git Review recap line, the same words and the same diffstat: how
+    // many files the run changed, then its totals and the five blocks. A run
+    // that changed no file keeps its own name (partial work, command history,
+    // documents) and the count of what it holds.
+    const changed = completion.files.length;
+    const heading = changed > 0 && !completion.stopped ? `${changed} file${changed === 1 ? "" : "s"} changed` : title;
+    let totals: { add: number; del: number } | null = null;
+    if (changed > 0 && islandDiffs) {
+      totals = { add: 0, del: 0 };
+      for (const path of completion.files) {
+        const diff = islandDiffs.get(path);
+        if (diff) { totals.add += diff.added; totals.del += diff.removed; }
+      }
+    }
+    const recap = [
+      history ? `${completion.commands.length} command${completion.commands.length === 1 ? "" : "s"}` : "",
+      completion.stopped && changed > 0 ? `${changed} change${changed === 1 ? "" : "s"}` : "",
+      documentCount > 0 ? `${documentCount} document${documentCount === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" · ");
     return (
-      <div className="klide-result-entry" data-variant="island" data-open={open ? "1" : undefined}>
-        <section className="klide-result-island" data-open={open ? "1" : undefined} aria-label={title}>
-          <div className="klide-result-island-header" role="button" tabIndex={0}
-            aria-expanded={open} aria-controls={id}
-            aria-label={`${open ? "Collapse" : "Expand"} ${spoken.toLowerCase()}`}
-            title={spoken}
-            data-attention={attention > 0 ? "1" : undefined}
-            onClick={() => setOpen(!open)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              setOpen(!open);
-            }}>
-            {/* A 232px column is a corner, not a panel: the header keeps one
-                mark and drops the rest — the title, the count, the attention
-                dot and the chevron. What they said is in the header's own
-                name and tooltip, and "needs attention" becomes the mark's
-                colour rather than a dot pinned beside it. */}
-            {/* An open column has no compacted line: an entry there is a
-                window with its words, however narrow the column gets — a
-                full-width row holding a centred icon was neither one thing
-                nor the other. Folded, it is a mark; there is no third state. */}
-            {mark}
-            <span className="klide-result-island-title">{title}</span>
-            {history && <span className="klide-result-meta">{completion.commands.length}</span>}
-            {files && <span className="klide-result-meta">{files}</span>}
-            {documentCount > 0 && <span className="klide-result-document-count">{documentCount} document{documentCount === 1 ? "" : "s"}</span>}
-            {dot}
-            <span className="klide-result-island-chevron" aria-hidden="true"><ChevronIcon open={open} /></span>
-            {/* Dismissal belongs to the open card. At rest the entry is one
-                mark, and an X beside it is a second thing in the space the
-                rule gives to one — hiding it with opacity was not enough
-                either, since it kept the pill as wide as two. The column's own
-                close puts the whole corner away meanwhile. */}
-            {/* No dismiss here. What a run produced stays in the corner while
-                that run is the latest one — the files are the run's output,
-                not a notice about it, and there is no reading of "close" that
-                should lose them. The column's own close folds this to its mark
-                like everything else. */}
+      <div className="klide-result-entry" data-variant="island" data-open="1">
+        <section className="klide-result-island" data-open="1" aria-label={title}>
+          <div className="klide-result-island-header" title={spoken} data-attention={attention > 0 ? "1" : undefined}>
+            <span className="klide-result-island-title">{heading}</span>
+            <span className="klide-result-island-spacer" />
+            {recap && <span className="klide-result-meta">{recap}</span>}
+            {totals && <DiffStat additions={totals.add} deletions={totals.del} />}
           </div>
-          <div className="klide-result-island-rule" data-shown={open ? "1" : undefined} aria-hidden="true" />
-          {/* Open, the card takes the rest of the column: the evidence scrolls
-              inside it and the two actions stay on the floor of the card, so
-              nothing ends mid-word against a hard edge. */}
-          {open && (
-            <div className="klide-result-island-panel" id={id}>
-              <ResultEvidence completion={completion} disabled={disabled} onReview={onReview}
-                onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} onDone={() => setOpen(false)} />
-            </div>
-        )}
+          <div className="klide-result-island-panel" id={id}>
+            <ResultEvidence completion={completion} disabled={disabled} onReview={onReview} diffs={islandDiffs}
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} onDone={() => {}} />
+          </div>
         </section>
       </div>
     );
@@ -342,7 +392,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
               <button type="button" autoFocus className="klide-result-close" aria-label={history ? "Close command history" : "Close result"} onClick={close}><CloseIcon size={18} /></button>
             </header>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} onDone={close} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} loadChanges={loadChanges} onDone={close} />
           </div>
         </div>,
         document.body,
