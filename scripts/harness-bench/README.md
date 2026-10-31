@@ -15,8 +15,10 @@ evidence. Native request diagnostics and the Hermes comparison remain available.
 ## Hermes comparison
 
 This small synthetic benchmark compares the real KIDE Rust Harness with Hermes's
-one-shot CLI. It does not recreate either agent loop. Three tasks cover a data
-transformation, a code regression, and a change across two files. Each trial gets
+one-shot CLI. It does not recreate either agent loop. Three smoke tasks cover a data
+transformation, a code regression, and a change across two files. Two additional
+quality tasks exercise cache expiry/falsy values across modules and atomic
+inventory updates with duplicate items and invalid quantities. Each trial gets
 fresh files. Hermes gets a fresh home so previous memories and learned skills do
 not contaminate later trials. Randomized order and repeated runs reduce order
 and model sampling effects.
@@ -63,6 +65,22 @@ Run grader regression tests without a model:
 ```sh
 python3 -m unittest discover -s scripts/harness-bench -p 'test_*.py'
 ```
+
+Select `--suite smoke`, `--suite quality` or `--suite all` (default). Preview a
+quality run without inference:
+
+```sh
+python3 scripts/harness-bench/run.py --provider openrouter --model '<model-id>' --suite quality
+```
+
+The quality graders stay outside the agent Workspace, use deterministic clocks,
+and check rollback after errors, exact expiry, cached `None`, boolean quantities,
+duplicate aggregation and preservation of caller inputs. Grader regression tests
+show the broken fixtures and six plausible partial repairs fail, while complete
+reference repairs pass. Benchmark identity is now `kide-hermes-synthetic-v2`;
+do not pool its five-task totals with the old three-task suite. These new tasks
+have not established a model-quality advantage; that requires actual repeated
+model trials. Ordinary CI runs only the graders, with no inference or credentials.
 
 ## Hermes Focus integration
 
