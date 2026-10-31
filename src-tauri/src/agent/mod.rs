@@ -357,6 +357,20 @@ pub(crate) trait RunSupervisor: Send + Sync {
     /// unless a PTY for the same conversation is live and still acts as it.
     /// Default no-op: the default wiring binds nothing.
     fn release_delegate_session(&self, _run_id: &str, _provider: &str) {}
+    /// Host facts are a dependency of dispatch, even with a fake child launcher.
+    /// Returning an owned future lets catalog probes run concurrently without
+    /// borrowing the supervisor into a spawned task.
+    fn worker_readiness(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+        scope: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = crate::launch_readiness::Readiness> + Send>> {
+        let (provider, model, scope) = (provider.to_string(), model.map(str::to_string), scope.map(PathBuf::from));
+        Box::pin(async move {
+            crate::launch_readiness::check(&provider, model.as_deref(), scope.as_deref()).await
+        })
+    }
     /// Execute an approved Mission operation in the app-owned supervisor.
     /// The receiver keeps the host seam object-safe and the caller cancellable.
     fn orchestrate(
@@ -5642,6 +5656,8 @@ pub(crate) mod test_support {
         pub(super) released_delegates: Mutex<Vec<(String, String)>>,
         /// Every `(parent, child)` a background dispatch asked to be woken for.
         pub(super) watched_workers: Mutex<Vec<(String, String)>>,
+        pub(super) readiness: Mutex<HashMap<String, crate::launch_readiness::State>>,
+        pub(super) readiness_checks: Mutex<Vec<(String, Option<String>)>>,
     }
 
     impl FakeSupervisor {
@@ -5665,11 +5681,23 @@ pub(crate) mod test_support {
                 wire_delegate: std::sync::atomic::AtomicBool::new(false),
                 released_delegates: Mutex::new(Vec::new()),
                 watched_workers: Mutex::new(Vec::new()),
+                readiness: Mutex::new(HashMap::new()),
+                readiness_checks: Mutex::new(Vec::new()),
             }
         }
     }
 
     impl RunSupervisor for FakeSupervisor {
+        fn worker_readiness(&self, provider: &str, model: Option<&str>, _scope: Option<&str>)
+            -> Pin<Box<dyn Future<Output = crate::launch_readiness::Readiness> + Send>> {
+            self.readiness_checks.lock().unwrap().push((provider.into(), model.map(str::to_string)));
+            let state = self.readiness.lock().unwrap().get(provider).copied()
+                .unwrap_or(crate::launch_readiness::State::Ready);
+            let answer = crate::launch_readiness::Readiness {
+                provider: provider.into(), state, reason: format!("fixture readiness: {state:?}"), observed_at: now_ms(),
+            };
+            Box::pin(std::future::ready(answer))
+        }
         fn spawn_subagent(
             &self,
             spec: subagents::SubagentRunSpec,
@@ -5759,59 +5787,48 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Poll the run's stashed permission sender and answer it — stands in for
-    /// the agent_resolve_permission command in a headless drive of the pause.
+    async fn answer_pending(
+        sup: &FakeSupervisor,
+        id: &str,
+        reply: &str,
+        label: &str,
+        timeout: std::time::Duration,
+        slot: fn(&AgentRunHandle) -> &Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
+    ) {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let mut answered = false;
+                sup.with_handle(id, &mut |handle| {
+                    if let Some(tx) = slot(handle).lock().unwrap().take() {
+                        let _ = tx.send(reply.to_string());
+                        answered = true;
+                    }
+                });
+                if answered { return; }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }).await.unwrap_or_else(|_| panic!("Run {id} never requested {label} within {timeout:?}"));
+    }
+
+    /// A simulated operator must fail promptly if the handler never opens its
+    /// expected card, rather than holding a shared fixture lock until CI dies.
     pub(super) async fn answer_permission(sup: &FakeSupervisor, id: &str, reply: &str) {
-        loop {
-            let mut answered = false;
-            sup.with_handle(id, &mut |h| {
-                if let Some(tx) = h.pending_permission.lock().unwrap().take() {
-                    let _ = tx.send(reply.to_string());
-                    answered = true;
-                }
-            });
-            if answered {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
+        answer_pending(sup, id, reply, "permission", std::time::Duration::from_secs(5), |h| &h.pending_permission).await;
     }
 
-    /// Poll the run's stashed diff sender and answer it — stands in for the
-    /// agent_resolve_diff command in a headless drive of the diff-review pause.
     pub(super) async fn answer_diff(sup: &FakeSupervisor, id: &str, reply: &str) {
-        loop {
-            let mut answered = false;
-            sup.with_handle(id, &mut |h| {
-                if let Some(tx) = h.pending_diff.lock().unwrap().take() {
-                    let _ = tx.send(reply.to_string());
-                    answered = true;
-                }
-            });
-            if answered {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
+        answer_pending(sup, id, reply, "diff review", std::time::Duration::from_secs(5), |h| &h.pending_diff).await;
     }
 
-    /// Poll the run's stashed question sender and answer it — stands in for the
-    /// agent_resolve_question command (which the frontend calls after the
-    /// advisor consult / subagent finishes) in a headless drive of the pause.
     pub(super) async fn answer_question(sup: &FakeSupervisor, id: &str, reply: &str) {
-        loop {
-            let mut answered = false;
-            sup.with_handle(id, &mut |h| {
-                if let Some(tx) = h.pending_question.lock().unwrap().take() {
-                    let _ = tx.send(reply.to_string());
-                    answered = true;
-                }
-            });
-            if answered {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
+        answer_pending(sup, id, reply, "question", std::time::Duration::from_secs(5), |h| &h.pending_question).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "never requested permission")]
+    async fn a_missing_simulated_approval_fails_with_a_deadline() {
+        let sup = FakeSupervisor::with_run("no-card");
+        answer_pending(&sup, "no-card", "allow", "permission", std::time::Duration::from_millis(20), |h| &h.pending_permission).await;
     }
 
     /// A provider caller that replays a scripted sequence of responses — the
@@ -10365,6 +10382,49 @@ mod worker_dispatch_tests {
         assert!(produced(outcome).ok);
         assert!(questions(&events).is_empty());
         assert_eq!(sup.spawned.lock().unwrap()[0].model, crate::delegate::CLI_DEFAULT_MODEL);
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_worker_is_refused_before_approval_without_starting_a_child() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
+        let root = plain_folder("unavailable");
+        let sup = FakeSupervisor::with_run("run");
+        sup.readiness.lock().unwrap().insert("claude-code".into(), crate::launch_readiness::State::NeedsLogin);
+        let cancel = CancellationToken::new();
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "have claude code write the tests".into();
+        let runs = runs_dir("unavailable");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: &runs };
+        let (events, mut emit) = event_log();
+        let call = subagent_call("unavailable", serde_json::json!({"subagent":"tester", "task":"Write tests", "worker":"claude-code"}));
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), process_subagent_tool(&ctx, &call, &mut emit)).await.expect("a refused dispatch must return, not wait for an approval");
+        let result = produced(outcome);
+        assert!(!result.ok);
+        assert!(result.content.contains("NeedsLogin"), "{}", result.content);
+        assert!(permission_requests(&events).is_empty());
+        assert!(sup.spawned.lock().unwrap().is_empty());
+        assert_eq!(sup.readiness_checks.lock().unwrap().as_slice(), &[("claude-code".into(), None)]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_rechecks_the_selected_model_after_the_operator_answers() {
+        let _fixture = DISPATCH_FIXTURES.lock().await;
+        let root = plain_folder("readiness-change");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("readiness-change");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: &runs };
+        let (events, mut emit) = event_log();
+        let call = subagent_call("changed", serde_json::json!({"subagent":"tester", "task":"Write tests", "worker":"claude-code"}));
+        let (outcome, _) = tokio::join!(process_subagent_tool(&ctx, &call, &mut emit), async {
+            answer_question(&sup, "run", r#"{"worker":"claude-code","model":"fixture-model"}"#).await;
+            sup.readiness.lock().unwrap().insert("claude-code".into(), crate::launch_readiness::State::Offline);
+        });
+        assert!(!produced(outcome).ok);
+        assert!(permission_requests(&events).is_empty());
+        assert!(sup.spawned.lock().unwrap().is_empty());
+        assert_eq!(sup.readiness_checks.lock().unwrap().last().unwrap(), &("claude-code".into(), Some("fixture-model".into())));
     }
 
     #[test]

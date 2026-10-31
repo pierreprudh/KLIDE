@@ -264,7 +264,7 @@ where
         user_named_dispatch(&ctx.request.initial_text, w, chosen_model.as_deref())
     });
     if (needs_worker || worker.is_some()) && !settled_by_user {
-        let mut options = available_worker_ids(ctx.request.workspace_root.as_deref()).await;
+        let mut options = available_worker_ids(ctx.sup, ctx.request.workspace_root.as_deref()).await;
         if options.is_empty() {
             options = subagents::worker_ids().into_iter().map(str::to_string).collect();
         }
@@ -357,10 +357,10 @@ where
     // Rechecked now, with the model it will run on: the card may have been
     // open long enough for a login to lapse or a server to stop.
     if let Some(worker) = worker {
-        let readiness = crate::launch_readiness::check(
+        let readiness = ctx.sup.worker_readiness(
             worker.id(),
             chosen_model.as_deref(),
-            ctx.request.workspace_root.as_deref().map(std::path::Path::new),
+            ctx.request.workspace_root.as_deref(),
         )
         .await;
         if readiness.blocks_dispatch() {
@@ -1008,12 +1008,12 @@ pub(super) fn parse_dispatch_answer(answer: &str) -> (Option<String>, Option<Str
 /// The workers that can actually take a task on this machine: every worker
 /// whose launch readiness is not a definite no. Checked at once — a CLI's
 /// login check is a subprocess each.
-async fn available_worker_ids(scope: Option<&str>) -> Vec<String> {
+async fn available_worker_ids(sup: &dyn RunSupervisor, scope: Option<&str>) -> Vec<String> {
     let mut checks = tokio::task::JoinSet::new();
     for (index, id) in subagents::worker_ids().into_iter().enumerate() {
-        let scope = scope.map(std::path::PathBuf::from);
+        let readiness = sup.worker_readiness(id, None, scope);
         checks.spawn(async move {
-            let readiness = crate::launch_readiness::check(id, None, scope.as_deref()).await;
+            let readiness = readiness.await;
             (index, id, readiness.blocks_dispatch())
         });
     }

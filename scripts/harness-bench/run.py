@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from quality_tasks import TASKS as QUALITY_TASKS, GRADERS as QUALITY_GRADERS
 
 REPO = Path(__file__).resolve().parents[2]
 TASKS = [
@@ -35,8 +36,13 @@ TASKS = [
 ]
 
 
+TASKS.extend(QUALITY_TASKS)
+
+
 def grade(task, workspace):
     """Run trusted assertions outside agent files, in a bounded child process."""
+    if task["id"] not in {"order-summary", "slug-regression", "multi-file-export", *QUALITY_GRADERS}:
+        return {"passed": False, "error": "Unknown benchmark task"}
     if task["id"] == "order-summary":
         try:
             actual = json.loads((workspace / "summary.json").read_text())
@@ -53,7 +59,7 @@ case = json.loads(sys.stdin.read())
 if case['id'] == 'slug-regression':
     module = load('slug')
     for value, expected in case['cases']: assert module.slugify(value) == expected, repr(value)
-else:
+elif case['id'] == 'multi-file-export':
     report, main = load('report'), load('main')
     for rows, expected in case['cases']:
         before = copy.deepcopy(rows)
@@ -61,6 +67,8 @@ else:
         assert json.loads(main.render(rows)) == expected
         assert rows == before, 'Input mutated'
 '''
+    if task['id'] in QUALITY_GRADERS:
+        code += QUALITY_GRADERS[task['id']]
     try:
         result = subprocess.run([sys.executable, "-I", "-c", code, str(workspace)], input=json.dumps(task), text=True, capture_output=True, timeout=10, cwd=tempfile.gettempdir())
         return {"passed": result.returncode == 0, "error": result.stderr[-4000:] or None}
@@ -97,6 +105,7 @@ def main():
     parser.add_argument("--hermes-provider", help="Hermes backend ID, defaults to --provider (openai becomes openai-api)")
     parser.add_argument("--model", required=True, help="Identical model ID for both harnesses")
     parser.add_argument("--hermes", default="hermes")
+    parser.add_argument("--suite", choices=["all", "smoke", "quality"], default="all")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--seed", type=int, default=42)
@@ -105,8 +114,10 @@ def main():
     args = parser.parse_args()
     if args.repeats < 1 or args.timeout < 1:
         parser.error("repeats and timeout must be positive")
+    tasks = [task for task in TASKS if args.suite == "all" or
+             (task["id"] in QUALITY_GRADERS) == (args.suite == "quality")]
     backend = args.hermes_provider or {"openai": "openai-api"}.get(args.provider, args.provider)
-    manifest = {"benchmark": "kide-hermes-synthetic-v1", "provider": args.provider, "hermesProvider": backend, "model": args.model, "repeats": args.repeats, "timeoutSeconds": args.timeout, "seed": args.seed, "tasks": [t["id"] for t in TASKS], "limits": ["Synthetic tasks, not a coding quality leaderboard", "Each harness keeps its native tools and prompt", "Hermes CLI metrics unavailable to this runner remain null", "Full-auto native execution; fresh Hermes home per trial; no human answers", "Hermes uses CLI oneshot here; ACP transport is tested separately"]}
+    manifest = {"benchmark": "kide-hermes-synthetic-v2", "provider": args.provider, "hermesProvider": backend, "model": args.model, "repeats": args.repeats, "timeoutSeconds": args.timeout, "seed": args.seed, "suite": args.suite, "tasks": [t["id"] for t in tasks], "limits": ["Synthetic tasks, not a coding quality leaderboard", "Each harness keeps its native tools and prompt", "Hermes CLI metrics unavailable to this runner remain null", "Full-auto native execution; fresh Hermes home per trial; no human answers", "Hermes uses CLI oneshot here; ACP transport is tested separately"]}
     if not args.run:
         print(json.dumps({"preview": True, **manifest}, indent=2)); return
     output = (args.output or Path(tempfile.mkdtemp(prefix="kide-hermes-bench-"))).resolve()
@@ -116,7 +127,7 @@ def main():
     subprocess.run(["cargo", "test", "--manifest-path", str(REPO / "src-tauri/Cargo.toml"), "--lib", "paired_harness_benchmark", "--no-run"], check=True, cwd=REPO)
     rng, results = random.Random(args.seed), []
     for repeat in range(args.repeats):
-        for task in TASKS:
+        for task in tasks:
             order = ["native", "hermes"]; rng.shuffle(order)
             for harness in order:
                 base = output / f"{task['id']}-{repeat}-{harness}"

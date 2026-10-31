@@ -27,6 +27,8 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm test
       - run: npm run build
+      - name: Benchmark graders (no inference)
+        run: python3 -m unittest discover -s scripts/harness-bench -p 'test_*.py'
 
   rust:
     name: Rust tests
