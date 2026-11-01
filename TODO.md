@@ -18,22 +18,22 @@ baseline; unchecked items below are verification or specific remaining gaps.
   the production build/bundle-split check passed. The full Rust test command
   passed outside the sandbox; the sandbox run denied local sockets/processes.
   This verifies automated checks, not the real-app acceptance pass below.
-- [ ] Complete a real-app acceptance pass: start an isolated Run, answer an
+- [x] Complete a real-app acceptance pass: start an isolated Run, answer an
   approval, stop and resume, restart and recover the Conversation, inspect the
   Diff and validation evidence, then merge or reject and explicitly clean up.
   Exercise a native hosted model, a local model and a supported Delegate;
   record which combinations passed and any limitations.
-  **Parked 2026-10-31, in progress.** Sandbox `~/Documents/Private/klide-acceptance`,
+  **Passed 2026-11-01** (Pierre tested it in the app; it worked). Sandbox `~/Documents/Private/klide-acceptance`,
   entry ⌘⇧P → Agent: New Run in Worktree, Work mode, Review policy, prompt
   "Add a `--max N` option to slug.sh … add two cases to test.sh, then run
   `sh test.sh`". DeepSeek Flash (OpenRouter) passed: isolated in its worktree,
   Stop then a follow-up resumed the same Run, 3 diffs + 2 commands waited for
-  approval, Merge landed and `sh test.sh` passed on main. Restart-and-recover
-  was not exercised. Fixed on the way: the worktree run opened a panel the
-  one-slot surfaces never draw, so the visible panel wrote to main (#386, plus
-  the Worktrees window in the Git preview's glass); the auto-commit subject was
-  the latest prompt and Merge left the branch behind (#387). Remaining: restart
-  leg, then Ollama `qwen3.5:9b`, then a Delegate (Claude Code).
+  approval, Merge landed and `sh test.sh` passed on main. Claude Code restart
+  and recovery: see the desktop quit/relaunch item below. Fixed on the way: the
+  worktree run opened a panel the one-slot surfaces never draw, so the visible
+  panel wrote to main (#386, plus the Worktrees window in the Git preview's
+  glass); the auto-commit subject was the latest prompt and Merge left the
+  branch behind (#387).
 - [x] Foreground Worker acceptance in the app (2026-10-26, sandbox repo
   `~/Documents/Private/klide-acceptance`, DeepSeek Flash parent, Claude Code
   worker): setup stage ran and was shown, the worker committed on its branch,
@@ -90,10 +90,20 @@ baseline; unchecked items below are verification or specific remaining gaps.
   starts no model, and retains the worktree for inspection/discard. The parent
   can continue after cancelling one worker. Automated coverage includes setup
   cancellation, parent Stop during setup and cancellation at Run admission.
-- [ ] Verify worker Cancel in the real app: setup, queued API worker, running
-  Delegate/API worker and an approval pause; reopen the conversation and
-  confirm Cancelled and the retained worktree. The tray of a Delegate's own
-  internal sub-agents is separate from a Klide-dispatched worker.
+- [x] Verify worker Cancel in the real app (2026-11-01, installed 2026-10-30
+  build, sandbox `klide-acceptance`, DeepSeek Flash parent): the row's ✕
+  cancelled a Claude Code worker during setup (no model started, worktree kept
+  with Discard), an OpenRouter worker queued behind 4 running API workers ("it
+  never started"), and a running OpenRouter worker; each time the parent kept
+  answering. Composer Stop during setup also cancelled the child and kept its
+  worktree. Not exercised: Cancel during a worker's approval pause (the
+  dispatch ran its commands full-auto). The tray of a Delegate's own internal
+  sub-agents is separate from a Klide-dispatched worker.
+- [ ] Worker follow-ups found in the Cancel pass (2026-11-01): the parent
+  ignored "in the background", a named model and "5 calls in one turn"
+  (DeepSeek Flash sent one foreground `spawn_subagent` with no model, so the
+  model question reappeared); the delegated line under the answer reads
+  "failed" for a cancelled worker while its row says Cancelled.
 - [x] Worker capacity at admission (2026-10-27): API workers wait in a fair
   queue for one of 4 app-wide slots, in front of the child Run
   (`agent/worker_slots.rs`), "Queued behind N running API workers" on the
@@ -132,7 +142,7 @@ machine-local evidence, not fixtures shipped with the repository.
 | Automated baseline | 2026-10-26 result recorded above; current [CI configuration](.github/workflows/ci.yml) defines frontend/build and Rust checks | Historical pass, not a fresh run. Linux tests enabled; Windows compile-only. Desktop acceptance still open |
 | Foreground workers | 2026-10-26 record above: DeepSeek Flash parent, Claude Code worker, setup, commit, Merge cleanup, failed setup and Discard | Does not verify every runtime pair or cancellation stage |
 | Background worker attention | 2026-10-27 record above: hidden parent, approval toast, Allow, finish notification and rail status; [attention handling](src-tauri/src/agent/attention.rs) | Hiding a conversation is not quitting the desktop. Individual Cancel and restart recovery still need acceptance |
-| Worker cancellation / capacity | [Dispatch and setup regressions](src-tauri/src/agent/mod.rs), [worker validation](src-tauri/src/agent/tool_handlers.rs), [dispatch cancellation](src-tauri/src/agent/dispatch_cancel.rs), [API slot queue](src-tauri/src/agent/worker_slots.rs) | Live cancellation matrix remains open; orchestration capacity display still uses fresh planning state per task |
+| Worker cancellation / capacity | [Dispatch and setup regressions](src-tauri/src/agent/mod.rs), [worker validation](src-tauri/src/agent/tool_handlers.rs), [dispatch cancellation](src-tauri/src/agent/dispatch_cancel.rs), [API slot queue](src-tauri/src/agent/worker_slots.rs) | Live Cancel verified 2026-11-01 for setup, queued and running workers; approval-pause Cancel not exercised; orchestration capacity display still uses fresh planning state per task |
 | `/btw` | Local note `docs/btw-live-acceptance-2026-10-26.md`: real Anthropic model, unchanged canary, concurrent main command, history and panel remount | No app/OS restart or live side-Stop exercise; Delegates that cannot enforce read-only are refused |
 | Desktop quit/relaunch | [Background contract and verification scope](docs/BACKGROUND_CONVERSATIONS.md), [host placement](src-tauri/src/agent/run_host.rs) | Updated 2026-11-01: real Claude Code completed-answer recovery, pending approval recovery and live reattachment passed on the installed build. Stop left a CLI-detached command running; other CLIs remain unverified. Current-checkout process tests use a fake CLI. Eligible standalone subscription Runs only on Unix; no VPS execution |
 | OpenCode V2 | [Verification notes](docs/OPENCODE_DELEGATE.md#verification), captured CLI fixtures and reproducible mock-model transport smoke | Transport coverage is not a funded real-model desktop acceptance pass; V2 account switching stays CLI-owned |
@@ -144,9 +154,7 @@ machine-local evidence, not fixtures shipped with the repository.
 
 README now states these verification limits and follows the current local-first
 stabilization → narrow VPS priority. No live acceptance item was closed by this
-audit. Next follow-up: verify worker Cancel during setup, API queueing, active
-Delegate/API execution and an approval pause, then reopen and inspect Cancelled
-state and the retained worktree.
+audit. Worker Cancel was verified live on 2026-11-01 (see above).
 
 ## Harness follow-ups
 
