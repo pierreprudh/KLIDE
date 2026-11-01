@@ -66,8 +66,7 @@ impl Drop for Daemon {
     }
 }
 
-#[test]
-fn background_chat_survives_all_clients_disconnecting_and_finishes_once() {
+fn fixture() -> Daemon {
     let dir = std::env::temp_dir().join(format!(
         "klide-chat-process-{}-{}",
         std::process::id(),
@@ -92,7 +91,7 @@ cat > prompt.txt
 printf '%s\n' '{"type":"step_start","sessionID":"ses_background_fixture","part":{"id":"start","type":"step-start"}}'
 printf '%s\n' '{"type":"text","sessionID":"ses_background_fixture","part":{"id":"first","type":"text","text":"Started. "}}'
 i=0
-while [ ! -f finish ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+while [ ! -f finish ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
 printf '%s\n' '{"type":"text","sessionID":"ses_background_fixture","part":{"id":"last","type":"text","text":"Finished while closed."}}'
 "##).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -112,6 +111,29 @@ printf '%s\n' '{"type":"text","sessionID":"ses_background_fixture","part":{"id":
         .unwrap();
     let daemon = Daemon { dir, child };
     daemon.wait(|| daemon.dir.join("ptyd.token").exists());
+    daemon
+}
+
+fn start(daemon: &Daemon) -> Value {
+    json!({"type":"chat_start", "runs_dir":daemon.dir.join("runs"), "request":{
+        "runId":"conversation", "workspaceRoot":daemon.dir, "provider":"opencode", "model":"default", "mode":"chat", "initialText":"Do the fixture work"
+    }})
+}
+
+fn events(daemon: &Daemon) -> Vec<Value> {
+    std::fs::read_to_string(daemon.dir.join("runs/conversation.jsonl"))
+        .unwrap_or_default()
+        // A live stream append may be in flight; only complete JSONL records
+        // are replayable. A malformed complete record must still fail the test.
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn background_chat_survives_all_clients_disconnecting_and_finishes_once() {
+    let daemon = fixture();
     let runs = daemon.dir.join("runs");
     let mut observer = daemon.connect();
     writeln!(observer.get_mut(), "{}", json!({"type":"subscribe"})).unwrap();
@@ -121,9 +143,7 @@ printf '%s\n' '{"type":"text","sessionID":"ses_background_fixture","part":{"id":
         serde_json::from_str::<Value>(&ack).unwrap()["type"],
         "subscribed"
     );
-    let start = json!({"type":"chat_start", "runs_dir":runs, "request":{
-        "runId":"conversation", "workspaceRoot":daemon.dir, "provider":"opencode", "model":"default", "mode":"chat", "initialText":"Do the fixture work"
-    }});
+    let start = start(&daemon);
     assert_eq!(daemon.request(start.clone())["type"], "chat_started");
     let transcript = runs.join("conversation.jsonl");
     daemon.wait(|| std::fs::read_to_string(&transcript).is_ok_and(|s| s.contains("Started.")));
@@ -172,4 +192,134 @@ printf '%s\n' '{"type":"text","sessionID":"ses_background_fixture","part":{"id":
     assert!(std::fs::read_to_string(daemon.dir.join("args.txt"))
         .unwrap()
         .contains("ses_background_fixture"));
+}
+
+// Exercise the real authenticated permission bridge while the CLI stand-in
+// holds its turn open. No desktop observer is connected when the prompt arrives.
+fn request_permission(daemon: &Daemon) -> std::thread::JoinHandle<Value> {
+    let endpoint: Value = serde_json::from_str(
+        &std::fs::read_to_string(daemon.dir.join("chat-coordination-endpoint.json")).unwrap(),
+    )
+    .unwrap();
+    let secret =
+        std::fs::read_to_string(daemon.dir.join("chat-mcp/conversation-opencode.secret")).unwrap();
+    std::thread::spawn(move || {
+        reqwest::blocking::Client::new()
+            .post(format!(
+                "http://127.0.0.1:{}/coord/{}/conversation:opencode",
+                endpoint["port"].as_u64().unwrap(),
+                endpoint["token"].as_str().unwrap()
+            ))
+            .header("X-Klide-Session-Secret", secret.trim())
+            .timeout(Duration::from_secs(15))
+            .json(&json!({"op":"permission", "toolName":"Bash",
+                "input":{"command":"printf background-approved"}, "toolUseId":"detached-command"}))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    })
+}
+
+fn waiting_for_permission() -> (Daemon, std::thread::JoinHandle<Value>) {
+    let daemon = fixture();
+    assert_eq!(daemon.request(start(&daemon))["type"], "chat_started");
+    daemon.wait(|| {
+        events(&daemon)
+            .iter()
+            .any(|e| e.to_string().contains("Started."))
+    });
+    let reply = request_permission(&daemon);
+    daemon.wait(|| {
+        events(&daemon)
+            .iter()
+            .any(|e| e["event"]["type"] == "permission_requested")
+    });
+    assert_eq!(
+        daemon.request(json!({"type":"chat_status", "run_id":"conversation"}))["status"],
+        "waiting_for_permission"
+    );
+    (daemon, reply)
+}
+
+#[test]
+fn approval_raised_without_a_desktop_can_be_recovered_and_answered_once() {
+    let (daemon, reply) = waiting_for_permission();
+    // A fresh client recovers the pending card from the durable transcript.
+    let before = events(&daemon);
+    assert_eq!(
+        before
+            .iter()
+            .filter(|e| e["event"]["type"] == "permission_requested")
+            .count(),
+        1
+    );
+    assert!(!before
+        .iter()
+        .any(|e| e["event"]["type"] == "permission_resolved"));
+    let answer = json!({"type":"chat_control", "run_id":"conversation", "control":{
+        "type":"permission", "decision":{"behavior":"allow", "scope":"once"}
+    }});
+    assert_eq!(daemon.request(answer.clone())["answered"], true);
+    assert_eq!(
+        daemon.request(answer)["type"],
+        "err",
+        "a second click must not answer twice"
+    );
+    let response = reply.join().unwrap();
+    assert_eq!(response["ok"], true);
+    let decision: Value =
+        serde_json::from_str(response["value"]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(decision["behavior"], "allow");
+    std::fs::write(daemon.dir.join("finish"), "").unwrap();
+    daemon.wait(|| {
+        daemon.request(json!({"type":"chat_status","run_id":"conversation"}))["status"].is_null()
+    });
+    let after = events(&daemon);
+    assert_eq!(
+        after
+            .iter()
+            .filter(|e| e["event"]["type"] == "permission_resolved")
+            .count(),
+        1
+    );
+    assert_eq!(after.last().unwrap()["event"]["type"], "run_result");
+    for (seq, event) in after.iter().enumerate() {
+        assert_eq!(event["seq"], seq);
+    }
+}
+
+#[test]
+fn stop_after_reconnecting_denies_a_pending_approval_and_settles_the_run() {
+    let (daemon, reply) = waiting_for_permission();
+    assert_eq!(
+        daemon.request(json!({"type":"chat_control", "run_id":"conversation",
+        "control":{"type":"stop"}}))["type"],
+        "chat_controlled"
+    );
+    daemon.wait(|| {
+        daemon.request(json!({"type":"chat_status","run_id":"conversation"}))["status"].is_null()
+    });
+    let response = reply.join().unwrap();
+    let decision: Value =
+        serde_json::from_str(response["value"]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        decision["behavior"], "deny",
+        "Stop must never approve the command"
+    );
+    let replay = events(&daemon);
+    assert!(replay
+        .iter()
+        .any(|e| e["event"]["type"] == "run_error" && e["event"]["error"]["code"] == "aborted"));
+    assert!(!replay.iter().any(|e| e["event"]["type"] == "run_result"));
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|e| e["event"]["type"] == "permission_resolved")
+            .count(),
+        1
+    );
+    for (seq, event) in replay.iter().enumerate() {
+        assert_eq!(event["seq"], seq);
+    }
 }

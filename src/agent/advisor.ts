@@ -15,12 +15,19 @@
 import type { ProviderId } from "./types";
 import { DEFAULT_MODELS } from "./providers";
 
-/** Default advisor when none is configured in Harness settings. The canonical
- *  advisor strategy: a cheap executor escalates to a hosted top model. Needs an
- *  Anthropic key in Settings. Change via HarnessSettings.advisorProvider/
- *  advisorModel (e.g. ollama/qwen3.5:9b for a keyless local-first advisor). */
-export const DEFAULT_ADVISOR_PROVIDER = "anthropic";
-export const DEFAULT_ADVISOR_MODEL = "claude-opus-4-8";
+/** A cost-conscious second opinion, not a promise to outperform the executor.
+ *  OpenRouter uses the account already configured there. Explicit model picks
+ *  (including local and subscription models) always take precedence. */
+export const DEFAULT_ADVISOR_PROVIDER = "openrouter";
+export const DEFAULT_ADVISOR_MODEL = "openai/gpt-5.6-luna";
+
+/** Advisor defaults are task-specific: do not inherit a provider's general
+ *  chat default (e.g. OpenRouter's GPT-4o) when its advisor model is absent. */
+export function advisorDefaultModel(provider: string): string {
+  if (provider === "openrouter") return DEFAULT_ADVISOR_MODEL;
+  if (provider === "openai") return "gpt-5.6-luna";
+  return DEFAULT_MODELS[provider as ProviderId] ?? "";
+}
 
 /** Error marker the AiPanel prepends when a consult fails, so the Rust side can
  *  return a not-ok tool result instead of dressing an error up as advice. Keep
@@ -40,9 +47,7 @@ export function resolveAdvisor(settings?: {
   const provider = settings?.advisorProvider?.trim() || DEFAULT_ADVISOR_PROVIDER;
   const model =
     settings?.advisorModel?.trim() ||
-    (provider === DEFAULT_ADVISOR_PROVIDER
-      ? DEFAULT_ADVISOR_MODEL
-      : DEFAULT_MODELS[provider as ProviderId] ?? "");
+    advisorDefaultModel(provider);
   return { provider, model };
 }
 

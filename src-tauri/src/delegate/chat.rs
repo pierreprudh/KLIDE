@@ -434,10 +434,8 @@ async fn run_cli_streaming(
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    command.kill_on_drop(true);
 
-    let mut child = command
-        .spawn()
+    let mut child = super::child::Child::spawn(&mut command)
         .map_err(|e| format!("Unable to start {label}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
@@ -810,13 +808,10 @@ async fn run_cli_with_stdin(
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    // Stopping a turn drops this future. Without `kill_on_drop` the CLI would
-    // keep running unattended — still editing the workspace, with nothing left
-    // reading its output — so cancelling from the composer has to end it.
-    command.kill_on_drop(true);
+    // Dropping a turn stops the CLI and its owned descendants before their
+    // parentage is lost. Killing only the CLI would orphan its shell commands.
 
-    let mut child = command
-        .spawn()
+    let mut child = super::child::Child::spawn(&mut command)
         .map_err(|e| format!("Unable to start {label}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
@@ -907,6 +902,136 @@ async fn run_cli_with_stdin(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    async fn cancelled_turn_stops_detached_command(streaming: bool) {
+        struct Fixture {
+            path: std::path::PathBuf,
+            pids: Vec<i32>,
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                for &pid in &self.pids {
+                    // SAFETY: this is the detached process created by this test.
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+        let mut fixture = Fixture {
+            path: std::env::temp_dir().join(format!(
+                "klide-stop-descendant-{}-{streaming}",
+                std::process::id()
+            )),
+            pids: Vec::new(),
+        };
+        let _ = std::fs::remove_file(&fixture.path);
+        let mut command = TokioCommand::new("/usr/bin/perl");
+        command
+            .args([
+                "-MPOSIX=setsid",
+                "-e",
+                r#"
+            my $child = fork(); die "fork" unless defined $child;
+            if ($child == 0) {
+                setsid() >= 0 or die "setsid";
+                my $grandchild = fork(); die "fork" unless defined $grandchild;
+                if ($grandchild == 0) { sleep 60; exit 0; }
+                open(my $pid, '>', $ARGV[0]) or die "pid file";
+                print $pid "$$ $grandchild"; close($pid);
+                sleep 60; exit 0;
+            }
+            sleep 60;
+        "#,
+            ])
+            .arg(&fixture.path);
+        let mut unrelated = TokioCommand::new("/bin/sleep")
+            .arg("60")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let turn = tokio::spawn(async move {
+            let channel = Channel::new(|_| Ok(()));
+            if streaming {
+                run_cli_streaming(
+                    &super::super::ClaudeCode,
+                    command,
+                    String::new(),
+                    "fixture",
+                    ".",
+                    None,
+                    &AtomicBool::new(false),
+                    &channel,
+                )
+                .await
+            } else {
+                run_cli_with_stdin(command, String::new(), "fixture", &channel).await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&fixture.path) {
+                    if let Ok(pids) = text
+                        .split_whitespace()
+                        .map(str::parse::<i32>)
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        if pids.len() == 2 {
+                            fixture.pids = pids;
+                            break;
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture must launch its detached child");
+        turn.abort();
+        assert!(turn.await.unwrap_err().is_cancelled());
+        let stopped = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let mut all_stopped = true;
+                for pid in &fixture.pids {
+                    let output = std::process::Command::new("/bin/ps")
+                        .args(["-o", "stat=", "-p", &pid.to_string()])
+                        .output()
+                        .unwrap();
+                    let state = String::from_utf8_lossy(&output.stdout);
+                    all_stopped &= state.trim().is_empty() || state.trim().starts_with('Z');
+                }
+                if all_stopped {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            stopped.is_ok(),
+            "Stop left detached commands {:?} running",
+            fixture.pids
+        );
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "Stop must leave unrelated processes running"
+        );
+        unrelated.kill().await.unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn cancelling_plain_turn_stops_detached_command() {
+        cancelled_turn_stops_detached_command(false).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn cancelling_streaming_turn_stops_detached_command() {
+        cancelled_turn_stops_detached_command(true).await;
+    }
 
     fn msg(role: &str, text: &str) -> serde_json::Value {
         serde_json::json!({ "role": role, "content": text })

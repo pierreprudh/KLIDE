@@ -32,8 +32,8 @@ export type HarnessSettings = {
   maxParallelTools?: number;
   /** Advisor strategy: which provider/model answers a `consult_advisor` call.
    *  The executor (the run's own model, typically small/local) escalates a hard
-   *  decision to this stronger model. Absent → the default advisor (Anthropic
-   *  Opus). See src/agent/advisor.ts. */
+   *  decision for a second opinion. Absent → the cost-conscious advisor
+   *  default (GPT-5.6 Luna via OpenRouter). See src/agent/advisor.ts. */
   advisorProvider?: string;
   advisorModel?: string;
   /** Eyes for a blind model: which provider/model describes a photo when the

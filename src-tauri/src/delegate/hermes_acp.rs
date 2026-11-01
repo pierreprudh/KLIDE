@@ -297,10 +297,8 @@ pub(super) async fn run(
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let mut child = command
-        .spawn()
+        .stderr(Stdio::null());
+    let mut child = super::child::Child::spawn(&mut command)
         .map_err(|e| format!("Unable to start Hermes ACP: {e}"))?;
     let mcp = spec
         .mcp

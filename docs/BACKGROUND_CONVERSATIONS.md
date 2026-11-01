@@ -64,12 +64,68 @@ background writer is not left in the old directory.
 and an isolated real daemon process with a fake OpenCode executable. The process
 test disconnects all clients during generation, verifies duplicate-start rejection,
 checks the completed durable answer, and confirms a follow-up's sequence cursor
-and CLI session reuse. It needs permission to bind local sockets. No real model
-or account is used.
+and CLI session reuse. Two further process tests raise a permission through the
+daemon's authenticated bridge with no desktop observer connected: a fresh client
+answers it once (a repeated answer is refused), or stops the Run and receives a
+deny. Both check transcript sequencing. These tests need permission to bind local
+sockets. No real model or account is used.
 
-The desktop UI still needs a manual quit/relaunch check against an installed CLI
-before release. The automated process test exercises the background ownership,
-wire protocol, and transcript recovery, not the native window lifecycle.
+### Desktop acceptance — 2026-11-01
+
+The installed macOS build (`/Applications/Klide.app`, built 2026-10-30) was
+exercised with the real Claude Code CLI in an empty disposable workspace:
+
+- Started a delayed shell command, quit through the native **Quit Klide** menu,
+  then reopened the workspace and recovered its completed answer.
+- Started a second turn whose Python command required approval. Quit without
+  answering; a process inspection confirmed the desktop had exited while the
+  same ptyd and MCP child remained. Relaunched and reopened the conversation:
+  the pending permission card returned and **Run** answered it once.
+- Quit again while the approved command was running. The command and original
+  ptyd survived. Reopened the same conversation, saw it running without
+  resending the prompt, then used **Stop** and saw the conversation return idle.
+- The saved transcript had two user turns, one permission request/resolution,
+  one successful first turn and one `aborted` second turn, with consecutive
+  sequence numbers. Local evidence: Run `mvyc1lbef24x4b`.
+
+**Stop failure in the installed build:** Stop ended Claude's agent process and settled its Run, but
+the Python command Claude had moved into a separate background process survived
+as an orphan. It was cleaned up explicitly after the check. Stop is therefore
+not verified as process-tree containment for Delegate-owned background commands.
+Do not infer it from the passing Harness command-cancellation tests: native CLI
+tools have their own execution lifecycle.
+
+### Stop cleanup implementation — 2026-11-01
+
+The current checkout fixes that failure through `delegate/child.rs`, shared by
+plain and streaming headless CLIs, the per-turn OpenCode server/client, and
+Hermes ACP. Each child starts in its own Unix process group. When a provider
+future is dropped or its process is explicitly killed, macOS also traverses
+the child relationships with libproc before killing/reaping the CLI. It stops
+ancestors while collecting descendants, then kills descendants from the leaves
+up, checking process birth times and parentage. This catches shells that changed
+their process group/session without relying on executable names or affecting
+other Runs. A normally reaped child is never signalled through its old PID.
+
+Automated regressions first reproduced the orphan, then passed through both real
+CLI runner paths. Their stand-in forks a child into a new session and gives it a
+grandchild; cancellation ends both while an unrelated process stays alive. No
+model or account is used. The existing daemon disconnect/approval tests remain
+part of the automated check.
+
+The updated native bundle still needs the live Claude Code Stop/relaunch retest;
+the earlier installed-build observation above remains historical evidence of the
+bug. This is process cleanup, not OS containment: descendants already reparented
+away before Stop, externally hosted services, denied OS inspection/signals, and
+extreme trees beyond the 16,384-process bound are outside the guarantee. Other
+Unix platforms get process-group cleanup only; Windows retains immediate-child
+cleanup. No process-tree claim is made for those platforms.
+
+This verifies Claude Code on that installed build, not every supported CLI or
+the current checkout's native bundle. Codex, OpenCode, and Omp still need real
+desktop quit/relaunch checks. Daemon death, OS restart, and machine sleep are
+outside this acceptance pass. The process tests exercise the current checkout's
+background ownership and wire behavior with a stand-in CLI.
 
 ## Storage and latency follow-up
 
