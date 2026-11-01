@@ -5008,6 +5008,46 @@ mod replay_tests {
     }
 
     #[test]
+    fn task_continuity_replays_after_repeated_compaction_and_transcript_reload() {
+        let runs_dir = std::env::temp_dir().join(format!("klide-compaction-replay-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let goal = format!("Implement offline search. {}\nDo not upload project files.", "背景🦀 ".repeat(200));
+        let correction = "Keep offline search; cancel deployment. Verification is still pending.";
+        let task_state = "[TODO list]\n[x] T1: implement offline search\n[ ] T2: verify cancellation (blocked on fixture)";
+        let mut events = vec![
+            user_msg(&goal),
+            context_event("r", &serde_json::json!({"role": "system", "content": "[TODO list]\n[ ] T1: implement offline search"})),
+            assistant_text("Initial plan"),
+            user_msg(correction),
+            context_event("r", &serde_json::json!({"role": "system", "content": task_state})),
+            assistant_text("The fixture is still missing."),
+        ];
+        for (round, notes) in ["Incomplete notes.", ""].into_iter().enumerate() {
+            let cut = compaction::Cut { start: events.len() - 1, kept: 1 };
+            let summary = compaction::summary_text(notes, &events, cut, &Default::default());
+            events.push(AgentEvent::ContextCompacted {
+                run_id: "r".into(), summary, kept: Some(cut.kept), context_tokens: None,
+                cost_usd: None, manual: round == 0, ts: round as i64,
+            });
+            events.push(assistant_text("Next action: obtain the missing fixture, then run tests."));
+        }
+        for (seq, event) in events.iter().enumerate() {
+            append_event(&runs_dir, "r", seq as u64, event).unwrap();
+        }
+        let reloaded = read_events(&runs_dir, "r").unwrap();
+        for structured in [true, false] {
+            let replay = reconstruct(&reloaded, structured);
+            let summary = replay[0]["content"].as_str().unwrap();
+            assert!(summary.contains(&goal));
+            assert!(summary.contains(correction));
+            assert!(summary.contains(task_state));
+            assert_eq!(replay.last().unwrap()["content"], "Next action: obtain the missing fixture, then run tests.");
+            assert_eq!(replay.iter().filter(|m| m["content"].as_str().is_some_and(|text| text.starts_with("[Earlier conversation compacted"))).count(), 1);
+        }
+        std::fs::remove_dir_all(runs_dir).unwrap();
+    }
+
+    #[test]
     fn a_large_window_compaction_shrinks_replayed_history_and_keeps_the_answer() {
         let mut events = vec![user_msg(&"inspect the flow ".repeat(200))];
         for _ in 0..26 {
@@ -7068,7 +7108,7 @@ mod run_loop_tests {
         assert!(events.iter().any(|event| matches!(event, AgentEvent::ContextCompacted { cost_usd: Some(cost), manual: false, .. } if (*cost - 0.03).abs() < 1e-9)));
         assert_eq!(read_summary(&runs_dir, "thread").unwrap().cost_usd, Some(0.03));
         assert!(notes.contains("\n1. Read the four files."), "the request survives: {notes}");
-        assert!(notes.contains("- read_file f0.txt — result stored: peek_value id"), "the ledger points at stored results: {notes}");
+        assert!(notes.contains("- read_file f0.txt (succeeded) — result stored: peek_value id"), "the ledger points at stored results: {notes}");
         assert!(kept.unwrap() >= 2, "the newest turn stays verbatim: {kept:?}");
 
         let seen = first.seen_messages.lock().unwrap().clone();
@@ -7553,9 +7593,13 @@ mod run_loop_tests {
         let id = "observer-conversation";
         let request = test_request(&root, &[]);
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("I will notify you when it finishes.", vec![])]);
-        let shell = background::spawn_observer(id, &root, "sleep 0.15; printf 'https://preview.example.test/branch'; exit 2").unwrap();
+        // Hold completion until the first reply settles; a short sleep races
+        // that reply when the full suite is busy.
+        let shell = background::spawn_observer(id, &root, "while [ ! -f observer.release ]; do sleep 0.01; done; printf 'https://preview.example.test/branch'; exit 2").unwrap();
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request.clone(), caller).await;
-        assert!(background::notification_pending(id, &shell.id), "a normal reply must not cancel its observer");
+        let pending = background::notification_pending(id, &shell.id);
+        std::fs::write(std::path::Path::new(&root).join("observer.release"), "go").unwrap();
+        assert!(pending, "a normal reply must not cancel its observer");
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while background::completions(id).is_empty() { tokio::time::sleep(std::time::Duration::from_millis(10)).await; }
         }).await.unwrap();
@@ -10153,7 +10197,11 @@ mod worker_dispatch_tests {
             let child_id = format!("sub_run_{suffix}");
             let stop = async {
                 let marker = std::path::Path::new(&root).join("setup.pid");
-                while !marker.exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+                // Shell redirection creates the file before echo writes its
+                // PID. Cancel only after the published PID can be read.
+                while std::fs::read_to_string(&marker).ok().and_then(|text| text.trim().parse::<i32>().ok()).is_none() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
                 if parent_stop { cancel.cancel(); }
                 else { assert!(dispatch_cancel::cancel(&child_id)); }
             };
