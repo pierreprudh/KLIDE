@@ -16,6 +16,7 @@ mod additional;
 mod hermes_acp;
 pub use additional::{AMP, CURSOR, FACTORY, HERMES};
 mod chat;
+mod child;
 mod chat_server;
 pub(crate) mod chat_stream;
 pub(crate) use chat_stream::summarize_call;

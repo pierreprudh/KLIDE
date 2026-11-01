@@ -28,7 +28,7 @@ import type { AgentMode, ProviderId } from "../agent/types";
 import { toolCatalog, type ToolCatalogEntry } from "../agent/tools";
 import { PROVIDER_GROUPS, DEFAULT_MODELS } from "../agent/providers";
 import { ModelPicker } from "./ai/ModelPicker";
-import { DEFAULT_ADVISOR_PROVIDER, DEFAULT_ADVISOR_MODEL } from "../agent/advisor";
+import { advisorDefaultModel, resolveAdvisor } from "../agent/advisor";
 import { refreshCustomCli, type CustomCli } from "../customCli";
 import { SETTINGS, settingsSearchIndex, useSetting, type SettingsSectionId } from "../settingsStore";
 import { SETTINGS_PAGES, defaultSettingsPage, settingsPageForSearch, settingsSearchTarget } from "../settingsPages";
@@ -367,6 +367,7 @@ function AdvisorControl({
       provider={provider}
       model={model}
       groups={["Local", "API", "Subscription"]}
+      defaultModelForProvider={advisorDefaultModel}
       onChange={(p, m) => onChange({ advisorProvider: p, advisorModel: m })}
     />
   );
@@ -382,6 +383,7 @@ function ModelPairControl({
   model,
   groups: groupLabels,
   automatic,
+  defaultModelForProvider = (p: string) => DEFAULT_MODELS[p as ProviderId] ?? "",
   onChange,
 }: {
   label: string;
@@ -390,6 +392,7 @@ function ModelPairControl({
   groups: string[];
   /** The caption of the empty choice, when there is one. */
   automatic?: string;
+  defaultModelForProvider?: (provider: string) => string;
   onChange: (provider: string, model: string) => void;
 }) {
   const groups = PROVIDER_GROUPS.filter((g) => groupLabels.includes(g.label));
@@ -418,7 +421,7 @@ function ModelPairControl({
         value={provider}
         onChange={(e) => {
           const p = e.target.value;
-          onChange(p, p ? DEFAULT_MODELS[p as ProviderId] ?? "" : "");
+          onChange(p, p ? defaultModelForProvider(p) : "");
         }}
       >
         {automatic && <option value="">{automatic}</option>}
@@ -1885,11 +1888,11 @@ export function SettingsPanel({
                   <Row
                     title="Advisor model"
                     description="Model consulted for difficult decisions in Plan and Goal modes."
-                    help="The assistant continues to run the task. The advisor answers consult_advisor calls with guidance."
+                    help="A second opinion for difficult decisions or repeated failures. Defaults to cost-conscious GPT-5.6 Luna through OpenRouter. The assistant keeps running the task; the advisor gives guidance."
                     control={
                       <AdvisorControl
-                        provider={harnessSettings?.advisorProvider ?? DEFAULT_ADVISOR_PROVIDER}
-                        model={harnessSettings?.advisorModel ?? DEFAULT_ADVISOR_MODEL}
+                        provider={resolveAdvisor(harnessSettings).provider}
+                        model={resolveAdvisor(harnessSettings).model}
                         onChange={(next) => onHarnessSettingsChange?.({ ...harnessSettings, ...next })}
                       />
                     }

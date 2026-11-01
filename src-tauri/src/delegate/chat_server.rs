@@ -150,7 +150,6 @@ pub(super) async fn run_via_server(
         c.envs(envs.iter().map(|(k, v)| (k, v)));
         c.envs(auth.iter().map(|(k, v)| (*k, v.as_str())));
         c.args(extra);
-        c.kill_on_drop(true);
         c
     };
 
@@ -163,7 +162,7 @@ pub(super) async fn run_via_server(
     // 1 · The server, for this turn only.
     let mut serve = spawnable(server.serve_args(), &auth);
     serve.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let mut serve = match serve.spawn() {
+    let mut serve = match super::child::Child::spawn(&mut serve) {
         Ok(child) => child,
         Err(e) => return ServerTurn::Unavailable(format!("Unable to start {label}'s server: {e}")),
     };
@@ -268,7 +267,7 @@ pub(super) async fn run_via_server(
         &auth,
     );
     run.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = match run.spawn() {
+    let mut child = match super::child::Child::spawn(&mut run) {
         Ok(child) => child,
         Err(e) => {
             reader.abort();
