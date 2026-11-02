@@ -4628,6 +4628,19 @@ button:focus-visible .menu-leadout {
   font-size: 11px; /* no token below --fs-xs; the scale stops at 12px */
 }
 
+/* A changed file's folder (ChangedFileLabel): one step in under the
+   status-coloured name, quieter than the Explorer's sub line since the name is
+   the point, and brought up by the row's hover or selection. */
+.klide-changed-file-folder {
+  padding-left: 8px;
+  opacity: 0.55;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.klide-file-row:hover .klide-changed-file-folder,
+.klide-file-row[data-active="true"] .klide-changed-file-folder {
+  opacity: 1;
+}
+
 /* The git status letter. Colour comes from the row (gitStatusMark.ts owns
    which token); this owns the shape, so M in the tree and M in Git Review
    are the same glyph at the same size. */

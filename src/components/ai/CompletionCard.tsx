@@ -6,7 +6,9 @@ import { buildDiffRows, type DiffRow } from "../../lineDiff";
 import { DiffStat } from "../diffView";
 import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
-import { ChevronIcon, CloseIcon, DocumentIcon, ReplayIcon, ReviewIcon } from "../../icons";
+import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon, UndoIcon } from "../../icons";
+import { gitStatusMarkForLetter } from "../../gitStatusMark";
+import { ChangedFileLabel } from "../ChangedFileLabel";
 import { formatBytes } from "../settings/storage";
 import { Z } from "../../zLayers";
 import "./completionCard.css";
@@ -150,35 +152,35 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
     <>
       <div className="klide-result-body" data-history={history ? "1" : undefined}>
         {completion.files.length > 0 && <section aria-label="Changed files">
-          {/* A recap: a row per file — the name and folder on one line, and
-              how much changed — with no mark in front of it. The row opens its diff in place, or
-              — where the host has a diff viewer — goes there. */}
+          {/* A row per file, drawn the way Git Review draws a change: the
+              name in its status colour, the folder under it, and how much
+              changed on the right. The row opens its diff in place, or —
+              where the host has a diff viewer — goes there. */}
           <div className="klide-result-changes">{completion.files.map((path) => {
-            const name = path.split("/").pop() || path;
-            const directory = path.slice(0, -name.length).replace(/\/$/, "");
             const diff = diffs?.get(path);
             const inline = !onReview && !!diff && diff.rows.length > 0;
             const open = inline && openFiles.has(path);
+            const mark = diff ? gitStatusMarkForLetter(diff.created ? "A" : "M") : null;
             const label = <>
-              <span className="klide-result-file-text">
-                <span className="klide-result-filename">{name}</span>
-                {directory && <span className="klide-result-directory">{directory}</span>}
+              <ChangedFileLabel path={path} mark={mark} />
+              <span className="klide-result-change-trail">
+                {diff && (diff.added > 0 || diff.removed > 0) && <span className="klide-result-stat">
+                  {diff.added > 0 && <span className="klide-result-stat-add">+{diff.added}</span>}
+                  {diff.removed > 0 && <span className="klide-result-stat-del">−{diff.removed}</span>}
+                </span>}
+                {onReview
+                  ? <span className="klide-result-file-go" aria-hidden="true">↗</span>
+                  : inline && <span className="klide-result-file-go" aria-hidden="true"><ChevronIcon open={open} size={13} /></span>}
               </span>
-              {diff && (diff.added > 0 || diff.removed > 0) && <span className="klide-result-stat">
-                {diff.added > 0 && <span className="klide-result-stat-add">+{diff.added}</span>}
-                {diff.removed > 0 && <span className="klide-result-stat-del">−{diff.removed}</span>}
-              </span>}
-              {onReview
-                ? <span className="klide-result-file-go" aria-hidden="true">↗</span>
-                : inline && <span className="klide-result-file-go" aria-hidden="true"><ChevronIcon open={open} size={13} /></span>}
             </>;
+            const row = "klide-file-row klide-result-change";
             return (
               <div key={path} className="klide-result-file" data-open={open ? "1" : undefined}>
                 {onReview
-                  ? <button type="button" className="klide-result-file-row" title={`Review ${path}`} onClick={() => review(path)}>{label}</button>
+                  ? <button type="button" className={row} title={`Review ${path}`} onClick={() => review(path)}>{label}</button>
                   : inline
-                    ? <button type="button" className="klide-result-file-row" aria-expanded={open} title={path} onClick={() => toggleFile(path)}>{label}</button>
-                    : <div className="klide-result-file-row" title={path}>{label}</div>}
+                    ? <button type="button" className={row} aria-expanded={open} data-active={open ? "true" : undefined} title={path} onClick={() => toggleFile(path)}>{label}</button>
+                    : <div className={row} data-static="1" title={path}>{label}</div>}
                 {open && diff && <InlineDiff rows={diff.rows} />}
               </div>
             );
@@ -240,7 +242,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
         <button type="button" className={onReview ? "klide-result-primary" : undefined} aria-expanded={onReview ? undefined : allOpen}
           onClick={seeChanges}>{onReview ? <>See changes <span aria-hidden="true">↗</span></> : allOpen ? "Hide changes" : "See changes"}</button>
         {revert && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
-          title="Undo every file change this run made" onClick={revert.onRevert}><ReplayIcon size={13} />{revert.busy ? "Undoing…" : "Undo"}</button>}
+          title="Undo every file change this run made" onClick={revert.onRevert}><UndoIcon size={13} />{revert.busy ? "Undoing…" : "Undo"}</button>}
       </footer>}
     </>
   );
