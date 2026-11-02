@@ -80,10 +80,14 @@ baseline; unchecked items below are verification or specific remaining gaps.
   a child in a separate session with a grandchild and leave an unrelated process
   alive. This fixes the orphan reproduced in the installed Claude Code build;
   it is not containment of already-reparented or externally hosted processes.
-- [ ] Retest Delegate Stop in the updated native app with Claude Code,
-  including a detached command, approval pause and quit/relaunch. Confirm that
-  both the Run and its command processes end. Then repeat desktop acceptance
-  with Codex and OpenCode. The installed 2026-10-30 build still has the old bug.
+- [x] Retest Delegate Stop with Claude Code in the updated build (2026-11-02,
+  Pierre-reported): started the 300-second Python command marked
+  `KLIDE_STOP_TEST_42`, quit/reopened Klide, reopened the same conversation and
+  clicked Stop. Pierre confirmed the flow worked; repeated
+  `pgrep -fl '[K]LIDE_STOP_TEST_42'` checks returned no matching processes.
+  This closes the Claude Code Stop/relaunch follow-up, not other CLI coverage.
+- [ ] Repeat desktop background execution/Stop acceptance with Codex and
+  OpenCode, including approval pauses and quit/relaunch.
 - [x] Cancel an individual Klide-dispatched worker from its activity row,
   including setup, slot waiting and execution. Setup shares the command
   process lifecycle: cancellation stops its process group before settling,
@@ -144,7 +148,7 @@ machine-local evidence, not fixtures shipped with the repository.
 | Background worker attention | 2026-10-27 record above: hidden parent, approval toast, Allow, finish notification and rail status; [attention handling](src-tauri/src/agent/attention.rs) | Hiding a conversation is not quitting the desktop. Individual Cancel and restart recovery still need acceptance |
 | Worker cancellation / capacity | [Dispatch and setup regressions](src-tauri/src/agent/mod.rs), [worker validation](src-tauri/src/agent/tool_handlers.rs), [dispatch cancellation](src-tauri/src/agent/dispatch_cancel.rs), [API slot queue](src-tauri/src/agent/worker_slots.rs) | Live Cancel verified 2026-11-01 for setup, queued and running workers; approval-pause Cancel not exercised; orchestration capacity display still uses fresh planning state per task |
 | `/btw` | Local note `docs/btw-live-acceptance-2026-10-26.md`: real Anthropic model, unchanged canary, concurrent main command, history and panel remount | No app/OS restart or live side-Stop exercise; Delegates that cannot enforce read-only are refused |
-| Desktop quit/relaunch | [Background contract and verification scope](docs/BACKGROUND_CONVERSATIONS.md), [host placement](src-tauri/src/agent/run_host.rs) | Updated 2026-11-01: real Claude Code completed-answer recovery, pending approval recovery and live reattachment passed on the installed build. Stop left a CLI-detached command running; other CLIs remain unverified. Current-checkout process tests use a fake CLI. Eligible standalone subscription Runs only on Unix; no VPS execution |
+| Desktop quit/relaunch | [Background contract and verification scope](docs/BACKGROUND_CONVERSATIONS.md), [host placement](src-tauri/src/agent/run_host.rs) | Updated 2026-11-02: Claude Code completed-answer recovery, pending approval recovery and live reattachment passed on the older installed build; Pierre confirmed the updated-build quit/reopen → Stop retest passed, with repeated process checks finding no test command. Other CLIs remain unverified. Automated process tests use a fake CLI. Eligible standalone subscription Runs only on Unix; no VPS execution |
 | OpenCode V2 | [Verification notes](docs/OPENCODE_DELEGATE.md#verification), captured CLI fixtures and reproducible mock-model transport smoke | Transport coverage is not a funded real-model desktop acceptance pass; V2 account switching stays CLI-owned |
 | Local inference | [Live smoke record](scripts/local-inference/results/SMOKE.md) for Llama app/managed llama.cpp setup, tool calls and restart selection | Specific servers/model only; not the full local Run recovery/review matrix |
 | Spreadsheets / races | Implemented tools and automated coverage; live acceptance items under v0.5.1 remain unchecked | Create/revise/reject/rollback on local and hosted models; race approval/restart/compare/merge/cleanup still owed |
