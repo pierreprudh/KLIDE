@@ -45,9 +45,12 @@ type Props = {
    *  latest result carries it — the checkpoints are the conversation's, so an
    *  older card offering it would undo more than the turn it describes. */
   revert?: { busy: boolean; onRevert: () => void };
+  /** Changes when the host consumed the checkpoints (undo, accept), so the
+   *  card reads them again and Undo goes once none are left. */
+  checkpointsVersion?: number;
 };
 
-type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "loadChanges" | "revert"> & {
+type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "loadChanges" | "revert" | "checkpointsVersion"> & {
   onDone: () => void;
   /** Diffs a host already loaded (the island reads them for its header). */
   diffs?: Map<string, FileDiff> | null;
@@ -94,7 +97,7 @@ type FileDiff = { rows: DiffRow[]; added: number; removed: number; created: bool
 /** The run's checkpoints, read once per completion and turned into one diff per
  *  file. Null while loading or when the host cannot read them; an accepted run
  *  has none left, and its files stay a plain list. */
-function useFileDiffs(completion: RunCompletion, load?: (runId: string) => Promise<CheckpointEntry[]>): Map<string, FileDiff> | null {
+function useFileDiffs(completion: RunCompletion, load?: (runId: string) => Promise<CheckpointEntry[]>, version = 0): Map<string, FileDiff> | null {
   const [diffs, setDiffs] = useState<Map<string, FileDiff> | null>(null);
   useEffect(() => {
     if (!load || completion.files.length === 0) return;
@@ -109,7 +112,7 @@ function useFileDiffs(completion: RunCompletion, load?: (runId: string) => Promi
     }).catch(() => {});
     return () => { live = false; };
     // The loader is a fresh closure every render; the run is what identifies the data.
-  }, [completion.runId, completion.completedAt, completion.files.length]);
+  }, [completion.runId, completion.completedAt, completion.files.length, version]);
   return diffs;
 }
 
@@ -130,7 +133,7 @@ function InlineDiff({ rows }: { rows: DiffRow[] }) {
   );
 }
 
-export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onDone, loadChanges, revert, diffs: given }: EvidenceProps) {
+export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onDone, loadChanges, revert, checkpointsVersion, diffs: given }: EvidenceProps) {
   const history = isCommandHistory(completion);
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(history && failed > 0);
@@ -140,7 +143,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   // there to put them away while reading the rest.
   const [documentsOpen, setDocumentsOpen] = useState(true);
   const review = (path?: string) => { onDone(); onReview?.(path); };
-  const loaded = useFileDiffs(completion, given === undefined ? loadChanges : undefined);
+  const loaded = useFileDiffs(completion, given === undefined ? loadChanges : undefined, checkpointsVersion);
   const diffs = given === undefined ? loaded : given;
   // The icon opens the document; its preview stays visible below.
   const artifacts = completionDocuments(completion);
@@ -241,7 +244,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
             every file's diff in place. Undo takes the run back. */}
         <button type="button" className={onReview ? "klide-result-primary" : undefined} aria-expanded={onReview ? undefined : allOpen}
           onClick={seeChanges}>{onReview ? <>See changes <span aria-hidden="true">↗</span></> : allOpen ? "Hide changes" : "See changes"}</button>
-        {revert && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
+        {revert && diffs && diffs.size > 0 && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
           title="Undo every file change this run made" onClick={revert.onRevert}><UndoIcon size={13} />{revert.busy ? "Undoing…" : "Undo"}</button>}
       </footer>}
     </>
@@ -263,12 +266,12 @@ function ArtifactThumb({ path, load }: { path: string; load?: (path: string) => 
 
 /** A quiet entry point. On the canvas the evidence opens inside the card, in
  *  the column the plan already lives in; in a transcript it opens as a sheet. */
-export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, variant = "inline", compact = false, folded = false, onUnfold, loadChanges, revert }: Props) {
+export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, variant = "inline", compact = false, folded = false, onUnfold, loadChanges, revert, checkpointsVersion }: Props) {
   const island = variant === "island";
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const id = useId();
-  const islandDiffs = useFileDiffs(completion, island && !folded ? loadChanges : undefined);
+  const islandDiffs = useFileDiffs(completion, island && !folded ? loadChanges : undefined, checkpointsVersion);
 
   // The sheet is modal, so Escape closes it and focus goes back to the row
   // that opened it. The island is part of the page — Escape belongs to the
@@ -405,7 +408,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
               <button type="button" autoFocus className="klide-result-close" aria-label={history ? "Close command history" : "Close result"} onClick={close}><CloseIcon size={18} /></button>
             </header>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} loadChanges={loadChanges} revert={revert} onDone={close} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} loadChanges={loadChanges} revert={revert} checkpointsVersion={checkpointsVersion} onDone={close} />
           </div>
         </div>,
         document.body,

@@ -1226,6 +1226,9 @@ export function AiPanel({
   // CheckpointPanel instead). Set is the source of truth; count drives render.
   const runChangedPathsRef = useRef<Set<string>>(new Set());
   const [revertableFiles, setRevertableFiles] = useState(0);
+  // Bumped when Undo or Accept consumes the checkpoints, so a result card
+  // rereads them — the card offers Undo only while some are left on disk.
+  const [checkpointsVersion, setCheckpointsVersion] = useState(0);
   const [reverting, setReverting] = useState(false);
   const [acceptingChanges, setAcceptingChanges] = useState(false);
   // Set when the user hits Stop while a local server is still warming up —
@@ -2482,16 +2485,19 @@ This user request requires workspace inspection. Before answering, you MUST call
   // and workbench to the reverted on-disk state. `revertRunCheckpoints` rolls
   // the run's whole checkpoint set back; the per-file/per-turn granularity
   // still lives in the Mission Control CheckpointPanel.
-  async function revertThisRun() {
-    const count = revertableFiles;
+  async function revertThisRun(files: readonly string[] = []) {
+    // The files this mount saw written, plus the ones the result names — after
+    // a restart or a reopen only the result knows them.
+    const paths = Array.from(new Set([...runChangedPathsRef.current, ...files]));
+    const count = paths.length;
     if (count === 0 || reverting) return;
-    if (!window.confirm(`Revert ${count} file change${count === 1 ? "" : "s"} this run made?`)) return;
-    const paths = Array.from(runChangedPathsRef.current);
+    if (!window.confirm(`Undo ${count} file change${count === 1 ? "" : "s"} this run made?`)) return;
     setReverting(true);
     try {
       await revertRunCheckpoints(currentId);
       runChangedPathsRef.current = new Set();
       setRevertableFiles(0);
+      setCheckpointsVersion((v) => v + 1);
       if (workspaceRoot && onFileWritten) {
         for (const p of paths) {
           try {
@@ -2520,6 +2526,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       await acceptRunCheckpoints(currentId);
       runChangedPathsRef.current = new Set();
       setRevertableFiles(0);
+      setCheckpointsVersion((v) => v + 1);
     } catch (e) {
       console.error("Failed to accept run changes:", e);
       notify(`Couldn't accept the modifications: ${e instanceof Error ? e.message : String(e)}`, { tone: "error" });
@@ -3358,9 +3365,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   // Revert lives on the result card, and only on the latest one: it undoes
   // the conversation's checkpoints, which an older card would overreach.
   function completionRevert(completion: RunCompletion) {
-    if (streaming || revertableFiles === 0 || !latestCompletion) return undefined;
+    // Availability is the checkpoints on disk (the card reads them), not this
+    // mount's memory of what it saw written — that is gone after a restart.
+    if (streaming || !latestCompletion) return undefined;
     if (completion.runId !== latestCompletion.runId || completion.completedAt !== latestCompletion.completedAt) return undefined;
-    return { busy: reverting, onRevert: () => void revertThisRun() };
+    return { busy: reverting, onRevert: () => void revertThisRun(completion.files) };
   }
 
   // The canvas' own width, measured: the island column's size is a share of it,
@@ -4440,6 +4449,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onPreviewArtifact={onPreviewArtifact}
               loadChanges={listCheckpoints}
               revert={completionRevert(completion)}
+              checkpointsVersion={checkpointsVersion}
             />;
           }
           // "Last" means the tail of the *exchange*, not of the array. Turns
@@ -5113,6 +5123,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onPreviewArtifact={onPreviewArtifact}
               loadChanges={listCheckpoints}
               revert={completionRevert(latestCompletion)}
+              checkpointsVersion={checkpointsVersion}
             />
           )}
           {latestVisuals && (
