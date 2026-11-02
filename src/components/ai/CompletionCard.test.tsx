@@ -199,20 +199,26 @@ describe("documents a command produced", () => {
 describe("ResultEvidence", () => {
   // The undo lives on the result, not under the answer: the card that names
   // what changed is the one that can take it back.
-  it("offers Undo only when the host hands it one and files changed", () => {
+  // Undo is offered while the run's checkpoints are on disk — not while some
+  // in-memory counter remembers the edits, which a restart forgets.
+  it("offers Undo only while the run has checkpoints left", () => {
     const changed = { ...completion, files: ["src/app.tsx"] };
     const revert = { busy: false, onRevert: () => {} };
-    const island = renderToStaticMarkup(<CompletionCard variant="island" completion={changed} revert={revert} />);
-    expect(island).toContain("klide-result-revert");
-    expect(island).toContain("Undo</button>");
-    expect(island).toContain("See changes");
-    expect(island).not.toContain("Request changes");
-    expect(renderEvidence(changed)).not.toContain("klide-result-revert");
-    const busy = renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={{ ...revert, busy: true }} />);
+    const left = new Map([["src/app.tsx", { rows: [], added: 2, removed: 0, created: false }]]);
+    const html = renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={revert} diffs={left} />);
+    expect(html).toContain("klide-result-revert");
+    expect(html).toContain("Undo</button>");
+    expect(html).toContain("See changes");
+    expect(html).not.toContain("Request changes");
+    // Consumed (undone or accepted) or not read: no Undo, See changes stays.
+    const none = renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={revert} diffs={new Map()} />);
+    expect(none).not.toContain("klide-result-revert");
+    expect(none).toContain("See changes");
+    expect(renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={revert} diffs={null} />)).not.toContain("klide-result-revert");
+    expect(renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} diffs={left} />)).not.toContain("klide-result-revert");
+    const busy = renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={{ ...revert, busy: true }} diffs={left} />);
     expect(busy).toContain("Undoing…");
     expect(busy).toMatch(/klide-result-revert"[^>]*disabled/);
-    const documentsOnly = renderToStaticMarkup(<ResultEvidence completion={{ ...completion, references: [DECK] }} onDone={() => {}} revert={revert} />);
-    expect(documentsOnly).not.toContain("klide-result-revert");
   });
 
   // Receipts, not headlines: one collapsed stack, dimmed, and it stays dimmed
