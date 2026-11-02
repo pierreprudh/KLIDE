@@ -3,6 +3,8 @@ import { Icon } from "../icons";
 import type { LinkSite } from "../linkIdentity";
 import type { ProviderId } from "../agent/types";
 import { ProviderLogo, ToolIcon } from "./ai/icons";
+import { CONNECTOR_BRANDS, type ConnectorBrand } from "../connectorBrands";
+import { isRemote, type ServerSpec } from "../ipc/connectors";
 
 // The mark beside a link's name. Brand marks are the standing exception to the
 // icon vocabulary (see icons.tsx) — a logo is a specific drawing, not a glyph
@@ -31,21 +33,59 @@ const GITHUB_PATH =
 const NPM_PATH =
   "M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.001V8.667h5.334v5.332h-2.669zm12.001 0h-1.33v-4h-1.336v4h-1.335v-4h-1.33v4h-2.671V8.667h8.002v5.331zM10.665 10H12v2.667h-1.335V10z";
 
-/**
- * The mark for a connector: GitHub's own for the GitHub connector, the plug
- * every other connector shares. Drawn in `currentColor`, so it takes the tone
- * of the row it sits in — a tool row's dim ink, a card's strong one — rather
- * than LinkMark's fixed ink.
- */
-export function ConnectorMark({ connector, size = 12 }: { connector: string; size?: number }) {
-  if (connector === "github") {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ flexShrink: 0 }}>
-        <path d={GITHUB_PATH} />
-      </svg>
-    );
+/** The brand a connector belongs to, read from every name it carries — its id,
+ *  label, the URL host or the command line that starts it. Whole tokens only,
+ *  so `sandbox` never reads as Box and `mirror` never as Miro. */
+export function connectorBrand(...names: (string | null | undefined)[]): ConnectorBrand | null {
+  const tokens = new Set(
+    names.filter(Boolean).join(" ").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
+  );
+  return CONNECTOR_BRANDS.find((brand) => brand.keywords.some((k) => tokens.has(k))) ?? null;
+}
+
+/** What a server spec says about whom it talks to: a URL's host, or the
+ *  program and its arguments (`npx -y @notionhq/notion-mcp-server`). */
+export function serverNames(server: ServerSpec | undefined): string {
+  if (!server) return "";
+  if (isRemote(server)) {
+    try { return new URL(server.url).host; } catch { return server.url; }
   }
-  return <ToolIcon name="connector_call" size={size} />;
+  return [server.command, ...server.args].join(" ");
+}
+
+// A brand too dark to read on a dark theme is drawn in the row's own ink —
+// those marks are monochrome by design (GitHub, Notion, Vercel).
+function inkOnly(hex: string): boolean {
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.05;
+}
+
+/**
+ * The mark a connector wears: its brand when one of its names says which
+ * (`connectorBrand`), the Settings plug otherwise. `ink` draws the brand in
+ * `currentColor`, taking the tone of the row it sits in — a tool row's dim
+ * ink; `brand` gives it its own colour, for a list of connectors by name.
+ */
+export function ConnectorMark({
+  connector, label, server, size = 12, tone = "ink",
+}: {
+  connector: string;
+  label?: string;
+  server?: ServerSpec;
+  size?: number;
+  tone?: "ink" | "brand";
+}) {
+  const brand = connectorBrand(connector, label, serverNames(server));
+  if (!brand) return <ToolIcon name="connector_call" size={size} />;
+  const color = tone === "brand" && !inkOnly(brand.hex) ? `#${brand.hex}` : "currentColor";
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color} role="img" aria-label={brand.title} style={{ flexShrink: 0 }}>
+      <path d={brand.path} />
+    </svg>
+  );
 }
 
 /**

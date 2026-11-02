@@ -7240,6 +7240,7 @@ button:focus-visible .menu-leadout {
   background: var(--composer-glass);
   color: var(--fg);
   font-family: var(--font-ui);
+  white-space: normal;
   backdrop-filter: var(--composer-blur);
   -webkit-backdrop-filter: var(--composer-blur);
   box-shadow: inset 0 1px 0 var(--panel-highlight), var(--panel-shadow);
@@ -7339,6 +7340,131 @@ button:focus-visible .menu-leadout {
 .klide-tool-option .klide-cmd-label > span {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+/* Install — the package field is the menu's header as a field of its own:
+   composer glass, an icon, mono text and one key that acts. */
+.klide-install-field {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 8px 0 14px;
+  border: 1px solid var(--composer-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--composer-glass) 70%, var(--bg-elevated));
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+  transition: border-color 150ms var(--ease-out);
+}
+
+.klide-install-field:focus-within {
+  border-color: var(--border-strong);
+}
+
+.klide-install-field > svg {
+  flex-shrink: 0;
+  color: var(--fg-dim);
+}
+
+.klide-install-field .klide-cmd-input {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.klide-install-field[data-busy="true"] .klide-cmd-input {
+  color: var(--fg-subtle);
+}
+
+.klide-install-go {
+  height: 26px;
+  padding: 0 9px;
+}
+
+.klide-install-go[data-ready="true"] {
+  color: var(--fg-strong);
+  border-color: var(--border-strong);
+}
+
+.klide-install-go:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.klide-install-status {
+  margin: 10px 0 0;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.klide-install-status[data-tone="error"] {
+  color: var(--danger);
+}
+
+.klide-install-list {
+  position: relative;
+  margin: 4px -8px 0;
+  padding: 0 8px;
+}
+
+.klide-install-list .klide-cmd-indicator {
+  left: 8px;
+  right: 8px;
+}
+
+.klide-install-row {
+  cursor: default;
+}
+
+/* Uninstall is there when you are on the row, quiet otherwise. */
+.klide-install-remove {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11.5px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.klide-install-row:hover .klide-install-remove,
+.klide-install-remove:focus-visible {
+  opacity: 1;
+}
+
+.klide-install-remove:hover,
+.klide-install-remove:focus-visible {
+  color: var(--danger);
+  outline: none;
+}
+
+/* A connector in the inventory: its logo, its name in the UI face. */
+.klide-connector-option {
+  cursor: default;
+  color: var(--fg-strong);
+}
+
+.klide-connector-option .klide-cmd-label > span {
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.klide-connector-option[data-disabled="true"] > svg,
+.klide-connector-option[data-disabled="true"] .klide-cmd-label > span {
+  opacity: 0.5;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -9791,6 +9917,13 @@ button:focus-visible .menu-leadout {
   gap: 12px;
   min-width: 0;
   margin-bottom: 4px;
+}
+
+/* The logo before a connector's name; a monochrome brand takes the title's ink. */
+.klide-connector-mark {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--fg-strong);
 }
 
 .klide-connector-source {

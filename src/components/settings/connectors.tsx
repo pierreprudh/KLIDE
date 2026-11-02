@@ -51,7 +51,7 @@ import {
   type ServerSpec,
 } from "../../ipc/connectors";
 import { githubAccounts } from "../../ipc/git";
-import { LinkMark } from "../linkMark";
+import { ConnectorMark } from "../linkMark";
 import { ProviderLogo } from "../ai/icons";
 import { DELEGATES } from "../../delegates";
 import type { ProviderId } from "../../agent/types";
@@ -416,7 +416,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
                 >
                   <div style={{ minWidth: 0 }}>
                     <div className="klide-connector-offer-head">
-                      <span className="klide-row-title" style={{ margin: 0 }}>{candidate.label}</span>
+                      <RowTitle connector={candidate}>{candidate.label}</RowTitle>
                       <span className="klide-connector-source" title={candidate.sourcePath}>
                         {source?.logo && <ProviderLogo id={source.logo} size={12} />}
                         <span>{source?.name ?? candidate.origin}</span>
@@ -508,7 +508,7 @@ function ConnectorRow({
             font: "inherit",
           }}
         >
-          <RowTitle mark={isGithub(connector)}>{connector.label}</RowTitle>
+          <RowTitle connector={connector}>{connector.label}</RowTitle>
           <div className="klide-connector-command">{commandLine(connector.server)}</div>
           <div className="klide-connector-meta">
             <span>{ORIGIN_LABEL[connector.origin] ?? connector.origin}</span>
@@ -548,10 +548,14 @@ function ConnectorRow({
 /** A row's title, with the GitHub mark in front of it when it earns one. The
  *  mark sits inside the title's line, so every row's text below still starts at
  *  the same x — a marked row is never indented past its neighbours. */
-function RowTitle({ mark, children }: { mark: boolean; children: ReactNode }) {
+/** A connector's name behind its logo — the brand its names point at, or the
+ *  plug when none does. */
+function RowTitle({ connector, children }: { connector: { id: string; label: string; server?: ServerSpec }; children: ReactNode }) {
   return (
-    <div className="klide-row-title" style={{ display: "flex", alignItems: "center", gap: 7 }}>
-      {mark && <LinkMark site="github" size={14} />}
+    <div className="klide-row-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span className="klide-connector-mark">
+        <ConnectorMark connector={connector.id} label={connector.label} server={connector.server} size={14} tone="brand" />
+      </span>
       {children}
     </div>
   );
@@ -588,7 +592,7 @@ function GithubSuggestion({
   return (
     <div className="klide-connector-row" style={last ? { borderBottom: "none" } : undefined} {...rowProps}>
       <div style={{ minWidth: 0 }}>
-        <RowTitle mark>GitHub</RowTitle>
+        <RowTitle connector={{ id: "github", label: "GitHub" }}>GitHub</RowTitle>
         <div className="klide-connector-meta" style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>
           Repositories, issues, pull requests and Actions
         </div>

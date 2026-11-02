@@ -13,6 +13,8 @@ import {
   useSkillAppearances,
 } from "../skillAppearance";
 import { MARK_NAMES, SkillMarkGlyph } from "./ai/skillMarks";
+import { ToolIcon } from "./ai/icons";
+import { ConnectorMark } from "./linkMark";
 import {
   type Skill,
   genSkillId,
@@ -299,10 +301,9 @@ function segBtn(active: boolean): CSSProperties {
   return { width: 28, height: 24, display: "grid", placeItems: "center", borderRadius: "var(--radius-xs)", color: active ? "var(--fg-strong)" : "var(--fg-subtle)", background: active ? "var(--bg-hover)" : "transparent" };
 }
 
+// Mono in the text's own line — no box: the menu draws nothing around a word.
 const codeInline: CSSProperties = {
-  fontFamily: "var(--font-mono)", fontSize: 11.5,
-  background: "var(--bg-elevated)", border: "1px solid var(--border)",
-  borderRadius: "var(--radius-xs)", padding: "1px 5px", color: "var(--fg-strong)",
+  fontFamily: "var(--font-mono)", fontSize: "0.92em", color: "var(--fg-strong)", whiteSpace: "nowrap",
 };
 
 /* ============================================================ the modal ===*/
@@ -1119,27 +1120,33 @@ function ToolsView({
           {!searching && (
             <>
               <div className="klide-cmd-heading">Connectors</div>
-              <div style={{ padding: "2px 10px 8px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.7 }}>
-                {connectors.length === 0 ? (
-                  <span style={{ color: "var(--fg-dim)" }}>None yet.</span>
-                ) : (
-                  connectors.map((c) => (
-                    <div key={c.id} style={{ opacity: c.enabled ? 1 : 0.5 }}>{c.label}</div>
-                  ))
-                )}
-                {canOpenSettings() && (
-                  <button
-                    type="button"
-                    onClick={() => openSettingsSection("connectors")}
-                    style={{
-                      display: "block", marginTop: 4, padding: 0, border: "none", background: "none",
-                      color: "var(--accent)", fontSize: 12, cursor: "pointer", font: "inherit",
-                    }}
-                  >
-                    Manage connectors
-                  </button>
-                )}
-              </div>
+              {connectors.length === 0 && (
+                <div style={{ padding: "2px 10px 6px", fontSize: 12, color: "var(--fg-dim)" }}>None yet.</div>
+              )}
+              {connectors.map((c) => (
+                <div
+                  key={c.id}
+                  {...hl.row(`connector:${c.id}`)}
+                  className="klide-cmd-option klide-tool-option klide-connector-option"
+                  data-disabled={!c.enabled || undefined}
+                  title={c.enabled ? undefined : "Turned off in Settings → Connectors"}
+                >
+                  <ConnectorMark connector={c.id} label={c.label} server={c.server} size={14} tone="brand" />
+                  <div className="klide-cmd-label"><span>{c.label}</span></div>
+                  {!c.enabled && <span className="klide-cmd-hint">Off</span>}
+                </div>
+              ))}
+              {canOpenSettings() && (
+                <button
+                  type="button"
+                  {...hl.row("connector:manage")}
+                  onClick={() => openSettingsSection("connectors")}
+                  className="klide-cmd-option klide-skills-option klide-tool-option"
+                >
+                  <ToolIcon name="connector_call" size={14} />
+                  <span className="klide-cmd-label"><span style={{ fontFamily: "var(--font-ui)", color: "var(--fg-subtle)" }}>Manage connectors</span></span>
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1283,107 +1290,92 @@ function InstallView({
 }) {
   const installedFromFile = skills.filter((s) => s.fromFile);
   const trimmed = pkg.trim();
+  const groups = groupedInstalled(installedFromFile);
+  // Nothing here is selected — the highlight is the pointer's alone.
+  const hl = useSlidingHighlight(null, installedFromFile.map((s) => s.id).join("|"));
   return (
     <div style={{ flex: 1, minWidth: 0, overflow: "auto" }} className="skills-tab-in">
-      <div style={{ padding: "32px 36px", maxWidth: 760 }}>
+      <div style={{ padding: "32px 36px", maxWidth: 720 }}>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.018em" }}>
           Install a skill
         </h1>
-        <p style={{ margin: "8px 0 0", fontSize: 13.5, lineHeight: 1.6, color: "var(--fg)" }}>
-          Paste a GitHub package — e.g. <code style={codeInline}>anthropics/skills</code> or <code style={codeInline}>vercel-labs/agent-skills/web-design</code>. Klide runs <code style={codeInline}>npx skills add</code> and the skill lands in <code style={codeInline}>~/.claude/skills/</code>, ready to enable.
+        <p style={{ margin: "8px 0 0", fontSize: 13, lineHeight: 1.6, color: "var(--fg-subtle)" }}>
+          A GitHub package — <code style={codeInline}>anthropics/skills</code> or <code style={codeInline}>vercel-labs/agent-skills/web-design</code>.
+          Klide runs <code style={codeInline}>npx skills add</code> and the skill lands in <code style={codeInline}>~/.claude/skills/</code>, ready to enable.
         </p>
 
-        <div style={{ marginTop: 22, display: "flex", gap: 8 }}>
+        {/* The command menu's field: an icon, the text, one key to act. */}
+        <div className="klide-install-field" data-busy={busy || undefined}>
+          <NavInstallIcon />
           <input
+            className="klide-cmd-input"
             value={pkg}
             onChange={(e) => setPkg(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") onInstall(); }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onInstall(); } }}
             placeholder="owner/repo  or  owner/repo/skill-name"
             disabled={busy}
-            className="klide-field"
-            style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12.5 }}
+            spellCheck={false}
+            autoComplete="off"
+            aria-label="Skill package"
           />
           <button
+            className="klide-cmd-esc klide-install-go"
             onClick={onInstall}
             disabled={busy || !trimmed}
-            className={!busy && trimmed ? "klide-button klide-button-primary" : "klide-button klide-button-secondary"}
-            style={{ minHeight: 32, padding: "0 16px" }}
+            data-ready={(!busy && !!trimmed) || undefined}
           >
-            {busy ? "Installing…" : "Install"}
+            {busy ? "Installing…" : "Install ↵"}
           </button>
         </div>
 
         {busy && (
-          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 9, fontSize: 12.5, color: "var(--fg-subtle)" }}>
+          <div className="klide-install-status">
             <span className="ai-assistant-placeholder-loader" aria-hidden><span /><span /><span /></span>
             Fetching from GitHub and installing — this can take up to a minute.
           </div>
         )}
-        {error && (
-          <div className="klide-paper" style={{ marginTop: 14, padding: "12px 14px", borderColor: "color-mix(in srgb, var(--danger) 35%, var(--border))" }}>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "var(--danger)", fontSize: 12, fontFamily: "var(--font-mono)", lineHeight: 1.55 }}>{error}</pre>
-          </div>
-        )}
-        {ok && (
-          <div className="klide-paper" style={{ marginTop: 14, padding: "12px 14px" }}>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "var(--fg)", fontSize: 12, fontFamily: "var(--font-mono)", lineHeight: 1.55 }}>{ok}</pre>
-          </div>
-        )}
+        {error && <pre className="klide-install-status" data-tone="error">{error}</pre>}
+        {ok && <pre className="klide-install-status">{ok}</pre>}
 
-        {/* Loaded from disk */}
-        <section style={{ marginTop: 36 }}>
-          <div style={{ display: "flex", alignItems: "center" }}>
+        {/* Loaded from disk — the menu's rows, grouped by where they came from */}
+        <section style={{ marginTop: 32 }}>
+          <div style={{ display: "flex", alignItems: "baseline", padding: "0 10px" }}>
             <SectionLabel>Loaded from disk</SectionLabel>
             <span style={{ flex: 1 }} />
-            <span style={{ fontSize: 11, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>
               {installedFromFile.length} {installedFromFile.length === 1 ? "skill" : "skills"}
             </span>
           </div>
           {installedFromFile.length === 0 ? (
-            <div className="klide-paper" style={{ marginTop: 10, padding: "16px 18px", color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.6 }}>
-              No filesystem skills yet. Install one above or drop a <code style={codeInline}>SKILL.md</code> into <code style={codeInline}>~/.claude/skills/</code> (or <code style={codeInline}>&lt;workspace&gt;/.agents/skills/</code>).
+            <div style={{ marginTop: 8, padding: "0 10px", color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.6 }}>
+              None yet. Install one above, or drop a <code style={codeInline}>SKILL.md</code> into <code style={codeInline}>~/.claude/skills/</code> (or <code style={codeInline}>&lt;workspace&gt;/.agents/skills/</code>).
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 10 }}>
-              {groupedInstalled(installedFromFile).map(({ group, items }) => (
-                <div key={group} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 4px" }}>
-                    <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>
-                      {group}
-                    </span>
-                    <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
-                    <span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>{items.length}</span>
-                  </div>
-                  <div className="klide-surface">
-                    {items.map((s, i) => {
-                      const folder = s.fromFile?.split("/").slice(-2, -1)[0] ?? s.id;
-                      return (
-                        <div
-                          key={s.id}
-                          className="klide-settings-row"
-                          style={{ minHeight: 60, padding: "12px 18px", gridTemplateColumns: "minmax(0, 1fr) auto", borderBottom: i < items.length - 1 ? "1px solid var(--border)" : "none" }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div className="klide-row-title" style={{ marginBottom: 3 }}>{s.name}</div>
-                            <div style={{ fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", letterSpacing: "0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {folder} · {s.fromFile ? shortenPath(s.fromFile) : ""}
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => onUninstall(folder)}
-                            disabled={busy}
-                            className="klide-button klide-button-ghost"
-                            style={{ minHeight: 28, padding: "0 12px", color: "var(--fg-subtle)" }}
-                            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--danger)"; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
-                          >
-                            Uninstall
-                          </button>
+            <div className="klide-install-list" {...hl.list}>
+              <Highlight at={hl.indicator} />
+              {groups.map(({ group, items }) => (
+                <Fragment key={group}>
+                  <div className="klide-cmd-heading">{group}</div>
+                  {items.map((s) => {
+                    const folder = s.fromFile?.split("/").slice(-2, -1)[0] ?? s.id;
+                    return (
+                      <div key={s.id} {...hl.row(s.id)} className="klide-cmd-option klide-skill-option klide-install-row">
+                        <div className="klide-skill-text">
+                          <span>{s.name}</span>
+                          <small>{s.fromFile ? shortenPath(s.fromFile) : folder}</small>
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                        <button
+                          onClick={() => onUninstall(folder)}
+                          disabled={busy}
+                          className="klide-install-remove"
+                          aria-label={`Uninstall ${s.name}`}
+                        >
+                          Uninstall
+                        </button>
+                      </div>
+                    );
+                  })}
+                </Fragment>
               ))}
             </div>
           )}
