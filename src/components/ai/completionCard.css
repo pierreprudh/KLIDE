@@ -80,7 +80,7 @@
 /* The one action is a quiet line at the foot, not a button bar: the recap is
    read far more often than it is answered. */
 .klide-result-island .klide-result-footer { flex-direction: row; justify-content: flex-end; gap: 4px; padding: 4px 7px 7px; border-top: 0; }
-.klide-result-island .klide-result-footer button { padding: 3px 7px; border-radius: var(--radius-sm); font-size: 10.5px; color: var(--fg-subtle); }
+.klide-result-island .klide-result-footer button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: var(--radius-sm); font-size: 10.5px; color: var(--fg-subtle); }
 .klide-result-island .klide-result-footer button:hover { color: var(--fg-strong); }
 .klide-result-island .klide-result-footer .klide-result-revert:hover:not(:disabled) { color: var(--danger); }
 .klide-result-island .klide-result-footer button:disabled { opacity: .45; cursor: default; }

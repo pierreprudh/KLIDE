@@ -6,7 +6,7 @@ import { buildDiffRows, type DiffRow } from "../../lineDiff";
 import { DiffStat } from "../diffView";
 import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
-import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon } from "../../icons";
+import { ChevronIcon, CloseIcon, DocumentIcon, ReplayIcon, ReviewIcon } from "../../icons";
 import { formatBytes } from "../settings/storage";
 import { Z } from "../../zLayers";
 import "./completionCard.css";
@@ -27,7 +27,6 @@ type Props = {
   /** A picture of a document Klide cannot render, when the host can make one.
    *  Resolving to null is a normal answer — some files have no preview. */
   onPreviewArtifact?: (path: string) => Promise<string | null>;
-  onRequestChanges: () => void;
   variant?: CompletionCardVariant;
   /** Too little room for the words: the entry keeps the mark and the count,
    *  and the label it drops moves to its tooltip and accessible name. */
@@ -46,7 +45,7 @@ type Props = {
   revert?: { busy: boolean; onRevert: () => void };
 };
 
-type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "onRequestChanges" | "loadChanges" | "revert"> & {
+type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "loadChanges" | "revert"> & {
   onDone: () => void;
   /** Diffs a host already loaded (the island reads them for its header). */
   diffs?: Map<string, FileDiff> | null;
@@ -129,11 +128,12 @@ function InlineDiff({ rows }: { rows: DiffRow[] }) {
   );
 }
 
-export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone, loadChanges, revert, diffs: given }: EvidenceProps) {
+export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onDone, loadChanges, revert, diffs: given }: EvidenceProps) {
   const history = isCommandHistory(completion);
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(history && failed > 0);
-  const [openFile, setOpenFile] = useState<string | null>(null);
+  const [openFiles, setOpenFiles] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleFile = (path: string) => setOpenFiles((was) => { const next = new Set(was); if (!next.delete(path)) next.add(path); return next; });
   // The documents are what the run made, so they start open; the fold is
   // there to put them away while reading the rest.
   const [documentsOpen, setDocumentsOpen] = useState(true);
@@ -143,6 +143,9 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   // The icon opens the document; its preview stays visible below.
   const artifacts = completionDocuments(completion);
   const checks = commandStatusSummary(completion);
+  const inlinePaths = onReview ? [] : completion.files.filter((path) => (diffs?.get(path)?.rows.length ?? 0) > 0);
+  const allOpen = inlinePaths.length > 0 && inlinePaths.every((path) => openFiles.has(path));
+  const seeChanges = () => onReview ? review() : setOpenFiles(allOpen ? new Set() : new Set(inlinePaths));
   return (
     <>
       <div className="klide-result-body" data-history={history ? "1" : undefined}>
@@ -155,7 +158,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
             const directory = path.slice(0, -name.length).replace(/\/$/, "");
             const diff = diffs?.get(path);
             const inline = !onReview && !!diff && diff.rows.length > 0;
-            const open = inline && openFile === path;
+            const open = inline && openFiles.has(path);
             const label = <>
               <span className="klide-result-file-text">
                 <span className="klide-result-filename">{name}</span>
@@ -174,7 +177,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
                 {onReview
                   ? <button type="button" className="klide-result-file-row" title={`Review ${path}`} onClick={() => review(path)}>{label}</button>
                   : inline
-                    ? <button type="button" className="klide-result-file-row" aria-expanded={open} title={path} onClick={() => setOpenFile(open ? null : path)}>{label}</button>
+                    ? <button type="button" className="klide-result-file-row" aria-expanded={open} title={path} onClick={() => toggleFile(path)}>{label}</button>
                     : <div className="klide-result-file-row" title={path}>{label}</div>}
                 {open && diff && <InlineDiff rows={diff.rows} />}
               </div>
@@ -231,11 +234,13 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
         </section>}
         {completion.warnings.length > 0 && <section className="klide-result-notes" aria-label="Review notes"><h3>Worth a look</h3>{completion.warnings.map((warning) => <p key={warning}>{warning}</p>)}</section>}
       </div>
-      {!history && <footer className="klide-result-footer">
-        {completion.files.length > 0 && onReview && <button type="button" className="klide-result-primary" onClick={() => review()}>Review changes <span aria-hidden="true">↗</span></button>}
-        <button type="button" disabled={disabled} onClick={() => { onDone(); onRequestChanges(); }}>Request changes</button>
-        {completion.files.length > 0 && revert && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
-          title="Undo every file change this run made" onClick={revert.onRevert}>{revert.busy ? "Reverting…" : "Revert"}</button>}
+      {!history && completion.files.length > 0 && <footer className="klide-result-footer">
+        {/* See changes goes where the host reads diffs; without one, it opens
+            every file's diff in place. Undo takes the run back. */}
+        <button type="button" className={onReview ? "klide-result-primary" : undefined} aria-expanded={onReview ? undefined : allOpen}
+          onClick={seeChanges}>{onReview ? <>See changes <span aria-hidden="true">↗</span></> : allOpen ? "Hide changes" : "See changes"}</button>
+        {revert && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
+          title="Undo every file change this run made" onClick={revert.onRevert}><ReplayIcon size={13} />{revert.busy ? "Undoing…" : "Undo"}</button>}
       </footer>}
     </>
   );
@@ -256,7 +261,7 @@ function ArtifactThumb({ path, load }: { path: string; load?: (path: string) => 
 
 /** A quiet entry point. On the canvas the evidence opens inside the card, in
  *  the column the plan already lives in; in a transcript it opens as a sheet. */
-export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, variant = "inline", compact = false, folded = false, onUnfold, loadChanges, revert }: Props) {
+export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, variant = "inline", compact = false, folded = false, onUnfold, loadChanges, revert }: Props) {
   const island = variant === "island";
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -357,7 +362,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
           </div>
           <div className="klide-result-island-panel" id={id}>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview} diffs={islandDiffs}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} revert={revert} onDone={() => {}} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} revert={revert} onDone={() => {}} />
           </div>
         </section>
       </div>
@@ -398,7 +403,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
               <button type="button" autoFocus className="klide-result-close" aria-label={history ? "Close command history" : "Close result"} onClick={close}><CloseIcon size={18} /></button>
             </header>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} loadChanges={loadChanges} revert={revert} onDone={close} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} loadChanges={loadChanges} revert={revert} onDone={close} />
           </div>
         </div>,
         document.body,
