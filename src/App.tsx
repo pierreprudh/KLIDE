@@ -69,7 +69,7 @@ import { delegateLabel, isDelegateId, type DelegateId } from "./delegates";
 import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId } from "./theme";
 import { SETTINGS, getSetting, setSetting, useSetting } from "./settingsStore";
-import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
+import { loadSkills, saveSkills, loadFilesystemSkills, mergeFilesystemSkills, type Skill } from "./skills";
 import {
   loadCustomPresets,
   saveCustomPresets,
@@ -660,10 +660,7 @@ function App() {
         action: { label: "Open Skills", run: () => setSkillsVisible(true) },
       });
     }
-    setSkills((prev) => {
-      const userDefined = prev.filter((s) => !s.fromFile);
-      return [...userDefined, ...fsSkills];
-    });
+    setSkills((prev) => mergeFilesystemSkills(prev, fsSkills));
   }, [workspaceRoot]);
 
   useEffect(() => {
@@ -1470,7 +1467,7 @@ function App() {
               <SkillsModal
                 open
                 skills={skills}
-                onChange={setSkills}
+                onChange={updateSkills}
                 onReloadFilesystemSkills={reloadFilesystemSkills}
                 onClose={() => setSidebarSlot2(null)}
               />
@@ -2938,7 +2935,6 @@ function App() {
     saveSkills(next);
     setSkills(next);
   }
-  void updateSkills;
 
   // Navigation must not reshuffle the project rail. A newly discovered folder
   // is appended; actual task activity promotes it through `markFolderWorked`.
@@ -3888,10 +3884,7 @@ function App() {
                 focusPanel={focusPanel}
                 onMountEditor={(editor) => { editorRef.current = editor; }}
                 skills={skills}
-                setSkills={(next) => {
-                  setSkills(next);
-                  saveSkills(next);
-                }}
+                setSkills={updateSkills}
                 reloadFilesystemSkills={reloadFilesystemSkills}
                 renderAiPanel={renderAiPanel}
                 onPanelWidthChange={(panel, w) => {

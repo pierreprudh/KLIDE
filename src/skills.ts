@@ -385,6 +385,19 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
   }));
 }
 
+/** A fresh disk scan folded into the live list. The scan says which skills
+ *  exist; the live list says which ones are on. A toggle made a moment ago
+ *  wins over the saved set, so a re-read that lands just after a click — the
+ *  Skills panel re-reads every time it opens — never switches the skill back
+ *  off. A skill the live list hasn't seen yet takes the scan's (saved) state. */
+export function mergeFilesystemSkills(prev: readonly Skill[], scanned: readonly Skill[]): Skill[] {
+  const liveEnabled = new Map(prev.filter((s) => s.fromFile).map((s) => [s.id, s.enabled]));
+  return [
+    ...prev.filter((s) => !s.fromFile),
+    ...scanned.map((s) => (liveEnabled.has(s.id) ? { ...s, enabled: liveEnabled.get(s.id)! } : s)),
+  ];
+}
+
 /** Mirrors `SkillCommandResult` in `src-tauri/src/skills.rs`. The name matches
  *  the Rust struct so one word greps across the seam.
  *
