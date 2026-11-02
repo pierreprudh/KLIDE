@@ -1422,11 +1422,6 @@ export function SteeringRow({ reason }: { reason: string }) {
   );
 }
 
-// The run's terminal failure, in the same visual family as the "Starting
-// {provider} local server…" line: a centered mono label between two hairlines.
-// The message wraps below rather than ellipsizing — a timeout's advice ("try a
-// smaller or pre-warmed model") is the useful half, and a truncated error is
-// the one row that must never hide its tail.
 /** The quiet underlined action both terminal rows wear — Retry, Try again. */
 function RowAction({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {
   return (
@@ -1454,29 +1449,13 @@ function RowAction({ label, onClick, disabled }: { label: string; onClick: () =>
 /** `onTryAgain` is offered for a retryable failure that still ends the
  *  conversation: it continues from where the Run stopped — what already ran
  *  is not run again. */
-export function RunFailedRow({ message, onTryAgain, disabled }: { message: string; onTryAgain?: () => void; disabled?: boolean }) {
-  const hairline = (
-    <span
-      aria-hidden="true"
-      style={{
-        height: 1,
-        flex: "1 1 44px",
-        minWidth: 28,
-        maxWidth: 72,
-        background: "color-mix(in srgb, var(--border) 82%, transparent)",
-      }}
-    />
-  );
+export function RunFailedRow({ message, hasOutput = false, onTryAgain, disabled }: { message: string; hasOutput?: boolean; onTryAgain?: () => void; disabled?: boolean }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, width: "100%" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", maxWidth: "min(520px, 100%)" }}>
-        {hairline}
-        <span style={{ ...COMPACT_MONO, color: "var(--danger)", fontWeight: 500, flexShrink: 0 }}>
-          Run failed
-        </span>
-        {hairline}
+    <div role="status" style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%", fontSize: 12, lineHeight: 1.5 }}>
+      <div style={{ color: "var(--danger)", fontWeight: 500 }}>
+        {hasOutput ? "Response received · run ended with an error" : "Run ended with an error"}
       </div>
-      <div style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", textAlign: "center", maxWidth: "min(520px, 92%)", lineHeight: 1.5 }}>
+      <div style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
         {message}
         {onTryAgain && <>{" "}<RowAction label="Try again" onClick={onTryAgain} disabled={disabled} /></>}
       </div>
@@ -1485,8 +1464,8 @@ export function RunFailedRow({ message, onTryAgain, disabled }: { message: strin
 }
 
 /**
- * The line for a turn the app was closed on — the RunFailedRow family
- * (centered, hairlines), but nothing failed, so quiet ink rather than red, and
+ * The line for a turn the app was closed on — centered between hairlines,
+ * with quiet ink because no failure was reported, and
  * one plain verb to move on. `onRetry` is the panel's resend; a read-only
  * surface renders the line without it.
  */
