@@ -11,6 +11,29 @@ import type { Skill } from "../src/skills";
 
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.theme = params.get("theme") ?? "dark";
+const tab = params.get("tab");
+
+const connectors = [
+  { id: "github", label: "GitHub", origin: "preset", enabled: true, server: { url: "https://api.githubcopilot.com/mcp/", headers: {} } },
+  { id: "linear", label: "Linear", origin: "claude-code", enabled: true, server: { url: "https://mcp.linear.app/sse", headers: {} } },
+  { id: "notion", label: "Notion", origin: "manual", enabled: true, server: { command: "npx", args: ["-y", "@notionhq/notion-mcp-server"], env: {} } },
+  { id: "obsidian-mcp-tools", label: "obsidian-mcp-tools", origin: "claude-code", enabled: true, server: { command: "/Users/pierre/bin/mcp-server", args: [], env: {} } },
+  { id: "sentry", label: "Sentry", origin: "codex", enabled: false, server: { url: "https://mcp.sentry.dev/mcp", headers: {} } },
+  { id: "pencil", label: "pencil", origin: "codex", enabled: true, server: { command: "pencil", args: ["mcp"], env: {} } },
+];
+(window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+  invoke: async (cmd: string) => {
+    if (cmd === "connectors_list") return connectors;
+    throw new Error(`preview: ${cmd}`);
+  },
+  transformCallback: () => 0,
+};
+// Land on a tab by clicking it, the way a person would.
+if (tab) setTimeout(() => {
+  const label = tab === "tools" ? "Tools & MCP" : tab === "install" ? "Install" : "Skills";
+  [...document.querySelectorAll("nav button")].find((b) => b.textContent?.startsWith(label))?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  if (params.has("bottom")) setTimeout(() => document.querySelectorAll(".klide-skills-list").forEach((l) => { l.scrollTop = l.scrollHeight; }), 300);
+}, 200);
 
 const seed: Skill[] = [
   { id: "a", name: "visualise", description: "Render inline SVG diagrams, charts and explainers in the conversation.", instructions: "# Visualise\n\nDraw the **mechanism**, not a decoration.\n\n- One idea per figure\n- Label in place\n\n```\n<svg>…</svg>\n```", tools: ["read_file", "list_dir"], enabled: true, fromFile: "/Users/pierre/.claude/skills/visualise/SKILL.md", group: "Personal", updatedAt: Date.now() },
