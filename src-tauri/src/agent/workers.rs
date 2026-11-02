@@ -52,6 +52,8 @@ struct Report {
     text: String,
     /// The HEAD observed in the worker's checkout, when there was one.
     commit: Option<String>,
+    /// Stopped on purpose (its row's ✕, `agent_cancel`), not failed.
+    cancelled: bool,
 }
 
 /// A report ready for the parent: `(child id, ok, text, observed HEAD)`.
@@ -128,11 +130,11 @@ pub fn register(
 
 /// The child settled: keep its report (already carrying the Git evidence the
 /// foreground path appends) until a turn of the parent delivers it.
-pub fn settle(parent_id: &str, child_id: &str, ok: bool, text: String, commit: Option<String>) {
+pub fn settle(parent_id: &str, child_id: &str, ok: bool, cancelled: bool, text: String, commit: Option<String>) {
     if let Ok(mut dispatches) = registry().lock() {
         if let Some(dispatch) = dispatches.get_mut(child_id).filter(|d| d.parent_id == parent_id) {
             if dispatch.report.is_none() {
-                dispatch.report = Some(Report { ok, text, commit });
+                dispatch.report = Some(Report { ok, text, commit, cancelled: cancelled && !ok });
             }
         }
     }
@@ -161,7 +163,7 @@ pub fn completions(parent_id: &str) -> Vec<Completion> {
 /// the Git state the Harness observed, so it carries the same caveat a
 /// foreground result does: execution finished, nothing is validated.
 fn delivery_text(dispatch: &Dispatch, report: &Report) -> String {
-    let outcome = if report.ok { "finished" } else { "failed" };
+    let outcome = if report.ok { "finished" } else if report.cancelled { "was cancelled" } else { "failed" };
     let place = match (&dispatch.branch, &dispatch.worktree_path) {
         (Some(branch), Some(path)) => format!("Branch `{branch}` in worktree `{path}`."),
         _ => "Worked directly in the project folder.".to_string(),
@@ -335,10 +337,10 @@ mod tests {
         assert_eq!(notification_state("parent-a", "child-1"), Some(false), "working");
         assert!(completions("parent-a").is_empty());
 
-        settle("parent-b", "child-1", true, "not mine".into(), None);
+        settle("parent-b", "child-1", true, false, "not mine".into(), None);
         assert_eq!(notification_state("parent-a", "child-1"), Some(false), "another Run cannot settle it");
 
-        settle("parent-a", "child-1", true, "Added slugify with tests.".into(), Some("78c3c5b".into()));
+        settle("parent-a", "child-1", true, false, "Added slugify with tests.".into(), Some("78c3c5b".into()));
         assert_eq!(notification_state("parent-a", "child-1"), Some(true), "report ready");
         assert_eq!(notification_state("parent-b", "child-1"), None, "ownership is checked, not guessed");
 
@@ -362,9 +364,20 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_child_is_reported_as_cancelled() {
+        register("parent-e", "child-4", "Codex", "tester", None, None);
+        settle("parent-e", "child-4", false, true, "Subagent \"tester\" was cancelled before it finished.".into(), None);
+        let ready = completions("parent-e");
+        assert!(!ready[0].1);
+        assert!(ready[0].2.contains("background Run child-4 was cancelled."));
+        assert!(!ready[0].2.contains("failed"));
+        release("parent-e");
+    }
+
+    #[test]
     fn a_failed_child_is_reported_as_failed_and_a_plain_folder_says_so() {
         register("parent-c", "child-2", "Codex", "tester", None, None);
-        settle("parent-c", "child-2", false, "Subagent \"tester\" failed: provider unavailable".into(), None);
+        settle("parent-c", "child-2", false, false, "Subagent \"tester\" failed: provider unavailable".into(), None);
         let ready = completions("parent-c");
         assert_eq!(ready.len(), 1);
         assert!(!ready[0].1);
@@ -398,8 +411,8 @@ mod tests {
     #[test]
     fn the_first_settlement_wins() {
         register("parent-d", "child-3", "Anthropic", "implementer", None, None);
-        settle("parent-d", "child-3", true, "first".into(), None);
-        settle("parent-d", "child-3", false, "second".into(), None);
+        settle("parent-d", "child-3", true, false, "first".into(), None);
+        settle("parent-d", "child-3", false, false, "second".into(), None);
         let ready = completions("parent-d");
         assert!(ready[0].1 && ready[0].2.contains("first") && !ready[0].2.contains("second"));
     }

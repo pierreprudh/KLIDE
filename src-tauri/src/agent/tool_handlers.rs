@@ -765,12 +765,11 @@ where
         let child_id = request_id.clone();
         let role = def.id;
         tokio::spawn(async move {
-            let _dispatch = dispatch;
-            let (ok, report) = settled_child(child.await, role);
+            let (ok, report) = settled_child(child.await, role, dispatch.cancel.is_cancelled());
             // The parent's Stop does not reach a background worker, so its
             // check runs to its own timeout too.
-            let (report, checkout, _) = outcome.describe(report, ok, &_dispatch.cancel).await;
-            workers::settle(&parent_id, &child_id, ok, report, observed_head(&checkout));
+            let (report, checkout, _) = outcome.describe(report, ok, &dispatch.cancel).await;
+            workers::settle(&parent_id, &child_id, ok, dispatch.cancel.is_cancelled(), report, observed_head(&checkout));
         });
         let where_now = match (branch.as_deref(), worktree_path.as_deref()) {
             (Some(branch), Some(path)) => format!("on branch `{branch}` in worktree `{path}`"),
@@ -808,7 +807,7 @@ where
             ctx.sup.with_handle(&request_id, &mut |handle| handle.cancel.cancel());
             return Ok(ToolOutcome::Cancelled);
         }
-        result = child => settled_child(result, def.id),
+        result = child => settled_child(result, def.id, child_cancel.is_cancelled()),
     };
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
     let description = outcome.describe(report, ok, &child_cancel);
@@ -837,7 +836,7 @@ where
         content: report,
         metadata: Some(serde_json::json!({
             "runId": request_id,
-            "outcome": if ok { "succeeded" } else { "failed" },
+            "outcome": if ok { "succeeded" } else if child_cancel.is_cancelled() { "cancelled" } else { "failed" },
             "sourceCommit": source_commit,
             "checkout": checkout.as_ref().and_then(|r| r.as_ref().ok()),
             "checkoutError": checkout.as_ref().and_then(|r| r.as_ref().err()),
@@ -852,9 +851,13 @@ where
 
 /// What a settled child means to its parent: `(ok, report)`. A child that
 /// failed is a tool result the model can react to, not a dead parent run.
-fn settled_child(result: Result<Result<String, String>, tokio::sync::oneshot::error::RecvError>, role: &str) -> (bool, String) {
+/// A child whose dispatch was cancelled (its row's ✕, Stop, `agent_cancel`)
+/// is not a success either, but it did not fail: say so, or the line under
+/// the answer reads "failed" beside a row that says Cancelled.
+fn settled_child(result: Result<Result<String, String>, tokio::sync::oneshot::error::RecvError>, role: &str, cancelled: bool) -> (bool, String) {
     match result {
         Ok(Ok(report)) => (true, report),
+        Ok(Err(_)) if cancelled => (false, format!("Subagent \"{role}\" was cancelled before it finished.")),
         Ok(Err(err)) => (false, format!("Subagent \"{role}\" failed: {err}")),
         Err(_) => (false, format!("Subagent \"{role}\" ended without reporting.")),
     }
@@ -2508,5 +2511,22 @@ mod worker_validation_tests {
         assert!(!root.join("ran.txt").exists());
         let (_, _, validation) = outcome(&root, None).describe("done".into(), true, &CancellationToken::new()).await;
         assert!(validation.is_none());
+    }
+}
+
+#[cfg(test)]
+mod settled_child_tests {
+    use super::*;
+
+    #[test]
+    fn a_cancelled_child_says_cancelled_not_failed() {
+        let (ok, text) = settled_child(Ok(Err("The subagent settled with status cancelled.".into())), "worker", true);
+        assert!(!ok);
+        assert_eq!(text, "Subagent \"worker\" was cancelled before it finished.");
+        let (ok, text) = settled_child(Ok(Err("provider unavailable".into())), "worker", false);
+        assert!(!ok);
+        assert_eq!(text, "Subagent \"worker\" failed: provider unavailable");
+        // A child that reported before the cancel landed still succeeded.
+        assert_eq!(settled_child(Ok(Ok("done".into())), "worker", true), (true, "done".to_string()));
     }
 }
