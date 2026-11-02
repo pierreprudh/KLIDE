@@ -90,8 +90,8 @@ exercised with the real Claude Code CLI in an empty disposable workspace:
 
 **Stop failure in the installed build:** Stop ended Claude's agent process and settled its Run, but
 the Python command Claude had moved into a separate background process survived
-as an orphan. It was cleaned up explicitly after the check. Stop is therefore
-not verified as process-tree containment for Delegate-owned background commands.
+as an orphan. It was cleaned up explicitly after the check. At that point, Stop
+had not been verified for cleanup of Delegate-owned background commands.
 Do not infer it from the passing Harness command-cancellation tests: native CLI
 tools have their own execution lifecycle.
 
@@ -113,16 +113,31 @@ grandchild; cancellation ends both while an unrelated process stays alive. No
 model or account is used. The existing daemon disconnect/approval tests remain
 part of the automated check.
 
-The updated native bundle still needs the live Claude Code Stop/relaunch retest;
-the earlier installed-build observation above remains historical evidence of the
-bug. This is process cleanup, not OS containment: descendants already reparented
+The live Claude Code Stop/relaunch retest passed by user report on 2026-11-02
+(details below); the earlier installed-build observation remains historical
+evidence of the bug. This is process cleanup, not OS containment: descendants already reparented
 away before Stop, externally hosted services, denied OS inspection/signals, and
 extreme trees beyond the 16,384-process bound are outside the guarantee. Other
 Unix platforms get process-group cleanup only; Windows retains immediate-child
 cleanup. No process-tree claim is made for those platforms.
 
-This verifies Claude Code on that installed build, not every supported CLI or
-the current checkout's native bundle. Codex, OpenCode, and Omp still need real
+### Claude Code Stop/relaunch acceptance — 2026-11-02
+
+Pierre confirmed the remaining manual test passed on the updated build, following
+the `npm run tauri dev` test instructions: select Claude Code in a new test
+conversation, run the command below, quit/reopen Klide while it runs, reopen the
+same conversation and click **Stop**.
+
+```sh
+python3 -c 'import time; time.sleep(300); print("KLIDE_STOP_TEST_42")'
+```
+
+Pierre pasted repeated `pgrep -fl '[K]LIDE_STOP_TEST_42'` checks with no output
+and confirmed the flow worked. This records user-reported live acceptance of
+Claude Code's quit/reopen → Stop flow and absence of the marked command afterward.
+No exact build hash or separate approval-pause retest was captured for this pass.
+
+This closes the Claude Code Stop/relaunch follow-up. Codex, OpenCode, and Omp still need real
 desktop quit/relaunch checks. Daemon death, OS restart, and machine sleep are
 outside this acceptance pass. The process tests exercise the current checkout's
 background ownership and wire behavior with a stand-in CLI.
