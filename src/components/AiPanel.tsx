@@ -3363,13 +3363,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     return { busy: reverting, onRevert: () => void revertThisRun() };
   }
 
-  function requestCompletionChanges(completion: RunCompletion) {
-    setInput((previous) => previous || (completion.stopped
-      ? `Please finish this unfinished work:\n${completion.outcome}\n\nRequested changes: `
-      : `Please revise this completed work:\n${completion.outcome}\n\nRequested changes: `));
-    taRef.current?.focus();
-  }
-
   // The canvas' own width, measured: the island column's size is a share of it,
   // not a constant. `width` (the prop) is the panel's assigned width and means
   // nothing in Focus, where the panel fills its host.
@@ -4445,7 +4438,6 @@ This user request requires workspace inspection. Before answering, you MUST call
               onReview={onReviewChanges ? (path) => onReviewChanges({ runId: completion.runId, title: "Run changes", path }) : undefined}
               onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: completion.runId, path, documents: documentSet(completion) }) : undefined}
               onPreviewArtifact={onPreviewArtifact}
-              onRequestChanges={() => requestCompletionChanges(completion)}
               loadChanges={listCheckpoints}
               revert={completionRevert(completion)}
             />;
@@ -5119,7 +5111,6 @@ This user request requires workspace inspection. Before answering, you MUST call
               onReview={onReviewChanges ? (path) => onReviewChanges({ runId: latestCompletion.runId, title: "Run changes", path }) : undefined}
               onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: latestCompletion.runId, path, documents: documentSet(latestCompletion) }) : undefined}
               onPreviewArtifact={onPreviewArtifact}
-              onRequestChanges={() => requestCompletionChanges(latestCompletion)}
               loadChanges={listCheckpoints}
               revert={completionRevert(latestCompletion)}
             />

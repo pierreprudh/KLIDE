@@ -5,15 +5,15 @@ import type { RunCompletion } from "../../agent/completion";
 import { artifactActionLabel } from "../../artifacts";
 
 const completion: RunCompletion = { runId: "r", completedAt: 1, outcome: "Updated settings.", files: [], commands: [], warnings: [] };
-const render = (value: RunCompletion) => renderToStaticMarkup(<CompletionCard completion={value} onReview={() => {}} onRequestChanges={() => {}} />);
+const render = (value: RunCompletion) => renderToStaticMarkup(<CompletionCard completion={value} onReview={() => {}} />);
 const renderIsland = (value: RunCompletion, compact = false) => renderToStaticMarkup(
-  <CompletionCard variant="island" compact={compact} completion={value} onReview={() => {}} onRequestChanges={() => {}} />,
+  <CompletionCard variant="island" compact={compact} completion={value} onReview={() => {}} />,
 );
 // The sheet only exists while open, and there is no DOM here to click in — so
 // the evidence both surfaces share is asserted directly.
 const renderEvidence = (value: RunCompletion, onOpenArtifact?: (path: string) => void) => renderToStaticMarkup(
   <ResultEvidence completion={value} onReview={() => {}} onOpenArtifact={onOpenArtifact}
-    onRequestChanges={() => {}} onDone={() => {}} />,
+    onDone={() => {}} />,
 );
 const DECK = { path: "decks/Q3 review.pptx", bytes: 40_960, created: true };
 
@@ -34,7 +34,7 @@ describe("CompletionCard", () => {
     expect(evidence).toContain("unknown revision");
     expect(evidence).toContain("Failed");
     expect(evidence).toContain("6 passed");
-    expect(evidence).not.toContain("Request changes");
+    expect(evidence).not.toContain("klide-result-footer");
     expect(evidence).not.toMatch(/recovered|resolved/i);
     expect(evidence).toMatch(/klide-result-commands"[^>]*data-open="1"/);
   });
@@ -49,7 +49,8 @@ describe("CompletionCard", () => {
     expect(renderIsland({ ...completion, commands, files: ["app.ts"] })).toContain('data-attention="1"');
     const stopped = { ...completion, commands, stopped: true };
     expect(renderIsland(stopped)).toContain("Partial work");
-    expect(renderEvidence(stopped)).toContain("Request changes");
+    expect(renderEvidence(stopped)).not.toContain("klide-result-footer");
+    expect(renderEvidence({ ...stopped, files: ["app.ts"] })).toContain("See changes");
     expect(renderIsland(stopped)).not.toContain("Command history");
   });
   it("renders nothing for empty evidence, including older saved completions", () => {
@@ -104,7 +105,7 @@ describe("the island card", () => {
   it("is a full-width window while the column is open", () => {
     const html = renderToStaticMarkup(
       <CompletionCard variant="island" completion={withFiles}
-        onReview={() => {}} onRequestChanges={() => {}} />,
+        onReview={() => {}} />,
     );
     expect(html).toContain("klide-result-island-title");
     expect(html).toContain("2 files changed");
@@ -117,7 +118,7 @@ describe("the island card", () => {
   it("keeps its words when the column is open and narrow", () => {
     const html = renderToStaticMarkup(
       <CompletionCard variant="island" compact completion={withFiles}
-        onReview={() => {}} onRequestChanges={() => {}} />,
+        onReview={() => {}} />,
     );
     expect(html).toContain("klide-result-island-title");
     expect(html).toContain("2 files changed");
@@ -129,7 +130,7 @@ describe("the island card", () => {
   it("folds to a mark when the column is closed", () => {
     const html = renderToStaticMarkup(
       <CompletionCard variant="island" folded completion={withFiles}
-        onReview={() => {}} onRequestChanges={() => {}} onUnfold={() => {}} />,
+        onReview={() => {}} onUnfold={() => {}} />,
     );
     expect(html).toContain("klide-result-mark");
     expect(html).toContain('data-folded="1"');
@@ -198,17 +199,19 @@ describe("documents a command produced", () => {
 describe("ResultEvidence", () => {
   // The undo lives on the result, not under the answer: the card that names
   // what changed is the one that can take it back.
-  it("offers Revert only when the host hands it one and files changed", () => {
+  it("offers Undo only when the host hands it one and files changed", () => {
     const changed = { ...completion, files: ["src/app.tsx"] };
     const revert = { busy: false, onRevert: () => {} };
-    const island = renderToStaticMarkup(<CompletionCard variant="island" completion={changed} onRequestChanges={() => {}} revert={revert} />);
+    const island = renderToStaticMarkup(<CompletionCard variant="island" completion={changed} revert={revert} />);
     expect(island).toContain("klide-result-revert");
-    expect(island).toContain(">Revert<");
+    expect(island).toContain("Undo</button>");
+    expect(island).toContain("See changes");
+    expect(island).not.toContain("Request changes");
     expect(renderEvidence(changed)).not.toContain("klide-result-revert");
-    const busy = renderToStaticMarkup(<ResultEvidence completion={changed} onRequestChanges={() => {}} onDone={() => {}} revert={{ ...revert, busy: true }} />);
-    expect(busy).toContain("Reverting…");
+    const busy = renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={{ ...revert, busy: true }} />);
+    expect(busy).toContain("Undoing…");
     expect(busy).toMatch(/klide-result-revert"[^>]*disabled/);
-    const documentsOnly = renderToStaticMarkup(<ResultEvidence completion={{ ...completion, references: [DECK] }} onRequestChanges={() => {}} onDone={() => {}} revert={revert} />);
+    const documentsOnly = renderToStaticMarkup(<ResultEvidence completion={{ ...completion, references: [DECK] }} onDone={() => {}} revert={revert} />);
     expect(documentsOnly).not.toContain("klide-result-revert");
   });
 
@@ -248,7 +251,7 @@ describe("ResultEvidence", () => {
     expect(html).not.toContain('klide-result-fold-title">Changes<');
     expect(html).toContain('title="Review src/app.tsx"');
     expect(html).toContain("time.ts");
-    expect(html).toContain("Review changes");
+    expect(html).toContain("See changes");
     expect(html).not.toContain("Command results");
   });
   // One line says what was checked; a passing command carries no status word,
@@ -281,7 +284,7 @@ describe("ResultEvidence", () => {
   // three, and the count says how many more there are.
   it("folds to a stack of the documents' marks, three at most, and counts the rest", () => {
     const html = renderToStaticMarkup(
-      <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}} onRequestChanges={() => {}}
+      <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}}
         completion={{ ...completion, artifacts: [
           DECK,
           { path: "decks/Q3 notes.pptx", bytes: 100, created: true },
@@ -303,7 +306,7 @@ describe("ResultEvidence", () => {
 
   it("is one disc for one document, two for two, with no count beside them", () => {
     const stack = (paths: string[]) => renderToStaticMarkup(
-      <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}} onRequestChanges={() => {}}
+      <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}}
         completion={{ ...completion, artifacts: paths.map((path) => ({ path, bytes: 100, created: true })) }} />,
     );
     const one = stack(["report.md"]);
