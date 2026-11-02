@@ -3614,92 +3614,6 @@ button:focus-visible .menu-leadout {
   }
 }
 
-/* Side-rail navigation item. The active state adds a thin accent bar
-   on the inner edge (left in LTR) and an inset highlight on the
-   rail surface. The 3px bar replaces the heavier full-tile tint used
-   elsewhere. */
-.klide-nav-rail-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 32px;
-  padding: 0 14px 0 17px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg-subtle);
-  border-radius: 0;
-  transition:
-    background var(--motion-fast) var(--ease-out),
-    color var(--motion-fast) var(--ease-out);
-}
-
-.klide-nav-rail-item:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-/* Active state: colour shifts to fg-strong only. The gradient + accent
-   edge are drawn by the FLIP-animated indicator below, so the active
-   "glow" can travel smoothly between rows. */
-.klide-nav-rail-item[data-active="true"] {
-  color: var(--fg-strong);
-  background: transparent;
-}
-
-/* FLIP-animated indicator — single element that draws both the soft
-   gradient fill and the 2px accent edge. Sits behind the buttons
-   (z-index 0) and translates between nav items on tab change. */
-.klide-nav-rail-indicator {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  /* TBD: the user wants to revisit the selection highlight treatment
-     later. For now the active row has no extra background or edge —
-     the only active-state signal is the icon going to --fg-strong
-     and the FLIP animation moving between rows. */
-  background: transparent;
-  box-shadow: none;
-  transition: transform var(--motion-slow) var(--ease-soft);
-  will-change: transform;
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* Before the first measurement lands, the indicator is sitting at
-   `transform: translateY(0)` with `opacity: 0`. We keep the
-   transition off so it doesn't visibly slide in from the origin. */
-.klide-nav-rail-list[data-flip="false"] .klide-nav-rail-indicator {
-  transition: none;
-}
-
-/* Buttons sit on top of the indicator. */
-.klide-nav-rail-list .klide-nav-rail-item {
-  position: relative;
-  z-index: 1;
-}
-
-.klide-nav-rail-item .klide-nav-rail-icon {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  color: var(--fg-subtle);
-}
-
-.klide-nav-rail-item[data-active="true"] .klide-nav-rail-icon {
-  color: var(--fg-strong);
-}
-
-.klide-nav-rail-item .klide-nav-rail-count {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-dim);
-}
-
 /* Editorial quote — the small italic pull-quote used in detail views.
    Uses Atkinson Hyperlegible at italic with em-dashes to feel like a
    footnote from a manual. */
@@ -3929,36 +3843,6 @@ button:focus-visible .menu-leadout {
   letter-spacing: 0.04em;
 }
 
-/* Modal entrance, in two parts. The scrim carries the fade; the panel rises
-   under it. They are split because the panel is a .floating-panel — a
-   backdrop-filter surface — and fading one of those directly makes the webview
-   re-rasterise its blur every frame. So the wrapper moves and fades, and the
-   blurred surface itself is never the animated box. */
-@keyframes klide-modal-scrim-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-@keyframes klide-modal-panel-in {
-  from { opacity: 0; transform: translateY(12px) scale(0.988); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.klide-modal-scrim {
-  animation: klide-modal-scrim-in var(--motion-med) var(--ease-out) backwards;
-}
-
-.klide-modal-panel {
-  animation: klide-modal-panel-in var(--motion-slow) var(--ease-soft) backwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .klide-modal-scrim,
-  .klide-modal-panel {
-    animation: none;
-  }
-}
-
 /* Modal tab transition — gentle cross-fade for content swap. */
 @keyframes skills-tab-in {
   from { opacity: 0; transform: translateY(2px); }
@@ -3967,73 +3851,6 @@ button:focus-visible .menu-leadout {
 
 .skills-tab-in {
   animation: skills-tab-in var(--motion-med) var(--ease-soft);
-}
-
-/* Skill row — the unit in the left list. Hover washes; selected washes
-   a step further. No bar, no tint, no border. */
-.klide-skill-row {
-  position: relative;
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 9px 12px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  color: var(--fg);
-  background: transparent;
-  transition:
-    background var(--motion-fast) var(--ease-out),
-    border-color var(--motion-fast) var(--ease-out),
-    transform var(--motion-fast) var(--ease-out);
-}
-
-.klide-skill-row:hover {
-  background: var(--bg-hover);
-}
-
-/* Selected is a highlight, not a colour: a neutral wash a step above hover,
-   readable in both polarities because it mixes the theme's own foreground. */
-.klide-skill-row[data-active="true"],
-.klide-skill-row[data-active="true"]:hover {
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-
-.klide-skill-row[data-disabled="true"] {
-  opacity: 0.78;
-}
-
-.klide-skill-row[data-disabled="true"][data-active="true"] {
-  opacity: 0.92;
-}
-
-/* Provenance + tool count are reference, not identity: the row keeps their
-   line so nothing shifts, and the words ease in when you are on the row
-   (hovered, focused, or selected). They settle up by a pixel rather than
-   blinking on, and a short delay keeps a cursor swept down the list from
-   strobing every row it crosses. Leaving is quicker and undelayed, so the
-   list quietens the moment you go. */
-.klide-skill-meta {
-  opacity: 0;
-  transform: translateY(2px);
-  transition:
-    opacity var(--motion-med) var(--ease-soft),
-    transform var(--motion-med) var(--ease-soft);
-}
-
-.klide-skill-row:hover .klide-skill-meta,
-.klide-skill-row:focus-visible .klide-skill-meta,
-.klide-skill-row[data-active="true"] .klide-skill-meta {
-  opacity: 1;
-  transform: none;
-  transition:
-    opacity var(--motion-slow) var(--ease-soft) 70ms,
-    transform var(--motion-slow) var(--ease-soft) 70ms;
-}
-
-/* The selected row is already there when the list renders — it should not
-   have to wait for a hover it never gets. */
-.klide-skill-row[data-active="true"] .klide-skill-meta {
-  transition-delay: 0ms;
 }
 
 /* Tool grid card — used in the skill form and detail view to pick /
@@ -4101,9 +3918,6 @@ button:focus-visible .menu-leadout {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .klide-nav-rail-item,
-  .klide-skill-row,
-  .klide-skill-meta,
   .klide-tool-card,
   .skills-tab-in {
     animation: none;
@@ -7308,7 +7122,8 @@ button:focus-visible .menu-leadout {
   pointer-events: none;
 }
 
-.klide-cmd[data-ready="true"] .klide-cmd-indicator {
+.klide-cmd[data-ready="true"] .klide-cmd-indicator,
+.klide-cmd-indicator[data-ready="true"] {
   transition:
     transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
     height 150ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -7391,8 +7206,145 @@ button:focus-visible .menu-leadout {
     animation: none;
   }
   .klide-cmd[data-sized="true"],
-  .klide-cmd[data-ready="true"] .klide-cmd-indicator {
+  .klide-cmd[data-ready="true"] .klide-cmd-indicator,
+  .klide-cmd-indicator[data-ready="true"] {
     transition: none;
+  }
+}
+
+/* Skills — the command menu's materials at window size: composer glass, 16px
+   corners, the same search header and Esc key, and the menu's one sliding
+   highlight in every list. The lists hand their selection to a page beside
+   them, so the highlight follows the pointer and settles back on the
+   selected row (useSlidingHighlight). */
+.klide-skills-scrim {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(
+    color-mix(in srgb, var(--modal-scrim) 55%, transparent),
+    color-mix(in srgb, var(--modal-scrim) 80%, transparent)
+  );
+  animation: klide-worktrees-fade 200ms var(--ease-out) backwards;
+}
+
+.klide-skills {
+  width: min(1080px, calc(100vw - 80px));
+  height: min(700px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--composer-border);
+  border-radius: 16px;
+  background: var(--composer-glass);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  backdrop-filter: var(--composer-blur);
+  -webkit-backdrop-filter: var(--composer-blur);
+  box-shadow: inset 0 1px 0 var(--panel-highlight), var(--panel-shadow);
+  transform: translateZ(0);
+  animation: klide-cmd-in 250ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.klide-skills-column {
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+}
+
+.klide-skills-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+}
+
+.klide-skills-list > .klide-cmd-heading:first-of-type {
+  padding-top: 4px;
+}
+
+/* A section or action as a menu row — a button, so it sheds its chrome. */
+.klide-skills-option {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.klide-skills-option > svg {
+  color: var(--fg-dim);
+  transition: color 150ms var(--ease-out);
+}
+
+.klide-skills-option[data-active="true"] > svg {
+  color: var(--fg-strong);
+}
+
+.klide-skills-rule {
+  height: 1px;
+  margin: 8px 10px;
+  background: color-mix(in srgb, var(--border) 76%, transparent);
+}
+
+/* A skill row: its name over one line of what it is for, the switch beside. */
+.klide-skill-option {
+  min-height: 46px;
+  padding: 6px 8px 6px 10px;
+}
+
+.klide-skill-text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.klide-skill-text > span,
+.klide-skill-text > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-skill-text > span {
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.klide-skill-text > small {
+  color: var(--fg-dim);
+  font-size: 11.5px;
+}
+
+.klide-skill-option[data-active="true"] .klide-skill-text > span {
+  color: var(--fg-strong);
+}
+
+.klide-skill-option[data-disabled="true"] .klide-skill-text > span {
+  color: var(--fg-subtle);
+}
+
+.klide-tool-option {
+  min-height: 32px;
+}
+
+.klide-tool-option .klide-cmd-label > span {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-skills-scrim,
+  .klide-skills {
+    animation: none;
   }
 }
 
