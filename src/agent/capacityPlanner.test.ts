@@ -17,9 +17,9 @@ describe("live API worker usage", () => {
     expect(canReserveCapacity(state, apiWorker).ok).toBe(true);
   });
 
-  it("matches Rust's limits: four API workers, no Delegate CLI limit", () => {
+  it("matches Rust's limits: fifteen API workers, no Delegate CLI limit", () => {
     const state = createCapacityState({ nowMs: 0 });
-    expect(state.slots["api-worker"].limit).toBe(4);
+    expect(state.slots["api-worker"].limit).toBe(15);
     const busy = createCapacityState({ slots: { "delegate-cli": { used: 50 } }, nowMs: 0 });
     expect(canReserveCapacity(busy, capacityNeedFor({ workerKind: "delegate", writesFiles: false })).ok).toBe(true);
   });

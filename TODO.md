@@ -105,7 +105,7 @@ baseline; unchecked items below are verification or specific remaining gaps.
   model question reappeared); the delegated line under the answer reads
   "failed" for a cancelled worker while its row says Cancelled.
 - [x] Worker capacity at admission (2026-10-27): API workers wait in a fair
-  queue for one of 4 app-wide slots, in front of the child Run
+  queue for one of 4 app-wide slots (15 since 2026-11-02), in front of the child Run
   (`agent/worker_slots.rs`), "Queued behind N running API workers" on the
   row, cancellable while queued. Verified in the app with a 2-CLI limit, then
   Pierre dropped the CLI limit (a CLI runs on its own subscription); bring it
@@ -314,7 +314,7 @@ Research and implementation audit: `docs/competitors-orb.md` (local notes).
   (2026-10-29): `OrchestratorConsole` routes the whole plan against one
   capacity state carrying Rust's live API worker pool (`agent_worker_capacity`,
   polled every 3 s) and shows "API workers running n/4" (+ "· k waiting").
-  The TS defaults now match Rust: 4 API workers, Delegate CLIs unlimited.
+  The TS defaults now match Rust: 4 API workers (15 since 2026-11-02), Delegate CLIs unlimited.
   Mission attempts still take no API worker slot. Previously it constructed a fresh `createCapacityState()`
   for each task, rather than reserving against shared live occupancy. Rust
   already limits API workers to 4 with cancellable queuing (`agent/worker_slots.rs`).

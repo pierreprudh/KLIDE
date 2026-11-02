@@ -50,10 +50,10 @@ export const DEFAULT_CAPACITY_SLOTS: Record<CapacitySlotKind, CapacitySlot> = {
     label: "API workers",
     // Rust's admission limit (agent/worker_slots.rs API_WORKERS); a dispatch
     // over it waits in a fair queue, it is never refused.
-    limit: 4,
+    limit: 15,
     used: 0,
     queued: 0,
-    reason: "Four run at once app-wide; the next one waits for a slot.",
+    reason: "Fifteen run at once app-wide; the next one waits for a slot.",
   },
   "local-model": {
     kind: "local-model",
