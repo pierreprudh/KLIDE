@@ -25,11 +25,29 @@ use super::{pause_for_user, with_run_handle, PauseOutcome, ToolCtx};
 /// kinds. A message from another agent is keyed by the peer Run it comes from
 /// — the receiving side decides who may talk to it — and has no project scope,
 /// since a Run id does not outlive the conversation.
+///
+/// A connector write (`mcp:<connector>/<tool>`) keeps the network namespace —
+/// same sets, same project allowlist, keys that cannot collide with `host:` —
+/// but is its own capability so the full-auto rung can tell a read of the web
+/// from a change made on someone's GitHub.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
     Command,
     Network,
+    Connector,
     Message,
+}
+
+impl Capability {
+    /// What the full-auto rung answers without a card: shell commands and
+    /// web reads (`web_fetch`, `web_search`). A command under full auto can
+    /// already `curl` anything, so asking before the read-only network door
+    /// was friction without protection. A connector write changes things in
+    /// another service and another agent's words are a prompt-injection
+    /// surface — both still wait for the user.
+    pub fn silenced_by_full_auto(self) -> bool {
+        matches!(self, Capability::Command | Capability::Network)
+    }
 }
 
 /// Where a Run came from. The full-auto rung is a conversation's choice: a
@@ -147,9 +165,9 @@ impl GateSubject {
         }
     }
 
-    /// The rung silences commands and nothing else.
+    /// The rung silences commands and web reads, nothing else.
     pub fn rung_covers(&self, cap: Capability) -> bool {
-        cap == Capability::Command
+        cap.silenced_by_full_auto()
     }
 }
 
@@ -231,7 +249,7 @@ impl TrustMemory {
     pub fn approved(&self, cap: Capability, key: &str) -> bool {
         match cap {
             Capability::Command => self.approved_commands.lock().unwrap().contains(key),
-            Capability::Network => self.approved_network.lock().unwrap().contains(key),
+            Capability::Network | Capability::Connector => self.approved_network.lock().unwrap().contains(key),
             Capability::Message => self.approved_messages.lock().unwrap().contains(key),
         }
     }
@@ -239,7 +257,7 @@ impl TrustMemory {
     pub fn rejected(&self, cap: Capability, key: &str) -> bool {
         match cap {
             Capability::Command => self.rejected_commands.lock().unwrap().contains(key),
-            Capability::Network => self.rejected_network.lock().unwrap().contains(key),
+            Capability::Network | Capability::Connector => self.rejected_network.lock().unwrap().contains(key),
             Capability::Message => self.rejected_messages.lock().unwrap().contains(key),
         }
     }
@@ -247,7 +265,7 @@ impl TrustMemory {
     pub fn remember_approved(&self, cap: Capability, key: &str) {
         let set = match cap {
             Capability::Command => &self.approved_commands,
-            Capability::Network => &self.approved_network,
+            Capability::Network | Capability::Connector => &self.approved_network,
             Capability::Message => &self.approved_messages,
         };
         set.lock().unwrap().insert(key.to_string());
@@ -256,7 +274,7 @@ impl TrustMemory {
     pub fn remember_rejected(&self, cap: Capability, key: &str) {
         let set = match cap {
             Capability::Command => &self.rejected_commands,
-            Capability::Network => &self.rejected_network,
+            Capability::Network | Capability::Connector => &self.rejected_network,
             Capability::Message => &self.rejected_messages,
         };
         set.lock().unwrap().insert(key.to_string());
@@ -309,15 +327,15 @@ pub fn remember_edits_auto_apply(ctx: &ToolCtx<'_>) {
     with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_edits_auto_apply());
 }
 
-/// The decision a command card receives when the rung silences it, so the
-/// transcript says the policy answered, not the user.
+/// The decision a command or web-read card receives when the rung silences
+/// it, so the transcript says the policy answered, not the user.
 pub const FULL_AUTO_DECISION: &str = "{\"behavior\":\"allow\",\"scope\":\"once\",\"via\":\"full_auto\"}";
 
 /// Apply a rung flip to a live run: remember the command policy, and when it
-/// is full auto and a *command* card is up, answer that card. Returns whether
-/// a card was answered. Any other pending card — a dispatch, a network target,
-/// a peer's message — is left for the user, as the full-auto rung excludes
-/// them by design. Refused for a Mission attempt or a spawned child: the rung
+/// is full auto and a card the rung covers is up (a command or a web read),
+/// answer that card. Returns whether a card was answered. Any other pending
+/// card — a dispatch, a connector write, a peer's message — is left for the
+/// user, as the full-auto rung excludes them by design. Refused for a Mission attempt or a spawned child: the rung
 /// is a conversation's, and theirs was fixed by the request that started them.
 pub fn apply_command_policy(
     handle: &super::AgentRunHandle,
@@ -331,7 +349,7 @@ pub fn apply_command_policy(
         return Err("The command policy of a Mission attempt was fixed at approval; this Run is one.".to_string());
     }
     handle.trust.set_commands_policy(auto_approve);
-    if !auto_approve || handle.trust.pending_capability() != Some(Capability::Command) {
+    if !auto_approve || !handle.trust.pending_capability().is_some_and(Capability::silenced_by_full_auto) {
         return Ok(false);
     }
     let sender = handle.pending_permission.lock().unwrap().take();
@@ -451,7 +469,7 @@ impl Capability {
                     command_allowlist::add(runs_dir, root, pattern)
                 }
             }
-            Capability::Network => network_allowlist::add(runs_dir, root, persist),
+            Capability::Network | Capability::Connector => network_allowlist::add(runs_dir, root, persist),
             // A peer Run id names one conversation; nothing durable to add to.
             Capability::Message => return,
         };
@@ -463,7 +481,7 @@ impl Capability {
     fn noun(&self) -> &'static str {
         match self {
             Capability::Command => "command",
-            Capability::Network => "network",
+            Capability::Network | Capability::Connector => "network",
             Capability::Message => "message",
         }
     }
@@ -475,7 +493,7 @@ impl Capability {
                 "You already proposed this exact command and the user rejected it. \
 Do not run it again — take a different approach or ask the user what they'd prefer."
             }
-            Capability::Network => {
+            Capability::Network | Capability::Connector => {
                 "You already proposed this exact network target and the user rejected it. \
 Do not use it again — take a different approach or ask the user what they'd prefer."
             }
@@ -492,7 +510,7 @@ Do not use it again — take a different approach or ask the user what they'd pr
                 "Rejected by user: command not run. Do not propose this exact \
 command again — take a different approach or ask the user what they'd prefer."
             }
-            Capability::Network => {
+            Capability::Network | Capability::Connector => {
                 "Rejected by user: network request not run. Do not propose this exact \
 network target again — take a different approach or ask the user what they'd prefer."
             }
@@ -829,10 +847,11 @@ mod tests {
     }
 
     #[test]
-    fn the_rung_covers_commands_only() {
+    fn the_rung_covers_commands_and_web_reads_only() {
         let subject = GateSubject::for_mode(AgentMode::Goal);
         assert!(subject.rung_covers(Capability::Command));
-        assert!(!subject.rung_covers(Capability::Network));
+        assert!(subject.rung_covers(Capability::Network), "web_fetch / web_search run under full auto");
+        assert!(!subject.rung_covers(Capability::Connector), "a connector write still asks");
         assert!(!subject.rung_covers(Capability::Message));
     }
 
