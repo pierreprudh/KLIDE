@@ -2495,6 +2495,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       onWorkspaceChanged?.();
     } catch (e) {
       console.error("Failed to revert run:", e);
+      notify(`Couldn't revert the run's changes: ${e instanceof Error ? e.message : String(e)}`, { tone: "error" });
     } finally {
       setReverting(false);
     }
@@ -3345,6 +3346,13 @@ This user request requires workspace inspection. Before answering, you MUST call
     () => latestReviewCompletion(msgs, recoveredDocuments, currentId),
     [msgs, recoveredDocuments, currentId],
   );
+  // Revert lives on the result card, and only on the latest one: it undoes
+  // the conversation's checkpoints, which an older card would overreach.
+  function completionRevert(completion: RunCompletion) {
+    if (streaming || revertableFiles === 0 || !latestCompletion) return undefined;
+    if (completion.runId !== latestCompletion.runId || completion.completedAt !== latestCompletion.completedAt) return undefined;
+    return { busy: reverting, onRevert: () => void revertThisRun() };
+  }
 
   function requestCompletionChanges(completion: RunCompletion) {
     setInput((previous) => previous || (completion.stopped
@@ -4430,6 +4438,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onPreviewArtifact={onPreviewArtifact}
               onRequestChanges={() => requestCompletionChanges(completion)}
               loadChanges={listCheckpoints}
+              revert={completionRevert(completion)}
             />;
           }
           // "Last" means the tail of the *exchange*, not of the array. Turns
@@ -4785,24 +4794,6 @@ This user request requires workspace inspection. Before answering, you MUST call
                       onRetry={() => retryFromMessage(i)}
                       onBranch={() => branchFromMessage(i)}
                       onBranchInWorktree={onForkConversationInWorktree ? () => branchMessageInWorktree(i) : undefined}
-                      revert={
-                        isLast && !streaming && revertableFiles > 0
-                          ? {
-                              files: revertableFiles,
-                              busy: reverting,
-                              onRevert: () => void revertThisRun(),
-                              onReview: onReviewChanges
-                                ? () =>
-                                    onReviewChanges({
-                                      runId: currentId,
-                                      title:
-                                        msgs.find((msg) => msg.role === "user")?.content.split("\n")[0].slice(0, 80) ??
-                                        "Run changes",
-                                    })
-                                : undefined,
-                            }
-                          : undefined
-                      }
                     />
                     {autoMemoryNotice && onOpenMemory && isLast && (
                       <button
@@ -5122,6 +5113,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onPreviewArtifact={onPreviewArtifact}
               onRequestChanges={() => requestCompletionChanges(latestCompletion)}
               loadChanges={listCheckpoints}
+              revert={completionRevert(latestCompletion)}
             />
           )}
           {latestVisuals && (
