@@ -245,7 +245,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
         <button type="button" className={onReview ? "klide-result-primary" : undefined} aria-expanded={onReview ? undefined : allOpen}
           onClick={seeChanges}>{onReview ? <>See changes <span aria-hidden="true">↗</span></> : allOpen ? "Hide changes" : "See changes"}</button>
         {revert && diffs && diffs.size > 0 && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
-          title="Undo every file change this run made" onClick={revert.onRevert}><UndoIcon size={12} />{revert.busy ? "Undoing…" : "Undo"}</button>}
+          title="Undo every file change this run made" onClick={revert.onRevert}><UndoIcon size={12} /><span className="klide-result-revert-label">{revert.busy ? "Undoing…" : "Undo"}</span></button>}
       </footer>}
     </>
   );
