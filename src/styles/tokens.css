@@ -2601,6 +2601,13 @@ textarea.klide-diff-comment-input:focus-visible {
    to fit instead of scrolling them. The one exception sets its own flex — an
    opened result, which takes the room the others are not using. */
 .klide-island-column > * { flex: 0 0 auto; }
+/* The column scrolls without a gutter. The global 10px classic scrollbar
+   takes layout space, so the moment the stack overflowed every card lost 10px
+   off its right edge — and lost it again each time a fold opened, a preview
+   loaded or the close row slid, which read as the right side jittering. The
+   wheel and trackpad still scroll it; a card cut at the bottom is the cue. */
+.klide-island-column { scrollbar-width: none; }
+.klide-island-column::-webkit-scrollbar { width: 0; height: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   .ai-qa-card {

@@ -336,3 +336,7 @@
 /* A long diff line scrolls inside its box; it never widens the card. */
 .klide-result-entry[data-variant="island"], .klide-result-island, .klide-result-island-panel, .klide-result-island .klide-result-body, .klide-result-file { min-width: 0; }
 .klide-result-diff { max-width: 100%; }
+/* Same rule as the column it sits in: no scrollbar gutter, or a long result
+   loses 10px off its right edge whenever it overflows its cap. */
+.klide-result-island .klide-result-body { scrollbar-width: none; }
+.klide-result-island .klide-result-body::-webkit-scrollbar { width: 0; height: 0; }
