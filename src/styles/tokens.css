@@ -2639,7 +2639,7 @@ textarea.klide-diff-comment-input:focus-visible {
 /* Streaming tail — each word that just arrived resolves in from a faint
    blur (markdown.tsx wraps only the newest words; settled text is plain). */
 .ai-word-in {
-  animation: ai-word-in 260ms var(--ease-out) both;
+  animation: ai-word-in 200ms var(--ease-out) both;
 }
 
 @keyframes ai-word-in {
