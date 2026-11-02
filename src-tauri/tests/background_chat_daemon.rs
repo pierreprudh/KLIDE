@@ -7,13 +7,24 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::{fs::PermissionsExt, net::UnixStream, process::CommandExt};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+
+/// One daemon at a time. Each test spawns a real ptyd and a CLI stand-in; three
+/// at once on a loaded macOS runner made `chat_start` fail or hang up (main CI,
+/// 2026-11-01). The guard lives in the `Daemon`, so it is released only after
+/// that daemon has been killed and its directory removed.
+static SERIAL: Mutex<()> = Mutex::new(());
 
 struct Daemon {
     dir: PathBuf,
     child: Child,
+    _serial: MutexGuard<'static, ()>,
 }
 impl Daemon {
+    fn log(&self) -> String {
+        std::fs::read_to_string(self.dir.join("ptyd.log")).unwrap_or_default()
+    }
     fn connect(&self) -> BufReader<UnixStream> {
         let stream = UnixStream::connect(klide_lib::pty_daemon::socket_path(&self.dir)).unwrap();
         stream
@@ -36,13 +47,26 @@ impl Daemon {
         writeln!(reader.get_mut(), "{value}").unwrap();
         let mut line = String::new();
         if let Err(e) = reader.read_line(&mut line) {
-            panic!(
-                "no answer to {}: {e}; log: {:?}",
-                value["type"],
-                std::fs::read_to_string(self.dir.join("ptyd.log"))
-            );
+            panic!("no answer to {}: {e}; log: {:?}", value["type"], self.log());
         }
-        serde_json::from_str(&line).unwrap()
+        serde_json::from_str(&line).unwrap_or_else(|e| {
+            panic!(
+                "unreadable answer to {} ({e}): {line:?}; log: {:?}",
+                value["type"],
+                self.log()
+            )
+        })
+    }
+    /// Start the fixture chat; on refusal, say why — the reply and the log.
+    fn start_chat(&self, request: Value) -> Value {
+        let response = self.request(request);
+        assert_eq!(
+            response["type"],
+            "chat_started",
+            "chat_start refused: {response}; log: {:?}",
+            self.log()
+        );
+        response
     }
     fn wait(&self, predicate: impl Fn() -> bool) {
         let end = Instant::now() + Duration::from_secs(15);
@@ -50,7 +74,7 @@ impl Daemon {
             assert!(
                 Instant::now() < end,
                 "background run timed out; log: {:?}",
-                std::fs::read_to_string(self.dir.join("ptyd.log"))
+                self.log()
             );
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -67,6 +91,10 @@ impl Drop for Daemon {
 }
 
 fn fixture() -> Daemon {
+    // A failed test poisons the lock; the next one must still run.
+    let serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = std::env::temp_dir().join(format!(
         "klide-chat-process-{}-{}",
         std::process::id(),
@@ -109,7 +137,11 @@ printf '%s\n' '{"type":"text","sessionID":"ses_background_fixture","part":{"id":
         .process_group(0)
         .spawn()
         .unwrap();
-    let daemon = Daemon { dir, child };
+    let daemon = Daemon {
+        dir,
+        child,
+        _serial: serial,
+    };
     daemon.wait(|| daemon.dir.join("ptyd.token").exists());
     daemon
 }
@@ -144,7 +176,7 @@ fn background_chat_survives_all_clients_disconnecting_and_finishes_once() {
         "subscribed"
     );
     let start = start(&daemon);
-    assert_eq!(daemon.request(start.clone())["type"], "chat_started");
+    daemon.start_chat(start.clone());
     let transcript = runs.join("conversation.jsonl");
     daemon.wait(|| std::fs::read_to_string(&transcript).is_ok_and(|s| s.contains("Started.")));
     drop(observer); // no request channel, event observer, or GUI remains
@@ -183,8 +215,7 @@ fn background_chat_survives_all_clients_disconnecting_and_finishes_once() {
     }
     // A follow-up starts after the previous terminal event, even if it finishes
     // before the start response reaches the UI. It resumes the CLI session.
-    let response = daemon.request(start);
-    assert_eq!(response["type"], "chat_started");
+    let response = daemon.start_chat(start);
     assert_eq!(response["from_seq"], events.len());
     daemon.wait(|| {
         daemon.request(json!({"type":"chat_status","run_id":"conversation"}))["status"].is_null()
@@ -223,7 +254,7 @@ fn request_permission(daemon: &Daemon) -> std::thread::JoinHandle<Value> {
 
 fn waiting_for_permission() -> (Daemon, std::thread::JoinHandle<Value>) {
     let daemon = fixture();
-    assert_eq!(daemon.request(start(&daemon))["type"], "chat_started");
+    daemon.start_chat(start(&daemon));
     daemon.wait(|| {
         events(&daemon)
             .iter()
