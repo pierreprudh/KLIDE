@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { useFlipIndicator } from "../hooks/useFlipIndicator";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useSlidingHighlight } from "../hooks/useSlidingHighlight";
 import { Z } from "../zLayers";
 import { notify } from "../toast";
 import { listConnectors, type Connector } from "../ipc/connectors";
@@ -46,13 +46,6 @@ type ToolEntry = AvailableTool;
 
 /* ------------------------------------------------------------------ icons */
 
-function CloseIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
-  );
-}
 function SearchIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -223,14 +216,12 @@ const fieldStyle: CSSProperties = {
   outline: "none",
   display: "block",
 };
+// The command menu's heading: small, dim, sentence case — never shouted.
 const labelStyle: CSSProperties = {
   display: "block",
-  fontSize: 10.5,
-  letterSpacing: "0.08em",
-  textTransform: "uppercase",
-  color: "var(--fg-subtle)",
+  fontSize: 11,
+  color: "var(--fg-dim)",
   marginBottom: 6,
-  fontWeight: 600,
 };
 
 function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
@@ -252,43 +243,46 @@ function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; labe
   );
 }
 
+/** The command menu's highlight, placed by `useSlidingHighlight`. */
+function Highlight({ at }: { at: ReturnType<typeof useSlidingHighlight>["indicator"] }) {
+  if (!at) return null;
+  return <div className="klide-cmd-indicator" data-ready={at.ready || undefined} style={at.style} aria-hidden="true" />;
+}
+
 function NavRail({
-  navItems, tab, onTabChange,
+  navItems, tab, onTabChange, onCreate,
 }: {
   navItems: { id: Tab; label: string; icon: ReactNode; count: number | null }[];
   tab: Tab;
   onTabChange: (t: Tab) => void;
+  onCreate: () => void;
 }) {
-  const flip = useFlipIndicator(tab, { size: 32, active: true });
+  const hl = useSlidingHighlight(tab, navItems.map((n) => `${n.id}:${n.count}`).join("|"));
   return (
-    <div
-      ref={flip.trackRef}
-      className="klide-nav-rail-list"
-      data-flip={flip.flip}
-      style={{ position: "relative", display: "flex", flexDirection: "column" }}
-    >
+    <div className="klide-skills-list" {...hl.list}>
+      <Highlight at={hl.indicator} />
       {navItems.map((n) => {
         const active = tab === n.id;
         return (
           <button
             key={n.id}
-            ref={flip.setItemRef(n.id)}
+            {...hl.row(n.id)}
             onClick={() => onTabChange(n.id)}
-            className="klide-nav-rail-item"
-            data-active={active}
+            className="klide-cmd-option klide-skills-option"
+            data-active={active || undefined}
             aria-current={active ? "page" : undefined}
           >
-            <span className="klide-nav-rail-icon">{n.icon}</span>
-            <span>{n.label}</span>
-            {n.count !== null && <span className="klide-nav-rail-count">{n.count}</span>}
+            {n.icon}
+            <span className="klide-cmd-label"><span>{n.label}</span></span>
+            {n.count !== null && <span className="klide-cmd-hint">{n.count}</span>}
           </button>
         );
       })}
-      <span
-        className="klide-nav-rail-indicator"
-        style={flip.style}
-        aria-hidden="true"
-      />
+      <div className="klide-skills-rule" />
+      <button {...hl.row("new")} onClick={onCreate} className="klide-cmd-option klide-skills-option">
+        <PlusIcon />
+        <span className="klide-cmd-label"><span>New skill</span></span>
+      </button>
     </div>
   );
 }
@@ -299,10 +293,6 @@ function NavRail({
 function editedDate(ts?: number): string {
   if (!ts) return "never edited";
   return new Date(ts).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-}
-
-function iconBtn(active: boolean): CSSProperties {
-  return { width: 28, height: 28, display: "grid", placeItems: "center", color: active ? "var(--fg-strong)" : "var(--fg-subtle)" };
 }
 
 function segBtn(active: boolean): CSSProperties {
@@ -377,6 +367,21 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
     return ordered.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
   }, [skills, query]);
 
+  // Tools filter and order the way the list draws them, so ↑ / ↓ follow the
+  // rows on screen rather than the registry's order.
+  const filteredTools = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const matched = q
+      ? tools.filter((t) => t.id.toLowerCase().includes(q) || t.label.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+      : tools;
+    return groupTools(matched).flatMap((group) => group.tools);
+  }, [tools, query]);
+
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (open) searchRef.current?.focus();
+  }, [open]);
+
   const filesystemCount = skills.filter((s) => !!s.fromFile).length;
 
   if (!open) return null;
@@ -415,88 +420,60 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
     { id: "tools", label: "Tools & MCP", icon: <NavToolsIcon />, count: tools.length },
   ];
 
+  // The header is the command menu's field: it filters the list beside it,
+  // and ↑ / ↓ walk that list the way they walk the menu's rows.
+  function step(delta: 1 | -1) {
+    const ids = tab === "tools" ? filteredTools.map((t) => t.id) : filtered.map((s) => s.id);
+    if (ids.length === 0) return;
+    const current = tab === "tools" ? selectedTool : selectedId;
+    const at = current ? ids.indexOf(current) : -1;
+    const next = ids[at < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, at + delta))];
+    if (tab === "tools") setSelectedTool(next);
+    else {
+      setSelectedId(next);
+      setDraft(null);
+      setRawView(false);
+    }
+  }
+
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Skills"
-      onClick={onClose}
-      className="klide-modal-scrim"
-      style={{
-        position: "fixed", inset: 0, zIndex: Z.modal,
-        display: "grid", placeItems: "center",
-        background: "rgba(0,0,0,0.30)",
-        backdropFilter: "blur(3px)",
-      }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      className="klide-skills-scrim"
+      style={{ zIndex: Z.modal }}
     >
-      {/* The wrapper is what rises: the panel under it keeps its blur unanimated. */}
-      <div
-        className="klide-modal-panel"
-        style={{
-          width: "min(1080px, calc(100vw - 80px))",
-          height: "min(700px, calc(100vh - 80px))",
-          display: "flex",
-        }}
-      >
-        <div
-          className="floating-panel"
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            borderRadius: "var(--radius-lg)",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-          }}
-        >
-          {/* Top hero strip — the title and the way out, nothing else */}
-          <header
-            style={{
-              flexShrink: 0,
-              height: 50,
-              padding: "0 12px 0 16px",
-              display: "flex",
-              alignItems: "center",
-              gap: 18,
-              borderBottom: "1px solid var(--border)",
-            }}
-          >
-            {/* The dialog is already named "Skills" for a screen reader, and the
-                detail page owns the h1 — this is the printed name, not a heading. */}
-            <div aria-hidden="true" style={{ minWidth: 0, fontSize: 20, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.018em" }}>
-              Skills
-            </div>
-            <div style={{ flex: 1 }} />
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="klide-button klide-button-ghost"
-              style={{ minHeight: 30, padding: "0 10px" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
-            >
-              <CloseIcon />
-            </button>
-          </header>
-
-          {/* Body — left rail + main content */}
-          <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-            {/* Vertical nav rail */}
-            <nav
-              aria-label="Sections"
-              style={{
-                width: 200,
-                flexShrink: 0,
-                borderRight: "1px solid var(--border)",
-                padding: "12px 0 14px",
-                display: "flex",
-                flexDirection: "column",
-                background: "color-mix(in srgb, var(--bg) 88%, var(--bg-elevated))",
+      <div className="klide-skills" role="dialog" aria-modal="true" aria-label="Skills">
+          <div className="klide-cmd-header">
+            <SearchIcon />
+            <input
+              ref={searchRef}
+              className="klide-cmd-input"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (tab === "install") setTab("skills");
               }}
-            >
-              <NavRail navItems={navItems} tab={tab} onTabChange={(t) => { setTab(t); setDraft(null); }} />
-              <div style={{ flex: 1 }} />
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") { e.preventDefault(); step(1); }
+                else if (e.key === "ArrowUp") { e.preventDefault(); step(-1); }
+              }}
+              placeholder={tab === "tools" ? "Search tools…" : "Search skills…"}
+              spellCheck={false}
+              autoComplete="off"
+              aria-label={tab === "tools" ? "Search tools" : "Search skills"}
+            />
+            <button className="klide-cmd-esc" onClick={onClose} aria-label="Close">Esc</button>
+          </div>
+
+          {/* Body — sections, the list, the page */}
+          <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+            <nav aria-label="Sections" className="klide-skills-column" style={{ width: 196 }}>
+              <NavRail
+                navItems={navItems}
+                tab={tab}
+                onTabChange={(t) => { setTab(t); setDraft(null); }}
+                onCreate={() => { setTab("skills"); startCreate(); }}
+              />
             </nav>
 
             {/* Main content area */}
@@ -508,8 +485,6 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                   selected={selected}
                   draft={draft}
                   query={query}
-                  setQuery={setQuery}
-                  searchOpen={query.length > 0}
                   onSelect={(id) => { setSelectedId(id); setDraft(null); setRawView(false); }}
                   onCreate={startCreate}
                   onToggleEnabled={toggleEnabled}
@@ -587,11 +562,10 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                   }}
                 />
               ) : (
-                <ToolsView skills={skills} selectedTool={selectedTool} setSelectedTool={setSelectedTool} tools={tools} connectors={connectors} />
+                <ToolsView skills={skills} selectedTool={selectedTool} setSelectedTool={setSelectedTool} tools={tools} filteredTools={filteredTools} query={query} connectors={connectors} />
               )}
             </main>
           </div>
-        </div>
       </div>
     </div>
   );
@@ -600,7 +574,7 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
 /* ============================================================ Skills pane */
 
 function SkillsPane({
-  filtered, selected, draft, query, setQuery, onSelect, onCreate,
+  filtered, selected, draft, query, onSelect, onCreate,
   onToggleEnabled, onEdit, onDelete, onSaveDraft, onCancelDraft, setDraft,
   rawView, setRawView, tools,
 }: {
@@ -609,8 +583,6 @@ function SkillsPane({
   selected: Skill | null;
   draft: Draft | null;
   query: string;
-  setQuery: (s: string) => void;
-  searchOpen: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onToggleEnabled: (id: string) => void;
@@ -623,92 +595,51 @@ function SkillsPane({
   setRawView: (v: boolean) => void;
   tools: ToolEntry[];
 }) {
+  const sections = [
+    { label: "Enabled", items: filtered.filter((s) => s.enabled) },
+    { label: "Off", items: filtered.filter((s) => !s.enabled) },
+  ].filter((section) => section.items.length > 0);
+  const hl = useSlidingHighlight(
+    draft ? null : selected?.id ?? null,
+    filtered.map((s) => `${s.id}:${s.enabled}`).join("|"),
+  );
   return (
     <>
-      {/* Skill list */}
-      <aside
-        aria-label="Skill list"
-        style={{
-          width: 280, flexShrink: 0,
-          borderRight: "1px solid var(--border)",
-          display: "flex", flexDirection: "column", minHeight: 0,
-        }}
-      >
-        <div style={{ flexShrink: 0, padding: "12px 12px 8px", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ flex: 1, fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
-              All skills
-            </span>
-            <button onClick={() => setQuery(query ? "" : " ")} aria-label="Search" style={iconBtn(query.length > 0)}
-              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--fg-strong)")}
-              onMouseLeave={(e) => (e.currentTarget.style.color = query.length > 0 ? "var(--fg-strong)" : "var(--fg-subtle)")}>
-              <SearchIcon />
-            </button>
-            <button onClick={onCreate} aria-label="New skill" title="New skill" style={iconBtn(false)}
-              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--fg-strong)")}
-              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-subtle)")}>
-              <PlusIcon />
-            </button>
-          </div>
-          {query.length > 0 && (
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter skills…"
-              style={{ ...fieldStyle, padding: "6px 10px", fontSize: 12.5 }}
-            />
-          )}
-        </div>
-        <div style={{ flex: 1, overflow: "auto", padding: "0 8px 12px", minHeight: 0 }}>
+      {/* Skill list — the command menu's rows: on first, then off */}
+      <aside aria-label="Skill list" className="klide-skills-column" style={{ width: 300 }}>
+        <div className="klide-skills-list" role="listbox" aria-label="Skills" {...hl.list}>
+          <Highlight at={hl.indicator} />
           {filtered.length === 0 && (
-            <div style={{ padding: "18px 12px", color: "var(--fg-subtle)", fontSize: 12.5, textAlign: "center" }}>
-              {query ? "No skills match." : "No skills yet."}
-            </div>
+            <div className="klide-cmd-empty">{query.trim() ? `No skills matching "${query.trim()}"` : "No skills yet"}</div>
           )}
-          {filtered.map((s) => {
-            const active = !draft && selected !== null && s.id === selected.id;
-            return (
-              <button
-                key={s.id}
-                onClick={() => onSelect(s.id)}
-                className="klide-skill-row"
-                data-active={active}
-                data-disabled={!s.enabled}
-                aria-current={active ? "true" : undefined}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: "-0.005em" }}>
-                    {s.name || "Untitled"}
-                  </span>
-                  <span onClick={(e) => e.stopPropagation()} style={{ display: "flex" }}>
-                    <Toggle on={s.enabled} onClick={() => onToggleEnabled(s.id)} label={`${s.enabled ? "Disable" : "Enable"} ${s.name}`} />
-                  </span>
-                </div>
-                {s.description && (
-                  <div style={{ fontSize: 11.5, color: "var(--fg-subtle)", marginTop: 4, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                    {s.description}
+          {sections.map((section) => (
+            <Fragment key={section.label}>
+              <div className="klide-cmd-heading">{section.label}</div>
+              {section.items.map((s) => {
+                const active = !draft && selected !== null && s.id === selected.id;
+                return (
+                  <div
+                    key={s.id}
+                    {...hl.row(s.id)}
+                    onClick={() => onSelect(s.id)}
+                    className="klide-cmd-option klide-skill-option"
+                    role="option"
+                    aria-selected={active}
+                    data-active={active || undefined}
+                    data-disabled={!s.enabled || undefined}
+                  >
+                    <div className="klide-skill-text">
+                      <span>{s.name || "Untitled"}</span>
+                      {s.description && <small>{s.description}</small>}
+                    </div>
+                    <span onClick={(e) => e.stopPropagation()} style={{ display: "flex" }}>
+                      <Toggle on={s.enabled} onClick={() => onToggleEnabled(s.id)} label={`${s.enabled ? "Disable" : "Enable"} ${s.name}`} />
+                    </span>
                   </div>
-                )}
-                <div className="klide-skill-meta" style={{ marginTop: 7, display: "flex", alignItems: "center", gap: 8 }}>
-                  {s.fromFile && (
-                    <span style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: "var(--font-mono)", letterSpacing: "0.02em" }}>
-                      {groupBadge(s)}
-                    </span>
-                  )}
-                  {s.builtin && (
-                    <span style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>
-                      Built-in
-                    </span>
-                  )}
-                  <span style={{ flex: 1 }} />
-                  <span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>
-                    {s.tools.length}/{tools.length} tools
-                  </span>
-                </div>
-              </button>
-            );
-          })}
+                );
+              })}
+            </Fragment>
+          ))}
         </div>
       </aside>
 
@@ -780,7 +711,7 @@ function SkillDetail({
 
       {/* Meta strip */}
       <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", rowGap: 6, columnGap: 22, alignItems: "center", fontSize: 12, color: "var(--fg-subtle)" }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{skill.builtin ? "built-in" : skill.fromFile ? "from file" : "custom"}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{skill.builtin ? "Built-in" : groupBadge(skill)}</span>
         <span>Updated {editedDate(skill.updatedAt)}</span>
         <span>{skill.tools.length} of {tools.length} tools allowed</span>
         {skill.fromFile && (<>
@@ -824,7 +755,7 @@ function SkillDetail({
         </div>
         <div className="klide-paper" style={{ marginTop: 10 }}>
           <div className="klide-paper-header">
-            <span style={{ textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--fg-subtle)" }}>SKILL.md</span>
+            <span style={{ color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}>SKILL.md</span>
             <span style={{ flex: 1 }} />
             <span style={{ color: "var(--fg-dim)" }}>{lineCount} {lineCount === 1 ? "line" : "lines"}</span>
             <span style={{ color: "var(--fg-dim)", marginLeft: 20 }}>{charCount} chars</span>
@@ -974,7 +905,7 @@ export function SkillLedeSection({ skill }: { skill: Skill }) {
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <span style={{ ...labelStyle, fontSize: 12.5, letterSpacing: "0.1em", color: "var(--fg)", marginBottom: 0, display: "inline-flex", alignItems: "center" }}>
+    <span style={{ ...labelStyle, fontSize: 12, color: "var(--fg-subtle)", marginBottom: 0, display: "inline-flex", alignItems: "center" }}>
       {children}
     </span>
   );
@@ -1126,17 +1057,28 @@ function capabilityLabel(capability: string | undefined): string {
   return CAPABILITY_GROUPS.find((group) => group.capability === capability)?.label ?? "Other";
 }
 
-const groupHeading = {
-  padding: "16px 6px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600,
-} as const;
+/** The tools in capability groups, in the order the inventory lists them. */
+function groupTools(tools: ToolEntry[]): { label: string; tools: ToolEntry[] }[] {
+  const known = new Set(CAPABILITY_GROUPS.map((group) => group.capability));
+  return [
+    ...CAPABILITY_GROUPS.map(({ capability, label }) => ({
+      label,
+      tools: tools.filter((t) => t.capability === capability),
+    })),
+    { label: "Other", tools: tools.filter((t) => !t.capability || !known.has(t.capability)) },
+  ].filter((group) => group.tools.length > 0);
+}
 
 function ToolsView({
-  skills, selectedTool, setSelectedTool, tools, connectors,
+  skills, selectedTool, setSelectedTool, tools, filteredTools, query, connectors,
 }: {
   skills: Skill[];
   selectedTool: string;
   setSelectedTool: (id: string) => void;
   tools: ToolEntry[];
+  /** `tools` narrowed by the header search, already in list order. */
+  filteredTools: ToolEntry[];
+  query: string;
   /** MCP servers the user has added (Settings → Connectors). Listed beside the
    *  built-ins because that is the inventory question this pane answers — their
    *  tools join the list once the harness can call them. */
@@ -1144,57 +1086,62 @@ function ToolsView({
 }) {
   const tool = tools.find((t) => t.id === selectedTool) ?? tools[0];
   const usedBy = tool ? skills.filter((s) => s.tools.includes(tool.id)) : [];
-  const known = new Set(CAPABILITY_GROUPS.map((group) => group.capability));
-  const groups = [
-    ...CAPABILITY_GROUPS.map(({ capability, label }) => ({
-      label,
-      tools: tools.filter((t) => t.capability === capability),
-    })),
-    { label: "Other", tools: tools.filter((t) => !t.capability || !known.has(t.capability)) },
-  ].filter((group) => group.tools.length > 0);
+  const groups = groupTools(filteredTools);
+  const searching = query.trim().length > 0;
+  const hl = useSlidingHighlight(tool?.id ?? null, filteredTools.map((t) => t.id).join("|"));
   return (
     <>
-      <aside
-        aria-label="Tool list"
-        style={{
-          width: 280, flexShrink: 0,
-          borderRight: "1px solid var(--border)",
-          display: "flex", flexDirection: "column", minHeight: 0,
-        }}
-      >
-        <div style={{ flex: 1, overflow: "auto", padding: "0 8px 8px", minHeight: 0 }}>
-          {groups.map((group, idx) => (
-            <div key={group.label}>
-              <div style={idx === 0 ? { ...groupHeading, paddingTop: 12 } : groupHeading}>
-                {group.label} · {group.tools.length}
-              </div>
-              {group.tools.map((t) => toolButton(t, selectedTool, setSelectedTool))}
-            </div>
+      <aside aria-label="Tool list" className="klide-skills-column" style={{ width: 300 }}>
+        <div className="klide-skills-list" role="listbox" aria-label="Tools" {...hl.list}>
+          <Highlight at={hl.indicator} />
+          {groups.length === 0 && <div className="klide-cmd-empty">No tools matching "{query.trim()}"</div>}
+          {groups.map((group) => (
+            <Fragment key={group.label}>
+              <div className="klide-cmd-heading">{group.label}</div>
+              {group.tools.map((t) => {
+                const active = t.id === tool?.id;
+                return (
+                  <div
+                    key={t.id}
+                    {...hl.row(t.id)}
+                    onClick={() => setSelectedTool(t.id)}
+                    className="klide-cmd-option klide-tool-option"
+                    role="option"
+                    aria-selected={active}
+                    data-active={active || undefined}
+                  >
+                    <div className="klide-cmd-label"><span>{t.id}</span></div>
+                  </div>
+                );
+              })}
+            </Fragment>
           ))}
-          <div style={groupHeading}>
-            Connectors · {connectors.length}
-          </div>
-          <div style={{ padding: "4px 6px 8px", fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.55 }}>
-            {connectors.length === 0 ? (
-              <>None yet.</>
-            ) : (
-              connectors.map((c) => (
-                <div key={c.id} style={{ opacity: c.enabled ? 1 : 0.5 }}>{c.label}</div>
-              ))
-            )}
-            {canOpenSettings() && (
-              <button
-                type="button"
-                onClick={() => openSettingsSection("connectors")}
-                style={{
-                  marginTop: 6, padding: 0, border: "none", background: "none",
-                  color: "var(--accent)", fontSize: 12, cursor: "pointer", font: "inherit",
-                }}
-              >
-                Manage connectors
-              </button>
-            )}
-          </div>
+          {!searching && (
+            <>
+              <div className="klide-cmd-heading">Connectors</div>
+              <div style={{ padding: "2px 10px 8px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.7 }}>
+                {connectors.length === 0 ? (
+                  <span style={{ color: "var(--fg-dim)" }}>None yet.</span>
+                ) : (
+                  connectors.map((c) => (
+                    <div key={c.id} style={{ opacity: c.enabled ? 1 : 0.5 }}>{c.label}</div>
+                  ))
+                )}
+                {canOpenSettings() && (
+                  <button
+                    type="button"
+                    onClick={() => openSettingsSection("connectors")}
+                    style={{
+                      display: "block", marginTop: 4, padding: 0, border: "none", background: "none",
+                      color: "var(--accent)", fontSize: 12, cursor: "pointer", font: "inherit",
+                    }}
+                  >
+                    Manage connectors
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </aside>
 
@@ -1219,7 +1166,7 @@ function ToolsView({
             </p>
             <div className="klide-paper" style={{ marginTop: 24 }}>
               <div className="klide-paper-header">
-                <span style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}>Enabled in</span>
+                <span>Enabled in</span>
               </div>
               <div style={{ padding: "14px 18px" }}>
                 {usedBy.length === 0 ? (
@@ -1246,29 +1193,6 @@ function ToolsView({
         )}
       </div>
     </>
-  );
-}
-
-function toolButton(
-  t: ToolEntry,
-  selectedTool: string,
-  setSelectedTool: (id: string) => void,
-) {
-  const active = t.id === selectedTool;
-  return (
-    <button
-      key={t.id}
-      onClick={() => setSelectedTool(t.id)}
-      className="klide-skill-row"
-      data-active={active}
-      style={{ marginBottom: 2, padding: "7px 12px 7px 15px" }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: active ? 600 : 500, color: active ? "var(--fg-strong)" : "var(--fg)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {t.id}
-        </span>
-      </div>
-    </button>
   );
 }
 
@@ -1424,7 +1348,7 @@ function InstallView({
               {groupedInstalled(installedFromFile).map(({ group, items }) => (
                 <div key={group} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 4px" }}>
-                    <span style={{ fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
+                    <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>
                       {group}
                     </span>
                     <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
