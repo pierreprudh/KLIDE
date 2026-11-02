@@ -15,6 +15,7 @@ import { relativeTimeLong } from "../time";
 import { errMessage } from "../errors";
 import type { GitFile, GitStatus } from "../gitTypes";
 import { UNNAMED_GIT_STATUS, gitStatusMark } from "../gitStatusMark";
+import { ChangedFileLabel } from "./ChangedFileLabel";
 import {
   clampDetailPct,
   CommitDetailPane,
@@ -129,12 +130,6 @@ const PANE_CARD = {
 } as React.CSSProperties;
 const DIFF_RENDER_LIMIT = 1600;
 
-
-function splitPath(path: string) {
-  const parts = path.split("/");
-  const name = parts.pop() ?? path;
-  return { name, folder: parts.join("/") };
-}
 
 type DiffViewerProps = {
   workspaceRoot: string | null;
@@ -390,9 +385,7 @@ type FileRowProps = {
 };
 
 function FileRow({ file, active, onOpen, onStage, onUnstage, onDiscard, loading }: FileRowProps) {
-  const { name, folder } = splitPath(file.path);
   const mark = gitStatusMark(file.status) ?? UNNAMED_GIT_STATUS;
-  const [hovered, setHovered] = useState(false);
   return (
     <div
       // Chrome — fills, radius, ellipsis, the action reveal — comes from
@@ -401,29 +394,13 @@ function FileRow({ file, active, onOpen, onStage, onUnstage, onDiscard, loading 
       className="klide-file-row"
       data-active={active}
       onClick={() => onOpen(file)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       // Rows sit one step in from their section header (10px) so the list
       // reads as header → children, not a flat column.
       style={{ gridTemplateColumns: "1fr auto", gap: 8, margin: "1px 6px", padding: "5px 8px 5px 14px", borderRadius: "var(--radius-md)", fontSize: 13 }}
     >
-      {/* No status letter: the name itself wears the status colour (warning
-          for modified, success for new, danger for deleted). The word stays
-          in the tooltip for anyone who needs it spelled out. */}
-      <div style={{ minWidth: 0 }}>
-        <div className="klide-file-row-name" title={mark.title} style={{ color: mark.color }}>{name}</div>
-        {/* The folder whispers under the name, set one step further in —
-            quieter than the Explorer's shared sub style, since here the
-            status-coloured name is the point. Hovering the row brings it up. */}
-        {folder && (
-          <div
-            className="klide-file-row-sub"
-            style={{ paddingLeft: 8, opacity: hovered || active ? 1 : 0.55, transition: "opacity var(--motion-fast) var(--ease-out)" }}
-          >
-            {folder}
-          </div>
-        )}
-      </div>
+      {/* The name in its status colour, the folder under it — the one
+          changed-file label every changes list shares. */}
+      <ChangedFileLabel path={file.path} mark={mark} />
       <div className="klide-file-row-actions">
         <button
           aria-label={file.staged ? "Unstage" : "Stage"}

@@ -24,6 +24,7 @@ import type { CSSProperties } from "react";
 import type { Icon as PhosphorGlyph } from "@phosphor-icons/react";
 
 import { ArrowCounterClockwise } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
+import { ArrowUUpLeft } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 import { Play } from "@phosphor-icons/react/dist/csr/Play";
 import { Pause } from "@phosphor-icons/react/dist/csr/Pause";
 import { Clock } from "@phosphor-icons/react/dist/csr/Clock";
@@ -362,6 +363,9 @@ export function VisualExpandIcon({ expanded = false, size = 18, ...props }: Glyp
 
 /** Refresh, or play again from the start. */
 export function ReplayIcon(p: GlyphProps) { return <Icon as={ArrowCounterClockwise} {...p} />; }
+
+/** Take back what was done — a run's file changes. */
+export function UndoIcon(p: GlyphProps) { return <Icon as={ArrowUUpLeft} {...p} />; }
 
 /** Trace playback and recorded waiting time. */
 export function PlayIcon(p: GlyphProps) { return <Icon as={Play} {...p} />; }
