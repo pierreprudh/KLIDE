@@ -207,7 +207,7 @@ describe("ResultEvidence", () => {
     const left = new Map([["src/app.tsx", { rows: [], added: 2, removed: 0, created: false }]]);
     const html = renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={revert} diffs={left} />);
     expect(html).toContain("klide-result-revert");
-    expect(html).toContain("Undo</button>");
+    expect(html).toContain(">Undo</span></button>");
     expect(html).toContain("See changes");
     expect(html).not.toContain("Request changes");
     // Consumed (undone or accepted) or not read: no Undo, See changes stays.
