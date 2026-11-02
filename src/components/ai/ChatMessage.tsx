@@ -1104,8 +1104,6 @@ function formatDuration(ms: number): string {
 
 // Quiet per-message stats — centered under the answer, barely-there by
 // default, full strength on hover (see .klide-msg-meta in tokens.css).
-// Order: tok/s, tokens, time, total, TTFT, cached, cost — spacing alone separates the
-// parts; every one is self-labeled, so a glyph between them is noise.
 function MessageMeta({ meta, responseCost }: { meta: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; cachedPct?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number }; responseCost?: ResponseCost }) {
   const parts: string[] = [];
   if (meta.tps) parts.push(`${meta.tps} tok/s`);
@@ -1125,7 +1123,7 @@ function MessageMeta({ meta, responseCost }: { meta: { ms?: number; modelMs?: nu
   }
   // How much of the prompt the provider read from its cache — the number
   // that says caching works. Only shown when the provider reported it.
-  if (meta.cachedPct !== undefined && meta.cachedPct > 0) parts.push(`${meta.cachedPct}% cached`);
+  const cachePct = meta.cachedPct !== undefined ? Math.max(0, Math.min(100, meta.cachedPct)) : undefined;
   // Cost last, so the eye lands on it. Sub-cent turns show "<$0.01".
   if (meta.costUsd !== undefined && meta.costUsd > 0 && !responseCost) {
     parts.push(`${formatCost(meta.costUsd)} this call`);
@@ -1133,28 +1131,19 @@ function MessageMeta({ meta, responseCost }: { meta: { ms?: number; modelMs?: nu
   if (responseCost && responseCost.costUsd > 0) {
     parts.push(`${formatCost(responseCost.costUsd)} response total (${responseCost.calls} priced call${responseCost.calls === 1 ? "" : "s"})`);
   }
-  if (parts.length === 0) return null;
+  if (parts.length === 0 && cachePct === undefined) return null;
   return (
-    <div
-      className="klide-msg-meta"
-      title="Tokens, speed, timing and cache describe the last model call. Response total includes all known model-call costs behind this answer, including automatic compaction. Manual compaction is priced on its own marker. External CLI usage is unavailable here."
-      style={{
-        marginTop: 6,
-        display: "flex",
-        justifyContent: "center",
-        flexWrap: "wrap",
-        gap: 14,
-        fontSize: 10,
-        fontFamily: "var(--font-mono)",
-        color: "var(--fg-dim)",
-        letterSpacing: "0.02em",
-        userSelect: "none",
-      }}
-    >
-      <span>Last model call</span>
-      {parts.map((p, i) => (
-        <span key={i}>{p}</span>
-      ))}
+    <div className="klide-msg-meta">
+      <div className="klide-msg-meta-stats" tabIndex={0} title="Tokens, speed, timing and cache describe the last model call. Response cost includes all known model calls behind the answer, including automatic compaction.">
+        {parts.map((part, index) => <span key={index}>{part}</span>)}
+      </div>
+      {cachePct !== undefined && <span className="klide-response-cache" title={`${cachePct}% of input served from cache on the last model call`}>
+        <svg width="15" height="15" viewBox="0 0 20 20" role="meter" aria-label="Last model call input served from cache" aria-valuemin={0} aria-valuemax={100} aria-valuenow={cachePct} aria-valuetext={`${cachePct}% cached`}>
+          <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="2" />
+          <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="2" pathLength="100" strokeDasharray={`${cachePct} 100`} transform="rotate(-90 10 10)" />
+        </svg>
+        <span>{cachePct}% cached</span>
+      </span>}
     </div>
   );
 }

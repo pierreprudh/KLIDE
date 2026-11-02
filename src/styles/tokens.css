@@ -2909,12 +2909,34 @@ textarea.klide-diff-comment-input:focus-visible {
 /* Per-message meta footer (duration · tokens) — barely-there until the
    reader actually wants it. */
 .klide-msg-meta {
-  opacity: 0.45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
+  gap: 9px;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 8px;
+  font: 11px/1.5 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  opacity: 0.85;
   transition: opacity var(--motion-fast, 0.15s) ease;
 }
-.klide-msg-meta:hover {
-  opacity: 1;
+.klide-msg-meta:hover,
+.klide-msg-meta:focus-within { opacity: 1; }
+.klide-msg-meta-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
+.klide-msg-meta-stats > span { flex-shrink: 0; }
+.klide-msg-meta-stats:focus-visible { outline: 1px solid var(--fg-subtle); outline-offset: 2px; }
+.klide-response-cache { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; }
 
 /* A folded run of tool work opens by growing to whatever height its rows
    need. `grid-template-rows: 0fr → 1fr` is what makes that animatable: a
