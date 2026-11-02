@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enabledFirst, enabledRunSkills, enabledSkillsPrompt, enabledSkillsPromptParts, skillFolderOf } from "./skills";
+import { enabledFirst, enabledRunSkills, enabledSkillsPrompt, enabledSkillsPromptParts, mergeFilesystemSkills, skillFolderOf } from "./skills";
 
 describe("enabledFirst", () => {
   it("moves the enabled skills ahead and keeps each side's own order", () => {
@@ -69,5 +69,26 @@ describe("enabledSkillsPromptParts", () => {
     expect(parts.lines.map((l) => l.command)).toEqual(["/visualise", "/handoff"]);
     expect(`${parts.preamble}\n${parts.lines.map((l) => l.line).join("\n")}`).toBe(enabledSkillsPrompt(skills));
     expect(enabledSkillsPromptParts([])).toBeNull();
+  });
+});
+
+describe("mergeFilesystemSkills", () => {
+  const fs = (id: string, enabled: boolean) => ({ id, name: id, description: "", instructions: "", tools: [], enabled, fromFile: `${id}/SKILL.md` });
+  const own = { id: "mine", name: "mine", description: "", instructions: "", tools: [], enabled: true };
+
+  it("keeps a toggle the saved set hasn't caught up with", () => {
+    // Switched on a moment ago; the re-read still carries the saved "off".
+    const out = mergeFilesystemSkills([own, fs("stack-diagram", true)], [fs("stack-diagram", false)]);
+    expect(out.find((s) => s.id === "stack-diagram")?.enabled).toBe(true);
+  });
+
+  it("keeps a skill switched off off", () => {
+    const out = mergeFilesystemSkills([fs("a", false)], [fs("a", true)]);
+    expect(out[0].enabled).toBe(false);
+  });
+
+  it("takes the scan's state for a skill that just landed on disk, drops one that left", () => {
+    const out = mergeFilesystemSkills([own, fs("gone", true)], [fs("new", true)]);
+    expect(out.map((s) => [s.id, s.enabled])).toEqual([["mine", true], ["new", true]]);
   });
 });
