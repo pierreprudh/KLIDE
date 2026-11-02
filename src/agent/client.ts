@@ -128,8 +128,8 @@ export async function resolvePermission(input: {
 
 /** The command half of the Goal policy, told to a Run that is already working.
  *  The rung is per conversation and this Run is the conversation's, so a flip
- *  reaches it: later commands follow the new policy, and a command card it has
- *  up right now is answered by full auto. Every other card stays. Resolves to
+ *  reaches it: later commands and web reads follow the new policy, and such a
+ *  card it has up right now is answered by full auto. Every other card stays. Resolves to
  *  whether a card was answered; rejects when no such Run is live. */
 export async function setRunCommandPolicy(input: {
   runId: string;

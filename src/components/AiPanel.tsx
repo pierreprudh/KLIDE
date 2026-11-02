@@ -5761,7 +5761,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   ? "Review: each edit pauses for your approval; commands ask too. Click: auto-accept edits."
                   : goalPolicy.key === "auto"
                     ? "Auto-accept: edits apply without a prompt (still checkpointed); commands still ask. Click: full auto."
-                    : "Full auto: edits apply and shell commands run without asking. Click: back to reviewing every edit."
+                    : "Full auto: edits apply, shell commands and web fetches run without asking. Click: back to reviewing every edit."
               }
             >
               <span key={goalPolicy.key} className="klide-ai-mode-note-label">

@@ -2107,22 +2107,6 @@ where
     let project_ok =
         network_allowlist::is_allowed(ctx.runs_dir, root_value, &target).unwrap_or(false);
 
-    match permission::precheck(ctx, permission::Capability::Network, &target, project_ok) {
-        permission::Precheck::Execute(_) => {
-            return Ok(ToolOutcome::Produced(
-                execute_network_tool(root_value, call, ctx.id).await,
-            ));
-        }
-        permission::Precheck::AutoReject(msg) => {
-            return Ok(ToolOutcome::Produced(ToolResult {
-                ok: false,
-                content: msg.to_string(),
-                metadata: None,
-            }));
-        }
-        permission::Precheck::Ask => {}
-    }
-
     let perm = PermissionRequest {
         id: permission::request_id(ctx, call),
         run_id: ctx.id.to_string(),
@@ -2136,6 +2120,25 @@ where
             "Approve target for this project",
         ),
     };
+
+    match permission::precheck(ctx, permission::Capability::Network, &target, project_ok) {
+        permission::Precheck::Execute(trusted) => {
+            if trusted == permission::Trusted::FullAuto {
+                permission::record_full_auto(ctx, call, perm, emit)?;
+            }
+            return Ok(ToolOutcome::Produced(
+                execute_network_tool(root_value, call, ctx.id).await,
+            ));
+        }
+        permission::Precheck::AutoReject(msg) => {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: msg.to_string(),
+                metadata: None,
+            }));
+        }
+        permission::Precheck::Ask => {}
+    }
 
     let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Network), perm, emit).await? {
         permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),

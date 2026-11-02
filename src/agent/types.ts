@@ -497,8 +497,9 @@ export type StartAgentRunInput = {
   requireDiffReview?: boolean;
   /** Whether shell commands skip the permission gate. Omit/false keeps the
    *  normal gate (run-scoped approvals + project allowlist); true is the
-   *  full-auto rung — commands run as if allowlisted. Network requests still
-   *  prompt. Per-conversation, never persisted. */
+   *  full-auto rung — commands and web reads (web_fetch / web_search) run as
+   *  if allowlisted. Connector writes and peer messages still prompt.
+   *  Per-conversation, never persisted. */
   autoApproveCommands?: boolean;
   /** Optional command to run after an accepted edit/create. */
   testAfterEditCommand?: string;

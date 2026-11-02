@@ -19,8 +19,9 @@
 //! without a prompt (Plan included); anything else — unannotated counts as
 //! "may write" — is [`ToolKind::Connector`], Goal-only, and goes through the
 //! same Permission engine as a network target, keyed `mcp:<connector>/<tool>`.
-//! That key namespace cannot collide with `host:` targets or tool names, and
-//! the full-auto rung (commands only) never answers it.
+//! That key namespace cannot collide with `host:` targets or tool names. It is
+//! gated as [`permission::Capability::Connector`] so the full-auto rung, which
+//! answers commands and web reads, never answers a connector write.
 //!
 //! Only a conversation's own Run gets connectors. A Mission attempt or a
 //! spawned child has no surface to answer an approval card on, so it is not
@@ -399,7 +400,7 @@ where
         .as_deref()
         .map(|root| network_allowlist::is_allowed(ctx.runs_dir, root, &key).unwrap_or(false))
         .unwrap_or(false);
-    match permission::precheck(ctx, permission::Capability::Network, &key, project_ok) {
+    match permission::precheck(ctx, permission::Capability::Connector, &key, project_ok) {
         permission::Precheck::Execute(_) => {
             return Ok(ToolOutcome::Produced(execute(connector, tool, arguments, workspace).await));
         }
@@ -423,11 +424,11 @@ where
         reason: format!("The agent wants to use {} on {}, which can change things there.", tool, c.label),
         options: standard_gate_options("Approve this tool for this run", "Approve this tool for this project"),
     };
-    let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Network), perm, emit).await? {
+    let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Connector), perm, emit).await? {
         permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
         decision => decision,
     };
-    permission::record(ctx, permission::Capability::Network, &key, Some(&key), &decision);
+    permission::record(ctx, permission::Capability::Connector, &key, Some(&key), &decision);
     Ok(ToolOutcome::Produced(match decision {
         permission::GateDecision::Approved { .. } => execute(connector, tool, arguments, workspace).await,
         _ => failed(format!("The user declined {tool} on {}. Don't retry it; continue without it or ask.", c.label)),

@@ -163,11 +163,14 @@ gets a card, the card offers no project scope, and nothing suffixed is ever
 written to `.klide/command-allowlist.json`.
 
 The full-auto Goal policy (`autoApproveCommands: true` on the run request)
-silences the command gate for that Run: commands execute as if allowlisted,
-including over a remembered rejection — escalating the policy is the override.
-It is chosen per conversation, never persisted, and does not extend to network
-targets, peer messages, headless Mission attempts, or spawned subagent runs. A
-command the policy runs still records `PermissionRequested` and a
+silences the command gate and the web-read gate (`web_fetch`, `web_search`)
+for that Run: they execute as if allowlisted, including over a remembered
+rejection — escalating the policy is the override. Web reads are covered
+because a command under full auto can already `curl` the same URL; asking
+before the read-only door was friction, not protection. It is chosen per
+conversation, never persisted, and does not extend to connector writes, peer
+messages, worker dispatches, headless Mission attempts, or spawned subagent
+runs. A call the policy runs still records `PermissionRequested` and a
 `PermissionResolved` carrying `via: "full_auto"`, so the transcript tells the
 policy from an allowlist hit.
 
@@ -180,11 +183,11 @@ best effort (`tools::preflight_command`), a prompt rather than a sandbox.
 
 The policy is per conversation, and a conversation's live Run is part of it.
 Flipping the rung while the Run works reaches that Run through
-`agent_set_command_policy`: its later commands follow the new policy, and a
-*command* card it has up is answered — the recorded decision carries
+`agent_set_command_policy`: its later commands and web reads follow the new
+policy, and such a card it has up is answered — the recorded decision carries
 `via: "full_auto"`, so the transcript names the policy rather than a click the
 user never made. Every other card standing at that moment (a dispatch, a
-network target, a peer's message) stays for the user. Stepping back down makes
+connector write, a peer's message) stays for the user. Stepping back down makes
 the Run ask again from its next command. The next Run needs none of this: its
 request carries the rung. A Mission attempt or a child Run has no conversation
 rung to follow: `agent_set_command_policy` refuses it, and it keeps what its
@@ -320,10 +323,11 @@ forty tools costs the prompt one short listing, not forty schemas:
 `connector_tools` returns a connector's tool list or the argument schemas of
 the tools named, and `connector_call` runs one. The kind is resolved per call
 from the *target* tool's annotation, before the Mode check and before
-`ToolCallStarted` records the capability. A write goes through the Network
-permission path under the target `mcp:<connector>/<tool>`, so run and project
-approvals are per tool and never imply a host or command approval; full auto
-does not answer it. Mission attempts and child Runs are offered no connector
+`ToolCallStarted` records the capability. A write goes through the permission
+engine as its own `Connector` capability, sharing the network allowlist under
+the target `mcp:<connector>/<tool>`, so run and project approvals are per tool
+and never imply a host or command approval; full auto does not answer it — it
+changes things in another service. Mission attempts and child Runs are offered no connector
 Tools, because nothing can answer their cards. Sessions live in
 `connector_pool.rs`, shared across Runs and killed at app exit; a call whose
 session the server ended is retried once on a fresh one, and no other failure

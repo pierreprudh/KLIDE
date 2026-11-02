@@ -3793,7 +3793,7 @@ pub(crate) fn apply_mission_run_policy(handle: &AgentRunHandle, review_edits: bo
             let _ = sender.send("{\"behavior\":\"apply\",\"via\":\"mission_policy\"}".to_string());
         }
     }
-    if auto_commands && handle.trust.pending_capability() == Some(permission::Capability::Command) {
+    if auto_commands && handle.trust.pending_capability().is_some_and(permission::Capability::silenced_by_full_auto) {
         if let Some(sender) = handle.pending_permission.lock().unwrap().take() {
             handle.trust.note_pending_capability(None);
             let _ = sender.send(permission::FULL_AUTO_DECISION.to_string());
@@ -3803,9 +3803,9 @@ pub(crate) fn apply_mission_run_policy(handle: &AgentRunHandle, review_edits: bo
 
 /// The command half of the Goal policy, applied to a live Run. The rung is per
 /// conversation and the conversation's Run is already working, so flipping to
-/// full auto must reach *it*: later commands skip the gate, and a command card
-/// that is up right now is answered. Any other card stays — the rung excludes
-/// dispatches, network targets and peer mail by design. Stepping back down
+/// full auto must reach *it*: later commands and web reads skip the gate, and
+/// such a card that is up right now is answered. Any other card stays — the
+/// rung excludes dispatches, connector writes and peer mail by design. Stepping back down
 /// makes the Run ask again from its next command. Returns whether a card was
 /// answered. Errors when no such Run is live: there is nothing to apply to,
 /// and the next Run carries the rung on its request anyway. Errors too for a
@@ -8873,6 +8873,25 @@ mod permission_gate_tests {
         );
     }
 
+    /// Full auto silences a web read too — a command could `curl` the same
+    /// URL — but a connector write still asks.
+    #[test]
+    fn full_auto_answers_a_web_read_and_leaves_a_connector_write() {
+        let cancel = CancellationToken::new();
+        let mut request = test_request("/unused", &[]);
+        request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("full-auto-web", &request);
+        let ctx = ToolCtx { sup: &sup, id: "full-auto-web", request: &request, cancel: &cancel, runs_dir: Path::new("/unused") };
+        assert!(matches!(
+            permission::precheck(&ctx, permission::Capability::Network, "host:docs.rs", false),
+            permission::Precheck::Execute(permission::Trusted::FullAuto)
+        ));
+        assert!(matches!(
+            permission::precheck(&ctx, permission::Capability::Connector, "mcp:github/create_issue", false),
+            permission::Precheck::Ask
+        ));
+    }
+
     /// Full auto silences commands, but not one that reads a credential file:
     /// the card goes up, says why, and offers no project rule.
     #[tokio::test]
@@ -9032,11 +9051,23 @@ mod permission_gate_tests {
         });
     }
 
-    /// Only a *command* card is the rung's to answer. A dispatch (no
-    /// capability) and a network target stay up for the user.
+    /// A web read's card is the rung's to answer, like a command's.
+    #[test]
+    fn going_full_auto_answers_a_web_read_card() {
+        let handle = make_handle();
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
+        handle.trust.note_pending_capability(Some(permission::Capability::Network));
+        *handle.pending_permission.lock().unwrap() = Some(tx);
+        assert_eq!(permission::apply_command_policy(&handle, true), Ok(true));
+        assert!(rx.try_recv().unwrap().contains("full_auto"));
+        assert_eq!(handle.trust.pending_capability(), None, "the card is down");
+    }
+
+    /// Only a command or web-read card is the rung's to answer. A dispatch
+    /// (no capability), a connector write and a peer's message stay up.
     #[test]
     fn going_full_auto_leaves_every_other_card_standing() {
-        for cap in [None, Some(permission::Capability::Network), Some(permission::Capability::Message)] {
+        for cap in [None, Some(permission::Capability::Connector), Some(permission::Capability::Message)] {
             let handle = make_handle();
             let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
             handle.trust.note_pending_capability(cap);
@@ -9074,7 +9105,8 @@ mod permission_gate_tests {
         assert!(command_rx.try_recv().unwrap().contains("full_auto"));
         assert!(permission::edits_auto_applied(&ctx));
         assert!(matches!(permission::precheck(&ctx, permission::Capability::Command, "new-command", false), permission::Precheck::Execute(_)));
-        assert!(matches!(permission::precheck(&ctx, permission::Capability::Network, "new-network", false), permission::Precheck::Ask));
+        assert!(matches!(permission::precheck(&ctx, permission::Capability::Network, "new-network", false), permission::Precheck::Execute(_)));
+        assert!(matches!(permission::precheck(&ctx, permission::Capability::Connector, "mcp:github/create_issue", false), permission::Precheck::Ask));
         sup.with_handle(ctx.id, &mut |handle| apply_mission_run_policy(handle, true, false));
         assert!(!permission::edits_auto_applied(&ctx));
         assert!(matches!(permission::precheck(&ctx, permission::Capability::Command, "another-command", false), permission::Precheck::Ask));
