@@ -146,6 +146,7 @@ import { VisualIsland } from "./ai/VisualIsland";
 import { visualBlocksOf } from "./markdown";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
 import { groupToolRuns, pairToolResults, questionVerdicts, toolRunLabel, turnsAfterQuestions } from "./ai/toolRuns";
+import { runFailurePresentation } from "./ai/runFailurePresentation";
 import { historyBefore, withCarriedHistory } from "./ai/carriedHistory";
 import { responseCosts } from "./ai/responseCost";
 import { LiveWork } from "./ai/LiveWork";
@@ -1447,6 +1448,7 @@ export function AiPanel({
   // foot of the work it follows rather than reading it as the answer.
   const arrivingRow = streaming && msgs[msgs.length - 1]?.role === "assistant" ? msgs.length - 1 : undefined;
   const toolRuns = useMemo(() => groupToolRuns(msgs, toolPairing, { streaming: arrivingRow }), [msgs, toolPairing, arrivingRow]);
+  const runFailures = useMemo(() => runFailurePresentation(msgs, toolRuns), [msgs, toolRuns]);
   // Which messages have handed their mark to a folded row's header. A turn
   // that opens with tool work keeps its mark on the header in *both* states —
   // a mark that appears and disappears as you click reads as the row moving,
@@ -1491,9 +1493,10 @@ export function AiPanel({
   function stackToolRuns(nodes: ReactNode[]): ReactNode[] {
     if (toolRuns.length === 0) return nodes;
     const out: ReactNode[] = [];
+    const movedFailures = new Set<number>();
     let cursor = 0;
     for (const run of toolRuns) {
-      for (; cursor < run.start; cursor++) out.push(nodes[cursor]);
+      for (; cursor < run.start; cursor++) if (!movedFailures.has(cursor)) out.push(nodes[cursor]);
       // The runs are computed from *messages*, but this function rewrites the
       // loop's *output* — and the loop sometimes draws nothing for a message
       // (a result its call already drew underneath itself renders null). A
@@ -1575,6 +1578,12 @@ export function AiPanel({
           </div>
         </div>,
       );
+      for (const [index, failure] of runFailures) {
+        if (failure.activityStart === run.start && nodes[index] != null) {
+          out.push(nodes[index]);
+          movedFailures.add(index);
+        }
+      }
       // The rows stay mounted either way and the wrapper animates its height
       // (see `.klide-tool-run-body`). Mounting them only when open would make
       // the close instant — there is nothing left to animate once the content
@@ -1621,7 +1630,7 @@ export function AiPanel({
       }
       cursor = run.end;
     }
-    for (; cursor < nodes.length; cursor++) out.push(nodes[cursor]);
+    for (; cursor < nodes.length; cursor++) if (!movedFailures.has(cursor)) out.push(nodes[cursor]);
     return out;
   }
 
@@ -4671,16 +4680,15 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
           }
 
-          // Run-failure marker: a terminal event, not an assistant utterance —
-          // rendered as its own centered hairline row (the local-server
-          // starting line's family), full width, no gutter.
+          // A failure stays visible beside the activity that produced it;
+          // stackToolRuns moves this node above the answer when a fold exists.
           // Try again only on the conversation's last word: once anything
           // follows, continuing from the failure would answer out of order.
           if (m.role === "system" && m.runError) {
             const canTryAgain = !!m.runError.retryable && i === lastExchangeIndex;
             return (
-              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "center", margin: "16px 0 10px" }}>
-                <RunFailedRow message={m.runError.message} onTryAgain={canTryAgain ? () => void continueAfterFailure() : undefined} disabled={streaming} />
+              <div key={i} className="ai-msg-in" style={{ margin: "6px 0 10px 32px" }}>
+                <RunFailedRow message={m.runError.message} hasOutput={runFailures.get(i)?.hasOutput} onTryAgain={canTryAgain ? () => void continueAfterFailure() : undefined} disabled={streaming} />
               </div>
             );
           }

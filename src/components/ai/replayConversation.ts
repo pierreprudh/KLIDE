@@ -33,10 +33,9 @@ export function isSilentRunError(code: string): boolean {
  *
  * A run that died (provider 500, proxy timeout, crash-loop quarantine) folds
  * to nothing — `foldEvents` renders work, and a failure produced none — so a
- * replay would end mid-thought and read as hung. Tail-only on purpose: an
- * error the conversation already moved past (a later turn was sent and
- * appended after it) is history, not the state of the thread, and pinning it
- * to the bottom would report a recovered conversation as failed.
+ * replay would end mid-thought and read as hung. This helper handles only
+ * the tail; withHistoricalRunErrors keeps earlier errors at their own turn
+ * boundaries instead of reporting a recovered conversation as failed.
  */
 /**
  * True when the transcript's last turn was never answered: a `user_message`
@@ -85,7 +84,35 @@ function extractRunMeta(events: AgentEvent[]): RunMeta | null {
 
 /** Convert a full Klide agent transcript into AiPanel-compatible messages. */
 export function eventsToMsgs(events: AgentEvent[]): Msg[] {
-  return foldedToMsgs(foldAgentEvents(events));
+  return withHistoricalRunErrors(events, foldedToMsgs(foldAgentEvents(events)));
+}
+
+/** Keep earlier attempts' errors at their own boundary. The tail error is
+ * still supplied by runErrorLine; it describes the current attempt. */
+function withHistoricalRunErrors(events: AgentEvent[], msgs: Msg[]): Msg[] {
+  const before = new Map<number, Msg[]>();
+  let pending: Msg[] = [];
+  let cursor = 0;
+  for (const event of events) {
+    if (event.type === "run_error" && !isSilentRunError(event.error.code)) {
+      pending.push(runFailedMsg(event.error.message, event.error.retryable));
+    }
+    if (event.type !== "user_message" && event.type !== "observer_completed" &&
+        !(event.type === "subagent_resolved" && event.background)) continue;
+    const index = msgs.findIndex((m, i) => i >= cursor && (
+      event.type === "user_message"
+        ? m.role === "user" && (m.ts === event.ts || (m.ts === undefined && m.content === event.text))
+        : event.type === "observer_completed"
+          ? m.role === "system" && m.observer?.shellId === event.shellId && m.ts === event.ts
+          : m.role === "system" && !!m.workerReport && m.ts === event.ts
+    ));
+    if (index < 0) continue;
+    if (pending.length) before.set(index, pending);
+    pending = [];
+    cursor = index + 1;
+  }
+  if (!before.size) return msgs;
+  return msgs.flatMap((m, i) => [...(before.get(i) ?? []), m]);
 }
 
 /**
@@ -160,7 +187,7 @@ export function replayForAdoption(
       model: started?.model, delegateHeadless: live.delegateHeadless });
   }
   const replayed = [
-    ...messages,
+    ...withHistoricalRunErrors(events, messages),
     ...(errorLine ? [errorLine] : []),
     ...queuedLocal,
   ];

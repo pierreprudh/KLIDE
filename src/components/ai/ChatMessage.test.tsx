@@ -1,13 +1,24 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { delegationThinking, extractThinking, normalizeThinking, renderMessageBody, type AttachedResult } from "./ChatMessage";
+import { delegationThinking, extractThinking, normalizeThinking, renderMessageBody, RunFailedRow, type AttachedResult } from "./ChatMessage";
 import { responseCosts } from "./responseCost";
 import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
 }
+
+describe("inline run failure", () => {
+  it.each([true, false])("keeps the actual error and retry visible (received output=%s)", (hasOutput) => {
+    const html = renderToStaticMarkup(<RunFailedRow message="OpenCode exited with exit status: 1" hasOutput={hasOutput} onTryAgain={() => {}} />);
+    expect(html).toContain("OpenCode exited with exit status: 1");
+    expect(html).toContain("Try again");
+    expect(html).toContain(hasOutput ? "Response received · run ended with an error" : "Run ended with an error");
+    expect(html).not.toContain("<details");
+    expect(html).not.toContain("Run failed");
+  });
+});
 
 describe("response cost footer", () => {
   it.each([true, false])("shows a compaction's own price after replay (manual=%s)", (manual) => {

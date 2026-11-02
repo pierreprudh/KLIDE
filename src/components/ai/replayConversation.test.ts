@@ -334,7 +334,7 @@ describe("replayForAdoption", () => {
     expect(afterStop?.[afterStop.length - 1]).toBe(queued);
   });
 
-  it("does not pin an old error to a conversation that moved past it", () => {
+  it("keeps an old error at its attempt without pinning it to the recovered conversation's tail", () => {
     // Turn 2 failed, turn 3 was sent and answered. The error is history — a
     // trailing "Run failed" line would report a recovered thread as failed.
     const recovered = [
@@ -345,7 +345,14 @@ describe("replayForAdoption", () => {
       assistantMessage("done", 5),
     ];
     const healed = replayForAdoption(recovered, []);
-    expect(healed?.some((m) => m.content.startsWith("Run failed:"))).toBe(false);
+    const errorIndex = healed!.findIndex((m) => m.role === "system" && m.runError);
+    expect(errorIndex).toBeGreaterThan(0);
+    expect(healed![errorIndex + 1]).toMatchObject({ role: "user", content: "retry" });
+    expect(healed![healed!.length - 1]).toMatchObject({ role: "assistant", content: "done" });
+    const reopened = eventsToConversation(recovered, "recovered", "Recovered").msgs;
+    expect(reopened.filter((m) => m.role === "system" && m.runError)).toHaveLength(1);
+    const reopenedError = reopened.findIndex((m) => m.role === "system" && m.runError);
+    expect(reopened[reopenedError + 1]).toMatchObject({ role: "user", content: "retry" });
   });
 });
 
