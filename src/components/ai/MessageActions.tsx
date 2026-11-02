@@ -106,13 +106,6 @@ const WorktreeBranchIcon = () => (
   </svg>
 );
 
-const RevertIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M9 14L4 9l5-5" />
-    <path d="M4 9h11a5 5 0 0 1 0 10h-3" />
-  </svg>
-);
-
 const TrashIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M3 6h18" />
@@ -134,12 +127,6 @@ type Props = {
   onAddToSharedNotes?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
-  /** Run outcome, shown right-aligned in the same row on the final answer:
-   *  "N files changed · Revert". Lives here instead of as its own strip so
-   *  the conversation ends with one quiet meta row, not three. When
-   *  `onReview` is wired the count itself is clickable and opens the run's
-   *  diffs in the docked Artifact Inspector. */
-  revert?: { files: number; busy: boolean; onRevert: () => void; onReview?: () => void };
 };
 
 export function MessageActions({
@@ -153,7 +140,6 @@ export function MessageActions({
   onAddToSharedNotes,
   onEdit,
   onDelete,
-  revert,
 }: Props) {
   return (
     <div
@@ -195,63 +181,6 @@ export function MessageActions({
         >
           <TrashIcon />
         </Chip>
-      )}
-      {revert && revert.files > 0 && (
-        <span
-          style={{
-            marginLeft: "auto",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
-            color: "var(--fg-dim)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {revert.onReview ? (
-            <button
-              type="button"
-              title="Review this run's changes"
-              onClick={revert.onReview}
-              disabled={revert.busy}
-              style={{
-                border: "none",
-                background: "transparent",
-                padding: 0,
-                font: "inherit",
-                color: "inherit",
-                cursor: revert.busy ? "default" : "pointer",
-                opacity: revert.busy ? 0.6 : 1,
-                textDecorationLine: "underline",
-                textDecorationStyle: "dotted",
-                textDecorationColor: "color-mix(in srgb, currentColor 45%, transparent)",
-                textUnderlineOffset: 3,
-                transition: "color var(--motion-fast) var(--ease-out)",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
-              onMouseLeave={(e) => (e.currentTarget.style.color = "inherit")}
-            >
-              {revert.files} file{revert.files === 1 ? "" : "s"} changed
-            </button>
-          ) : (
-            <span style={{ opacity: revert.busy ? 0.6 : 1 }}>
-              {revert.files} file{revert.files === 1 ? "" : "s"} changed
-            </span>
-          )}
-          <Chip
-            title={
-              revert.busy
-                ? "Reverting…"
-                : "Undo every file change this run made"
-            }
-            onClick={revert.onRevert}
-            disabled={revert.busy}
-            tone="danger"
-          >
-            <RevertIcon />
-          </Chip>
-        </span>
       )}
     </div>
   );

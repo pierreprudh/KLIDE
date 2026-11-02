@@ -196,6 +196,22 @@ describe("documents a command produced", () => {
 });
 
 describe("ResultEvidence", () => {
+  // The undo lives on the result, not under the answer: the card that names
+  // what changed is the one that can take it back.
+  it("offers Revert only when the host hands it one and files changed", () => {
+    const changed = { ...completion, files: ["src/app.tsx"] };
+    const revert = { busy: false, onRevert: () => {} };
+    const island = renderToStaticMarkup(<CompletionCard variant="island" completion={changed} onRequestChanges={() => {}} revert={revert} />);
+    expect(island).toContain("klide-result-revert");
+    expect(island).toContain(">Revert<");
+    expect(renderEvidence(changed)).not.toContain("klide-result-revert");
+    const busy = renderToStaticMarkup(<ResultEvidence completion={changed} onRequestChanges={() => {}} onDone={() => {}} revert={{ ...revert, busy: true }} />);
+    expect(busy).toContain("Reverting…");
+    expect(busy).toMatch(/klide-result-revert"[^>]*disabled/);
+    const documentsOnly = renderToStaticMarkup(<ResultEvidence completion={{ ...completion, references: [DECK] }} onRequestChanges={() => {}} onDone={() => {}} revert={revert} />);
+    expect(documentsOnly).not.toContain("klide-result-revert");
+  });
+
   // Receipts, not headlines: one collapsed stack, dimmed, and it stays dimmed
   // when opened. A failure is the exception that cancels the dimming.
   it("stacks the commands, closed and quiet", () => {

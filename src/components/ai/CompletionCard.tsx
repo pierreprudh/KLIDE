@@ -40,9 +40,13 @@ type Props = {
   /** The run's file checkpoints, for the +/− counts and the in-place diff.
    *  Absent, the changed files are a plain list. */
   loadChanges?: (runId: string) => Promise<CheckpointEntry[]>;
+  /** Undo every file change the run made, from its checkpoints. Only the
+   *  latest result carries it — the checkpoints are the conversation's, so an
+   *  older card offering it would undo more than the turn it describes. */
+  revert?: { busy: boolean; onRevert: () => void };
 };
 
-type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "onRequestChanges" | "loadChanges"> & {
+type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "onRequestChanges" | "loadChanges" | "revert"> & {
   onDone: () => void;
   /** Diffs a host already loaded (the island reads them for its header). */
   diffs?: Map<string, FileDiff> | null;
@@ -125,7 +129,7 @@ function InlineDiff({ rows }: { rows: DiffRow[] }) {
   );
 }
 
-export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone, loadChanges, diffs: given }: EvidenceProps) {
+export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone, loadChanges, revert, diffs: given }: EvidenceProps) {
   const history = isCommandHistory(completion);
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(history && failed > 0);
@@ -230,6 +234,8 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
       {!history && <footer className="klide-result-footer">
         {completion.files.length > 0 && onReview && <button type="button" className="klide-result-primary" onClick={() => review()}>Review changes <span aria-hidden="true">↗</span></button>}
         <button type="button" disabled={disabled} onClick={() => { onDone(); onRequestChanges(); }}>Request changes</button>
+        {completion.files.length > 0 && revert && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
+          title="Undo every file change this run made" onClick={revert.onRevert}>{revert.busy ? "Reverting…" : "Revert"}</button>}
       </footer>}
     </>
   );
@@ -250,7 +256,7 @@ function ArtifactThumb({ path, load }: { path: string; load?: (path: string) => 
 
 /** A quiet entry point. On the canvas the evidence opens inside the card, in
  *  the column the plan already lives in; in a transcript it opens as a sheet. */
-export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, variant = "inline", compact = false, folded = false, onUnfold, loadChanges }: Props) {
+export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, variant = "inline", compact = false, folded = false, onUnfold, loadChanges, revert }: Props) {
   const island = variant === "island";
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -351,7 +357,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
           </div>
           <div className="klide-result-island-panel" id={id}>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview} diffs={islandDiffs}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} onDone={() => {}} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} revert={revert} onDone={() => {}} />
           </div>
         </section>
       </div>
@@ -392,7 +398,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
               <button type="button" autoFocus className="klide-result-close" aria-label={history ? "Close command history" : "Close result"} onClick={close}><CloseIcon size={18} /></button>
             </header>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} loadChanges={loadChanges} onDone={close} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} loadChanges={loadChanges} revert={revert} onDone={close} />
           </div>
         </div>,
         document.body,
