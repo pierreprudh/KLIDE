@@ -7646,7 +7646,7 @@ mod run_loop_tests {
         workers::register(id, child, "Claude Code", "implementer", Some("klide/worker-slugify-1"), Some("/wt/slugify"));
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request.clone(), caller).await;
         assert_eq!(workers::notification_state(id, child), Some(false), "a normal reply must not forget a working child");
-        workers::settle(id, child, true, "Added slugify with tests. — Claude Code worked in the worktree `/wt/slugify`.".into(), None);
+        workers::settle(id, child, true, false, "Added slugify with tests. — Claude Code worked in the worktree `/wt/slugify`.".into(), None);
         assert_eq!(workers::notification_state(id, child), Some(true));
 
         let mut wake = request.clone();
@@ -7722,7 +7722,7 @@ mod run_loop_tests {
         request.auto_approve_commands = Some(true);
         request.initial_text.clear();
         workers::register(id, child, "OpenCode", "implementer", None, None);
-        workers::settle(id, child, true, "Implementation is committed.".into(), None);
+        workers::settle(id, child, true, false, "Implementation is committed.".into(), None);
         let caller = ScriptedProviderCaller::new(vec![
             scripted_turn("Checking the result.", vec![scripted_tool_call("verify", "run_command", serde_json::json!({"command": "printf worker-followup-command-ok"}))]),
             scripted_turn("Verified.", vec![]),
@@ -7862,7 +7862,7 @@ mod run_loop_tests {
         request.auto_approve_commands = Some(false);
         request.initial_text.clear();
         workers::register(id, child, "Claude Code", "implementer", None, None);
-        workers::settle(id, child, true, "hello2.sh is committed.".into(), None);
+        workers::settle(id, child, true, false, "hello2.sh is committed.".into(), None);
         let caller = ScriptedProviderCaller::new(vec![
             scripted_turn("Checking the result.", vec![scripted_tool_call("verify", "run_command", serde_json::json!({"command": "printf worker-review-command-ran"}))]),
             scripted_turn("You declined the check.", vec![]),
@@ -7897,7 +7897,7 @@ mod run_loop_tests {
             while background::completions(id).is_empty() { tokio::time::sleep(std::time::Duration::from_millis(10)).await; }
         }).await.unwrap();
         workers::register(id, child, "OpenCode", "implementer", None, None);
-        workers::settle(id, child, true, "Worker finished.".into(), None);
+        workers::settle(id, child, true, false, "Worker finished.".into(), None);
         let mut request = test_request(&root, &[]);
         request.auto_approve_commands = Some(true);
         request.initial_text.clear();

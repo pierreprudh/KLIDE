@@ -107,7 +107,9 @@ baseline; unchecked items below are verification or specific remaining gaps.
   ignored "in the background", a named model and "5 calls in one turn"
   (DeepSeek Flash sent one foreground `spawn_subagent` with no model, so the
   model question reappeared); the delegated line under the answer reads
-  "failed" for a cancelled worker while its row says Cancelled.
+  "failed" for a cancelled worker while its row says Cancelled. The wording
+  is fixed (2026-11-02): a cancelled worker's result and background report
+  say "was cancelled"; the parent ignoring instructions remains open.
 - [x] Worker capacity at admission (2026-10-27): API workers wait in a fair
   queue for one of 4 app-wide slots (15 since 2026-11-02), in front of the child Run
   (`agent/worker_slots.rs`), "Queued behind N running API workers" on the
