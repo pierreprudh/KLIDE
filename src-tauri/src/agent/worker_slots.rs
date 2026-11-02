@@ -4,7 +4,7 @@
 //! with its own model traffic, an API worker is a Harness loop on a paid model.
 //! Nothing used to bound them, so a parent (or three conversations) could start
 //! ten at once. Decided 2026-10-26: a dispatch over the limit **waits** — it is
-//! never refused. At most 4 API workers run at once, across every
+//! never refused. At most 15 API workers run at once (raised from 4 on 2026-11-02), across every
 //! conversation. Delegate CLI workers are not limited: tried at 2 in the app
 //! on 2026-10-27, and Pierre wants none for now (a CLI runs on its own
 //! subscription). A CLI pool is one more `Slots` if that changes.
@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-pub const API_WORKERS: usize = 4;
+pub const API_WORKERS: usize = 15;
 
 /// A fair pool and the children waiting on it.
 pub struct Slots {
