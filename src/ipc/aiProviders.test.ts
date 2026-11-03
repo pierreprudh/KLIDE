@@ -7,6 +7,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 import {
   LOCAL_MODEL_CHANGED_EVENT,
   selectLlamaModel,
+  readLlamaSetupInfo,
+  discoverRegistryModels,
   listProviderModels,
   modelReflectionLevels,
   modelSupportsReflection,
@@ -19,6 +21,17 @@ import {
 
 describe("AI Provider IPC Adapter", () => {
   beforeEach(() => invokeMock.mockReset());
+
+  it("preserves discovered models after refreshing setup information", async () => {
+    const candidate = { id: "registry:verified", registrySource: "https://github.com/example/recipe" };
+    invokeMock.mockResolvedValueOnce({ models: [{ id: "preset" }], registryModels: [candidate], selectedModel: candidate.id });
+    const info = await readLlamaSetupInfo();
+    expect(info.models.map((m) => m.id)).toEqual(["preset", candidate.id]);
+    expect(info.selectedModel).toBe(candidate.id);
+    invokeMock.mockResolvedValueOnce({ models: [candidate], checked: 20, unavailable: 1 });
+    await expect(discoverRegistryModels()).resolves.toMatchObject({ models: [candidate] });
+    expect(invokeMock).toHaveBeenLastCalledWith("ai_llamacpp_discover_models");
+  });
 
   it("owns the model-list wire contract", async () => {
     invokeMock.mockResolvedValue(["model-a"]);

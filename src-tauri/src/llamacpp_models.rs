@@ -80,7 +80,7 @@ fn sysctl(key: &str) -> Option<String> {
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
-fn machine() -> Machine {
+pub(crate) fn machine() -> Machine {
     let apple = cfg!(target_os = "macos") && cfg!(target_arch = "aarch64");
     let memory_gb = if cfg!(target_os = "macos") {
         sysctl("hw.memsize")
@@ -102,7 +102,7 @@ fn machine() -> Machine {
         },
     }
 }
-fn budget(machine: &Machine) -> Option<f64> {
+pub(crate) fn budget(machine: &Machine) -> Option<f64> {
     // Leave at least 4 GiB and 35% of RAM for the OS and other applications.
     machine
         .memory_gb
@@ -135,22 +135,37 @@ pub struct SetupInfo {
     selected_model: Option<String>,
     memory_budget_gb: Option<f64>,
     runtime_installed: bool,
+    registry_models: Vec<crate::registry_models::Candidate>,
 }
 #[derive(Serialize, Deserialize)]
 struct Config {
     model: String,
+    #[serde(default)]
+    registry_model: Option<crate::registry_models::Candidate>,
 }
 fn config_path() -> Result<PathBuf, String> {
     crate::cli::home_dir_path()
         .map(|h| h.join(".klide/llamacpp.json"))
         .ok_or("Could not find home directory".into())
 }
+pub(crate) fn registered_model() -> Option<crate::registry_models::Candidate> {
+    let config: Config = serde_json::from_slice(&std::fs::read(config_path().ok()?).ok()?).ok()?;
+    config
+        .registry_model
+        .filter(|m| m.id == config.model && m.valid())
+}
 pub(crate) fn selected_model() -> Option<String> {
     let config: Config = serde_json::from_slice(&std::fs::read(config_path().ok()?).ok()?).ok()?;
     MODELS
         .iter()
         .any(|m| m.id == config.model)
-        .then_some(config.model)
+        .then_some(config.model.clone())
+        .or_else(|| {
+            config
+                .registry_model
+                .filter(|m| m.id == config.model && m.valid())
+                .map(|m| m.id)
+        })
 }
 pub(crate) fn launch_model() -> String {
     selected_model()
@@ -163,6 +178,8 @@ pub(crate) fn launch_args(model: &str) -> Vec<String> {
             "-m".into(),
             klide_model_path().to_string_lossy().into_owned(),
         ]
+    } else if let Some(m) = registered_model().filter(|m| m.id == model) {
+        vec!["-m".into(), m.path().to_string_lossy().into_owned()]
     } else {
         vec!["-hf".into(), model.into()]
     };
@@ -175,6 +192,8 @@ pub(crate) fn launch_args(model: &str) -> Vec<String> {
         "--port".into(),
         "8081".into(),
         "--jinja".into(),
+        "--parallel".into(),
+        "1".into(),
         "--ctx-size".into(),
         LOCAL_CONTEXT.to_string(),
     ]);
@@ -192,6 +211,9 @@ fn klide_model_path() -> PathBuf {
 pub(crate) async fn ensure_model() -> Result<(), String> {
     use sha2::{Digest, Sha256};
     use tokio::io::AsyncWriteExt;
+    if let Some(m) = registered_model() {
+        return crate::registry_models::ensure(m).await;
+    }
     if launch_model() != KLIDE_MODEL {
         return Ok(());
     }
@@ -254,6 +276,15 @@ pub(crate) async fn ai_llamacpp_setup_info() -> Result<SetupInfo, String> {
             selected_model: selected_model(),
             memory_budget_gb,
             runtime_installed: crate::llamacpp_setup::server_path().is_ok(),
+            registry_models: {
+                let mut models = crate::registry_models::cached();
+                if let Some(m) = registered_model() {
+                    if !models.iter().any(|v| v.id == m.id) {
+                        models.push(m);
+                    }
+                }
+                models
+            },
         }
     })
     .await
@@ -276,24 +307,28 @@ pub(crate) async fn ai_llamacpp_select_model(model: String) -> Result<(), String
         setup.finish(&result);
         result
     })
-        .await
-        .map_err(|e| e.to_string())?
+    .await
+    .map_err(|e| e.to_string())?
 }
 fn save_model(model: String) -> Result<(), String> {
     static SAVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = SAVE.lock().map_err(|e| e.to_string())?;
-    if !MODELS.iter().any(|m| m.id == model) {
+    let registry_model = crate::registry_models::find(&model)
+        .or_else(|| registered_model().filter(|m| m.id == model));
+    if !MODELS.iter().any(|m| m.id == model) && registry_model.is_none() {
         return Err("Choose a model from the llama.cpp setup list".into());
     }
     let path = config_path()?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec(&Config { model }).map_err(|e| e.to_string())?,
+    crate::durable::write_atomic(
+        &path,
+        &serde_json::to_vec(&Config {
+            model,
+            registry_model,
+        })
+        .map_err(|e| e.to_string())?,
     )
-    .map_err(|e| e.to_string())?;
-    std::fs::rename(tmp, path).map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())
 }
 #[cfg(test)]
 mod tests {
@@ -305,6 +340,36 @@ mod tests {
             cpu_cores: 8,
             acceleration: "Metal · unified memory",
         }
+    }
+    #[test]
+    fn registry_selection_survives_serialization_and_rejects_modified_paths() {
+        let sha = "a".repeat(64);
+        let candidate: crate::registry_models::Candidate = serde_json::from_value(serde_json::json!({
+            "id":"registry/model-Q4_0@aaaaaaaaaaaa", "label":"Test", "maker":"community", "description":"test",
+            "url":"https://huggingface.co/owner/model", "quantization":"Q4_0", "downloadGb":1., "memoryGb":4.,
+            "registrySource":"https://github.com/example/recipe", "repo":"owner/model", "revision":"b".repeat(40),
+            "file":"model-Q4_0.gguf", "sha256":sha, "bytes":1_000_000_000
+        })).unwrap();
+        assert!(candidate.valid());
+        let config = Config {
+            model: candidate.id.clone(),
+            registry_model: Some(candidate),
+        };
+        let bytes = serde_json::to_vec(&config).unwrap();
+        let restored: Config = serde_json::from_slice(&bytes).unwrap();
+        let model = restored.registry_model.unwrap();
+        assert_eq!(restored.model, model.id);
+        assert!(model.valid());
+        assert!(model
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(&"a".repeat(64)));
+        let mut tampered: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        tampered["registry_model"]["file"] = "../../model.gguf".into();
+        let restored: Config = serde_json::from_value(tampered).unwrap();
+        assert!(!restored.registry_model.unwrap().valid());
     }
     #[test]
     fn launched_context_has_room_for_klide_tool_prompt() {

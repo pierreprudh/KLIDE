@@ -231,14 +231,19 @@ export async function stopLocalProvider(provider: string): Promise<void> {
 export const LOCAL_MODEL_CHANGED_EVENT = "klide:local-model-changed";
 export type LlamaSetupInfo = {
   machine: { chip: string; memoryGb: number | null; cpuCores: number; acceleration: string };
-  models: { id: string; label: string; maker: string; description: string; url: string; quantization: string; downloadGb: number; memoryGb: number }[];
+  models: { id: string; label: string; maker: string; description: string; url: string; quantization: string; downloadGb: number; memoryGb: number; registrySource?: string }[];
   recommendedModel: string | null;
   selectedModel: string | null;
   memoryBudgetGb: number | null;
   runtimeInstalled: boolean;
 };
 export function readLlamaSetupInfo(): Promise<LlamaSetupInfo> {
-  return invoke<LlamaSetupInfo>("ai_llamacpp_setup_info");
+  return invoke<LlamaSetupInfo & { registryModels?: LlamaSetupInfo["models"] }>("ai_llamacpp_setup_info")
+    .then(({ registryModels = [], ...info }) => ({ ...info, models: [...info.models, ...registryModels] }));
+}
+export type RegistryDiscovery = { models: LlamaSetupInfo["models"]; checked: number; unavailable: number };
+export function discoverRegistryModels(): Promise<RegistryDiscovery> {
+  return invoke<RegistryDiscovery>("ai_llamacpp_discover_models");
 }
 export function installLlamaRuntime(): Promise<void> {
   return invoke("ai_llamacpp_install");

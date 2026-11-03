@@ -22,6 +22,16 @@ describe("useful local suggestions without community evidence", () => {
     expect(larger.map((m) => m.id)).toEqual(["klide"]);
     expect(info.models[0].id).toBe("klide");
   });
+  it("offers registry candidates while keeping provenance and unverified status visible", () => {
+    const candidate = { ...info.models[1], id: "registry:verified", label: "Qwen3.5 9B", memoryGb: 9.3, registrySource: "https://github.com/example/recipe" };
+    const discovered = { ...info, models: [...info.models, candidate] };
+    expect(localModelSuggestions(discovered).suggested).toContain(candidate);
+    const html = renderToStaticMarkup(<LlamaModelCards info={discovered} value={candidate.id} disabled={false} onChange={() => {}} />);
+    expect(html).toContain("9.3 GiB");
+    expect(html).toContain("Registry candidate");
+    expect(html).toContain("not tested on this Mac");
+    expect(html).toContain('checked="" value="registry:verified"');
+  });
   it("does not invent fit when RAM is unknown", () => {
     const unknown = { ...info, memoryBudgetGb: null };
     expect(localModelSuggestions(unknown).suggested).toHaveLength(4);

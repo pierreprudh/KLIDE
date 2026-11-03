@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  installLlamaRuntime, readLlamaSetupInfo, readLocalProviderStatus,
+  discoverRegistryModels, installLlamaRuntime, readLlamaSetupInfo, readLocalProviderStatus,
   selectLlamaModel, startLocalProvider, stopLocalProvider, readLocalProviderDetails, readLocalSetupProgress, type LlamaSetupInfo, type LocalSetupProgress,
 } from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
@@ -11,6 +11,8 @@ import { LocalModelCatalogBrowser } from "./localModelCatalogBrowser";
 
 export function LlamaServerSetup() {
   const [info, setInfo] = useState<LlamaSetupInfo | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discovery, setDiscovery] = useState<string | null>(null);
   const [model, setModel] = useState("");
   const [running, setRunning] = useState(false);
   const [owned, setOwned] = useState(false);
@@ -45,6 +47,16 @@ export function LlamaServerSetup() {
     return () => { cancelled = true; clearTimeout(timer); };
   }, [retry]);
 
+  async function discover() {
+    setDiscovering(true); setError(null);
+    try {
+      const result = await discoverRegistryModels();
+      setInfo((current) => current && { ...current, models: [...current.models.filter((m) => !m.registrySource || m.id === current.selectedModel), ...result.models.filter((m) => m.id !== current?.selectedModel)] });
+      setDiscovery(`${result.models.length} registry options estimated to fit. Checked ${result.checked} portable configurations.${result.unavailable ? ` Requirements unavailable for ${result.unavailable}.` : ""} No models downloaded. These have not been tested on this Mac.`);
+    } catch (e) { setError(String(e)); }
+    finally { setDiscovering(false); }
+  }
+
   async function act(action: "runtime" | "model" | "stop") {
     if (busy) return;
     setBusy(action); setError(null);
@@ -78,8 +90,13 @@ export function LlamaServerSetup() {
     {info && <div className="klide-llama-body">
       <LlamaModelCards info={info} value={model} disabled={!!busy || setupActive || running || owned} onChange={setModel} />
       <div className="klide-llama-controls">
+        <button className="klide-button klide-button-subtle" disabled={discovering || !!busy || setupActive} onClick={() => void discover()}>{discovering ? "Checking registry models…" : "Find more models"}</button>
+        <span className="klide-llama-hint">Checks pinned weights and memory for this computer</span>
+      </div>
+      {(discovering || discovery) && <p role="status" className="klide-llama-hint">{discovering ? "Reading model sizes and GGUF headers. Model downloads start only when you press Start." : discovery}</p>}
+      <div className="klide-llama-controls">
         <button className="klide-button klide-button-secondary"
-          disabled={!!busy || setupActive || (!running && !owned && !model)} onClick={() => void act(running || owned ? "stop" : "model")}>
+          disabled={discovering || !!busy || setupActive || (!running && !owned && !model)} onClick={() => void act(running || owned ? "stop" : "model")}>
           {busy === "stop" ? "Stopping…" : busy || setupActive ? "Setting up…" : running || owned ? "Stop" : info.runtimeInstalled ? `Start ${chosen?.label ?? "model"}` : "Set up & start"}
         </button>
         <span className="klide-llama-hint">{owned && !running ? "The managed server is not ready. Stop it before retrying." : running ? "Stop to change models" : "Downloads on first start"}</span>
