@@ -9,6 +9,12 @@ models. The selected candidate survives an app restart.
 
 Discovery currently estimates fit on Apple Silicon with detected unified RAM.
 It scans all registry recipes rather than requiring an exact hardware entry.
+Discovery requires weights published by the model provider in a reviewed, matching
+provider namespace. A community conversion does not qualify because it uses the
+provider’s model name, or because its uploader has a Hub badge. The UI names the
+actual publisher. Existing community selections remain accessible separately;
+Klide’s own model is also separate from the provider suggestions.
+
 Only single-file GGUFs in standard quantizations with stock llama.cpp provenance
 are considered. Multi-card, vision, custom-runtime, and unpinned weights are
 excluded. Recipes and shell commands are never executed.
@@ -20,9 +26,14 @@ use the maximum per-layer KV-head count. Unknown dimensions, unsupported
 architectures and files outside the budget are excluded. Estimates do not prove
 runtime compatibility, speed, tool reliability, or actual memory pressure.
 
-On the M5 with 16 GiB, the metadata check found LFM2.5-2.6B Q4_0 (1.59 GB download,
-4.5 GiB estimate) and Qwen3.5-9B Q4_K_M (5.68 GB download, 9.3 GiB estimate).
-Neither result claims a real model load or Klide task test on this machine.
+On the M5 with 16 GiB, the provider-only metadata check finds LiquidAI’s
+LFM2.5-2.6B Q4_0 (1.59 GB download, 4.5 GiB estimate). The previous
+`unsloth/Qwen3.5-9B-GGUF` suggestion is excluded because it is a third-party
+conversion. This result does not claim a real model load or Klide task test.
+
+Provider identities: [LiquidAI model library](https://docs.liquid.ai/lfm/models/complete-library),
+[Qwen official repository](https://github.com/QwenLM/Qwen3),
+[Mistral official repository](https://huggingface.co/mistralai).
 
 ## Verify
 

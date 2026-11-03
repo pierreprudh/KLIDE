@@ -18,12 +18,11 @@ const info: LlamaSetupInfo = {
   recommendedModel: "Qwen/Qwen3-8B-GGUF:Q4_K_M", selectedModel: null,
   memoryBudgetGb: 10.4, runtimeInstalled: true,
   models: [
-    { id: "registry/LFM2.5-2.6B-QAD-Q4_0@a247afd64149", label: "LFM2.5-2.6B", maker: "liquid", description: "Chat model · adapted to Klide’s 16k context.", url: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF", quantization: "Q4_0", downloadGb: 1.59, memoryGb: 4.5, registrySource: "https://github.com/sybil-solutions/local-ai-registry" },
-    { id: "registry/Qwen3.5-9B-Q4_K_M@03b74727a860", label: "Qwen3.5-9B", maker: "qwen", description: "Reasoning model · adapted to Klide’s 16k context.", url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF", quantization: "Q4_K_M", downloadGb: 5.68, memoryGb: 9.3, registrySource: "https://github.com/sybil-solutions/local-ai-registry" },
-    { id: "pierreprudh/klide-8b", label: "Klide 8B", maker: "klide", description: "Tuned for Klide’s tools and file edits.", url: "https://ollama.com/pierreprudh/klide-8b", quantization: "Q8_0", downloadGb: 9.01, memoryGb: 12.5 },
-    { id: "Qwen/Qwen3-8B-GGUF:Q4_K_M", label: "Qwen3 8B", maker: "qwen", description: "Reasoning, coding and everyday tasks.", url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF", quantization: "Q4_K_M", downloadGb: 5, memoryGb: 8 },
-    { id: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M", label: "Llama 3.2 3B", maker: "meta", description: "A light option for everyday conversation.", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF", quantization: "Q4_K_M", downloadGb: 2.02, memoryGb: 4 },
-    { id: "mistralai/Ministral-3-3B-Instruct-2512-GGUF:Q4_K_M", label: "Ministral 3 3B", maker: "mistral", description: "Compact, multilingual instruction following.", url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF", quantization: "Q4_K_M", downloadGb: 2.15, memoryGb: 4.5 },
+    { id: "registry/LFM2.5-2.6B-QAD-Q4_0@a247afd64149", label: "LFM2.5-2.6B", providerRelease: true, publisher: "LiquidAI", maker: "liquid", description: "Chat model · adapted to Klide’s 16k context.", url: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF", quantization: "Q4_0", downloadGb: 1.59, memoryGb: 4.5, registrySource: "https://github.com/sybil-solutions/local-ai-registry" },
+    { id: "pierreprudh/klide-8b", label: "Klide 8B", providerRelease: false, publisher: "Klide", maker: "klide", description: "Tuned for Klide’s tools and file edits.", url: "https://ollama.com/pierreprudh/klide-8b", quantization: "Q8_0", downloadGb: 9.01, memoryGb: 12.5 },
+    { id: "Qwen/Qwen3-8B-GGUF:Q4_K_M", label: "Qwen3 8B", providerRelease: true, publisher: "Qwen", maker: "qwen", description: "Reasoning, coding and everyday tasks.", url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF", quantization: "Q4_K_M", downloadGb: 5, memoryGb: 8 },
+    { id: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M", label: "Llama 3.2 3B", providerRelease: false, publisher: "bartowski", maker: "meta", description: "A light option for everyday conversation.", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF", quantization: "Q4_K_M", downloadGb: 2.02, memoryGb: 4 },
+    { id: "mistralai/Ministral-3-3B-Instruct-2512-GGUF:Q4_K_M", label: "Ministral 3 3B", providerRelease: true, publisher: "mistralai", maker: "mistral", description: "Compact, multilingual instruction following.", url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF", quantization: "Q4_K_M", downloadGb: 2.15, memoryGb: 4.5 },
   ],
 };
 function Preview() {

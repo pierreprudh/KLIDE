@@ -17,6 +17,10 @@ pub(crate) struct Candidate {
     pub download_gb: f64,
     pub memory_gb: f64,
     pub registry_source: String,
+    #[serde(default)]
+    pub publisher: String,
+    #[serde(default)]
+    pub provider_release: bool,
     repo: String,
     revision: String,
     file: String,
@@ -40,6 +44,20 @@ fn valid_source(repo: &str, revision: &str, file: &str) -> bool {
         && component(file)
         && file.ends_with(".gguf")
 }
+// Reviewed provider namespaces. A model's name or a Hub verification badge
+// alone does not establish who published its weights.
+fn provider_publisher(family: &str, repo: &str) -> Option<(&'static str, &'static str)> {
+    let (maker, owner) = match family {
+        "qwen" => ("qwen", "Qwen"),
+        "lfm" | "liquid" => ("liquid", "LiquidAI"),
+        "mistral" => ("mistral", "mistralai"),
+        "llama" | "meta" => ("meta", "meta-llama"),
+        _ => return None,
+    };
+    repo.split_once('/')
+        .filter(|(publisher, _)| publisher.eq_ignore_ascii_case(owner))
+        .map(|_| (maker, owner))
+}
 fn model_id(file: &str, sha: &str) -> String {
     format!(
         "registry/{}@{}",
@@ -48,6 +66,10 @@ fn model_id(file: &str, sha: &str) -> String {
     )
 }
 impl Candidate {
+    pub fn refresh_publisher(&mut self) {
+        self.publisher = self.repo.split('/').next().unwrap_or("").into();
+        self.provider_release = provider_publisher(&self.maker, &self.repo).is_some();
+    }
     pub fn valid(&self) -> bool {
         valid_source(&self.repo, &self.revision, &self.file)
             && hex(&self.sha256, 64)
@@ -90,6 +112,8 @@ struct Source {
     revision: String,
     file: String,
     quant: String,
+    maker: String,
+    publisher: String,
 }
 fn sources(cat: &Value) -> Result<Vec<Source>, String> {
     if cat["schema"] != "local-ai-registry/catalog/4" {
@@ -140,6 +164,12 @@ fn sources(cat: &Value) -> Result<Vec<Source>, String> {
         if !valid_source(repo, revision, file) {
             continue;
         }
+        let model = &cat["models"][r["model"].as_str().unwrap_or("")];
+        let Some((maker, publisher)) =
+            provider_publisher(model["family"].as_str().unwrap_or(""), repo)
+        else {
+            continue;
+        };
         // Standard quantizations only; special ternary/Hadamard runtimes are not portable.
         let upper = file.to_ascii_uppercase();
         let Some(quant) = [
@@ -149,7 +179,6 @@ fn sources(cat: &Value) -> Result<Vec<Source>, String> {
         .find(|q| upper.ends_with(&format!("-{q}.GGUF"))) else {
             continue;
         };
-        let model = &cat["models"][r["model"].as_str().unwrap_or("")];
         found
             .entry(format!("{repo}@{revision}/{file}"))
             .or_insert_with(|| Source {
@@ -165,6 +194,8 @@ fn sources(cat: &Value) -> Result<Vec<Source>, String> {
                 revision: revision.into(),
                 file: file.into(),
                 quant: quant.into(),
+                maker: maker.into(),
+                publisher: publisher.into(),
             });
     }
     Ok(found.into_values().collect())
@@ -338,14 +369,9 @@ async fn inspect(
     let mut m = Candidate {
         id: model_id(&s.file, sha),
         label: s.label,
-        maker: if s.repo.to_lowercase().contains("qwen") {
-            "qwen"
-        } else if s.repo.starts_with("LiquidAI/") {
-            "liquid"
-        } else {
-            "community"
-        }
-        .into(),
+        maker: s.maker,
+        publisher: s.publisher,
+        provider_release: true,
         description: s.about,
         url: format!("https://huggingface.co/{}", s.repo),
         quantization: s.quant,
@@ -529,6 +555,26 @@ mod tests {
         b
     }
     #[test]
+    fn provider_identity_requires_the_matching_official_namespace() {
+        assert_eq!(
+            provider_publisher("qwen", "Qwen/Qwen3-8B-GGUF"),
+            Some(("qwen", "Qwen"))
+        );
+        assert_eq!(
+            provider_publisher("lfm", "LiquidAI/LFM2.5-2.6B-GGUF"),
+            Some(("liquid", "LiquidAI"))
+        );
+        for repo in [
+            "unsloth/Qwen3.5-9B-GGUF",
+            "Qwen-community/Qwen3-GGUF",
+            "random/Qwen",
+            "LiquidAI/Qwen-GGUF",
+        ] {
+            assert_eq!(provider_publisher("qwen", repo), None);
+        }
+        assert_eq!(provider_publisher("unknown", "Qwen/model"), None);
+    }
+    #[test]
     fn weights_alone_do_not_establish_fit() {
         let h = header("qwen3", 32, 32768);
         // 16k * 32 layers * 4 KV heads * (256+256) * F16 = 2GiB.
@@ -566,7 +612,7 @@ mod tests {
             &"a".repeat(40),
             "x.gguf"
         ));
-        let mut cat = serde_json::json!({"schema":"local-ai-registry/catalog/4","models":{},"recipes":{"cpu/test":{"model":"test","proof":[{"gates":"load chat"}],"launch":{"image":"ghcr.io/ggml-org/llama.cpp@sha256:abc","weights":[{"repo":"owner/model","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","files":["model-Q4_0.gguf"]}]}}}});
+        let mut cat = serde_json::json!({"schema":"local-ai-registry/catalog/4","models":{"test":{"family":"qwen"}},"recipes":{"cpu/test":{"model":"test","proof":[{"gates":"load chat"}],"launch":{"image":"ghcr.io/ggml-org/llama.cpp@sha256:abc","weights":[{"repo":"Qwen/model","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","files":["model-Q4_0.gguf"]}]}}}});
         assert_eq!(sources(&cat).unwrap().len(), 1);
         cat["recipes"]["cpu/test"]["launch"]["weights"][0]["files"] = "model-Q4_0.gguf".into();
         assert_eq!(sources(&cat).unwrap().len(), 1);
@@ -574,6 +620,9 @@ mod tests {
             "model-Q4_0.gguf,mmproj.gguf".into();
         assert!(sources(&cat).unwrap().is_empty());
         cat["recipes"]["cpu/test"]["launch"]["weights"][0]["files"] = "model-Q4_0.gguf".into();
+        cat["recipes"]["cpu/test"]["launch"]["weights"][0]["repo"] = "unsloth/Qwen3-model".into();
+        assert!(sources(&cat).unwrap().is_empty());
+        cat["recipes"]["cpu/test"]["launch"]["weights"][0]["repo"] = "Qwen/model".into();
         cat["recipes"]["cpu/test"]["launch"]["cards"] = 2.into();
         assert!(sources(&cat).unwrap().is_empty());
         cat["recipes"]["cpu/test"]["launch"]["cards"] = 1.into();
@@ -666,10 +715,8 @@ mod tests {
             "checked {}, unavailable {}",
             result.checked, result.unavailable
         );
-        assert!(result
-            .models
-            .iter()
-            .any(|m| m.repo == "unsloth/Qwen3.5-9B-GGUF"));
+        assert!(result.models.iter().all(|m| m.provider_release));
+        assert!(!result.models.iter().any(|m| m.repo.starts_with("unsloth/")));
         assert!(result
             .models
             .iter()

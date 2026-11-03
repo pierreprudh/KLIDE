@@ -13,6 +13,8 @@ pub struct ModelChoice {
     pub quantization: &'static str,
     pub download_gb: f64,
     pub memory_gb: f64,
+    pub publisher: &'static str,
+    pub provider_release: bool,
 }
 // Runtime estimates include weights, a 16k KV cache and working buffers.
 pub const LOCAL_CONTEXT: usize = 16_384;
@@ -23,6 +25,8 @@ const MODELS: &[ModelChoice] = &[
         id: KLIDE_MODEL,
         label: "Klide 8B",
         maker: "klide",
+        publisher: "Klide",
+        provider_release: false,
         description: "Tuned for Klide’s tools and file edits.",
         url: "https://ollama.com/pierreprudh/klide-8b",
         quantization: "Q8_0",
@@ -33,6 +37,8 @@ const MODELS: &[ModelChoice] = &[
         id: "Qwen/Qwen3-8B-GGUF:Q4_K_M",
         label: "Qwen3 8B",
         maker: "qwen",
+        publisher: "Qwen",
+        provider_release: true,
         description: "Reasoning, coding and everyday tasks.",
         url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
         quantization: "Q4_K_M",
@@ -43,6 +49,8 @@ const MODELS: &[ModelChoice] = &[
         id: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M",
         label: "Llama 3.2 3B",
         maker: "meta",
+        publisher: "bartowski",
+        provider_release: false,
         description: "A light option for everyday conversation.",
         url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF",
         quantization: "Q4_K_M",
@@ -53,6 +61,8 @@ const MODELS: &[ModelChoice] = &[
         id: "mistralai/Ministral-3-3B-Instruct-2512-GGUF:Q4_K_M",
         label: "Ministral 3 3B",
         maker: "mistral",
+        publisher: "mistralai",
+        provider_release: true,
         description: "Compact, multilingual instruction following.",
         url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF",
         quantization: "Q4_K_M",
@@ -111,26 +121,22 @@ pub(crate) fn budget(machine: &Machine) -> Option<f64> {
 fn recommend(machine: &Machine) -> Option<&'static str> {
     let available = budget(machine)?;
     let accelerated = machine.acceleration.starts_with("Metal");
-    // Prefer Klide's tuned model when it fits, then Qwen on Metal.
-    // CPU inference favours the two smaller general-purpose models.
-    let order = if accelerated {
-        [0, 1, 3, 2]
-    } else if machine.cpu_cores >= 4 {
-        [3, 2, 1, 0]
-    } else {
-        [2, 3, 1, 0]
-    };
+    // Prefer provider releases: Qwen on Metal, compact Ministral on CPU.
+    let order = if accelerated { [1, 3] } else { [3, 1] };
     order
         .into_iter()
         .map(|i| &MODELS[i])
-        .find(|m| m.memory_gb <= available)
+        .find(|m| m.provider_release && m.memory_gb <= available)
         .map(|m| m.id)
+}
+fn selectable(choice: &ModelChoice, selected: Option<&str>) -> bool {
+    choice.provider_release || choice.maker == "klide" || selected == Some(choice.id)
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupInfo {
     machine: Machine,
-    models: &'static [ModelChoice],
+    models: Vec<ModelChoice>,
     recommended_model: Option<&'static str>,
     selected_model: Option<String>,
     memory_budget_gb: Option<f64>,
@@ -153,6 +159,10 @@ pub(crate) fn registered_model() -> Option<crate::registry_models::Candidate> {
     config
         .registry_model
         .filter(|m| m.id == config.model && m.valid())
+        .map(|mut m| {
+            m.refresh_publisher();
+            m
+        })
 }
 pub(crate) fn selected_model() -> Option<String> {
     let config: Config = serde_json::from_slice(&std::fs::read(config_path().ok()?).ok()?).ok()?;
@@ -170,7 +180,7 @@ pub(crate) fn selected_model() -> Option<String> {
 pub(crate) fn launch_model() -> String {
     selected_model()
         .or_else(|| recommend(&machine()).map(str::to_owned))
-        .unwrap_or_else(|| MODELS[2].id.to_owned())
+        .unwrap_or_else(|| MODELS[3].id.to_owned())
 }
 pub(crate) fn launch_args(model: &str) -> Vec<String> {
     let source = if model == KLIDE_MODEL {
@@ -269,11 +279,16 @@ pub(crate) async fn ai_llamacpp_setup_info() -> Result<SetupInfo, String> {
         let machine = machine();
         let recommended_model = recommend(&machine);
         let memory_budget_gb = budget(&machine);
+        let selected = selected_model();
         SetupInfo {
             machine,
-            models: MODELS,
+            models: MODELS
+                .iter()
+                .filter(|m| selectable(m, selected.as_deref()))
+                .cloned()
+                .collect(),
             recommended_model,
-            selected_model: selected_model(),
+            selected_model: selected,
             memory_budget_gb,
             runtime_installed: crate::llamacpp_setup::server_path().is_ok(),
             registry_models: {
@@ -315,7 +330,12 @@ fn save_model(model: String) -> Result<(), String> {
     let _guard = SAVE.lock().map_err(|e| e.to_string())?;
     let registry_model = crate::registry_models::find(&model)
         .or_else(|| registered_model().filter(|m| m.id == model));
-    if !MODELS.iter().any(|m| m.id == model) && registry_model.is_none() {
+    let selected = selected_model();
+    if !MODELS
+        .iter()
+        .any(|m| m.id == model && selectable(m, selected.as_deref()))
+        && registry_model.is_none()
+    {
         return Err("Choose a model from the llama.cpp setup list".into());
     }
     let path = config_path()?;
@@ -386,11 +406,19 @@ mod tests {
         );
     }
     #[test]
+    fn new_choices_exclude_community_presets_but_preserve_an_existing_selection() {
+        assert!(!selectable(&MODELS[2], None));
+        assert!(selectable(&MODELS[2], Some(MODELS[2].id)));
+        assert!(selectable(&MODELS[1], None));
+        assert!(selectable(&MODELS[0], None));
+        assert!(!MODELS[0].provider_release);
+    }
+    #[test]
     fn recommendations_reserve_memory_for_other_apps() {
-        assert_eq!(recommend(&mac(8.0)), Some(MODELS[2].id));
+        assert_eq!(recommend(&mac(8.0)), None);
         assert_eq!(recommend(&mac(16.0)), Some(MODELS[1].id));
-        assert_eq!(recommend(&mac(24.0)), Some(MODELS[0].id));
-        assert_eq!(recommend(&mac(64.0)), Some(MODELS[0].id));
+        assert_eq!(recommend(&mac(24.0)), Some(MODELS[1].id));
+        assert_eq!(recommend(&mac(64.0)), Some(MODELS[1].id));
         assert_eq!(recommend(&mac(4.0)), None);
     }
     #[test]
@@ -399,7 +427,7 @@ mod tests {
         cpu.acceleration = "CPU";
         assert_eq!(recommend(&cpu), Some(MODELS[3].id));
         cpu.cpu_cores = 2;
-        assert_eq!(recommend(&cpu), Some(MODELS[2].id));
+        assert_eq!(recommend(&cpu), Some(MODELS[3].id));
         cpu.memory_gb = None;
         assert_eq!(recommend(&cpu), None);
     }
