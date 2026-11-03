@@ -25,6 +25,7 @@ import {
 } from "../../customCli";
 import { GhostButton, IconButton, LinkButton, Panel, PencilIcon, Row, StatusText, TrashIcon } from "./controls";
 import type { KeyStatus } from "./apiKeys";
+import { SelfHostedConnectionTest } from "./selfHostedConnectionTest";
 
 /** The words a non-chat model's row ends on. */
 const TASK_WORD: Record<string, string> = { embedding: "Embedding", ocr: "OCR" };
@@ -349,6 +350,7 @@ export function CustomEndpointsBlock({
   }
 
   const formOpen = adding || editingId !== null;
+  const editingEndpoint = endpoints.find((ep) => ep.id === editingId);
 
   // Escape closes the add/edit modal, matching the app's other dialogs.
   useEffect(() => {
@@ -444,6 +446,9 @@ export function CustomEndpointsBlock({
 
   return (
     <>
+      <p className="klide-row-description" style={{ marginBottom: 12 }}>
+        Use a model server on your VPS, another computer, or this machine. Your agent and workspace stay on this computer.
+      </p>
       {endpoints.length > 0 && (
         <Panel>
           {endpoints.map((ep) => (
@@ -549,6 +554,11 @@ export function CustomEndpointsBlock({
                 autoComplete="off"
                 style={{ height: 34, padding: "0 12px" }}
               />
+              <SelfHostedConnectionTest provider={{
+                id: editingId ?? customIdFromLabel(label), label: label.trim() || "Self-hosted",
+                baseUrl: baseUrl.trim(), defaultModel,
+                tokenRef: token.trim() || editingEndpoint?.tokenRef,
+              }} onSelectModel={setDefaultModel} />
               <input
                 // A `${VAR}` reference is non-secret config, so it's shown
                 // plainly — there's no token to mask (self-hosted endpoints
@@ -564,6 +574,9 @@ export function CustomEndpointsBlock({
                 style={{ height: 34, padding: "0 12px" }}
               />
               <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--fg-subtle)" }}>
+                Use the server's API base URL, for example <code>https://llm.example.com/v1</code>,
+                a private Tailscale address, or <code>http://127.0.0.1:18080/v1</code> through your SSH tunnel.
+                <br />
                 The bearer token is a reference like <code>{"${DEV_TOKEN}"}</code> —
                 put the value in your project's <code>.env</code>{" "}
                 (<code>DEV_TOKEN=…</code>), or in <code>~/.klide/.env</code> as a global

@@ -25,6 +25,7 @@ mod connector_pool;
 mod coordination_bridge;
 mod custom_cli;
 mod custom_providers;
+mod self_hosted_probe;
 mod delegate;
 mod documents;
 mod durable;
@@ -1266,6 +1267,7 @@ pub fn run() {
             ai_model_pricing,
             custom_provider_list,
             custom_provider_upsert,
+            self_hosted_probe::custom_provider_probe,
             custom_provider_remove,
             custom_cli_list,
             custom_cli_upsert,

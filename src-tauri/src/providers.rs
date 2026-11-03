@@ -1309,10 +1309,18 @@ pub(crate) fn resolve_reference(reference: &str, scope: Option<&std::path::Path>
 /// `Option`, not `Result`. `id` is a raw `custom:` id, not in the static
 /// registry.
 pub fn custom_token(id: &str, scope: Option<&std::path::Path>) -> Option<String> {
-    if let Some(reference) = custom_token_reference(id) {
-        return resolve_reference(&reference, scope);
+    if let Some(provider) = crate::custom_providers::get(id) {
+        return custom_token_for_config(&provider, scope);
     }
     env_var(&custom_env_var_name(id))
+}
+
+/// Resolve an unsaved endpoint exactly as a saved endpoint, without writing it.
+pub(crate) fn custom_token_for_config(provider: &crate::custom_providers::CustomProvider, scope: Option<&std::path::Path>) -> Option<String> {
+    if let Some(reference) = &provider.token_ref {
+        return resolve_reference(&reference, scope);
+    }
+    env_var(&custom_env_var_name(&provider.id))
 }
 
 /// The `${VAR}` reference configured for a custom provider, if any.

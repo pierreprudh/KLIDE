@@ -38,6 +38,12 @@ export type CustomProvider = {
   tokenRef?: string;
 };
 
+export type EndpointConnection = { models: string[]; elapsedMs: number };
+/** Tests an unsaved configuration without changing the endpoint store. */
+export function testCustomProvider(provider: CustomProvider): Promise<EndpointConnection> {
+  return invoke("custom_provider_probe", { provider });
+}
+
 let cache: CustomProvider[] = [];
 
 const listeners = new Set<() => void>();
