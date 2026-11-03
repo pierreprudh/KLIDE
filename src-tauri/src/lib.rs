@@ -1,7 +1,6 @@
 mod launch_readiness;
 mod llamacpp_models;
 mod llamacpp_setup;
-mod local_setup;
 mod visual_export;
 mod accounts;
 mod usage;
@@ -33,6 +32,7 @@ mod file_memo;
 mod gateway;
 mod git;
 mod local_servers;
+mod local_setup;
 mod mcp_client;
 pub mod mcp_server;
 mod memory;
@@ -1278,12 +1278,12 @@ pub fn run() {
             set_active_workspace,
             ai_chat,
             llamacpp_setup::ai_llamacpp_install,
-            local_setup::ai_local_setup_progress,
             llamacpp_models::ai_llamacpp_setup_info,
             llamacpp_models::ai_llamacpp_select_model,
             local_servers::ai_local_server_start,
             local_servers::ai_local_server_stop,
             local_servers::ai_local_server_status,
+            local_setup::ai_local_setup_progress,
             local_servers::ollama_account_status,
             gateway::gateway_status,
             gateway::gateway_start,
