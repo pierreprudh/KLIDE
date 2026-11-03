@@ -23,6 +23,7 @@ impl Followup {
     fn prepare_request(&self, run_id: &str, mut request: StartRunRequest) -> StartRunRequest {
         request.run_id = Some(run_id.to_string());
         request.initial_text.clear();
+        request.retry = false;
         request.attachments.clear();
         request.context = None;
         if matches!(self, Self::Observer(_)) {
@@ -114,6 +115,15 @@ pub(super) fn watch(app: tauri::AppHandle, run_id: String, followup: Followup, r
 mod tests {
     use super::*;
     use crate::agent::test_support::{test_request, FakeSupervisor};
+
+    #[test]
+    fn automatic_followups_do_not_inherit_operator_retry() {
+        for followup in [Followup::Observer("shell".into()), Followup::Worker("child".into())] {
+            let mut original = test_request("/tmp/workers", &[]);
+            original.retry = true;
+            assert!(!followup.prepare_request("parent", original).retry);
+        }
+    }
 
     #[test]
     fn worker_followup_preserves_full_auto_and_original_budget() {

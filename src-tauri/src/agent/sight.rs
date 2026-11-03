@@ -602,6 +602,7 @@ mod tests {
             provider: "ollama".into(),
             model: "llama3.1:8b".into(),
             initial_text: "what's wrong here?".into(),
+            retry: false,
             attachments,
             context: None,
             system_prompt: None,

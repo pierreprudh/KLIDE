@@ -474,6 +474,12 @@ async fn run_cli_streaming(
             .await
             .map_err(|e| format!("Unable to read {label} exit status: {e}"))?;
         if !status.success() {
+            // Codex reports account/model failures on stdout and then exits
+            // nonzero. Keep that actionable error instead of replacing it
+            // with a bare exit code (stderr can be empty).
+            if let Some(error) = emitter.error.take() {
+                return Err(error);
+            }
             // stderr is only read on failure: on the happy path it carries
             // warnings that would otherwise be pasted into the answer.
             let mut stderr_text = String::new();
@@ -1242,6 +1248,18 @@ mod tests {
         emitter.handle(super::super::chat_stream::StreamItem::Error("Global regions required".into()));
         assert!(emitted.load(Ordering::Relaxed));
         assert_eq!(emitter.finish(), Err("Global regions required".into()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn nonzero_cli_exit_preserves_the_structured_provider_error() {
+        let mut command = TokioCommand::new("/bin/sh");
+        command.args(["-c", "cat >/dev/null; printf '%s\\n' '{\"type\":\"turn.failed\",\"error\":{\"message\":\"The selected model is not supported with this account.\"}}'; exit 1"]);
+        let emitted = AtomicBool::new(false);
+        let channel = Channel::new(|_| Ok(()));
+        let result = run_cli_streaming(&super::super::Codex, command, "test".into(), "Codex", "/tmp", None, &emitted, &channel).await;
+        assert_eq!(result, Err("The selected model is not supported with this account.".into()));
+        assert!(emitted.load(Ordering::Relaxed), "a provider rejection must prevent a cold retry");
     }
 }
 

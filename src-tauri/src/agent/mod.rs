@@ -775,6 +775,7 @@ async fn run_subagent_to_completion(
         provider: spec.provider.clone(),
         model: spec.model.clone(),
         initial_text: spec.task.clone(),
+        retry: false,
         attachments: vec![],
         context: Some(AgentContextSnapshot {
             memory: None,
@@ -1173,6 +1174,8 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
 /// A wake turn's input when the mail it was woken for is already gone.
 const NOTHING_WAITING: &str =
     "[Agent messages] Nothing is waiting for you after all. Reply in one short sentence.";
+const RETRY_FAILED_TURN: &str =
+    "Continue the user's latest request from the recorded progress after the previous failure. Check what already completed before acting; do not repeat completed commands or edits. Finish the remaining work and report the outcome.";
 
 fn inject_context(
     messages: &mut Vec<serde_json::Value>,
@@ -3011,12 +3014,17 @@ async fn loop_body(
                     ts: now_ms(),
                 })?;
             }
-        } else if wake && turn == 0 {
+        } else if wake && turn == 0 && !request.retry {
             // Woken for a message that is no longer there (declined, or read
             // by a turn that got in first). The provider still needs a user
             // turn to answer; keep the answer short. Recorded, so a later
             // turn's replay sends these same bytes and the cache holds.
             inject_context(&mut messages, &mut emit, &id, user_provider_message(NOTHING_WAITING, &[]))?;
+        }
+        if wake && turn == 0 && request.retry {
+            // Retry is an operator action, not an inbox notification. Keep
+            // this instruction even when pending mail was delivered above.
+            inject_context(&mut messages, &mut emit, &id, user_provider_message(RETRY_FAILED_TURN, &[]))?;
         }
 
         // Check after all last-minute context additions and compaction. A
@@ -7681,6 +7689,28 @@ mod run_loop_tests {
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
         drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller).await;
         assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|e| matches!(e, AgentEvent::SubagentResolved { .. })).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn operator_retry_continues_the_failed_request_instead_of_checking_mail() {
+        let (runs_dir, root) = sandbox("retry-failed-request");
+        let id = "retry-failed-request";
+        let request = test_request(&root, &[]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request.clone(),
+            ScriptedProviderCaller::new(vec![Err("The selected model is not supported with this account.".into())])).await;
+        let mut retry = request;
+        retry.initial_text.clear();
+        retry.retry = true;
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Recovered the original task.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, retry, caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap();
+        let input = seen[0].last().unwrap()["content"].as_str().unwrap();
+        assert!(input.contains("Continue the user's latest request"), "{input}");
+        assert!(!input.contains("Nothing is waiting"));
+        drop(seen);
+        let events = read_events(&runs_dir, id).unwrap();
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::UserMessage { .. })).count(), 1);
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ContextInjected { content, .. } if content.contains("Continue the user's latest request"))));
     }
 
     /// Woken for mail another turn already read: the model still gets a user

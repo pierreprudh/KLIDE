@@ -462,6 +462,8 @@ export type ConversationHistory = {
 };
 
 export type StartAgentRunInput = {
+  /** Resume a failed turn from its recorded progress, without an inbox wake. */
+  retry?: boolean;
   /** Stored locally for retrieval; never inserted into provider messages. */
   conversationHistory?: ConversationHistory;
   /** Client-supplied run id. The AI panel passes its conversation id so the

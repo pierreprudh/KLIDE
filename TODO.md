@@ -86,8 +86,27 @@ baseline; unchecked items below are verification or specific remaining gaps.
   clicked Stop. Pierre confirmed the flow worked; repeated
   `pgrep -fl '[K]LIDE_STOP_TEST_42'` checks returned no matching processes.
   This closes the Claude Code Stop/relaunch follow-up, not other CLI coverage.
-- [ ] Repeat desktop background execution/Stop acceptance with Codex and
-  OpenCode, including approval pauses and quit/relaunch.
+- [x] Codex desktop quit/relaunch and reconnect/Stop acceptance (2026-11-04,
+  Pierre-reported): repeated with `KLIDE_CODEX_STOP_03` and an explicit
+  wait-for-completion instruction. Pierre confirmed "reconnect worked well
+  test is ok" after the quit/reopen → same conversation → Stop instructions.
+  No separate process-check output or exact build hash was supplied.
+  Codex attempt 2026-11-03 did not pass (Run `mw1aftphmxu8ql`):
+  `gpt-6-luna` was rejected for the ChatGPT account; two failed turns appeared
+  as generic exit-code errors. Retry was incorrectly treated as an inbox wake,
+  producing "Nothing is waiting" after switching models. Fixed 2026-11-04
+  with explicit retry intent and preserved structured CLI errors; regression
+  tests pass. A later `gpt-5.6-terra` turn started the sleep command but returned
+  without waiting, so it did not establish reattach/Stop acceptance. Retest
+  with a supported model and an explicit instruction to wait for completion.
+  Codex's current headless adapter does not forward its native approvals;
+  do not count the Claude Code approval relay as Codex coverage.
+- [x] OpenCode desktop quit/relaunch and reconnect/Stop acceptance (2026-11-04,
+  Pierre-reported): repeated the `KLIDE_OPENCODE_STOP_01` wait-for-completion
+  test and confirmed "works perfectly" after the quit/reopen → same
+  conversation → Stop and process-check instructions. No separate process-check
+  output, exact model or build hash was supplied. Approval-pause recovery was
+  not separately reported for this pass.
 - [x] Cancel an individual Klide-dispatched worker from its activity row,
   including setup, slot waiting and execution. Setup shares the command
   process lifecycle: cancellation stops its process group before settling,

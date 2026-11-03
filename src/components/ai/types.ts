@@ -144,6 +144,8 @@ export type Msg =
     };
 
 export type QueuedTurn = {
+  /** Explicit operator retry; `wake` only controls the hidden empty UI row. */
+  retry?: true;
   clientId: string;
   text: string;
   mode: AgentMode;
