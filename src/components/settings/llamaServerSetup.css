@@ -6,7 +6,7 @@
 
 .klide-llama-label {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--fg-strong);
 }
 
@@ -98,63 +98,37 @@
 
 .klide-llama-models legend { margin-bottom: 14px; padding: 0; }
 
-.klide-llama-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
-  gap: 14px;
-  max-width: 960px;
+/* Compact model choices use the same type and hairlines as Settings rows. */
+.klide-llama-model-intro { margin: 0 0 16px; max-width: 65ch; }
+.klide-llama-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.klide-llama-card { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
+.klide-llama-card[data-selected="true"] { border-color: var(--border-strong); background: var(--bg-elevated); }
+.klide-llama-card:has(input:not(:disabled)):hover { border-color: var(--border-strong); }
+.klide-llama-card:has(:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+.klide-llama-card-choice { display: grid; gap: 12px; position: relative; cursor: pointer; }
+.klide-llama-card-choice input { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+.klide-llama-card-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.klide-llama-card-art { display: inline-flex; flex-shrink: 0; color: var(--fg-strong); }
+.klide-llama-card-title { flex: 1; min-width: 0; color: var(--fg-strong); font-size: 14px; font-weight: 400; overflow-wrap: anywhere; }
+.klide-llama-card-description { display: block; min-height: 36px; color: var(--fg-subtle); font-size: 12px; line-height: 1.5; }
+.klide-llama-card-stats, .klide-community-metrics { display: grid; gap: 8px; margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.klide-llama-card-stats > div, .klide-community-metrics > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.klide-llama-card-stats dt, .klide-community-metrics dt { color: var(--fg-subtle); }
+.klide-llama-card-stats dd, .klide-community-metrics dd { color: var(--fg); margin: 0; overflow-wrap: anywhere; }
+.klide-llama-card-fit { color: var(--fg-subtle); font-size: 12px; line-height: 1.5; }
+.klide-llama-card-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 16px; gap: 8px; font-size: 12px; }
+.klide-llama-card-footer a, .klide-community-source { color: var(--fg-subtle); text-underline-offset: 3px; }
+.klide-llama-card-footer a:hover, .klide-community-source:hover { color: var(--fg-strong); }
+.klide-llama-card-selected { display: inline-flex; width: 14px; color: var(--accent); flex-shrink: 0; }
+.klide-llama-recommended { color: var(--accent); }
+.klide-llama-larger { margin-top: 16px; }
+.klide-llama-larger > .klide-llama-card-grid { max-width: none; padding-top: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
+.klide-local-catalog > div { max-width: none; padding-top: 12px; }
+.klide-local-catalog p { margin: 0 0 12px; }
+.klide-community-configurations { display: grid; gap: 12px; }
+.klide-community-configurations .klide-settings-row { padding-inline: 0; }
+.klide-community-configurations .klide-settings-select { width: 240px; min-width: 0; max-width: 100%; }
+.klide-community-source { font-size: 12px; justify-self: start; }
+@media (prefers-reduced-motion: reduce) {
+  .klide-llama-details summary > span { transition: none; }
 }
-
-.klide-llama-card {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  transition: border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out);
-}
-
-.klide-llama-card[data-selected="true"] {
-  border-color: var(--fg-subtle);
-  background: var(--bg-selected);
-}
-
-.klide-llama-card:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
-.klide-llama-card-choice { position: relative; cursor: pointer; flex: 1; }
-.klide-llama-models:disabled .klide-llama-card-choice { cursor: default; }
-.klide-llama-card-choice input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-
-.klide-llama-card-art {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 88px;
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--fg-strong);
-}
-
-.klide-llama-card-content { display: grid; gap: 8px; padding: 14px 8px 8px; }
-.klide-llama-card-badges { display: flex; flex-wrap: wrap; gap: 6px; min-height: 16px; }
-.klide-llama-card-badges span { font-size: 10px; color: var(--fg-subtle); }
-.klide-llama-card-title { color: var(--fg-strong); font-size: 14px; font-weight: 700; }
-.klide-llama-card-description { min-height: 36px; color: var(--fg-subtle); font-size: 12px; line-height: 1.5; }
-.klide-llama-card-stats { display: grid; gap: 6px; margin: 8px 0 0; font-size: 11px; }
-.klide-llama-card-stats > div { display: flex; justify-content: space-between; gap: 8px; }
-.klide-llama-card-stats dt { color: var(--fg-subtle); }
-.klide-llama-card-stats dd { color: var(--fg-strong); margin: 0; }
-.klide-llama-card-fit { color: var(--fg-subtle); font-size: 10px; line-height: 1.5; }
-.klide-llama-card-footer { display: flex; align-items: center; justify-content: space-between; padding: 8px; gap: 8px; }
-.klide-llama-card-footer a { color: var(--fg-subtle); font-size: 11px; text-decoration: none; }
-.klide-llama-card-footer a:hover { color: var(--fg-strong); text-decoration: underline; }
-.klide-llama-card-selected { display: inline-flex; width: 14px; color: var(--fg-strong); }

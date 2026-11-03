@@ -1,10 +1,16 @@
 # Local model recommendations
 
-Settings → Local AI → Llama includes an opt-in, read-only browser for the
+Settings → Local AI → Llama starts with managed model suggestions for the
+detected computer. These use Klide's conservative memory budget and a 16k
+context estimate, independent of registry coverage. The backend's recommended
+model comes first; models above the budget remain accessible in a disclosure.
+They are estimates, not verified coding or performance results.
+
+The optional **Community benchmarks** disclosure contains a read-only browser for the
 [Local AI registry](https://github.com/sybil-solutions/local-ai-registry).
 The existing four managed llama.cpp models remain the installable selection.
 
-Opening the browser downloads `dist/catalog.json` at the reviewed revision in
+Opening the disclosure downloads `dist/catalog.json` at the reviewed revision in
 `src-tauri/src/local_model_catalog.rs`. It does not download weights or run
 commands. Catalog failure leaves managed setup available; Retry fetches again.
 The adapter accepts catalog schema 4, limits downloads to 12 MiB, and projects
@@ -17,7 +23,7 @@ that computer shows upstream recipes. A missing entry is explained separately
 from failed detection or unknown memory. The user can also select catalog
 hardware explicitly, including a different machine's GPU. This is hardware
 matching, not a free-memory or performance guarantee.
-Unknown measurements stay unknown. Each card links to its recipe at the same
+Unknown measurements stay unknown. Each configuration row links to its recipe at the same
 commit, with upstream requirements and evidence. Nothing is labelled verified
 in Klide: full agent acceptance requires separate evidence.
 

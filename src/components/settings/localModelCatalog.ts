@@ -22,10 +22,10 @@ export function resolveCatalogHardware(hardware: CatalogHardware[], machine: Cat
       ? "Your chip was detected, but RAM could not be read. Choose tested hardware to explore its configurations."
       : match
         ? "Matches this computer’s chip and memory. Available memory and other requirements still apply."
-        : "No tested configuration for this exact chip and memory is in the catalog yet. The managed model recommendations above are still available; choose other hardware to explore its results.";
+        : "No tested configuration for this computer yet. Klide’s model suggestions use memory estimates.";
   } else {
     message = value
-      ? "Exploring other hardware does not establish memory fit on this computer. Check the configuration’s requirements."
+      ? "Exploring other hardware. These results do not establish a fit for this computer."
       : "Could not detect this computer’s hardware. Retry detection or choose hardware to explore the catalog.";
   }
   return {
