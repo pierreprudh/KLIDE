@@ -4,6 +4,7 @@ import { useLlamaSetupMode, setLlamaSetupMode } from "../../hooks/useLlamaSetupM
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { LlamaServerSetup } from "./llamaServerSetup";
+import { LocalModelCatalogBrowser } from "./localModelCatalogBrowser";
 import { useEffect, useState } from "react";
 import {
   readLocalProviderStatus,
@@ -44,6 +45,7 @@ function LlamaLocalSetup() {
       />}
     />
     {mode === "klide" ? <LlamaServerSetup /> : <LocalServerRow provider="llamaapp" />}
+    <LocalModelCatalogBrowser />
   </>;
 }
 
