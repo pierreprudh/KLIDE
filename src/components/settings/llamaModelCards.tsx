@@ -13,7 +13,7 @@ type Props = {
 
 export function LlamaModelCards({ info, value, disabled, onChange }: Props) {
   const name = useId();
-  const { suggested, larger } = localModelSuggestions(info);
+  const { suggested, larger, other } = localModelSuggestions(info);
   function card(model: LlamaSetupInfo["models"][number]) {
     const selected = model.id === value;
     const fits = info.memoryBudgetGb == null ? null : model.memoryGb <= info.memoryBudgetGb;
@@ -26,6 +26,7 @@ export function LlamaModelCards({ info, value, disabled, onChange }: Props) {
           <span className="klide-llama-card-title">{model.label}</span>
           <span className="klide-llama-card-selected" aria-hidden="true">{selected && <CheckIcon />}</span>
         </div>
+        <span className="klide-llama-hint">{model.providerRelease ? `Published by ${model.publisher} · Provider release` : model.maker === "klide" ? "Published by Klide · Klide model" : `Published by ${model.publisher ?? "unknown publisher"} · Community conversion`}</span>
         <span className="klide-llama-card-description">{model.description}</span>
         <dl className="klide-llama-card-stats">
           <div><dt>Memory estimate</dt><dd>{model.memoryGb.toFixed(1)} GiB</dd></div>
@@ -44,14 +45,18 @@ export function LlamaModelCards({ info, value, disabled, onChange }: Props) {
     <legend className="klide-llama-label">Models for this computer</legend>
     <p className="klide-llama-hint klide-llama-model-intro">{info.memoryBudgetGb == null
       ? "Memory fit is unknown. Choose a small model to start."
-      : `Memory estimates use a 16k context and a ${info.memoryBudgetGb.toFixed(1)} GiB model budget.`} Coding performance has not been verified.</p>
+      : `Memory estimates use a 16k context and a ${info.memoryBudgetGb.toFixed(1)} GiB model budget.`} Provider releases are shown first. Coding performance has not been verified.</p>
     <div className="klide-llama-card-grid">
       {suggested.map(card)}
     </div>
-    {suggested.length === 0 && <p className="klide-llama-hint">None of these models fits the estimated budget. You can use a self-hosted endpoint or explore the larger models below.</p>}
+    {suggested.length === 0 && <p className="klide-llama-hint">No provider release fits the estimated budget. You can use a self-hosted endpoint or explore the larger models below.</p>}
     {larger.length > 0 && <details className="klide-llama-details klide-llama-larger" open={larger.some((m) => m.id === value) || undefined}>
       <summary><span aria-hidden="true"><ChevronDown /></span>Models needing more memory ({larger.length})</summary>
       <div className="klide-llama-card-grid">{larger.map(card)}</div>
+    </details>}
+    {other.length > 0 && <details className="klide-llama-details klide-llama-larger" open={other.some((m) => m.id === value) || undefined}>
+      <summary><span aria-hidden="true"><ChevronDown /></span>Klide and previously selected models ({other.length})</summary>
+      <div className="klide-llama-card-grid">{other.map(card)}</div>
     </details>}
   </fieldset>;
 }

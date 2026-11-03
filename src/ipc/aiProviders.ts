@@ -231,7 +231,7 @@ export async function stopLocalProvider(provider: string): Promise<void> {
 export const LOCAL_MODEL_CHANGED_EVENT = "klide:local-model-changed";
 export type LlamaSetupInfo = {
   machine: { chip: string; memoryGb: number | null; cpuCores: number; acceleration: string };
-  models: { id: string; label: string; maker: string; description: string; url: string; quantization: string; downloadGb: number; memoryGb: number; registrySource?: string }[];
+  models: { id: string; label: string; maker: string; description: string; url: string; quantization: string; downloadGb: number; memoryGb: number; registrySource?: string; publisher?: string; providerRelease?: boolean }[];
   recommendedModel: string | null;
   selectedModel: string | null;
   memoryBudgetGb: number | null;

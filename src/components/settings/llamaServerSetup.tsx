@@ -52,7 +52,7 @@ export function LlamaServerSetup() {
     try {
       const result = await discoverRegistryModels();
       setInfo((current) => current && { ...current, models: [...current.models.filter((m) => !m.registrySource || m.id === current.selectedModel), ...result.models.filter((m) => m.id !== current?.selectedModel)] });
-      setDiscovery(`${result.models.length} registry options estimated to fit. Checked ${result.checked} portable configurations.${result.unavailable ? ` Requirements unavailable for ${result.unavailable}.` : ""} No models downloaded. These have not been tested on this Mac.`);
+      setDiscovery(`${result.models.length} provider releases estimated to fit. Checked ${result.checked} portable configurations.${result.unavailable ? ` Requirements unavailable for ${result.unavailable}.` : ""} No models downloaded. These have not been tested on this Mac.`);
     } catch (e) { setError(String(e)); }
     finally { setDiscovering(false); }
   }
@@ -91,7 +91,7 @@ export function LlamaServerSetup() {
       <LlamaModelCards info={info} value={model} disabled={!!busy || setupActive || running || owned} onChange={setModel} />
       <div className="klide-llama-controls">
         <button className="klide-button klide-button-subtle" disabled={discovering || !!busy || setupActive} onClick={() => void discover()}>{discovering ? "Checking registry models…" : "Find more models"}</button>
-        <span className="klide-llama-hint">Checks pinned weights and memory for this computer</span>
+        <span className="klide-llama-hint">Checks provider-published weights and memory for this computer</span>
       </div>
       {(discovering || discovery) && <p role="status" className="klide-llama-hint">{discovering ? "Reading model sizes and GGUF headers. Model downloads start only when you press Start." : discovery}</p>}
       <div className="klide-llama-controls">
