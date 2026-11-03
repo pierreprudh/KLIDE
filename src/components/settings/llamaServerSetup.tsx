@@ -7,6 +7,7 @@ import { Row, StatusText } from "./controls";
 import { ChevronDown, ProviderLogo } from "../ai/icons";
 import "./llamaServerSetup.css";
 import { LlamaModelCards } from "./llamaModelCards";
+import { LocalModelCatalogBrowser } from "./localModelCatalogBrowser";
 
 export function LlamaServerSetup() {
   const [info, setInfo] = useState<LlamaSetupInfo | null>(null);
@@ -93,6 +94,7 @@ export function LlamaServerSetup() {
           {" Memory estimates use a 16k context. Smaller models favour speed; larger models favour quality. Actual speed depends on your workload and has not been benchmarked."}
         </div>
       </details>
+      <LocalModelCatalogBrowser machine={info.machine} />
       {!info.runtimeInstalled && <button className="klide-button klide-button-subtle klide-llama-engine"
         disabled={!!busy || setupActive} onClick={() => void act("runtime")}>Download engine only</button>}
       {(busy || setupActive) && <div role="status" className="klide-llama-hint">

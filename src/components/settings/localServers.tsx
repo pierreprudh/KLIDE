@@ -44,8 +44,12 @@ function LlamaLocalSetup() {
         onChange={choose}
       />}
     />
-    {mode === "klide" ? <LlamaServerSetup /> : <LocalServerRow provider="llamaapp" />}
-    <LocalModelCatalogBrowser />
+    {mode === "klide" ? <LlamaServerSetup /> : <>
+      <LocalServerRow provider="llamaapp" />
+      <Row title="Model recommendations" description="Let Klide suggest and set up a model for this computer."
+        control={<LinkButton onClick={() => setLlamaSetupMode("klide")}>Set up with Klide</LinkButton>} />
+      <div className="klide-llama-body"><LocalModelCatalogBrowser /></div>
+    </>}
   </>;
 }
 

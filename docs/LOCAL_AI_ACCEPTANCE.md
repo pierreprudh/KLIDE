@@ -28,7 +28,8 @@ Start the app with `npm run tauri dev`.
 
 | Feature | Action | Expected result |
 | --- | --- | --- |
-| Catalog | Settings → Local AI → Llama → Browse model catalog | The detected computer is selected, even without a catalog entry. Exact chip/memory matches show recipes; missing entries are explained. Other hardware can be explored separately. |
+| Suggestions | Settings → Local AI → Llama → Klide | Estimated-to-fit models appear first, with the backend recommendation leading. M5/16 GB offers Qwen3 8B, Llama 3.2 3B and Ministral 3 3B; Klide 8B is in the larger-model disclosure. Selection and Start remain usable without catalog access. |
+| Catalog | Open Community benchmarks | The detected computer is selected, even without a catalog entry. Exact chip/memory matches show recipes; missing entries are explained. Other hardware can be explored separately. |
 | Evidence | Open a configuration's evidence link | The recipe opens at the pinned revision. Unknown measurements show “—”; upstream evidence does not claim Klide verification. |
 | Catalog failure | Load the catalog offline, then reconnect and Retry | Retry works and managed setup stays available. Use a fresh app session if the catalog was already loaded. |
 | Setup | Choose a small model that fits, then Set up & start | Engine installation, download and readiness are distinct stages. Klide's own GGUF shows byte counts; other models show loading without invented percentages. |
