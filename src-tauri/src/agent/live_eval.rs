@@ -167,6 +167,14 @@ async fn paired_harness_benchmark() {
     };
     let events = read_events(&runs, id).unwrap_or_default();
     let usages: Vec<_> = events.iter().filter_map(|e| match e { AgentEvent::AssistantMessage { usage: Some(u), .. } => Some(u), _ => None }).collect();
+    let provider_usages: Vec<_> = events.iter().filter_map(|e| match e {
+        AgentEvent::AssistantMessage { usage, timing: Some(_), .. } => Some(usage.as_ref()), _ => None,
+    }).collect();
+    let engine_ms = |prompt| -> Option<u64> {
+        if provider_usages.is_empty() { return None; }
+        provider_usages.iter().map(|u| u.and_then(|u| if prompt { u.prompt_eval_duration_ms } else { u.eval_duration_ms }))
+            .collect::<Option<Vec<_>>>().map(|v| v.iter().sum())
+    };
     let costs: Option<Vec<f64>> = if usages.is_empty() { None } else { usages.iter().map(|u| u.cost_usd).collect() };
     let tokens = |input| -> Option<u64> {
         if usages.is_empty() { return None; }
@@ -175,6 +183,7 @@ async fn paired_harness_benchmark() {
     std::fs::write(base.join("native-result.json"), serde_json::to_vec_pretty(&serde_json::json!({
         "elapsedSeconds":started.elapsed().as_secs_f64(),"error":outcome.err(),
         "inputTokens":tokens(true),"outputTokens":tokens(false),"costUsd":costs.map(|v| v.iter().sum::<f64>()),
+        "enginePromptMs":engine_ms(true),"engineGenerationMs":engine_ms(false),
         "toolCalls":events.iter().filter(|e| matches!(e, AgentEvent::ToolCallStarted {..})).count(),
         "permissionRequests":events.iter().filter(|e| matches!(e, AgentEvent::PermissionRequested {..})).count(),
         "transcript":super::transcripts::transcript_path(&runs, id),
