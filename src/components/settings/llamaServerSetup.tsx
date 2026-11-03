@@ -63,7 +63,6 @@ export function LlamaServerSetup() {
         if (!up) throw new Error("The model did not become ready. Try starting it again.");
       }
       const next = await readLlamaSetupInfo(); setInfo(next);
-      setModel(next.selectedModel ?? next.recommendedModel ?? "");
     } catch (e) { setError(String(e)); }
     finally { setBusy(null); }
   }
