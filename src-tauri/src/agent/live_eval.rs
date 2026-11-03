@@ -166,26 +166,36 @@ async fn paired_harness_benchmark() {
         }
     };
     let events = read_events(&runs, id).unwrap_or_default();
-    let usages: Vec<_> = events.iter().filter_map(|e| match e { AgentEvent::AssistantMessage { usage: Some(u), .. } => Some(u), _ => None }).collect();
     let provider_usages: Vec<_> = events.iter().filter_map(|e| match e {
         AgentEvent::AssistantMessage { usage, timing: Some(_), .. } => Some(usage.as_ref()), _ => None,
     }).collect();
-    let engine_ms = |prompt| -> Option<u64> {
-        if provider_usages.is_empty() { return None; }
-        provider_usages.iter().map(|u| u.and_then(|u| if prompt { u.prompt_eval_duration_ms } else { u.eval_duration_ms }))
-            .collect::<Option<Vec<_>>>().map(|v| v.iter().sum())
-    };
-    let costs: Option<Vec<f64>> = if usages.is_empty() { None } else { usages.iter().map(|u| u.cost_usd).collect() };
-    let tokens = |input| -> Option<u64> {
-        if usages.is_empty() { return None; }
-        usages.iter().map(|u| if input {u.prompt_tokens} else {u.completion_tokens}).collect::<Option<Vec<_>>>().map(|v| v.iter().sum())
-    };
+    let engine_ms = |prompt| complete_usage_sum(&provider_usages, |u| if prompt { u.prompt_eval_duration_ms } else { u.eval_duration_ms });
+    let cost = complete_usage_sum(&provider_usages, |u| u.cost_usd);
+    let tokens = |input| complete_usage_sum(&provider_usages, |u| if input { u.prompt_tokens } else { u.completion_tokens });
     std::fs::write(base.join("native-result.json"), serde_json::to_vec_pretty(&serde_json::json!({
         "elapsedSeconds":started.elapsed().as_secs_f64(),"error":outcome.err(),
-        "inputTokens":tokens(true),"outputTokens":tokens(false),"costUsd":costs.map(|v| v.iter().sum::<f64>()),
+        "inputTokens":tokens(true),"outputTokens":tokens(false),"costUsd":cost,
         "enginePromptMs":engine_ms(true),"engineGenerationMs":engine_ms(false),
         "toolCalls":events.iter().filter(|e| matches!(e, AgentEvent::ToolCallStarted {..})).count(),
         "permissionRequests":events.iter().filter(|e| matches!(e, AgentEvent::PermissionRequested {..})).count(),
         "transcript":super::transcripts::transcript_path(&runs, id),
     })).unwrap()).unwrap();
+}
+
+fn complete_usage_sum<T: std::iter::Sum<T>>(
+    usages: &[Option<&AgentUsage>], field: impl Fn(&AgentUsage) -> Option<T>,
+) -> Option<T> {
+    if usages.is_empty() { return None; }
+    usages.iter().map(|usage| usage.and_then(&field)).collect::<Option<Vec<_>>>()
+        .map(|values| values.into_iter().sum())
+}
+
+#[test]
+fn missing_turn_usage_cannot_produce_partial_totals() {
+    let known = AgentUsage { prompt_tokens: Some(10), cost_usd: Some(0.5), ..Default::default() };
+    let unknown = AgentUsage::default();
+    assert_eq!(complete_usage_sum(&[Some(&known), Some(&known)], |u| u.prompt_tokens), Some(20));
+    assert_eq!(complete_usage_sum(&[Some(&known), None], |u| u.prompt_tokens), None);
+    assert_eq!(complete_usage_sum(&[Some(&known), Some(&unknown)], |u| u.cost_usd), None);
+    assert_eq!(complete_usage_sum(&[], |u| u.prompt_tokens), None);
 }

@@ -2,6 +2,9 @@
 
 ## Verify a model with Klide
 
+The [test guide](../../docs/LOCAL_AI_ACCEPTANCE.md) also covers the catalog,
+managed setup and self-hosted connection UI.
+
 Run only the native Harness with `--harness native`; Hermes is not required.
 Preview makes no model requests and creates no output:
 

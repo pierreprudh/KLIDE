@@ -45,6 +45,20 @@ class ReportTests(unittest.TestCase):
 
 
 class DriverTests(unittest.TestCase):
+    def test_malformed_native_results_are_retained_as_failures(self):
+        for content in ("{", "[]", '{"error": null}', '{"error": null, "elapsedSeconds": NaN}', '{"error": false, "elapsedSeconds": 1}'):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "native-result.json").write_text(content)
+                self.assertIsNotNone(bench.read_native_result(Path(directory), {"error": None})["error"])
+
+    def test_existing_markdown_evidence_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(bench.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "revision", "")), contextlib.redirect_stderr(io.StringIO()):
+            report = Path(directory) / "REPORT.md"
+            report.write_text("Earlier evidence")
+            with self.assertRaises(SystemExit):
+                bench.main(["--harness", "native", "--model", "fixture", "--run", "--output", directory])
+            self.assertEqual(report.read_text(), "Earlier evidence")
+
     def test_preview_never_compiles_executes_or_creates_output(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(bench.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "revision", "")), patch.object(bench, "execute") as execute, contextlib.redirect_stdout(io.StringIO()) as output:
             destination = Path(directory) / "preview"

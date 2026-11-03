@@ -49,5 +49,7 @@ def write_report(output, manifest, results, setup_error=None):
         duration = group["successfulTrials"]["elapsedSeconds"]["median"]
         lines.append(f"| {group['task']} | {group['harness']} | {group['passed']} / {group['expected']} | {group['failed']} | {'—' if duration is None else f'{duration:.2f} s'} |")
     lines.extend(["", *report["limits"], "", "Inspect manifest.json, results.json and each native transcript for configuration and evidence."])
+    if setup_error:
+        lines.extend(["", "Setup error:", "", str(setup_error)])
     (output / "REPORT.md").write_text("\n".join(lines) + "\n")
     return report

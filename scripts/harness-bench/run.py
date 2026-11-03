@@ -6,6 +6,7 @@ Results preserve failures and unknown metrics; graders live outside workspaces.
 """
 import argparse
 import json
+import math
 import os
 import platform
 from pathlib import Path
@@ -102,6 +103,23 @@ def execute(command, base, env, prompt=None, timeout=180):
         return {"elapsedSeconds": time.monotonic() - started, "error": str(error)}
 
 
+def read_native_result(base, measured):
+    """Retain a broken result as a failed trial, without hiding process errors."""
+    try:
+        result = json.loads((base / "native-result.json").read_text())
+    except FileNotFoundError:
+        return {**measured, "error": measured.get("error") or "Native benchmark produced no result"}
+    except (OSError, ValueError):
+        return {**measured, "error": measured.get("error") or "Native benchmark produced an unreadable result"}
+    elapsed = result.get("elapsedSeconds") if isinstance(result, dict) else None
+    if (not isinstance(result, dict) or "error" not in result or
+            result["error"] is not None and not isinstance(result["error"], str) or
+            not isinstance(elapsed, (int, float)) or isinstance(elapsed, bool) or
+            not math.isfinite(elapsed) or elapsed < 0):
+        return {**measured, "error": measured.get("error") or "Native benchmark produced an invalid result"}
+    return {**measured, **result, "error": measured.get("error") or result["error"]}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", default="openrouter", help="KIDE provider ID")
@@ -149,9 +167,13 @@ def main(argv=None):
         print(json.dumps({"preview": True, **manifest}, indent=2)); return 0
     output = (args.output or Path(tempfile.mkdtemp(prefix="kide-hermes-bench-"))).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    if any((output / name).exists() for name in ("manifest.json", "results.json", "report.json")):
+    if any((output / name).exists() for name in ("manifest.json", "results.json", "report.json", "REPORT.md")):
         parser.error("Output contains an earlier run; choose a fresh directory to preserve its evidence")
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    try:
+        with (output / "manifest.json").open("x") as file:
+            file.write(json.dumps(manifest, indent=2))
+    except FileExistsError:
+        parser.error("Another run claimed this output directory; choose a fresh directory")
     write_report(output, manifest, [])
     # Compile before timing trials. This test drives KIDE's real Rust loop.
     if "native" in harnesses:
@@ -176,11 +198,7 @@ def main(argv=None):
                 if harness == "native":
                     env["KLIDE_BENCH_CASE"] = str(base)
                     measured = execute(["cargo", "test", "--manifest-path", str(REPO / "src-tauri/Cargo.toml"), "--lib", "paired_harness_benchmark", "--", "--ignored", "--exact", "agent::live_eval::paired_harness_benchmark", "--nocapture"], base, env, timeout=args.timeout + 60)
-                    if (base / "native-result.json").exists():
-                        process_error = measured.get("error")
-                        measured.update(json.loads((base / "native-result.json").read_text()))
-                        measured["error"] = process_error or measured.get("error")
-                    elif not measured["error"]: measured["error"] = "Native benchmark produced no result"
+                    measured = read_native_result(base, measured)
                 else:
                     home = base / "hermes-home"; home.mkdir()
                     env["HERMES_HOME"] = str(home)
