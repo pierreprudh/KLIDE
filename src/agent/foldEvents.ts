@@ -90,6 +90,8 @@ export type AssistantMeta = {
   promptTokens?: number;
   /** Share of the prompt the provider served from its prompt cache, 0–100. */
   cachedPct?: number;
+  /** Exact provider-reported cache reads; retained alongside the rounded share. */
+  cacheReadTokens?: number;
   /** Decode speed in tok/s — never derived from wall clock (see computeMeta). */
   tps?: number;
   /** True iff `tokens` came from the provider, not the estimate. */
@@ -949,6 +951,7 @@ function computeMeta(
     tokens: tokens || undefined,
     tokensEstimate: hasUsage ? undefined : estimated || undefined,
     promptTokens: usage?.promptTokens,
+    cacheReadTokens: usage?.cacheReadTokens,
     cachedPct:
       usage?.cacheReadTokens !== undefined && usage.promptTokens
         ? Math.round((usage.cacheReadTokens / usage.promptTokens) * 100)
@@ -1086,6 +1089,7 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
             tokens: row.meta.tokens,
             promptTokens: row.meta.promptTokens,
             cachedPct: row.meta.cachedPct,
+            cacheReadTokens: row.meta.cacheReadTokens,
             tps: row.meta.tps,
             exact: row.meta.exact,
             costUsd: row.meta.costUsd,

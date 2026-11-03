@@ -21,6 +21,19 @@ describe("inline run failure", () => {
 });
 
 describe("response cost footer", () => {
+  it("keeps exact cache counts through replay even when the percentage rounds to 100", () => {
+    const msgs = foldedToMsgs(foldAgentEvents([
+      { type: "assistant_message", runId: "r", messageId: "a", content: [{ type: "text", text: "Done" }], usage: { promptTokens: 1000, completionTokens: 42, cacheReadTokens: 999 }, ts: 1 },
+    ]));
+    const restored: Msg = JSON.parse(JSON.stringify(msgs[0]));
+    const html = renderToStaticMarkup(renderMessageBody(restored));
+    expect(html).toContain("in 1K");
+    expect(html).toContain("out 42");
+    expect(html).toContain("cache 999");
+    expect(html).not.toContain('role="meter"');
+    expect(html).not.toContain("100% cached");
+  });
+
   it.each([true, false])("shows a compaction's own price after replay (manual=%s)", (manual) => {
     const msgs = foldedToMsgs(foldAgentEvents([
       { type: "context_compacted", runId: "r", summary: "Earlier findings", kept: 0, costUsd: 0.313914, manual, ts: 0 },

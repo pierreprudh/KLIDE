@@ -1104,10 +1104,18 @@ function formatDuration(ms: number): string {
 
 // Quiet per-message stats — centered under the answer, barely-there by
 // default, full strength on hover (see .klide-msg-meta in tokens.css).
-function MessageMeta({ meta, responseCost }: { meta: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; cachedPct?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number }; responseCost?: ResponseCost }) {
+function MessageMeta({ meta, responseCost }: { meta: { ms?: number; modelMs?: number; tokens?: number; promptTokens?: number; cachedPct?: number; cacheReadTokens?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number }; responseCost?: ResponseCost }) {
   const parts: string[] = [];
+  const details: string[] = [];
+  const tokenCount = (n: number) => n.toLocaleString("en", { notation: "compact", maximumSignificantDigits: 3 });
+  if (meta.promptTokens !== undefined) parts.push(`in ${tokenCount(meta.promptTokens)}`);
+  if (meta.tokens !== undefined) parts.push(`out ${meta.exact ? "" : "~"}${tokenCount(meta.tokens)}`);
+  if (meta.cacheReadTokens !== undefined) {
+    parts.push(`cache ${tokenCount(meta.cacheReadTokens)}`);
+  } else if (meta.promptTokens !== undefined && meta.cachedPct !== undefined) {
+    parts.push(`cache ~${tokenCount(Math.round(meta.promptTokens * meta.cachedPct / 100))}`);
+  }
   if (meta.tps) parts.push(`${meta.tps} tok/s`);
-  if (meta.tokens) parts.push(`${meta.exact ? "" : "~"}${meta.tokens.toLocaleString()} tokens`);
   // The duration slot is the model's own time when the harness measured it.
   // Wall clock only earns its own slot when it's meaningfully longer — that
   // gap is tool execution and time the turn sat waiting on a diff review.
@@ -1121,29 +1129,21 @@ function MessageMeta({ meta, responseCost }: { meta: { ms?: number; modelMs?: nu
   if (meta.ttftMs !== undefined && (durationMs === undefined || formatDuration(meta.ttftMs) !== formatDuration(durationMs))) {
     parts.push(`TTFT ${formatDuration(meta.ttftMs)}`);
   }
-  // How much of the prompt the provider read from its cache — the number
-  // that says caching works. Only shown when the provider reported it.
-  const cachePct = meta.cachedPct !== undefined ? Math.max(0, Math.min(100, meta.cachedPct)) : undefined;
   // Cost last, so the eye lands on it. Sub-cent turns show "<$0.01".
   if (meta.costUsd !== undefined && meta.costUsd > 0 && !responseCost) {
-    parts.push(`${formatCost(meta.costUsd)} this call`);
+    details.push(`${formatCost(meta.costUsd)} this call`);
   }
   if (responseCost && responseCost.costUsd > 0) {
-    parts.push(`${formatCost(responseCost.costUsd)} response total (${responseCost.calls} priced call${responseCost.calls === 1 ? "" : "s"})`);
+    details.push(`${formatCost(responseCost.costUsd)} response total (${responseCost.calls} priced call${responseCost.calls === 1 ? "" : "s"})`);
   }
-  if (parts.length === 0 && cachePct === undefined) return null;
+  const costLabel = formatCost(responseCost ? responseCost.costUsd : meta.costUsd);
+  if (costLabel) parts.push(responseCost ? `${costLabel} (${responseCost.calls} call${responseCost.calls === 1 ? "" : "s"})` : costLabel);
+  if (parts.length === 0) return null;
   return (
     <div className="klide-msg-meta">
-      <div className="klide-msg-meta-stats" tabIndex={0} title="Tokens, speed, timing and cache describe the last model call. Response cost includes all known model calls behind the answer, including automatic compaction.">
+      <div className="klide-msg-meta-stats" tabIndex={0} title={`${parts.join("\n")}\n${details.join("\n")}\n\nInput, output, cache, speed and timing describe the last model call. Cached tokens are included in input. ~ marks estimates; older messages estimate cache reads from a rounded percentage. Response cost includes all known model calls behind the answer, including automatic compaction.`}>
         {parts.map((part, index) => <span key={index}>{part}</span>)}
       </div>
-      {cachePct !== undefined && <span className="klide-response-cache" title={`${cachePct}% of input served from cache on the last model call`}>
-        <svg width="15" height="15" viewBox="0 0 20 20" role="meter" aria-label="Last model call input served from cache" aria-valuemin={0} aria-valuemax={100} aria-valuenow={cachePct} aria-valuetext={`${cachePct}% cached`}>
-          <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="2" />
-          <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="2" pathLength="100" strokeDasharray={`${cachePct} 100`} transform="rotate(-90 10 10)" />
-        </svg>
-        <span>{cachePct}% cached</span>
-      </span>}
     </div>
   );
 }

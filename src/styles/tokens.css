@@ -2936,7 +2936,6 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 .klide-msg-meta-stats > span { flex-shrink: 0; }
 .klide-msg-meta-stats:focus-visible { outline: 1px solid var(--fg-subtle); outline-offset: 2px; }
-.klide-response-cache { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; }
 
 /* A folded run of tool work opens by growing to whatever height its rows
    need. `grid-template-rows: 0fr → 1fr` is what makes that animatable: a
