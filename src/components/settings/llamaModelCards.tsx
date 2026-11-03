@@ -1,5 +1,5 @@
 import { CheckIcon, ChevronDown, KlideMark } from "../ai/icons";
-import { LlamaLogo, MistralLogo, QwenLogo } from "../../modelBrand";
+import { HuggingFaceLogo, LiquidAiLogo, LlamaLogo, MistralLogo, QwenLogo } from "../../modelBrand";
 import type { LlamaSetupInfo } from "../../ipc/aiProviders";
 import { useId } from "react";
 import { localModelSuggestions } from "./localModelSuggestions";
@@ -17,7 +17,7 @@ export function LlamaModelCards({ info, value, disabled, onChange }: Props) {
   function card(model: LlamaSetupInfo["models"][number]) {
     const selected = model.id === value;
     const fits = info.memoryBudgetGb == null ? null : model.memoryGb <= info.memoryBudgetGb;
-    const Logo = model.maker === "klide" ? KlideMark : model.maker === "qwen" ? QwenLogo : model.maker === "meta" ? LlamaLogo : MistralLogo;
+    const Logo = model.maker === "klide" ? KlideMark : model.maker === "qwen" ? QwenLogo : model.maker === "meta" ? LlamaLogo : model.maker === "mistral" ? MistralLogo : model.maker === "liquid" ? LiquidAiLogo : HuggingFaceLogo;
     return <article key={model.id} className="klide-llama-card" data-selected={selected}>
       <label className="klide-llama-card-choice">
         <input type="radio" name={name} value={model.id} checked={selected} onChange={() => onChange(model.id)} />
@@ -28,11 +28,12 @@ export function LlamaModelCards({ info, value, disabled, onChange }: Props) {
         </div>
         <span className="klide-llama-card-description">{model.description}</span>
         <dl className="klide-llama-card-stats">
-          <div><dt>Memory estimate</dt><dd>{model.memoryGb} GB</dd></div>
-          <div><dt>Download</dt><dd>{model.downloadGb} GB</dd></div>
+          <div><dt>Memory estimate</dt><dd>{model.memoryGb.toFixed(1)} GiB</dd></div>
+          <div><dt>Download</dt><dd>{model.downloadGb.toFixed(2)} GB</dd></div>
         </dl>
         <span className="klide-llama-card-fit">{fits === null ? "Memory fit unknown" : fits ? "Estimated to fit" : "Above this computer’s memory budget"} · {model.quantization}</span>
       </label>
+      {model.registrySource && <p className="klide-llama-hint">Registry candidate · 16k estimate · not tested on this Mac. <a className="klide-community-source" href={model.registrySource} target="_blank" rel="noreferrer">Source recipe</a></p>}
       <div className="klide-llama-card-footer">
         <a href={model.url} target="_blank" rel="noreferrer">Model details</a>
         {model.id === info.recommendedModel && <span className="klide-llama-recommended">Recommended</span>}
@@ -43,7 +44,7 @@ export function LlamaModelCards({ info, value, disabled, onChange }: Props) {
     <legend className="klide-llama-label">Models for this computer</legend>
     <p className="klide-llama-hint klide-llama-model-intro">{info.memoryBudgetGb == null
       ? "Memory fit is unknown. Choose a small model to start."
-      : `Memory estimates use a 16k context and a ${info.memoryBudgetGb.toFixed(1)} GB model budget.`} Coding performance has not been verified.</p>
+      : `Memory estimates use a 16k context and a ${info.memoryBudgetGb.toFixed(1)} GiB model budget.`} Coding performance has not been verified.</p>
     <div className="klide-llama-card-grid">
       {suggested.map(card)}
     </div>

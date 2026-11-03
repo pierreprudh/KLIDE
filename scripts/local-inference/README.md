@@ -1,5 +1,7 @@
 # Local inference benchmark
 
+For finding additional models and testing their fit, see [registry model discovery](REGISTRY.md).
+
 An opt-in Rust test compares the Klide model through its real streaming adapters.
 
 | Coverage | Details |

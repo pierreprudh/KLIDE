@@ -77,7 +77,7 @@ fn project(bytes: &[u8]) -> Result<CatalogView, String> {
                 evidence: evidence.into(),
                 date: proof["at"].as_str().map(str::to_string),
                 source: format!("https://github.com/sybil-solutions/local-ai-registry/blob/{REVISION}/registry/recipes/{key}.json"),
-                needs: recipe["needs"].clone(),
+                needs: recipe["launch"]["needs"].clone(),
             })
         }).collect::<Vec<_>>();
         if !recipes.is_empty() { hardware.push(HardwareView { id, name: card.name, memory_gb: card.vram_gb, recipes }); }
@@ -88,6 +88,9 @@ fn project(bytes: &[u8]) -> Result<CatalogView, String> {
 
 #[tauri::command]
 pub async fn ai_local_model_catalog() -> Result<CatalogView, String> {
+    project(&fetch_catalog().await?)
+}
+pub(crate) async fn fetch_catalog() -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30))
         .build().map_err(|e| e.to_string())?;
     let mut response = client.get(format!("https://raw.githubusercontent.com/sybil-solutions/local-ai-registry/{REVISION}/dist/catalog.json"))
@@ -98,7 +101,7 @@ pub async fn ai_local_model_catalog() -> Result<CatalogView, String> {
         if bytes.len() + chunk.len() > MAX_BYTES { return Err("Model catalog exceeds the size limit".into()); }
         bytes.extend_from_slice(&chunk);
     }
-    project(&bytes)
+    Ok(bytes)
 }
 
 #[cfg(test)]

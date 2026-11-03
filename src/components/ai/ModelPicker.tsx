@@ -97,6 +97,7 @@ export function modelOptionsFor(
  *  glance. Strip the noisy repo prefix that Hugging Face / Ollama-style
  *  tags both use. Value stays the same; only the display is shortened. */
 export function modelLabel(name: string): string {
+  if (name.startsWith("registry/")) return name.slice(9).replace(/@[a-f0-9]{12}$/i, "");
   const slash = name.indexOf("/");
   return slash >= 0 ? name.slice(slash + 1) : name;
 }
