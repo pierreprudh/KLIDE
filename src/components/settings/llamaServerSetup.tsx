@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   installLlamaRuntime, readLlamaSetupInfo, readLocalProviderStatus,
-  selectLlamaModel, startLocalProvider, stopLocalProvider, readLocalSetupProgress, type LlamaSetupInfo, type LocalSetupProgress,
+  selectLlamaModel, startLocalProvider, stopLocalProvider, readLocalProviderDetails, readLocalSetupProgress, type LlamaSetupInfo, type LocalSetupProgress,
 } from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
 import { ChevronDown, ProviderLogo } from "../ai/icons";
@@ -12,6 +12,7 @@ export function LlamaServerSetup() {
   const [info, setInfo] = useState<LlamaSetupInfo | null>(null);
   const [model, setModel] = useState("");
   const [running, setRunning] = useState(false);
+  const [owned, setOwned] = useState(false);
   const [busy, setBusy] = useState<"runtime" | "model" | "stop" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
@@ -27,14 +28,20 @@ export function LlamaServerSetup() {
     }).catch((e) => { if (!cancelled) setError(String(e)); });
     async function check() {
       try {
-        const [up, step] = await Promise.all([readLocalProviderStatus("llamacpp"), readLocalSetupProgress("llamacpp")]);
-        if (!cancelled) { setRunning(up); setProgress(step); }
+        const [server, step] = await Promise.all([readLocalProviderDetails("llamacpp"), readLocalSetupProgress("llamacpp")]);
+        if (!cancelled) { setRunning(server.ready); setOwned(server.owned); setProgress(step); }
       }
       catch (e) { if (!cancelled) setError(String(e)); }
     }
-    void check();
-    const timer = setInterval(() => void check(), 1000);
-    return () => { cancelled = true; clearInterval(timer); };
+    // Schedule after completion: a slow health probe must not accumulate or
+    // overwrite newer progress with an older interval response.
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      await check();
+      if (!cancelled) timer = setTimeout(() => void poll(), 1000);
+    }
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [retry]);
 
   async function act(action: "runtime" | "model" | "stop") {
@@ -45,6 +52,7 @@ export function LlamaServerSetup() {
         await stopLocalProvider("llamacpp");
         const up = await readLocalProviderStatus("llamacpp");
         setRunning(up);
+        setOwned(false);
         if (up) throw new Error("This server was started outside Klide. Stop it there before changing models.");
       } else if (action === "runtime") {
         await installLlamaRuntime();
@@ -55,6 +63,7 @@ export function LlamaServerSetup() {
         if (!up) throw new Error("The model did not become ready. Try starting it again.");
       }
       const next = await readLlamaSetupInfo(); setInfo(next);
+      setModel(next.selectedModel ?? next.recommendedModel ?? "");
     } catch (e) { setError(String(e)); }
     finally { setBusy(null); }
   }
@@ -65,15 +74,15 @@ export function LlamaServerSetup() {
     <Row leading={<ProviderLogo id="llamacpp" size={24} />} title="llama.cpp" description={info
       ? `${info.machine.chip} · ${info.machine.memoryGb == null ? "RAM unknown" : `${Math.round(info.machine.memoryGb)} GB RAM`}`
       : "Checking this machine…"}
-      control={<StatusText tone={running ? "ok" : "idle"}>{running ? "Running" : info?.runtimeInstalled ? "Installed" : "Not installed"}</StatusText>} />
+      control={<StatusText tone={running ? "ok" : owned ? "warn" : "idle"}>{running ? "Running" : owned ? "Not ready" : info?.runtimeInstalled ? "Installed" : "Not installed"}</StatusText>} />
     {info && <div className="klide-llama-body">
-      <LlamaModelCards info={info} value={model} disabled={!!busy || setupActive || running} onChange={setModel} />
+      <LlamaModelCards info={info} value={model} disabled={!!busy || setupActive || running || owned} onChange={setModel} />
       <div className="klide-llama-controls">
         <button className="klide-button klide-button-secondary"
-          disabled={!!busy || setupActive || (!running && !model)} onClick={() => void act(running ? "stop" : "model")}>
-          {busy || setupActive ? "Setting up…" : running ? "Stop" : info.runtimeInstalled ? `Start ${chosen?.label ?? "model"}` : "Set up & start"}
+          disabled={!!busy || setupActive || (!running && !owned && !model)} onClick={() => void act(running || owned ? "stop" : "model")}>
+          {busy === "stop" ? "Stopping…" : busy || setupActive ? "Setting up…" : running || owned ? "Stop" : info.runtimeInstalled ? `Start ${chosen?.label ?? "model"}` : "Set up & start"}
         </button>
-        <span className="klide-llama-hint">{running ? "Stop to change models" : "Downloads on first start"}</span>
+        <span className="klide-llama-hint">{owned && !running ? "The managed server is not ready. Stop it before retrying." : running ? "Stop to change models" : "Downloads on first start"}</span>
       </div>
       {fits === false && <div className="klide-llama-hint">This model may exceed your memory budget. Choose a smaller one for smoother use.</div>}
       {info.memoryBudgetGb == null && <div className="klide-llama-hint">RAM could not be detected. Start with a small model.</div>}

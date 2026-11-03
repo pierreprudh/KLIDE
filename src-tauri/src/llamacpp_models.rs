@@ -261,15 +261,21 @@ pub(crate) async fn ai_llamacpp_setup_info() -> Result<SetupInfo, String> {
 }
 #[tauri::command]
 pub(crate) async fn ai_llamacpp_select_model(model: String) -> Result<(), String> {
-    if crate::local_setup::active("llamacpp") {
-        return Err("Wait for the current setup before changing its model".into());
-    }
+    let setup = crate::local_setup::begin("llamacpp")?;
     if crate::local_servers::local_server_is_up("llamacpp").await
         && selected_model().as_deref() != Some(model.as_str())
     {
-        return Err("Stop llama.cpp before changing its model".into());
+        let result = Err("Stop llama.cpp before changing its model".into());
+        setup.finish::<()>(&result);
+        return result;
     }
-    tokio::task::spawn_blocking(move || save_model(model))
+    tokio::task::spawn_blocking(move || {
+        // The worker owns admission until its write completes, even if the
+        // invoking future is dropped while the blocking worker is running.
+        let result = save_model(model);
+        setup.finish(&result);
+        result
+    })
         .await
         .map_err(|e| e.to_string())?
 }

@@ -22,7 +22,7 @@ impl Tracker {
     fn begin(&self, provider: &str) -> Result<Setup<'_>, String> {
         let mut rows = self.0.lock().map_err(|e| e.to_string())?;
         if rows.get(provider).is_some_and(Progress::active) {
-            return Err("Setup is already in progress. Follow its progress in Local AI.".into());
+            return Err("Another local model operation is in progress. Follow its progress in Local AI.".into());
         }
         rows.insert(provider.into(), Progress { phase: "checking".into(), ..Default::default() });
         Ok(Setup { tracker: self, provider: provider.into(), finished: false })
@@ -55,9 +55,6 @@ impl Drop for Setup<'_> {
     }
 }
 pub fn begin(provider: &str) -> Result<Setup<'static>, String> { tracker().begin(provider) }
-pub fn active(provider: &str) -> bool {
-    tracker().0.lock().ok().and_then(|rows| rows.get(provider).map(Progress::active)).unwrap_or(false)
-}
 pub fn phase(provider: &str, phase: &str) {
     if let Ok(mut rows) = tracker().0.lock() {
         if let Some(row) = rows.get_mut(provider).filter(|r| r.active()) {

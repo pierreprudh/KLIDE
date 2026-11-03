@@ -248,9 +248,14 @@ async fn start_local_server(
         return Err(format!("{provider} is not a local server provider"));
     }
 
-    // Serialize setup/start so multiple panels cannot spawn competing downloads.
-    static LLAMA_START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _llama_guard = if provider == "llamacpp" { Some(LLAMA_START.lock().await) } else { None };
+    // The setup lease also excludes model selection and Stop for this provider.
+    if provider == "llamacpp" {
+        let selected = tokio::task::spawn_blocking(crate::llamacpp_models::launch_model)
+            .await.map_err(|e| e.to_string())?;
+        if selected != model {
+            return Err("The selected model changed in another panel. Select your model again before starting.".into());
+        }
+    }
 
     // Already running externally or previously started. Still warm the model:
     // the port can be up while the model is unloaded / mid-download.
@@ -410,24 +415,46 @@ pub(crate) fn ai_local_server_stop(
     provider: String,
     state: tauri::State<'_, LocalServerState>,
 ) -> Result<bool, String> {
-    if crate::local_setup::active(&provider) {
-        return Err("Setup is still in progress. Wait for it to finish before stopping the server.".into());
-    }
     if !is_local_server_provider(&provider) {
         return Err(format!("{provider} is not a local server provider"));
     }
+    let setup = crate::local_setup::begin(&provider)?;
+    let result = stop_managed_server(&provider, &state);
+    setup.finish(&result);
+    result
+}
 
-    let child = {
-        let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
-        procs.remove(&provider)
-    };
-
-    if let Some(mut c) = child {
-        let _ = c.kill();
-        let _ = c.wait();
+fn stop_managed_server(provider: &str, state: &LocalServerState) -> Result<bool, String> {
+    let mut processes = state.processes.lock().map_err(|e| e.to_string())?;
+    if let Some(child) = processes.get_mut(provider) {
+        if child.try_wait().map_err(|e| format!("Could not check managed server: {e}"))?.is_none() {
+            child.kill().map_err(|e| format!("Could not stop managed server: {e}"))?;
+        }
+        child.wait().map_err(|e| format!("Could not reap managed server: {e}"))?;
     }
-
+    processes.remove(provider);
     Ok(false)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LocalServerDetails { ready: bool, owned: bool }
+
+#[tauri::command]
+pub(crate) async fn ai_local_server_details(
+    provider: String,
+    state: tauri::State<'_, LocalServerState>,
+) -> Result<LocalServerDetails, String> {
+    let owned = {
+        let mut processes = state.processes.lock().map_err(|e| e.to_string())?;
+        managed_server_owned(&mut processes, &provider)?
+    };
+    Ok(LocalServerDetails { ready: local_server_ready(&provider).await, owned })
+}
+
+fn managed_server_owned(processes: &mut HashMap<String, std::process::Child>, provider: &str) -> Result<bool, String> {
+    remove_exited(processes, provider)?;
+    Ok(processes.contains_key(provider))
 }
 
 #[tauri::command]
@@ -522,6 +549,18 @@ mod tests {
         let mut processes = HashMap::from([("test".into(), child)]);
         remove_exited(&mut processes, "test").unwrap();
         assert!(!processes.contains_key("test"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unhealthy_owned_process_can_still_be_stopped() {
+        let child = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = child.id() as i32;
+        let state = LocalServerState { processes: Mutex::new(HashMap::from([("test".into(), child)])) };
+        assert!(managed_server_owned(&mut state.processes.lock().unwrap(), "test").unwrap());
+        stop_managed_server("test", &state).unwrap();
+        assert!(!managed_server_owned(&mut state.processes.lock().unwrap(), "test").unwrap());
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     }
 
     #[cfg(unix)]

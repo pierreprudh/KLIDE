@@ -18,6 +18,12 @@ restarting. A process that fails before readiness is killed and reaped on every
 exit path. Stop affects only Klide-owned processes. Setup itself is not cancellable
 from this first UI slice; Stop is available after setup completes.
 
+Readiness and process ownership are reported separately. An unhealthy owned
+server still offers Stop, so the user can recover without leaving settings.
+Start, Stop and model selection use the same admission lease; Start refuses
+if the caller's chosen model changed in another panel. Blocking selection and
+runtime extraction retain their locks until their filesystem work completes.
+
 Existing download checks remain in force: official runtime archives require a
 SHA-256 match, and the Klide GGUF is published only after its pinned digest matches.
 Other curated models continue to use llama.cpp's own Hugging Face downloader.

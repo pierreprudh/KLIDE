@@ -1283,6 +1283,7 @@ pub fn run() {
             local_servers::ai_local_server_start,
             local_servers::ai_local_server_stop,
             local_servers::ai_local_server_status,
+            local_servers::ai_local_server_details,
             local_setup::ai_local_setup_progress,
             local_servers::ollama_account_status,
             gateway::gateway_status,
