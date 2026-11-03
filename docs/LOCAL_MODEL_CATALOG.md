@@ -11,9 +11,12 @@ The adapter accepts catalog schema 4, limits downloads to 12 MiB, and projects
 up to three published picks per hardware entry. Withdrawn, archived and captured
 proofs are excluded. Legacy and related-hardware proofs have distinct labels.
 
-Chip names and memory must match exactly for automatic hardware selection.
-Otherwise the user selects hardware explicitly, including a different machine's
-GPU. This is hardware matching, not a free-memory or performance guarantee.
+The detected computer is always shown and selected, even when the catalog has
+no tested configuration for it. Chip names and memory must match exactly before
+that computer shows upstream recipes. A missing entry is explained separately
+from failed detection or unknown memory. The user can also select catalog
+hardware explicitly, including a different machine's GPU. This is hardware
+matching, not a free-memory or performance guarantee.
 Unknown measurements stay unknown. Each card links to its recipe at the same
 commit, with upstream requirements and evidence. Nothing is labelled verified
 in Klide: full agent acceptance requires separate evidence.
