@@ -4,7 +4,11 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ProviderLogo } from "../src/components/ai/icons";
-import { SourceLogo, ForkGlyph, WorktreeGlyph, DiffGlyph, MemoryGlyph, ExportGlyph, EvidenceGlyph, PencilGlyph, ArchiveGlyph, CopyGlyph, FolderGlyph } from "../src/components/missionControl/glyphs";
+import { SourceLogo, ForkGlyph, WorktreeGlyph, DiffGlyph, MemoryGlyph, ExportGlyph, PencilGlyph, ArchiveGlyph, CopyGlyph, Glyph } from "../src/components/missionControl/glyphs";
+// Both glyphs left glyphs.tsx with their run actions (d37de83); kept here so
+// the proposals still render.
+const EvidenceGlyph = <Glyph><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" /><path d="M14 3v6h6" /><path d="m9 15 2 2 4-4" /></Glyph>;
+const FolderGlyph = <Glyph><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></Glyph>;
 import { DELEGATES } from "../src/delegates";
 import { makerMark } from "../src/modelIdentity";
 import { ChevronIcon, FocusLayoutIcon, MoreIcon } from "../src/icons";

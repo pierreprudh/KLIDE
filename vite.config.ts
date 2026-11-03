@@ -29,6 +29,13 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  // Pre-bundle from the app's own entry only. Left unset, Vite scans every
+  // .html in the repo — preview/ harnesses, artifacts/, src-tauri/target/
+  // codegen — and one stale preview import fails the whole scan, so the app
+  // starts with pre-bundling skipped.
+  optimizeDeps: {
+    entries: ["index.html"],
+  },
   test: {
     // Coding-agent worktrees live at `.claude/worktrees/<name>/` — inside the
     // repo, and hidden from `git status` by `.git/info/exclude`. Each one holds
