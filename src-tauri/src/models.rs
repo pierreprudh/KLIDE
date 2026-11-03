@@ -53,7 +53,7 @@ impl ModelMeta {
 }
 
 /// A row's task, from its explicit `task` field or its Ollama capabilities.
-fn listed_task(row: &serde_json::Value) -> Option<String> {
+pub(crate) fn listed_task(row: &serde_json::Value) -> Option<String> {
     if let Some(task) = row.get("task").and_then(|v| v.as_str()) {
         return Some(task.to_ascii_lowercase());
     }

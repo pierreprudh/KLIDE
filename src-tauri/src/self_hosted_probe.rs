@@ -18,6 +18,9 @@ fn parse_models(body: &[u8]) -> Result<Vec<String>, String> {
     for row in rows {
         let id = row["id"].as_str().filter(|id| !id.trim().is_empty())
             .ok_or("The model list contains an invalid model ID.")?;
+        if matches!(crate::models::listed_task(row).as_deref(), Some("embedding" | "ocr")) {
+            continue;
+        }
         models.push(id.to_string());
     }
     models.sort(); models.dedup();
@@ -86,6 +89,16 @@ mod tests {
         assert!(parse_models(br#"{"data":[{}]}"#).is_err());
         assert_eq!(parse_models(br#"{"data":[{"id":"b"},{"id":"a"},{"id":"b"}]}"#).unwrap(), ["a", "b"]);
         assert!(parse_models(br#"{"data":[]}"#).unwrap().is_empty());
+    }
+    #[test]
+    fn known_non_chat_models_cannot_be_selected_as_chat_defaults() {
+        let models = parse_models(br#"{"data":[
+            {"id":"chat","task":"chat"}, {"id":"unknown"},
+            {"id":"embed","task":"EMBEDDING"}, {"id":"ocr","task":"ocr"},
+            {"id":"embed-caps","capabilities":["embedding"]},
+            {"id":"both","capabilities":["embedding","completion"]}
+        ]}"#).unwrap();
+        assert_eq!(models, ["both", "chat", "unknown"]);
     }
     #[tokio::test]
     async fn tests_auth_and_models_without_generating_text() {

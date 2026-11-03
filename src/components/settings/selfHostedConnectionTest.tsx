@@ -29,13 +29,13 @@ export function SelfHostedConnectionTest({ provider, onSelectModel }: {
     </button>
     {error && <div role="alert" style={{ color: "var(--danger)" }}>{error}</div>}
     {result && <>
-      <div role="status">Connected · {result.models.length} models · {result.elapsedMs} ms</div>
+      <div role="status">Connected · {result.models.length} chat models · {result.elapsedMs} ms</div>
       {result.models.length > 0 ? <label>Choose a default model
         <select className="klide-field" style={{ display: "block", width: "100%", marginTop: 6 }} value={result.models.includes(provider.defaultModel) ? provider.defaultModel : ""} onChange={(e) => onSelectModel(e.target.value)}>
           <option value="">Choose a model</option>
           {result.models.map((model) => <option key={model} value={model}>{model}</option>)}
         </select>
-      </label> : <div>The endpoint is reachable but reports no models. Load a model on the server, then test again.</div>}
+      </label> : <div>The endpoint is reachable but reports no chat models. Load a chat model on the server, then test again.</div>}
       <div style={{ color: "var(--fg-subtle)" }}>This checks access and model discovery. Coding and tool support require a separate model test.</div>
     </>}
   </div>;

@@ -20,7 +20,10 @@ Choose **Test connection** before saving. The check reads `/models` with a
 10-second timeout and 2 MiB response limit. It reports authentication, address,
 redirect and response-format problems separately, without echoing response bodies.
 Select a reported model as the default, then save. Testing does not save config
-or issue a model generation request. Empty listings are shown explicitly.
+or issue a model generation request. Models explicitly marked as embedding or
+OCR are excluded from chat defaults, using the same task interpretation as the
+existing provider picker. Unknown tasks remain available without claiming
+verified chat support. Empty chat listings are shown explicitly.
 
 Choose the saved endpoint as the intelligence source for a compatible harness.
 Existing native and delegate source selection remains in control: this does not
