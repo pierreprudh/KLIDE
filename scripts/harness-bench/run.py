@@ -6,7 +6,9 @@ Results preserve failures and unknown metrics; graders live outside workspaces.
 """
 import argparse
 import json
+import math
 import os
+import platform
 from pathlib import Path
 import random
 import signal
@@ -14,7 +16,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from quality_tasks import TASKS as QUALITY_TASKS, GRADERS as QUALITY_GRADERS
+from verification_report import write_report
 
 REPO = Path(__file__).resolve().parents[2]
 TASKS = [
@@ -99,7 +103,24 @@ def execute(command, base, env, prompt=None, timeout=180):
         return {"elapsedSeconds": time.monotonic() - started, "error": str(error)}
 
 
-def main():
+def read_native_result(base, measured):
+    """Retain a broken result as a failed trial, without hiding process errors."""
+    try:
+        result = json.loads((base / "native-result.json").read_text())
+    except FileNotFoundError:
+        return {**measured, "error": measured.get("error") or "Native benchmark produced no result"}
+    except (OSError, ValueError):
+        return {**measured, "error": measured.get("error") or "Native benchmark produced an unreadable result"}
+    elapsed = result.get("elapsedSeconds") if isinstance(result, dict) else None
+    if (not isinstance(result, dict) or "error" not in result or
+            result["error"] is not None and not isinstance(result["error"], str) or
+            not isinstance(elapsed, (int, float)) or isinstance(elapsed, bool) or
+            not math.isfinite(elapsed) or elapsed < 0):
+        return {**measured, "error": measured.get("error") or "Native benchmark produced an invalid result"}
+    return {**measured, **result, "error": measured.get("error") or result["error"]}
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", default="openrouter", help="KIDE provider ID")
     parser.add_argument("--hermes-provider", help="Hermes backend ID, defaults to --provider (openai becomes openai-api)")
@@ -111,24 +132,60 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run", action="store_true", help="Execute model calls (may incur provider charges)")
-    args = parser.parse_args()
+    parser.add_argument("--harness", choices=["both", "native", "hermes"], default="both", help="Use native for Klide-only verification; Hermes is not required")
+    parser.add_argument("--task", action="append", choices=[task["id"] for task in TASKS], help="Run only these tasks within the selected suite (repeatable)")
+    parser.add_argument("--engine-version", help="Operator-reported engine/version; unknown when omitted")
+    parser.add_argument("--model-revision", help="Operator-reported weights revision or digest")
+    parser.add_argument("--recipe-url", help="Optional link to the exact deployment configuration")
+    args = parser.parse_args(argv)
     if args.repeats < 1 or args.timeout < 1:
         parser.error("repeats and timeout must be positive")
     tasks = [task for task in TASKS if args.suite == "all" or
              (task["id"] in QUALITY_GRADERS) == (args.suite == "quality")]
+    if args.task:
+        tasks = [task for task in tasks if task["id"] in args.task]
+    if not tasks:
+        parser.error("No tasks match the selected suite and task filters")
+    harnesses = ["native", "hermes"] if args.harness == "both" else [args.harness]
     backend = args.hermes_provider or {"openai": "openai-api"}.get(args.provider, args.provider)
     manifest = {"benchmark": "kide-hermes-synthetic-v2", "provider": args.provider, "hermesProvider": backend, "model": args.model, "repeats": args.repeats, "timeoutSeconds": args.timeout, "seed": args.seed, "suite": args.suite, "tasks": [t["id"] for t in tasks], "limits": ["Synthetic tasks, not a coding quality leaderboard", "Each harness keeps its native tools and prompt", "Hermes CLI metrics unavailable to this runner remain null", "Full-auto native execution; fresh Hermes home per trial; no human answers", "Hermes uses CLI oneshot here; ACP transport is tested separately"]}
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
+    manifest.update({"benchmark": "klide-native-verification-v1" if args.harness == "native" else manifest["benchmark"],
+                     "harnesses": harnesses, "sourceRevision": revision.stdout.strip() if revision.returncode == 0 else None,
+                     "startedAt": datetime.now(timezone.utc).isoformat(), "machine": {"system": platform.system(), "architecture": platform.machine()},
+                     "engineVersion": args.engine_version, "modelRevision": args.model_revision, "recipeUrl": args.recipe_url,
+                     "cacheCondition": "uncontrolled; fresh workspaces do not flush server caches"})
+    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True)
+    manifest["sourceDirty"] = bool(dirty.stdout.strip()) if dirty.returncode == 0 else None
+    if args.harness == "native":
+        manifest.pop("hermesProvider")
+        manifest["limits"] = ["Synthetic Klide coding tasks, not a general quality leaderboard",
+                              "Real native Harness with edits and commands pre-approved in disposable workspaces",
+                              "Server cache state is uncontrolled; missing measurements remain null",
+                              "Engine version and model revision are operator-reported, not independently verified"]
     if not args.run:
-        print(json.dumps({"preview": True, **manifest}, indent=2)); return
+        print(json.dumps({"preview": True, **manifest}, indent=2)); return 0
     output = (args.output or Path(tempfile.mkdtemp(prefix="kide-hermes-bench-"))).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    if any((output / name).exists() for name in ("manifest.json", "results.json", "report.json", "REPORT.md")):
+        parser.error("Output contains an earlier run; choose a fresh directory to preserve its evidence")
+    try:
+        with (output / "manifest.json").open("x") as file:
+            file.write(json.dumps(manifest, indent=2))
+    except FileExistsError:
+        parser.error("Another run claimed this output directory; choose a fresh directory")
+    write_report(output, manifest, [])
     # Compile before timing trials. This test drives KIDE's real Rust loop.
-    subprocess.run(["cargo", "test", "--manifest-path", str(REPO / "src-tauri/Cargo.toml"), "--lib", "paired_harness_benchmark", "--no-run"], check=True, cwd=REPO)
+    if "native" in harnesses:
+        try:
+            subprocess.run(["cargo", "test", "--manifest-path", str(REPO / "src-tauri/Cargo.toml"), "--lib", "paired_harness_benchmark", "--no-run"], check=True, cwd=REPO)
+        except (OSError, subprocess.CalledProcessError) as error:
+            write_report(output, manifest, [], setup_error=str(error))
+            return 1
     rng, results = random.Random(args.seed), []
     for repeat in range(args.repeats):
         for task in tasks:
-            order = ["native", "hermes"]; rng.shuffle(order)
+            order = list(harnesses); rng.shuffle(order)
             for harness in order:
                 base = output / f"{task['id']}-{repeat}-{harness}"
                 workspace = base / "workspace"; workspace.mkdir(parents=True, exist_ok=False)
@@ -138,20 +195,16 @@ def main():
                 env = os.environ.copy()
                 # Keep Hermes memories, sessions, skills and config out of
                 # repeated trials and out of the user's ordinary Hermes home.
-                home = base / "hermes-home"; home.mkdir()
-                env["HERMES_HOME"] = str(home)
-                env.pop("HERMES_PROFILE", None)
-                env.pop("HERMES_CONFIG_PATH", None)
-                env.pop("HERMES_ENV_PATH", None)
-                env.pop("HERMES_CONFIG", None)
-                env.pop("HERMES_ENV", None)
-                (home / "config.yaml").write_text(json.dumps({"model": {"provider": backend, "default": args.model}, "terminal": {"backend": "local"}, "memory": {"memory_enabled": False, "user_profile_enabled": False}}))
                 if harness == "native":
                     env["KLIDE_BENCH_CASE"] = str(base)
                     measured = execute(["cargo", "test", "--manifest-path", str(REPO / "src-tauri/Cargo.toml"), "--lib", "paired_harness_benchmark", "--", "--ignored", "--exact", "agent::live_eval::paired_harness_benchmark", "--nocapture"], base, env, timeout=args.timeout + 60)
-                    if (base / "native-result.json").exists(): measured.update(json.loads((base / "native-result.json").read_text()))
-                    elif not measured["error"]: measured["error"] = "Native benchmark produced no result"
+                    measured = read_native_result(base, measured)
                 else:
+                    home = base / "hermes-home"; home.mkdir()
+                    env["HERMES_HOME"] = str(home)
+                    for name in ("HERMES_PROFILE", "HERMES_CONFIG_PATH", "HERMES_ENV_PATH", "HERMES_CONFIG", "HERMES_ENV"):
+                        env.pop(name, None)
+                    (home / "config.yaml").write_text(json.dumps({"model": {"provider": backend, "default": args.model}, "terminal": {"backend": "local"}, "memory": {"memory_enabled": False, "user_profile_enabled": False}}))
                     # A new HERMES_HOME may bootstrap dependencies. Perform
                     # that setup outside timing, just as native compilation is.
                     try:
@@ -168,9 +221,11 @@ def main():
                 record["passed"] = not record["error"] and record["grading"]["passed"]
                 results.append(record)
                 (output / "results.json").write_text(json.dumps(results, indent=2))
+                write_report(output, manifest, results)
                 print(f"{harness}: {task['id']} repeat {repeat + 1}: {'PASS' if record['passed'] else 'FAIL'}", flush=True)
     print(f"Results: {output / 'results.json'}")
+    return 0 if all(record["passed"] for record in results) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

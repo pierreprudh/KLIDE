@@ -1,5 +1,54 @@
 # Hermes / KIDE harness comparison
 
+## Verify a model with Klide
+
+The [test guide](../../docs/LOCAL_AI_ACCEPTANCE.md) also covers the catalog,
+managed setup and self-hosted connection UI.
+
+Run only the native Harness with `--harness native`; Hermes is not required.
+Preview makes no model requests and creates no output:
+
+```sh
+python3 scripts/harness-bench/run.py --harness native --provider ollama --model '<installed-model>' --suite smoke
+```
+
+Start the chosen model yourself, then add `--run` to execute in disposable
+workspaces. These runs approve the Harness's edits and commands automatically.
+For a saved self-hosted endpoint, use its `custom:<id>` provider and its model ID.
+Supply credentials through the process environment or `~/.klide/.env`; the
+disposable Workspace does not inherit your project's `.env`.
+
+```sh
+python3 scripts/harness-bench/run.py --harness native \
+  --provider 'custom:my-vps' --model '<served-model-id>' --suite all \
+  --repeats 3 --engine-version '<engine and version>' --model-revision '<weights revision>' \
+  --run --output /private/tmp/klide-model-verification
+```
+
+Use `--task order-summary` for one small task, or `--suite quality` for cache
+expiry and atomic inventory cases. Compilation happens outside measured trials.
+`--recipe-url` records an optional deployment evidence link. Engine/revision
+metadata is operator-reported; omit it rather than guessing. Source revision,
+dirty state, platform, architecture and cache limitations are recorded too.
+
+Each run writes `REPORT.md`, `report.json`, `manifest.json`, `results.json` and
+the native transcripts. The summary requires every expected trial and an
+independent grader pass; failures stay in the raw results. An interrupted run
+remains incomplete. Duplicate or missing trials cannot produce a passing report.
+Exit status is nonzero when any completed trial fails. Existing result directories
+are refused so earlier evidence cannot be overwritten accidentally.
+
+Successful-trial timings have sample counts. Provider-reported prompt-processing
+and generation durations are kept separately, and stay unknown unless every
+provider turn reports them. End-to-end task time includes tools and verification;
+it is not isolated inference speed. Fresh workspaces do not flush engine caches,
+so these results cannot rank cold versus warm engines.
+
+This is a small coding acceptance suite, not the registry's six-gate protocol,
+a general quality leaderboard, or full desktop acceptance. A passing report
+does not automatically add a “verified in Klide” model badge. No live model
+results are claimed by the tooling's fixture/grader tests.
+
 Native request diagnostics are a separate, opt-in measurement tool. See
 [Harness diagnostics](../../docs/HARNESS_DIAGNOSTICS.md) for collection boundaries
 and `report_diagnostics.py` for a local report from existing Transcripts.
