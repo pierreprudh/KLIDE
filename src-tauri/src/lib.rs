@@ -2,6 +2,7 @@ mod launch_readiness;
 mod llamacpp_models;
 mod llamacpp_setup;
 mod local_model_catalog;
+mod registry_models;
 mod visual_export;
 mod accounts;
 mod usage;
@@ -1282,6 +1283,7 @@ pub fn run() {
             ai_chat,
             llamacpp_setup::ai_llamacpp_install,
             local_model_catalog::ai_local_model_catalog,
+            registry_models::ai_llamacpp_discover_models,
             llamacpp_models::ai_llamacpp_setup_info,
             llamacpp_models::ai_llamacpp_select_model,
             local_servers::ai_local_server_start,

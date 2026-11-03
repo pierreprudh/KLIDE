@@ -869,6 +869,9 @@ async fn resolve_uncached(
     // whether the *model* reasons is the name table's call.
     let (supports_vision, reasons) = match entry.map(|e| (e.id, e.wire)) {
         Some(("mlx", _)) => (false, false),
+        // Discovered GGUFs are launched without a vision projector.
+        Some(("llamacpp", providers::WireFormat::OpenAi(cfg))) if model.starts_with("registry/") =>
+            (false, cfg.supports_reasoning_effort && names.reasoning),
         Some((_, providers::WireFormat::Anthropic)) => (listing.as_ref().and_then(|m| m.supports_vision).unwrap_or(names.vision), listing.as_ref().and_then(|m| m.reasoning_levels.as_ref()).is_some_and(|v| !v.is_empty()) || names.reasoning),
         Some((_, providers::WireFormat::OpenAi(cfg))) => (
             listing.as_ref().and_then(|m| m.supports_vision).unwrap_or(names.vision),
@@ -1357,6 +1360,14 @@ mod tests {
         assert!(!caps.supports_vision);
         assert!(caps.reasoning_levels.is_empty());
         assert_eq!(caps.price_class, PriceClass::Unknown);
+    }
+
+    #[tokio::test]
+    async fn registry_models_use_the_managed_context_and_no_vision_projector() {
+        let caps = capabilities("llamacpp", "registry/Qwen3.5-9B-Q4_K_M@03b74727a860", false).await.unwrap();
+        assert_eq!(caps.context_window, Some(crate::llamacpp_models::LOCAL_CONTEXT));
+        assert!(!caps.supports_vision);
+        assert_eq!(caps.maker, Some(Maker::Qwen));
     }
 
     #[tokio::test]

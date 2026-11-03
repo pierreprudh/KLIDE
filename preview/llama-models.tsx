@@ -4,6 +4,7 @@ import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
 import "../src/styles/tokens.css";
 import "../src/components/settings/llamaServerSetup.css";
+import { LlamaServerSetup } from "../src/components/settings/llamaServerSetup";
 import { LlamaModelCards } from "../src/components/settings/llamaModelCards";
 import { CommunityModelConfigurations, LocalModelCatalogBrowser } from "../src/components/settings/localModelCatalogBrowser";
 import { Row, StatusText } from "../src/components/settings/controls";
@@ -17,6 +18,8 @@ const info: LlamaSetupInfo = {
   recommendedModel: "Qwen/Qwen3-8B-GGUF:Q4_K_M", selectedModel: null,
   memoryBudgetGb: 10.4, runtimeInstalled: true,
   models: [
+    { id: "registry/LFM2.5-2.6B-QAD-Q4_0@a247afd64149", label: "LFM2.5-2.6B", maker: "liquid", description: "Chat model · adapted to Klide’s 16k context.", url: "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF", quantization: "Q4_0", downloadGb: 1.59, memoryGb: 4.5, registrySource: "https://github.com/sybil-solutions/local-ai-registry" },
+    { id: "registry/Qwen3.5-9B-Q4_K_M@03b74727a860", label: "Qwen3.5-9B", maker: "qwen", description: "Reasoning model · adapted to Klide’s 16k context.", url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF", quantization: "Q4_K_M", downloadGb: 5.68, memoryGb: 9.3, registrySource: "https://github.com/sybil-solutions/local-ai-registry" },
     { id: "pierreprudh/klide-8b", label: "Klide 8B", maker: "klide", description: "Tuned for Klide’s tools and file edits.", url: "https://ollama.com/pierreprudh/klide-8b", quantization: "Q8_0", downloadGb: 9.01, memoryGb: 12.5 },
     { id: "Qwen/Qwen3-8B-GGUF:Q4_K_M", label: "Qwen3 8B", maker: "qwen", description: "Reasoning, coding and everyday tasks.", url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF", quantization: "Q4_K_M", downloadGb: 5, memoryGb: 8 },
     { id: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M", label: "Llama 3.2 3B", maker: "meta", description: "A light option for everyday conversation.", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF", quantization: "Q4_K_M", downloadGb: 2.02, memoryGb: 4 },
@@ -51,4 +54,4 @@ for (const element of [document.documentElement, document.body, document.getElem
   element.style.height = "auto";
   element.style.overflow = "visible";
 }
-createRoot(document.getElementById("root")!).render(<Preview />);
+createRoot(document.getElementById("root")!).render(params.has("setup") ? <main style={{ maxWidth: 900, margin: "24px auto", color: "var(--fg)", fontFamily: "var(--font-ui)" }}><LlamaServerSetup /></main> : <Preview />);
