@@ -21,3 +21,9 @@ in Klide: full agent acceptance requires separate evidence.
 To update the registry pin, review schema and launch changes, update the revision,
 run the adapter tests, then check the browser against that catalog. Recipe launch
 commands are deliberately not interpreted or executed by this adapter.
+
+An opt-in smoke test reads the pinned public catalog without loading any model:
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml pinned_upstream_catalog_is_readable -- --ignored --nocapture
+```

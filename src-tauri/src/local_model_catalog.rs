@@ -104,6 +104,15 @@ pub async fn ai_local_model_catalog() -> Result<CatalogView, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    #[ignore = "Downloads the pinned public catalog; no model downloads or inference"]
+    async fn pinned_upstream_catalog_is_readable() {
+        let view = ai_local_model_catalog().await.unwrap();
+        assert!(!view.hardware.is_empty());
+        assert!(view.hardware.iter().all(|h| !h.recipes.is_empty() && h.memory_gb.is_finite() && h.memory_gb >= 0.0));
+        assert!(view.hardware.iter().flat_map(|h| &h.recipes).all(|r| r.source.contains(REVISION)));
+        eprintln!("Catalog {REVISION}: {} hardware entries", view.hardware.len());
+    }
     fn fixture() -> serde_json::Value { serde_json::json!({
         "schema":"local-ai-registry/catalog/4", "models": {"test":{"name":"Test model"}},
         "cards":{"apple":{"name":"Apple M2","vram_gb":16,"picks":["apple/m2/test"]}},
