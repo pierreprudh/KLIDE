@@ -97,7 +97,7 @@ fn write_all(providers: &[CustomProvider]) -> Result<(), String> {
 /// Insert or replace a custom provider (matched by id). Validates the
 /// id prefix and that label / base URL are non-empty so the dispatch and
 /// the UI never have to defend against half-formed rows.
-pub fn upsert(mut provider: CustomProvider) -> Result<(), String> {
+pub(crate) fn normalize(mut provider: CustomProvider) -> Result<CustomProvider, String> {
     provider.id = provider.id.trim().to_string();
     provider.label = provider.label.trim().to_string();
     provider.base_url = provider.base_url.trim().to_string();
@@ -115,9 +115,22 @@ pub fn upsert(mut provider: CustomProvider) -> Result<(), String> {
     if provider.label.is_empty() {
         return Err("Label is required".to_string());
     }
-    if !provider.base_url.starts_with("http://") && !provider.base_url.starts_with("https://") {
+    let url = reqwest::Url::parse(&provider.base_url).map_err(|_| "Enter a valid base URL, for example https://llm.example.com/v1")?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err("Base URL must start with http:// or https://".to_string());
     }
+    if !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+        return Err("Use a base URL without credentials, query parameters or a fragment. Put authentication in the token reference.".into());
+    }
+    if url.path().trim_end_matches('/').ends_with("/chat/completions") || url.path().trim_end_matches('/').ends_with("/models") {
+        return Err("Use the API base URL (usually ending in /v1), without /models or /chat/completions.".into());
+    }
+    provider.base_url = url.as_str().trim_end_matches('/').to_string();
+    Ok(provider)
+}
+
+pub fn upsert(provider: CustomProvider) -> Result<(), String> {
+    let provider = normalize(provider)?;
 
     let mut all = list();
     match all.iter_mut().find(|p| p.id == provider.id) {
