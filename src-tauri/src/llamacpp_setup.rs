@@ -137,5 +137,9 @@ pub(crate) async fn ensure_installed() -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) async fn ai_llamacpp_install() -> Result<(), String> {
-    ensure_installed().await
+    let setup = crate::local_setup::begin("llamacpp")?;
+    crate::local_setup::phase("llamacpp", "engine");
+    let result = ensure_installed().await;
+    setup.finish(&result);
+    result
 }

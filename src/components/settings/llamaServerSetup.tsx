@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   installLlamaRuntime, readLlamaSetupInfo, readLocalProviderStatus,
-  selectLlamaModel, startLocalProvider, stopLocalProvider, type LlamaSetupInfo,
+  selectLlamaModel, startLocalProvider, stopLocalProvider, readLocalSetupProgress, type LlamaSetupInfo, type LocalSetupProgress,
 } from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
 import { ChevronDown, ProviderLogo } from "../ai/icons";
@@ -15,6 +15,8 @@ export function LlamaServerSetup() {
   const [busy, setBusy] = useState<"runtime" | "model" | "stop" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const [progress, setProgress] = useState<LocalSetupProgress | null>(null);
+  const setupActive = progress != null && !["idle", "failed"].includes(progress.phase);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,11 +26,14 @@ export function LlamaServerSetup() {
       setModel(next.selectedModel ?? next.recommendedModel ?? "");
     }).catch((e) => { if (!cancelled) setError(String(e)); });
     async function check() {
-      try { const up = await readLocalProviderStatus("llamacpp"); if (!cancelled) setRunning(up); }
+      try {
+        const [up, step] = await Promise.all([readLocalProviderStatus("llamacpp"), readLocalSetupProgress("llamacpp")]);
+        if (!cancelled) { setRunning(up); setProgress(step); }
+      }
       catch (e) { if (!cancelled) setError(String(e)); }
     }
     void check();
-    const timer = setInterval(() => void check(), 4000);
+    const timer = setInterval(() => void check(), 1000);
     return () => { cancelled = true; clearInterval(timer); };
   }, [retry]);
 
@@ -62,11 +67,11 @@ export function LlamaServerSetup() {
       : "Checking this machine…"}
       control={<StatusText tone={running ? "ok" : "idle"}>{running ? "Running" : info?.runtimeInstalled ? "Installed" : "Not installed"}</StatusText>} />
     {info && <div className="klide-llama-body">
-      <LlamaModelCards info={info} value={model} disabled={!!busy || running} onChange={setModel} />
+      <LlamaModelCards info={info} value={model} disabled={!!busy || setupActive || running} onChange={setModel} />
       <div className="klide-llama-controls">
         <button className="klide-button klide-button-secondary"
-          disabled={!!busy || (!running && !model)} onClick={() => void act(running ? "stop" : "model")}>
-          {busy ? "Please wait…" : running ? "Stop" : info.runtimeInstalled ? `Start ${chosen?.label ?? "model"}` : "Set up & start"}
+          disabled={!!busy || setupActive || (!running && !model)} onClick={() => void act(running ? "stop" : "model")}>
+          {busy || setupActive ? "Setting up…" : running ? "Stop" : info.runtimeInstalled ? `Start ${chosen?.label ?? "model"}` : "Set up & start"}
         </button>
         <span className="klide-llama-hint">{running ? "Stop to change models" : "Downloads on first start"}</span>
       </div>
@@ -81,13 +86,17 @@ export function LlamaServerSetup() {
         </div>
       </details>
       {!info.runtimeInstalled && <button className="klide-button klide-button-subtle klide-llama-engine"
-        disabled={!!busy} onClick={() => void act("runtime")}>Download engine only</button>}
-      {busy && <div role="status" className="klide-llama-hint">
-        {busy === "runtime" ? "Downloading and verifying llama.cpp…" : busy === "stop" ? "Stopping…" : "Downloading and loading the model. First start may take several minutes…"}
+        disabled={!!busy || setupActive} onClick={() => void act("runtime")}>Download engine only</button>}
+      {(busy || setupActive) && <div role="status" className="klide-llama-hint">
+        {busy === "stop" ? "Stopping…" : progress?.phase === "engine" ? "Downloading and verifying llama.cpp…" : progress?.phase === "model" ? "Downloading and verifying the model…" : progress?.phase === "loading" ? "Loading the model and checking readiness…" : "Preparing setup…"}
+        {progress?.phase === "model" && progress.downloadedBytes > 0 && <div>
+          {(progress.downloadedBytes / 1e9).toFixed(2)} GB downloaded{progress.totalBytes != null ? ` of ${(progress.totalBytes / 1e9).toFixed(2)} GB` : ""}
+        </div>}
       </div>}
     </div>}
     {error && <div role="alert" className="klide-llama-error">{error}
       {!info && <button className="klide-button klide-button-secondary" onClick={() => { setError(null); setRetry((n) => n + 1); }}>Retry</button>}
     </div>}
+    {!error && progress?.phase === "failed" && <div role="alert" className="klide-llama-error">{progress.error}</div>}
   </div>;
 }

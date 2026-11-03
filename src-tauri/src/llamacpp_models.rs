@@ -219,6 +219,8 @@ pub(crate) async fn ensure_model() -> Result<(), String> {
         .error_for_status()
         .map_err(|e| e.to_string())?;
     let partial = path.with_extension("gguf.part");
+    let total = response.content_length();
+    let mut downloaded = 0;
     let mut file = tokio::fs::File::create(&partial)
         .await
         .map_err(|e| e.to_string())?;
@@ -226,6 +228,8 @@ pub(crate) async fn ensure_model() -> Result<(), String> {
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
         hash.update(&chunk);
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        crate::local_setup::download("llamacpp", downloaded, total);
     }
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
@@ -257,6 +261,9 @@ pub(crate) async fn ai_llamacpp_setup_info() -> Result<SetupInfo, String> {
 }
 #[tauri::command]
 pub(crate) async fn ai_llamacpp_select_model(model: String) -> Result<(), String> {
+    if crate::local_setup::active("llamacpp") {
+        return Err("Wait for the current setup before changing its model".into());
+    }
     if crate::local_servers::local_server_is_up("llamacpp").await
         && selected_model().as_deref() != Some(model.as_str())
     {

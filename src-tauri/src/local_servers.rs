@@ -232,6 +232,18 @@ pub(crate) async fn ai_local_server_start(
     concurrency: Option<u32>,
     state: tauri::State<'_, LocalServerState>,
 ) -> Result<bool, String> {
+    let setup = crate::local_setup::begin(&provider)?;
+    let result = start_local_server(provider, model, concurrency, &state).await;
+    setup.finish(&result);
+    result
+}
+
+async fn start_local_server(
+    provider: String,
+    model: String,
+    concurrency: Option<u32>,
+    state: &LocalServerState,
+) -> Result<bool, String> {
     if !is_local_server_provider(&provider) {
         return Err(format!("{provider} is not a local server provider"));
     }
@@ -262,16 +274,20 @@ pub(crate) async fn ai_local_server_start(
     }
 
     {
-        let procs = state.processes.lock().map_err(|e| e.to_string())?;
+        let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
+        remove_exited(&mut procs, &provider)?;
         if procs.contains_key(&provider) {
-            return Ok(true);
+            return Err("The managed server is still running but is not ready. Stop it and try Start again.".into());
         }
     }
 
     if provider == "llamacpp" {
+        crate::local_setup::phase(&provider, "engine");
         crate::llamacpp_setup::ensure_installed().await?;
+        crate::local_setup::phase(&provider, "model");
         crate::llamacpp_models::ensure_model().await?;
     }
+    crate::local_setup::phase(&provider, "loading");
     let (cmd, args) = local_server_command(&provider, &model)?;
 
     let hf_cache_dir = if provider == "mlx" {
@@ -302,13 +318,14 @@ pub(crate) async fn ai_local_server_start(
         }
     }
 
-    let mut child = command.spawn().map_err(|e| {
+    let child = command.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             format!("Command not found: {cmd}. Make sure {provider} is installed.")
         } else {
             format!("Failed to start {provider}: {e}")
         }
     })?;
+    let mut child = PendingServer(Some(child));
 
     // Quick check for immediate exit (wrong args, missing module, etc.)
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -348,7 +365,7 @@ pub(crate) async fn ai_local_server_start(
                 let _ = warm_mlx_model(&canonical_mlx_model(&model)).await;
             }
             let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
-            procs.insert(provider, child);
+            procs.insert(provider, child.0.take().unwrap());
             return Ok(true);
         }
     }
@@ -358,7 +375,7 @@ pub(crate) async fn ai_local_server_start(
     let _ = child.wait();
     let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
     if stderr.trim().is_empty() {
-        Ok(false)
+        Err(format!("{provider} did not become ready in time. The managed process was stopped; try Start again."))
     } else {
         Err(format!(
             "{provider} timed out starting. Last stderr:\n{stderr}"
@@ -366,11 +383,36 @@ pub(crate) async fn ai_local_server_start(
     }
 }
 
+/// A remembered PID is not readiness. Reap dead children before allowing retry.
+fn remove_exited(processes: &mut HashMap<String, std::process::Child>, provider: &str) -> Result<(), String> {
+    let exited = processes.get_mut(provider).map(|child| child.try_wait())
+        .transpose().map_err(|e| format!("Could not check managed server: {e}"))?.flatten().is_some();
+    if exited { processes.remove(provider); }
+    Ok(())
+}
+
+/// Until readiness transfers ownership to LocalServerState, every exit path
+/// (including a cancelled command future) must reap the process it spawned.
+struct PendingServer(Option<std::process::Child>);
+impl std::ops::Deref for PendingServer {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target { self.0.as_ref().unwrap() }
+}
+impl std::ops::DerefMut for PendingServer {
+    fn deref_mut(&mut self) -> &mut Self::Target { self.0.as_mut().unwrap() }
+}
+impl Drop for PendingServer {
+    fn drop(&mut self) { if let Some(mut child) = self.0.take() { let _ = child.kill(); let _ = child.wait(); } }
+}
+
 #[tauri::command]
 pub(crate) fn ai_local_server_stop(
     provider: String,
     state: tauri::State<'_, LocalServerState>,
 ) -> Result<bool, String> {
+    if crate::local_setup::active(&provider) {
+        return Err("Setup is still in progress. Wait for it to finish before stopping the server.".into());
+    }
     if !is_local_server_provider(&provider) {
         return Err(format!("{provider} is not a local server provider"));
     }
@@ -472,6 +514,24 @@ pub(crate) async fn ollama_account_status() -> Result<OllamaAccountStatus, Strin
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn dead_process_entries_are_reaped_before_retry() {
+        let mut child = std::process::Command::new("/bin/sh").args(["-c", "exit 0"]).spawn().unwrap();
+        child.wait().unwrap();
+        let mut processes = HashMap::from([("test".into(), child)]);
+        remove_exited(&mut processes, "test").unwrap();
+        assert!(!processes.contains_key("test"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unready_process_is_reaped_when_setup_exits() {
+        let child = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = child.id() as i32;
+        drop(PendingServer(Some(child)));
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    }
     use super::*;
 
     #[test]
