@@ -36,7 +36,7 @@ pub(crate) fn server_path() -> Result<String, String> {
 
 pub(crate) async fn ensure_installed() -> Result<(), String> {
     static INSTALL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _guard = INSTALL.lock().await;
+    let guard = INSTALL.lock().await;
     if server_path().is_ok() {
         return Ok(());
     }
@@ -98,6 +98,8 @@ pub(crate) async fn ensure_installed() -> Result<(), String> {
     }
     let dir = runtime_dir()?;
     tokio::task::spawn_blocking(move || -> Result<(), String> {
+        // Extraction outlives a cancelled invoke; retain its lock in the worker.
+        let _guard = guard;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let archive = dir.join("runtime.tar.gz");
         let staging = dir.join("staging");
@@ -137,5 +139,9 @@ pub(crate) async fn ensure_installed() -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) async fn ai_llamacpp_install() -> Result<(), String> {
-    ensure_installed().await
+    let setup = crate::local_setup::begin("llamacpp")?;
+    crate::local_setup::phase("llamacpp", "engine");
+    let result = ensure_installed().await;
+    setup.finish(&result);
+    result
 }

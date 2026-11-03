@@ -33,6 +33,7 @@ mod file_memo;
 mod gateway;
 mod git;
 mod local_servers;
+mod local_setup;
 mod mcp_client;
 pub mod mcp_server;
 mod memory;
@@ -1284,6 +1285,8 @@ pub fn run() {
             local_servers::ai_local_server_start,
             local_servers::ai_local_server_stop,
             local_servers::ai_local_server_status,
+            local_servers::ai_local_server_details,
+            local_setup::ai_local_setup_progress,
             local_servers::ollama_account_status,
             gateway::gateway_status,
             gateway::gateway_start,

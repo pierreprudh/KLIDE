@@ -204,6 +204,18 @@ export function readLocalProviderStatus(provider: string): Promise<boolean> {
   return invoke<boolean>("ai_local_server_status", { provider });
 }
 
+export function readLocalProviderDetails(provider: string): Promise<{ ready: boolean; owned: boolean }> {
+  return invoke("ai_local_server_details", { provider });
+}
+
+export type LocalSetupProgress = {
+  phase: "idle" | "checking" | "engine" | "model" | "loading" | "failed";
+  downloadedBytes: number; totalBytes: number | null; error: string | null;
+};
+export function readLocalSetupProgress(provider: string): Promise<LocalSetupProgress> {
+  return invoke("ai_local_setup_progress", { provider });
+}
+
 export function startLocalProvider({
   provider,
   model,

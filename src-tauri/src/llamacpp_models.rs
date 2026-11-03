@@ -219,6 +219,8 @@ pub(crate) async fn ensure_model() -> Result<(), String> {
         .error_for_status()
         .map_err(|e| e.to_string())?;
     let partial = path.with_extension("gguf.part");
+    let total = response.content_length();
+    let mut downloaded = 0;
     let mut file = tokio::fs::File::create(&partial)
         .await
         .map_err(|e| e.to_string())?;
@@ -226,6 +228,8 @@ pub(crate) async fn ensure_model() -> Result<(), String> {
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
         hash.update(&chunk);
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        crate::local_setup::download("llamacpp", downloaded, total);
     }
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
@@ -257,12 +261,21 @@ pub(crate) async fn ai_llamacpp_setup_info() -> Result<SetupInfo, String> {
 }
 #[tauri::command]
 pub(crate) async fn ai_llamacpp_select_model(model: String) -> Result<(), String> {
+    let setup = crate::local_setup::begin("llamacpp")?;
     if crate::local_servers::local_server_is_up("llamacpp").await
         && selected_model().as_deref() != Some(model.as_str())
     {
-        return Err("Stop llama.cpp before changing its model".into());
+        let result = Err("Stop llama.cpp before changing its model".into());
+        setup.finish::<()>(&result);
+        return result;
     }
-    tokio::task::spawn_blocking(move || save_model(model))
+    tokio::task::spawn_blocking(move || {
+        // The worker owns admission until its write completes, even if the
+        // invoking future is dropped while the blocking worker is running.
+        let result = save_model(model);
+        setup.finish(&result);
+        result
+    })
         .await
         .map_err(|e| e.to_string())?
 }
