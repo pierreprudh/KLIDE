@@ -118,7 +118,7 @@ export const BRAND_LOGO_PATHS: Partial<Record<BrandKey, string>> = {
 // The one brand-colour table, keyed by brand. `mark` tints the logo itself;
 // `chart` is the hue a brand wears in Stats and the balance donuts — its
 // logo's own colour, so a bar reads as the provider whose mark sits beside it.
-// A monochrome logo (OpenAI, Codex, Ollama, xAI, OpenCode…) has no hue to
+// A monochrome logo (OpenAI, Ollama, xAI, OpenCode…) has no hue to
 // lend and falls to the neutral ramp there. Mission Control once kept a
 // near-duplicate (`PROVIDER_ACCENT`) and Stats a second chart table
 // (`PROVIDER_BRAND_COLOR`); a row's accent depended on which surface drew it.
@@ -129,7 +129,8 @@ const BRAND_COLOR: Partial<Record<BrandKey | ModelColorBrand, { mark?: string; c
   anthropic: { mark: "#D97757", chart: "#D97757" },
   "claude-code": { mark: "#D97757", chart: "#D97757" },
   openai: { mark: "var(--fg-strong)" },
-  codex: { mark: "var(--fg-strong)" },
+  // The cloud's lilac→blue gradient, taken at its middle.
+  codex: { mark: "#6474FF", chart: "#6474FF" },
   opencode: { mark: "var(--fg-strong)" },
   xai: { mark: "var(--fg-strong)" },
   // The amber between the pixel M's yellow and red — its red end sits too
@@ -184,7 +185,8 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
 // - "white-logo-img": white mark, inverted to dark on light themes.
 const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   "claude-code": "color-logo-img",
-  codex: "white-logo-img",
+  // A lilac→blue cloud with a white prompt glyph — keeps its colour.
+  codex: "color-logo-img",
   // DeepSeek's whale is brand blue on transparent — inverting it would turn it
   // into an unreadable yellow.
   deepseek: "color-logo-img",

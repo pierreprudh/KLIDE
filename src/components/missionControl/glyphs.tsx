@@ -27,10 +27,10 @@ export function ClaudeCodeLogo({ size = 13 }: { size?: number }) {
 export function KlideLogo({ size = 13 }: { size?: number }) {
   return <KlideMark size={size} />;
 }
-// Codex and Z.AI marks are white-on-transparent — invert them on light themes
-// via the white-logo-img rule in tokens.css so they stay visible everywhere.
+// Codex's mark is a coloured cloud — the same image ProviderLogo draws, never
+// inverted.
 export function CodexLogo({ size = 13 }: { size?: number }) {
-  return <BrandImage className="white-logo-img" src="/codex-logo.png" size={size} />;
+  return <BrandImage src="/codex-logo.png" size={size} />;
 }
 // Oh My Pi mark — uses the same ProviderLogo(id="omp") as the AI panel
 // dropdown, so the run list and the AI panel show the same mark.
