@@ -137,10 +137,48 @@ and confirmed the flow worked. This records user-reported live acceptance of
 Claude Code's quit/reopen → Stop flow and absence of the marked command afterward.
 No exact build hash or separate approval-pause retest was captured for this pass.
 
-This closes the Claude Code Stop/relaunch follow-up. Codex, OpenCode, and Omp still need real
-desktop quit/relaunch checks. Daemon death, OS restart, and machine sleep are
+This closes the Claude Code Stop/relaunch follow-up. Codex subsequently passed
+by user report (see below), as did OpenCode; Omp still needs real desktop
+quit/relaunch checks. Daemon death, OS restart, and machine sleep are
 outside this acceptance pass. The process tests exercise the current checkout's
 background ownership and wire behavior with a stand-in CLI.
+
+### Codex acceptance attempt — 2026-11-03
+
+Run `mw1aftphmxu8ql` did not pass the desktop lifecycle check. Codex rejected
+`gpt-6-luna` because it was unsupported with the signed-in ChatGPT account.
+The structured rejection was replaced with a generic exit-code error. An
+operator Retry then used the inbox-wake path and injected "Nothing is waiting
+for you after all", yielding an unrelated answer after a model switch.
+
+The 2026-11-04 fix preserves structured CLI errors on nonzero exits and carries
+explicit operator retry intent into the Harness. Its continuation instruction
+is recorded as injected context, without another user message; automatic
+worker/shell follow-ups clear that retry intent. Both failures have deterministic
+regressions. This is implementation verification, not desktop acceptance.
+
+With `gpt-5.6-terra`, a later turn started the 300-second command and returned
+without waiting for it. No reattach/Stop success follows from that response;
+repeat with an explicit wait-for-completion instruction. The current Codex
+`exec` adapter does not forward native approval prompts into Klide.
+
+### Codex reconnect acceptance — 2026-11-04
+
+Pierre repeated the test with `KLIDE_CODEX_STOP_03` and an explicit instruction
+to wait for completion. After being instructed to quit/reopen the development
+build, reopen the same conversation without resending, click Stop and check the
+marked process, Pierre confirmed "reconnect worked well test is ok". Record
+this as user-reported acceptance of that flow. No exact build hash or separate
+process-check output was supplied. Native Codex approval forwarding remains
+unsupported by the current adapter; this pass does not cover approval recovery.
+
+### OpenCode reconnect acceptance — 2026-11-04
+
+Pierre repeated the wait-for-completion test with `KLIDE_OPENCODE_STOP_01`
+and confirmed "works perfectly" after the quit/reopen → same conversation →
+Stop and process-check instructions. This records user-reported acceptance;
+no separate process-check output, exact model or build hash was supplied.
+Approval-pause recovery was not separately reported for this pass.
 
 ## Storage and latency follow-up
 

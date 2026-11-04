@@ -100,6 +100,9 @@ pub struct StartRunRequest {
     pub provider: String,
     pub model: String,
     pub initial_text: String,
+    /// Explicit operator retry, distinct from an inbox wake with no new mail.
+    #[serde(default)]
+    pub retry: bool,
     #[serde(default)]
     pub attachments: Vec<AgentAttachment>,
     pub context: Option<AgentContextSnapshot>,

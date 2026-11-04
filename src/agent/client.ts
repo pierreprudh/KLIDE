@@ -12,6 +12,7 @@ import type {
 } from "./types";
 
 type StartRunRequest = {
+  retry?: boolean;
   conversationHistory?: StartAgentRunInput["conversationHistory"];
   runId?: string;
   workspaceRoot: string | null;
@@ -84,6 +85,7 @@ export async function startAgentRun(
       provider: input.provider,
       model: input.model,
       initialText: input.text,
+      retry: input.retry,
       conversationHistory: input.conversationHistory,
       attachments: input.attachments,
       context: input.context,

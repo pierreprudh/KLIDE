@@ -1011,6 +1011,7 @@ fn start_request_for(
         provider: dispatch.provider.clone(),
         model: dispatch.model.clone(),
         initial_text: prompt,
+        retry: false,
         attachments: vec![],
         context: Some(AgentContextSnapshot {
             memory: None,

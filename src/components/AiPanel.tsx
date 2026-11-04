@@ -3513,6 +3513,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       sideQuestionOf: sideQuestionParent,
       workspaceRoot, mode: sideQuestionParent ? "plan" : turn.mode, provider: turn.provider, model: turn.model,
       text: carriedTurn.text, attachments,
+      retry: turn.retry,
       conversationHistory: carriedTurn.conversationHistory,
       context: { workspaceRoot, attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
       systemPrompt,
@@ -3924,8 +3925,8 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   // Try again on a retryable failure: the Run continues from its transcript
   // with no new words — tool calls that already ran are replayed as history,
-  // not run again — the way a wake turn reads its inbox. Same Mode, same
-  // rung as a send now.
+  // not run again. Explicit retry intent distinguishes this from an inbox
+  // wake. Same Mode, same rung as a send now.
   async function continueAfterFailure() {
     const state = controller.getState();
     if (streaming || state.queued > 0 || state.following) return;
@@ -3934,6 +3935,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       clientId: genId(),
       text: "",
       wake: true,
+      retry: true,
       mode: agentModeRef.current,
       provider,
       model,
