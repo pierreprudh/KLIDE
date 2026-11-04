@@ -230,6 +230,27 @@ pub fn bind_socket(data_dir: &Path) -> Result<UnixListener, String> {
 /// Entry point for `klide ptyd --data-dir <dir>`. Never returns: serves until
 /// idle-exit, `shutdown`, or a fatal bind error.
 pub fn daemon_main(data_dir: PathBuf) -> ! {
+    daemon_main_impl(data_dir, None)
+}
+
+/// A separate ptyd host, kept alive by launchd, owns the durable clock and
+/// scheduled Runs. It never shares an idle-exit policy with terminal hosts.
+pub fn scheduled_main(app_data: PathBuf) -> ! {
+    let _owner = match crate::process_lock::try_exclusive(&app_data.join("scheduled-owner.lock")) {
+        Ok(Some(lease)) => lease,
+        Ok(None) => std::process::exit(0),
+        Err(error) => { eprintln!("Cannot claim the scheduled service: {error}"); std::process::exit(1); }
+    };
+    daemon_main_impl(app_data.join("scheduled-host"), Some(app_data))
+}
+
+/// Production registration document, also used by the isolated launchd
+/// process acceptance test. No shell expansion or credentials are involved.
+pub fn scheduled_launch_agent(data: &Path, executable: &Path, path: &str) -> (String, String) {
+    (crate::scheduled_service::label(data), crate::scheduled_service::definition(data, executable, path))
+}
+
+fn daemon_main_impl(data_dir: PathBuf, scheduled_data: Option<PathBuf>) -> ! {
     let listener = match bind_socket(&data_dir) {
         Ok(l) => l,
         Err(e) => {
@@ -256,7 +277,10 @@ pub fn daemon_main(data_dir: PathBuf) -> ! {
 
     // Idle exit: with nothing hosted and nobody attached for IDLE_EXIT_MS,
     // remove the socket and leave. The app respawns us on demand.
-    {
+    if let Some(app_data) = scheduled_data {
+        crate::agent::command_env::warm();
+        crate::agent::schedules::start_service(app_data, state.chats.clone());
+    } else {
         let state = state.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(IDLE_CHECK_EVERY);

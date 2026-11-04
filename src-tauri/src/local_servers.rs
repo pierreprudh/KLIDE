@@ -388,6 +388,17 @@ async fn start_local_server(
     }
 }
 
+/// Managed local inference for Runs launched without a desktop process.
+/// Uses the same readiness, model checks and spawn path as Send.
+pub(crate) async fn ensure_for_background(provider: &str, model: &str) -> Result<(), String> {
+    if !is_local_server_provider(provider) { return Ok(()); }
+    static STATE: std::sync::OnceLock<LocalServerState> = std::sync::OnceLock::new();
+    let setup = crate::local_setup::begin(provider)?;
+    let result = start_local_server(provider.into(), model.into(), None, STATE.get_or_init(LocalServerState::default)).await;
+    setup.finish(&result);
+    result.map(|_| ())
+}
+
 /// A remembered PID is not readiness. Reap dead children before allowing retry.
 fn remove_exited(processes: &mut HashMap<String, std::process::Child>, provider: &str) -> Result<(), String> {
     let exited = processes.get_mut(provider).map(|child| child.try_wait())

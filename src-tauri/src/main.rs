@@ -23,16 +23,17 @@ fn main() {
     #[cfg(unix)]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        if args.first().map(String::as_str) == Some("ptyd") {
+        if matches!(args.first().map(String::as_str), Some("ptyd" | "scheduled")) {
             let data_dir = args
                 .iter()
                 .position(|a| a == "--data-dir")
                 .and_then(|i| args.get(i + 1))
                 .map(std::path::PathBuf::from);
             match data_dir {
+                Some(dir) if args[0] == "scheduled" => klide_lib::pty_daemon::scheduled_main(dir),
                 Some(dir) => klide_lib::pty_daemon::daemon_main(dir),
                 None => {
-                    eprintln!("usage: klide ptyd --data-dir <dir>");
+                    eprintln!("usage: klide {} --data-dir <dir>", args[0]);
                     std::process::exit(2);
                 }
             }

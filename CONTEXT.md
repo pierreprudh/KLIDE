@@ -48,14 +48,39 @@ _Avoid_: agent loop, runner, executor
 
 **Run host**:
 The one door a Run passes through to be admitted, placed, controlled and
-listed, whichever process runs its loop — the app, or `klide ptyd` for a
-background subscription conversation. It decides the host once (`placement`),
+listed, whichever process runs its loop — the app, `klide ptyd` for a
+background subscription conversation, or `klide scheduled` for a Schedule. It decides the host once (`placement`),
 claims the conversation under one lock, spawns the Harness loop, writes the one
 terminal event for a loop that left without settling, answers a card, and holds
-the one definition of "active". The app is the only dispatcher, so its failure
-budget is the one judgement for a conversation whatever host runs it. The
+the one definition of "active". Manual Conversations use the app's failure
+budget whatever host runs them. Schedules dispatch from the persistent local
+service and stop repeats after a failed occurrence until explicit retry. The
 hosts (`TauriSupervisor`, `daemon::RunHost`) are adapters around it.
 _Avoid_: second supervisor, per-host admission, remote fallback, background runner
+
+**Schedule**:
+A saved clock trigger with its own instructions, Workspace, agent/model, and
+Run history, managed from Scheduled in the sidebar. Each occurrence starts a
+fresh standalone Run through the existing Run host. One-time or fixed-interval;
+repeats skip missed intervals and wait for the previous occurrence to settle.
+A persistent per-user local service owns the clock on this Mac, even when
+Klide is closed, while the Machine is awake and the user logged in. Overdue
+work starts once after waking or logging in. A Schedule does not
+preserve temporary full-auto command authority. An uncertain dispatch after
+a crash requires explicit retry, so recovery never automatically repeats
+possibly completed work. Cancelling a Schedule revokes future occurrences;
+Stop controls a Run already launched. Schedule history keeps the Run id, due
+time, start/finish times, execution target, status and error for each occurrence.
+This Mac is the available target; Remote machine selection awaits VPS support.
+Schedules are
+independent of manual Conversations. See `docs/SCHEDULED_RUNS.md`.
+_Avoid_: scheduled worker, second executor, cron daemon
+
+**Machine**:
+The computer a Run host runs on: this Mac, or a Remote machine. The app is
+only ever on this Mac; what moves is where the Run's loop, shell and files
+are. A Conversation's Run happens on one Machine at a time.
+_Avoid_: box, host (that is the Run host, a process), environment
 
 **Harness contract**:
 The written interface of the Harness: modes, tool capabilities, permission

@@ -6,8 +6,10 @@ its observer; it does not cancel the run. The daemon owns the existing Harness
 loop, CLI child, cancellation token, pending approvals, and transcript writer.
 This does not depend on the persistent **terminal** sessions setting.
 
-API-provider runs, Mission attempts, nested subagents, and observer wake turns
-still use the app-owned supervisor. Windows retains the existing app-owned path.
+Manual API-provider runs, Mission attempts, nested subagents, and observer wake
+turns still use the app-owned supervisor. Scheduled standalone Runs, including
+API providers, use the persistent `klide scheduled` service described in
+[SCHEDULED_RUNS.md](SCHEDULED_RUNS.md). Windows retains the existing app-owned path.
 The computer must remain running; this is not a remote execution service.
 
 ## Ownership and recovery

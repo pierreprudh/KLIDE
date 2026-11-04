@@ -6,7 +6,8 @@
 //! daemon's map. What is the daemon's own: the coordination bridge it hosts,
 //! the Mission operations it queues for the app to execute, and the socket
 //! sink every event and journal move goes out on. The app judges the failure
-//! budget before it hands a Run over, so there is none here.
+//! budget before it hands a manual Run over. Scheduled occurrences instead
+//! use their durable history and explicit retry policy.
 use super::*;
 use crate::coordination_bridge::{BridgeHooks, BridgeSession, CoordinationBridgeState};
 use crate::pty_wire::ChatControl;
@@ -139,25 +140,52 @@ impl RunHost {
 
     fn start_with(
         self: &Arc<Self>,
-        mut request: StartRunRequest,
+        request: StartRunRequest,
         runs_dir: PathBuf,
         caller: impl AgentProviderCaller,
     ) -> Result<u64, String> {
-        if !run_host::background_eligible(&request) {
+        self.start_admitted(request, runs_dir, caller, false)
+    }
+
+    /// A durable Schedule authorizes a standalone Run in this host for any
+    /// supported provider. Ordinary ChatStart placement remains unchanged.
+    pub(crate) async fn start_scheduled(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf) -> Result<u64, String> {
+        if request.parent_id.is_some() || request.mission_id.is_some() || request.mission_task_id.is_some() || request.side_question_of.is_some() {
+            return Err("A scheduled Run must be standalone".into());
+        }
+        let id = request.run_id.clone().ok_or("Missing scheduled Run id")?;
+        let clamped = run_core::clamp_attachments(std::mem::take(&mut request.attachments));
+        request.attachments = clamped.kept;
+        if let Some(context) = &mut request.context {
+            context.attachments = request.attachments.clone(); context.omitted.extend(clamped.omitted);
+        }
+        crate::providers::refresh_background_credentials();
+        route_auto(&runs_dir, &id, &mut request).await?;
+        crate::local_servers::ensure_for_background(&request.provider, &request.model).await?;
+        let host = self.clone();
+        crate::blocking::run(move || host.start_admitted(request, runs_dir, RealProviderCaller, true)).await
+    }
+
+    fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool) -> Result<u64, String> {
+        if !scheduled && !run_host::background_eligible(&request) {
             return Err("Only standalone subscription conversations can run in this host".into());
         }
         let id = request.run_id.clone().ok_or("Missing conversation id")?;
         validate_run_id(&id)?;
         std::fs::create_dir_all(&runs_dir).map_err(|e| e.to_string())?;
-        request.command_allowlist = delegate_allowed_commands(
+        request.command_allowlist = if scheduled {
+            request.auto_approve_commands = None;
+            match request.workspace_root.as_deref() { Some(root) => command_allowlist::list(&runs_dir, root)?, None => Vec::new() }
+        } else { delegate_allowed_commands(
             &request.provider,
             &runs_dir,
             request.workspace_root.as_deref(),
-        );
+        ) };
         let admitted = run_host::admit(&self.runs, &runs_dir, &id, &request, || Ok(()))?;
         let from = admitted.from_seq();
         self.starts.lock().unwrap().insert(id.clone(), from);
         self.ensure_bridge();
+        if scheduled { let _ = register_coordination_run(self.as_ref(), &request, &id); }
         // RunLease retires the handle on success, error, and panic; the
         // host's backstop reports a loop that left without settling. Dropping
         // a UI/socket observer never drops this task or its cancellation token.

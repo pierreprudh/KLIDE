@@ -62,6 +62,42 @@ export function isRunBusyError(err: unknown): boolean {
   return String(err).includes("A run is already active for this conversation");
 }
 
+export function toStartRunRequest(input: StartAgentRunInput): StartRunRequest {
+  return {
+    runId: input.runId,
+    workspaceRoot: input.workspaceRoot,
+    mode: input.mode,
+    provider: input.provider,
+    model: input.model,
+    initialText: input.text,
+    retry: input.retry,
+    conversationHistory: input.conversationHistory,
+    attachments: input.attachments,
+    context: input.context,
+    systemPrompt: input.systemPrompt,
+    skills: input.skills,
+    disabledTools: input.disabledTools,
+    numCtx: input.numCtx,
+    numPredict: input.numPredict,
+    reflectionLevel: input.reflectionLevel,
+    maxParallelTools: input.maxParallelTools,
+    maxTurns: input.maxTurns,
+    commandTimeoutSecs: input.commandTimeoutSecs,
+    requireDiffReview: input.requireDiffReview,
+    autoApproveCommands: input.autoApproveCommands,
+    testAfterEditCommand: input.testAfterEditCommand,
+    goal: input.goal,
+    delegateSession: input.delegateSession,
+    parentId: input.parentId,
+    sideQuestionOf: input.sideQuestionOf,
+    missionId: input.missionId,
+    missionTaskId: input.missionTaskId,
+    preferredModels: input.preferredModels,
+    eyes: input.eyes,
+    naming: input.naming,
+  };
+}
+
 export async function startAgentRun(
   input: StartAgentRunInput,
   onEvent: (event: AgentEvent) => void
@@ -78,39 +114,7 @@ export async function startAgentRun(
   // The Rust command spawns the run loop and returns the id immediately;
   // progress streams through the channel until run_result / run_error.
   const response = await invoke<StartRunResponse>("agent_start_run", {
-    request: {
-      runId: input.runId,
-      workspaceRoot: input.workspaceRoot,
-      mode: input.mode,
-      provider: input.provider,
-      model: input.model,
-      initialText: input.text,
-      retry: input.retry,
-      conversationHistory: input.conversationHistory,
-      attachments: input.attachments,
-      context: input.context,
-      systemPrompt: input.systemPrompt,
-      skills: input.skills,
-      disabledTools: input.disabledTools,
-      numCtx: input.numCtx,
-      numPredict: input.numPredict,
-      reflectionLevel: input.reflectionLevel,
-      maxParallelTools: input.maxParallelTools,
-      maxTurns: input.maxTurns,
-      commandTimeoutSecs: input.commandTimeoutSecs,
-      requireDiffReview: input.requireDiffReview,
-      autoApproveCommands: input.autoApproveCommands,
-      testAfterEditCommand: input.testAfterEditCommand,
-      goal: input.goal,
-      delegateSession: input.delegateSession,
-      parentId: input.parentId,
-      sideQuestionOf: input.sideQuestionOf,
-      missionId: input.missionId,
-      missionTaskId: input.missionTaskId,
-      preferredModels: input.preferredModels,
-      eyes: input.eyes,
-      naming: input.naming,
-    } satisfies StartRunRequest,
+    request: toStartRunRequest(input),
     onEvent: onEventChannel,
   });
   return { runId: response.runId, done };

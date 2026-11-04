@@ -15,16 +15,15 @@
 // every command here is async and does its work off the main thread: a
 // synchronous Tauri command runs ON the UI thread and freezes the window.
 //
-// The runs directory is resolved in exactly one place (`runs_dir`), which
-// `agent::transcripts::app_runs_dir` delegates to. Every writer and reader in
-// the app already goes through that function, so an override cannot half-apply
-// and leave one caller writing to the old folder.
+// `runs_dir_for_data` resolves the transcript directory for both the desktop
+// and scheduled service; `runs_dir` is its app-handle adapter.
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-// Serializes new run admission with storage mutations in this app process.
+// Serializes admission with storage mutations inside the desktop. Both the
+// desktop and scheduled service also take run-storage.lock across processes.
 pub(crate) static RUN_STORAGE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Serialize)]
@@ -125,6 +124,7 @@ pub async fn app_storage_delete_conversation(
 ) -> Result<(), String> {
     let _guard = RUN_STORAGE_GATE.lock().await;
     crate::blocking::run(move || {
+        let _lease = crate::process_lock::exclusive(&app_data(&app)?.join("run-storage.lock"))?;
         crate::agent::ensure_storage_idle(&app).map_err(|_| {
             "Finish or stop active conversations before deleting saved history.".to_string()
         })?;
@@ -324,7 +324,12 @@ fn write_problem(path: &Path) -> Option<String> {
 /// affordable — `app_storage_dirs` reports it, and `validate_target` refuses to
 /// select one in the first place.
 pub fn runs_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let default = default_runs_dir(app)?;
+    runs_dir_for_data(&app_data(app)?)
+}
+
+/// The same resolver for the headless scheduled service.
+pub(crate) fn runs_dir_for_data(data: &Path) -> Result<PathBuf, String> {
+    let default = data.join("runs");
     if let Some(chosen) = read_config().runs_dir {
         let path = PathBuf::from(&chosen);
         // Creation is the last word: a folder that inspects clean but cannot be
@@ -506,6 +511,7 @@ pub async fn app_storage_set_runs_dir(
     // the blocking task with the rest — a Tauri command body runs on the UI
     // thread until it awaits, and this module's whole point is not to freeze it.
     tokio::task::spawn_blocking(move || {
+        let _lease = crate::process_lock::exclusive(&app_data(&app)?.join("run-storage.lock"))?;
         crate::agent::ensure_storage_idle(&app)?;
         let current = runs_dir(&app)?;
         validate_target(&target, &current)?;
@@ -546,6 +552,7 @@ pub async fn app_storage_reset_runs_dir(
 ) -> Result<RunsDirChange, String> {
     let _guard = RUN_STORAGE_GATE.lock().await;
     tokio::task::spawn_blocking(move || {
+        let _lease = crate::process_lock::exclusive(&app_data(&app)?.join("run-storage.lock"))?;
         crate::agent::ensure_storage_idle(&app)?;
         let current = runs_dir(&app)?;
         let default = default_runs_dir(&app)?;

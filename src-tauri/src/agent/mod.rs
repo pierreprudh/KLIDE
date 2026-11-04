@@ -11,6 +11,7 @@ mod background;
 mod process;
 pub(crate) mod command_env;
 mod observers;
+pub(crate) mod schedules;
 pub(crate) mod workers;
 pub(crate) mod worker_slots;
 mod attention;
@@ -168,7 +169,8 @@ pub(crate) fn run_is_active(app: &tauri::AppHandle, run_id: &str) -> bool {
 
 /// Storage relocation must not strand a writer in the previous directory.
 pub(crate) fn ensure_storage_idle(app: &tauri::AppHandle) -> Result<(), String> {
-    if run_host::any_hosted(app)? {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    if run_host::any_hosted(app)? || schedules::has_active(&data)? {
         return Err("Finish or stop active conversations before changing the runs folder.".into());
     }
     Ok(())
@@ -1957,6 +1959,8 @@ async fn start_run(
     followup: Option<&observers::Followup>,
 ) -> Result<StartRunResponse, String> {
     let _storage_guard = crate::storage::RUN_STORAGE_GATE.lock().await;
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let _storage_lease = crate::blocking::run(move || crate::process_lock::exclusive(&data.join("run-storage.lock"))).await?;
     let state = app.state::<AgentSupervisorState>();
     let runs_dir = app_runs_dir(&app)?;
     // Never accept renderer-supplied trust. Only the private, fingerprint-bound

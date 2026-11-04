@@ -25,6 +25,7 @@ import {
   FolderIcon,
   GitIcon,
   MissionIcon,
+  ClockIcon,
   NewTaskIcon,
   SkillsIcon,
 } from "./icons";
@@ -138,6 +139,8 @@ import { registerSettingsOpener } from "./settingsNavigation";
 import { registerAttachmentOpener } from "./attachmentNavigation";
 import { attachmentsRoot } from "./ipc/pdf";
 import { registerConversationOpener, registerSessionReattacher } from "./conversationNavigation";
+import { registerScheduleOpener } from "./scheduleNavigation";
+import { isScheduledRun } from "./scheduleStatus";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
 import { setIndexedProject } from "./workspaceIndex";
@@ -151,6 +154,7 @@ import { promoteWorkedFolder, rememberOpenedFolder } from "./recentFolders";
 import "./styles/tokens.css";
 
 const MissionControl = lazy(() => import("./components/MissionControl").then((m) => ({ default: m.MissionControl })));
+const Scheduled = lazy(() => import("./components/Scheduled").then(m => ({ default: m.Scheduled })));
 const FocusMode = lazy(() => import("./components/FocusMode").then((m) => ({ default: m.FocusMode })));
 const GitReview = lazy(() => import("./components/GitReview").then((m) => ({ default: m.GitReview })));
 const MemoryModal = lazy(() => import("./components/MemoryModal").then((m) => ({ default: m.MemoryModal })));
@@ -1086,7 +1090,10 @@ function App() {
    *  False when no stored conversation has that id. */
   function openConversationById(conversationId: string): boolean {
     const convo = loadConversations<Conversation>().find((c) => c.id === conversationId);
-    if (!convo) return false;
+    if (!convo) {
+      if (isScheduledRun(conversationId)) { void resumeKlideRun(conversationId); return true; }
+      return false;
+    }
     if (focusBase) {
       setFocusSelectedConvoId(convo.id);
       setFocusConvoError(null);
@@ -1109,6 +1116,12 @@ function App() {
       registerSessionReattacher(null);
     };
   });
+
+  const [scheduledSelection, setScheduledSelection] = useState<{ id: string; version: number } | null>(null);
+  useEffect(() => {
+    registerScheduleOpener(id => { setScheduledSelection(current => ({ id, version: (current?.version ?? 0) + 1 })); openOverlay("scheduled"); });
+    return () => registerScheduleOpener(null);
+  }, [openOverlay]);
 
   const railNav: RailNavItem[] = [
     {
@@ -1135,6 +1148,13 @@ function App() {
       icon: <MissionIcon size={15} />,
       active: activityState.runs,
       onClick: () => togglePanel("runs"),
+    },
+    {
+      id: "scheduled",
+      label: "Scheduled",
+      icon: <ClockIcon size={15} />,
+      active: overlay === "scheduled",
+      onClick: () => openOverlay("scheduled"),
     },
     {
       id: "memory",
@@ -1197,6 +1217,13 @@ function App() {
       icon: <MissionIcon size={15} />,
       active: activityState.runs,
       onClick: () => openOverlay("runs"),
+    },
+    {
+      id: "scheduled",
+      label: "Scheduled",
+      icon: <ClockIcon size={15} />,
+      active: overlay === "scheduled",
+      onClick: () => openOverlay("scheduled"),
     },
     {
       id: "memory",
@@ -3612,6 +3639,11 @@ function App() {
                   // (another root) get no open arrow.
                   onOpenFile={effectiveGitReviewRoot === workspaceRoot ? (path) => void openFromGitReview(path) : undefined}
                 />
+              </Suspense>
+            ) : overlay === "scheduled" ? (
+              <Suspense fallback={null}>
+                <Scheduled workspaceRoot={workspaceRoot} defaultProvider={focusShownProvider} defaultModel={focusShownModel} initialSelectedId={scheduledSelection?.id} selectionVersion={scheduledSelection?.version}
+                  harnessSettings={harnessSettings} onOpenRun={runId => void resumeKlideRun(runId)} />
               </Suspense>
             ) : overlay === "runs" ? (
               <Suspense fallback={<MissionControlSkeleton />}>

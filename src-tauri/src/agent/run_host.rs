@@ -2,7 +2,8 @@
 //! controlled and listed, whichever process ends up running its loop.
 //!
 //! Two hosts run `run_agent_loop` unchanged: the app (`TauriSupervisor`) and
-//! `klide ptyd` (`daemon::RunHost`, the background subscription chats). What
+//! `daemon::RunHost` (`klide ptyd` for subscription chats and `klide scheduled`
+//! for scheduled standalone Runs). What
 //! sits *outside* the loop — is this id free, is the conversation quarantined,
 //! which host gets it, build the handle, spawn the loop and report one that
 //! left without settling, answer a card, say whether the Run is active — used
@@ -11,9 +12,10 @@
 //! missing card). Each of those decisions lives here once; the hosts are
 //! adapters around it, and the seven Tauri commands are one call each.
 //!
-//! The app is the only dispatcher: a daemon-hosted Run is still *admitted* by
-//! the app (`start`), so the app's failure budget is the one judgement for a
-//! conversation whatever host runs it. Local outcomes feed it from
+//! Manual Conversations dispatch through the app (`start`), so its failure
+//! budget is the one judgement whatever host runs them. Scheduled occurrences
+//! dispatch through the persistent service, use the same admission/spawn door,
+//! and stop repeats on failure until explicit retry. Local outcomes feed it from
 //! `settle_run`; daemon outcomes feed it from the terminal event the watcher
 //! delivers (`record_remote_outcome`).
 
