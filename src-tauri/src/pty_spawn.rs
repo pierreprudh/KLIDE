@@ -536,7 +536,7 @@ mod tests {
         let expect = [
             (
                 "claude-code",
-                "claude -p --permission-mode acceptEdits --output-format text 'fix the bug'",
+                "CLAUDE_CODE_ENTRYPOINT=klide claude -p --permission-mode acceptEdits --output-format text 'fix the bug'",
             ),
             (
                 "codex",
