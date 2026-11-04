@@ -63,6 +63,8 @@ mod klide_skill;
 mod services_menu;
 mod skills;
 mod storage;
+mod process_lock;
+mod scheduled_service;
 mod workspace;
 mod worktree_setup;
 
@@ -1116,6 +1118,7 @@ pub fn run() {
                 // Start enabled connectors now, so the first Run doesn't wait
                 // on an `npx` cold start.
                 connector_pool::warm();
+                agent::schedules::start(handle.clone());
             }
 
             // Open at a comfortable fraction of the display the window lands on,
@@ -1308,6 +1311,13 @@ pub fn run() {
             connectors::connectors_add_github,
             connectors::connectors_status,
             agent::agent_start_run,
+            agent::schedules::agent_schedule_create,
+            agent::schedules::agent_schedule_update,
+            agent::schedules::agent_schedule_list,
+            agent::schedules::agent_schedule_history,
+            scheduled_service::agent_schedule_service_status,
+            scheduled_service::agent_schedule_service_enable,
+            agent::schedules::agent_schedule_action,
             agent::agent_resolve_permission,
             agent::agent_set_command_policy,
             agent::worker_slots::agent_worker_capacity,
@@ -1559,6 +1569,8 @@ mod blocking_door_tests {
         ("storage.rs", include_str!("storage.rs")),
         ("providers.rs", include_str!("providers.rs")),
         ("agent/mod.rs", include_str!("agent/mod.rs")),
+        ("agent/schedules.rs", include_str!("agent/schedules.rs")),
+        ("scheduled_service.rs", include_str!("scheduled_service.rs")),
         ("git/mod.rs", include_str!("git/mod.rs")),
         ("git/github.rs", include_str!("git/github.rs")),
     ];

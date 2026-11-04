@@ -1180,6 +1180,12 @@ fn invalidate_token_cache(provider: &str) {
     TOKEN_CACHE.lock().unwrap().remove(provider);
 }
 
+/// Long-lived background hosts must notice credentials changed by the app.
+/// Re-read the Machine's own Keychain at the next scheduled occurrence.
+pub(crate) fn refresh_background_credentials() {
+    TOKEN_CACHE.lock().unwrap().clear();
+}
+
 /// Env-var name holding a custom provider's bearer token:
 /// `KLIDE_TOKEN_<SLUG>`, where SLUG is the id minus the `custom:` prefix,
 /// uppercased, with each run of non-alphanumerics collapsed to one `_`.

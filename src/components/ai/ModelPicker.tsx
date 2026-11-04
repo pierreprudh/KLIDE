@@ -50,6 +50,8 @@ const MENU_MAX_HEIGHT = 360;
 type Props = {
   /** Pick directly from this provider's catalog, as worker dispatch does. */
   catalogOnly?: boolean;
+  /** Keep a picker opened from a native dialog inside its modal top layer. */
+  portalContainer?: HTMLElement | null;
   provider: ProviderId;
   model: string;
   availableModels: string[];
@@ -123,6 +125,7 @@ function StandardModelPicker({
   fluid = false,
   bareHover = false,
   placeholder = "Select model",
+  portalContainer,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -750,7 +753,7 @@ function StandardModelPicker({
             )}
           </div>
         </div>,
-        document.body
+        portalContainer ?? document.body
       )}
     </div>
   );

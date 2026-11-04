@@ -63,11 +63,12 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
     serde_json::from_str(&reply).map_err(|e| format!("bad response: {e}"))
 }
 
-/// Both locations are stable across desktop restarts. The second is used
-/// when a legacy terminal host cannot speak the chat protocol. Existing runs
-/// must always be located across both before starting or controlling a turn.
-pub(crate) fn chat_host_dirs(data_dir: &Path) -> [std::path::PathBuf; 2] {
-    [data_dir.to_path_buf(), data_dir.join("chat-host")]
+/// All locations are stable across desktop restarts. The companion is used
+/// when a legacy terminal host cannot speak the chat protocol; scheduled Runs
+/// have a dedicated persistent host. Locate existing Runs across all three
+/// before starting or controlling a turn.
+pub(crate) fn chat_host_dirs(data_dir: &Path) -> [std::path::PathBuf; 3] {
+    [data_dir.to_path_buf(), data_dir.join("chat-host"), data_dir.join("scheduled-host")]
 }
 
 /// `strict` also requires the very same binary. Chats need it: the daemon
@@ -87,7 +88,7 @@ fn select_chat_host(
     data_dir: &Path,
     ping: impl Fn(&Path) -> Result<Response, String>,
 ) -> Result<std::path::PathBuf, String> {
-    let [primary, companion] = chat_host_dirs(data_dir);
+    let [primary, companion, _scheduled] = chat_host_dirs(data_dir);
     // Keep using an already-launched companion, including after its terminal
     // predecessor goes away. ensure_daemon still validates compatibility.
     match ping(&companion) {

@@ -27,7 +27,8 @@ function readChoice(model: string, harness: string): { provider: string; model: 
   if (!model.startsWith(prefix)) return null;
   try { return JSON.parse(model.slice(prefix.length)); } catch { return null; }
 }
-export function HarnessModelPicker({ harness = "hermes", model, onChange, disabled, fluid, bareHover = false, placeholder, direction = "up" }: {
+export function HarnessModelPicker({ harness = "hermes", model, onChange, disabled, fluid, bareHover = false, placeholder, direction = "up", portalContainer }: {
+  portalContainer?: HTMLElement | null;
   harness?: DelegateId; model: string; onChange: (model: string) => void; disabled?: boolean; fluid?: boolean; bareHover?: boolean; placeholder?: string; direction?: "up" | "down";
 }) {
   const custom = useCustomProviders();
@@ -166,7 +167,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     {menu.open && menu.pos && createPortal(<div ref={menu.menuRef}
       style={{ position: "fixed", ...menu.pos, width: 200, zIndex: Z.popover }}
       onKeyDown={(e) => {
-        if (e.key === "Escape") { menu.close(); menu.triggerRef.current?.focus(); }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); menu.close(); menu.triggerRef.current?.focus(); }
         const target = e.target as HTMLElement;
         if (e.key === "ArrowRight" && target.dataset.own) {
           e.preventDefault(); showOwn(target, true);
@@ -269,6 +270,6 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         {!error && !loading && query.trim() && !models.includes(query.trim()) && <button type="button" role="menuitem" style={style} onClick={() => select(query.trim())}>Use “{query.trim()}”</button>}
         </div>
       </div>}
-    </div>, document.body)}
+    </div>, portalContainer ?? document.body)}
   </div>;
 }

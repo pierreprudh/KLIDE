@@ -35,7 +35,7 @@ import { useCallback, useEffect, useState } from "react";
 
 /** The full-window views that sit over the base surface. This is the old
  *  `view` enum minus "workbench" (which is the absence of an overlay). */
-export type OverlayView = "runs" | "settings" | "git-review";
+export type OverlayView = "runs" | "scheduled" | "settings" | "git-review";
 
 /** What the main canvas is when no overlay covers it. `panels` means the
  *  anchored/free workbench — which of the two is the panel-layout store's
@@ -135,7 +135,7 @@ export function resolveSurface(core: SurfaceCore, ctx: SurfaceContext): Surface 
   // not in Settings → the full-screen welcome page. Any other overlay is
   // latent underneath it (as `view` used to be) and shows again if a
   // workspace opens while it is still set.
-  if (!ctx.workspaceOpen && core.overlay !== "settings") return { kind: "welcome" };
+  if (!ctx.workspaceOpen && core.overlay !== "settings" && core.overlay !== "scheduled") return { kind: "welcome" };
   if (core.overlay !== null) return { kind: "overlay", view: core.overlay };
   if (core.base.kind === "focus") return { kind: "focus" };
   if (core.base.kind === "grid" && ctx.gridExists(core.base.gridId)) {
@@ -183,7 +183,7 @@ export function showsStatusBar(surface: Surface): boolean {
   return (
     surface.kind !== "focus" &&
     surface.kind !== "welcome" &&
-    !(surface.kind === "overlay" && (surface.view === "settings" || surface.view === "git-review" || surface.view === "runs"))
+    !(surface.kind === "overlay" && (surface.view === "settings" || surface.view === "git-review" || surface.view === "runs" || surface.view === "scheduled"))
   );
 }
 

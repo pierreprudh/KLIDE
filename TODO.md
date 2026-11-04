@@ -224,10 +224,16 @@ audit. Worker Cancel was verified live on 2026-11-01 (see above).
   acknowledgements before retry; use destination credentials. Cover dirty files,
   duplicate activation, interrupted copy and stale source events. Preserve
   ADR-0002's explicit retry for interrupted Mission attempts.
-- [ ] Durable one-shot wake-ups: persisted due time/reason, occurrence identity,
-  cancellation, restart recovery and deduplicated admission through the Run
-  host. Show waiting-for-client/permission/error states. Existing process-local
-  shell/worker follow-ups are not a durable scheduler.
+- [x] Local scheduled Runs (2026-11-04): Scheduled in the sidebar owns named
+  one-shot/repeating schedules and per-occurrence history. Each occurrence gets
+  a fresh Run through the existing Run host, with durable claims, cancellation,
+  restart recovery and explicit retry for uncertain dispatch. Create/edit,
+  Run now, pause/resume, Stop Run and Open Run; composer clock removed.
+  A persistent macOS login service owns the clock and Runs while Klide is
+  closed and the Machine awake. Native approval/reconnect, CLI dispatch,
+  restart/no replay and real launchd restart acceptance pass with isolated
+  fixtures. Execution targets preserve the future VPS seam; remote selection
+  remains disabled. See `docs/SCHEDULED_RUNS.md`.
 - [ ] Cross-machine project-context replication, after real multi-machine use:
   explicit scope, revisions, conflicts, exclusions and offline reconciliation.
   Keep working Foundations separate from reviewed Project Memory; a transfer

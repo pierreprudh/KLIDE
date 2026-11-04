@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Z } from "../zLayers";
 import { watchDelegateStatus } from "../delegateStatusNotify";
 import { watchWorkerStatus } from "../workerStatus";
+import { watchScheduleStatus } from "../scheduleStatus";
 import { watchRunAttention } from "../runAttention";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
@@ -355,7 +356,8 @@ export default function ToastHost() {
     const stopDelegates = watchDelegateStatus();
     const stopWorkers = watchWorkerStatus();
     const stopAttention = watchRunAttention();
-    return () => { stopDelegates(); stopWorkers(); stopAttention(); };
+    const stopSchedules = watchScheduleStatus();
+    return () => { stopDelegates(); stopWorkers(); stopAttention(); stopSchedules(); };
   }, []);
 
   if (rows.length === 0) return null;

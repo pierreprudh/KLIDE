@@ -309,3 +309,15 @@ describe("surfaceHostKey", () => {
     expect(surfaceHostKey(GRID)).toBe(surfaceHostKey(g2));
   });
 });
+
+// Scheduled is global management, reachable even if no workspace is open.
+it("opens Scheduled over either base, keeps the rail, and returns without changing the base", () => {
+  for (const base of [PANELS, FOCUS, GRID]) {
+    const core = surfaceReducer(base, { type: "open-overlay", view: "scheduled" });
+    const surface = resolveSurface(core, { workspaceOpen: false, panelsAnchored: true, gridExists: () => true });
+    expect(surface).toEqual({ kind: "overlay", view: "scheduled" });
+    expect(showsRail(surface)).toBe(true);
+    expect(showsStatusBar(surface)).toBe(false);
+    expect(surfaceReducer(core, { type: "back" })).toEqual(base);
+  }
+});
