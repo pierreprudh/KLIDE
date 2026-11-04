@@ -432,10 +432,10 @@ export const SOURCE_LABEL: Record<RunSource, string> = {
 // A subtle per-source tint for the row badge — distinct but never loud.
 export const SOURCE_COLOR: Record<RunSource, string> = {
   "claude-code": "#D97757",
-  codex: "var(--fg-strong)",
+  codex: "#6474FF",
   // opencode's brand mark is a neutral graphite; a fixed near-black vanished
   // on dark surfaces, so use the theme-aware quiet neutral. Reads as quieter
-  // than Codex's --fg-strong, keeping the paid `opencode-go/*` runs calm.
+  // than the other sources, keeping the paid `opencode-go/*` runs calm.
   opencode: "var(--fg-subtle)",
   // Oh My Pi's mark is a warm violet (the ⌥ glyph); a muted version keeps it
   // distinct from the others without shouting.
