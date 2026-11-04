@@ -343,6 +343,7 @@ pub trait Delegate: Sync {
         let cli = crate::cli::resolve_command(self.binary())?;
         let args = self.chat_args(cwd, model)?;
         let mut command = tokio::process::Command::new(cli);
+        command.envs(self.headless_env());
         let env = self.chat_source_env(cwd, model)?;
         command.current_dir(cwd).args(args).args(self.chat_source_args(model, &env)?).envs(env);
         Ok(command)
@@ -453,6 +454,7 @@ pub trait Delegate: Sync {
                 command.args(&mcp.args);
                 command.envs(mcp.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
             }
+            command.envs(self.headless_env());
             command.envs(self.chat_stream_env(spec));
             let env = self.chat_source_env(cwd, spec.model)?;
             command.args(self.chat_source_args(spec.model, &env)?).envs(env);
@@ -468,6 +470,13 @@ pub trait Delegate: Sync {
 
     fn chat_source_args(&self, _model: &str, _env: &[(String, String)]) -> Result<Vec<String>, String> {
         Ok(Vec::new())
+    }
+
+    /// Environment every headless turn of this CLI carries, prose or
+    /// structured — how it names the caller, say. The interactive PTY never
+    /// gets it: that one *is* the CLI's own front end.
+    fn headless_env(&self) -> Vec<(String, String)> {
+        Vec::new()
     }
 
     /// Environment a *headless* structured turn needs and a PTY launch must
@@ -1083,7 +1092,7 @@ mod tests {
             ClaudeCode
                 .mission_command(Some("fix the bug"), Some("claude-sonnet-4-6"))
                 .unwrap(),
-            "claude -p --model 'claude-sonnet-4-6' --permission-mode acceptEdits --output-format text 'fix the bug'"
+            "CLAUDE_CODE_ENTRYPOINT=klide claude -p --model 'claude-sonnet-4-6' --permission-mode acceptEdits --output-format text 'fix the bug'"
         );
         assert_eq!(
             Codex

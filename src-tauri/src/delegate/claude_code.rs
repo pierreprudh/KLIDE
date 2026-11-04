@@ -14,6 +14,13 @@ use std::collections::{HashMap, HashSet};
 /// `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`.
 pub struct ClaudeCode;
 
+/// The name a headless Claude Code turn started by Klide reports itself under.
+/// Without it `claude -p` files the turn as `sdk-cli`, and users measure that
+/// label drawing the subscription's 5-hour window ~1.8× faster per token than
+/// an interactive session on the same work (anthropics/claude-code#97074). The
+/// label is Klide's own name — honest about who is driving — never `cli`.
+pub const HEADLESS_ENTRYPOINT: (&str, &str) = ("CLAUDE_CODE_ENTRYPOINT", "klide");
+
 impl ClaudeCode {
     /// `.claude.json` — user state: the `oauthAccount` identity block, the
     /// user-level MCP servers, per-project settings. Beside the config dir
@@ -147,7 +154,9 @@ impl Delegate for ClaudeCode {
         let task = self.mission_task(task)?;
         let model_arg = self.mission_model_arg(model);
         Ok(format!(
-            "claude -p{model_arg} --permission-mode acceptEdits --output-format text {}",
+            "{}={} claude -p{model_arg} --permission-mode acceptEdits --output-format text {}",
+            HEADLESS_ENTRYPOINT.0,
+            HEADLESS_ENTRYPOINT.1,
             shell_quote(task)
         ))
     }
@@ -231,6 +240,10 @@ impl Delegate for ClaudeCode {
     /// TUI answers its own prompts and keeps its own timeout.
     fn chat_source_env(&self, cwd: &str, model: &str) -> Result<Vec<(String, String)>, String> {
         crate::model_source_bridge::runtime_env(self.id(), model, cwd, false)
+    }
+
+    fn headless_env(&self) -> Vec<(String, String)> {
+        vec![(HEADLESS_ENTRYPOINT.0.to_string(), HEADLESS_ENTRYPOINT.1.to_string())]
     }
 
     fn chat_stream_env(&self, spec: &ChatSpec) -> Vec<(String, String)> {
@@ -1389,6 +1402,29 @@ mod tests {
         // No server wired, no MCP grant.
         let args = ClaudeCode.chat_stream_args("/tmp/ws", &spec("", None, &[])).unwrap();
         assert!(!args.contains(&"mcp__klide".to_string()));
+    }
+
+    #[test]
+    fn headless_turns_say_klide_started_them_and_the_tui_does_not() {
+        // Unlabelled, `claude -p` files the turn as `sdk-cli`, which drains the
+        // subscription's 5-hour window faster per token (claude-code#97074).
+        let label = ("CLAUDE_CODE_ENTRYPOINT".to_string(), "klide".to_string());
+        assert_eq!(ClaudeCode.headless_env(), [label.clone()]);
+        // Both headless doors carry it — structured Focus turns and prose ones.
+        if crate::cli::resolve_command("claude").is_ok() {
+            let has = |command: &tokio::process::Command| {
+                command.as_std().get_envs().any(|(k, v)| {
+                    k == label.0.as_str() && v.map(|v| v == label.1.as_str()).unwrap_or(false)
+                })
+            };
+            let stream = ClaudeCode.chat_stream_invocation("/tmp", &spec("", None, &[])).unwrap().unwrap();
+            assert!(has(&stream), "structured turn");
+            assert!(has(&ClaudeCode.chat_invocation("/tmp", "").unwrap()), "prose turn");
+        }
+        // A Mission attempt runs as a shell line in a PTY: the label leads it.
+        assert!(ClaudeCode.mission_command(Some("x"), None).unwrap().starts_with("CLAUDE_CODE_ENTRYPOINT=klide claude -p"));
+        // The interactive TUI is Claude Code's own front end — never relabelled.
+        assert!(!ClaudeCode.spawn_command(Some("x"), None, None, None).contains("CLAUDE_CODE_ENTRYPOINT"));
     }
 
     #[test]
