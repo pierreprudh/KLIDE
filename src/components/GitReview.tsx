@@ -10,6 +10,8 @@ import type { GitDestination } from "../gitNavigation";
 // bottom shelf: stashes live at the foot of the files pane, the last fetch
 // time sits beside the branch. History is the graph itself.
 
+import { createPortal } from "react-dom";
+import { Z } from "../zLayers";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { relativeTimeLong } from "../time";
 import { errMessage } from "../errors";
@@ -991,6 +993,7 @@ const readinessColor = (tone: PrSignalTone) => ({
 
 function PRMergeReadiness({ detail }: { detail: PullRequestDetails }) {
   const [checksOpen, setChecksOpen] = useState(false);
+  const merged = detail.badge === "merged";
   const [checks, review, conflicts] = prReadinessSignals(detail);
   const reportedChecks = detail.checks ?? [];
   const passed = reportedChecks.filter(check => check.state === "SUCCESS").length;
@@ -1001,7 +1004,7 @@ function PRMergeReadiness({ detail }: { detail: PullRequestDetails }) {
   const rowStyle = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minHeight: 28 } as const;
   const reviewers = [...new Set([...(detail.requestedReviewers ?? []), ...(detail.reviewedBy ?? [])])];
   return (
-    <section aria-label="Before merge" title="GitHub snapshot at load. Reopen the PR to refresh. Branch rules still apply on GitHub."
+    <section aria-label={merged ? "Review and checks" : "Before merge"} title={merged ? "Latest GitHub check results for this PR. Reopen to refresh; these are not a frozen snapshot from the time of merge." : "GitHub snapshot at load. Reopen the PR to refresh. Branch rules still apply on GitHub."}
       style={{ marginBottom: 18, fontSize: 11.5, lineHeight: 1.5 }}>
       <div style={{ ...rowStyle, alignItems: "center" }}>
         {reviewers.length > 0 ? (
@@ -1041,10 +1044,10 @@ function PRMergeReadiness({ detail }: { detail: PullRequestDetails }) {
       ) : (
         <div style={rowStyle}><span style={{ color: "var(--fg-subtle)" }}>Checks</span><span style={{ color: "var(--fg-dim)" }}>{checks.value}</span></div>
       )}
-      <div style={rowStyle}>
+      {!merged && <div style={rowStyle}>
         <span style={{ color: "var(--fg-subtle)" }}>Conflicts</span>
         <span style={{ color: readinessColor(conflicts.tone) }}>{conflicts.value}</span>
-      </div>
+      </div>}
     </section>
   );
 }
@@ -1091,7 +1094,7 @@ function PRExpandedDetail({ detail, loading, nowMs }: {
       )}
       {detail && (
         <>
-          {(detail.badge === "open" || detail.badge === "draft") && <PRMergeReadiness detail={detail} />}
+          {(detail.badge === "open" || detail.badge === "draft" || detail.badge === "merged") && <PRMergeReadiness detail={detail} />}
           <div
             ref={scrollRef}
             style={{
@@ -1506,6 +1509,7 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
   const [commitMessage, setCommitMessage] = useState("");
   const [commitLoading, setCommitLoading] = useState(false);
   const [prComposer, setPrComposer] = useState<{ title: string; body: string } | null>(null);
+  const [prComposerError, setPrComposerError] = useState<string | null>(null);
   const [prFilter, setPrFilter] = useState<PullRequestFilter>("open");
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT);
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT);
@@ -1819,18 +1823,33 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
     // PR commits only what's staged (the backend no longer `git add -A`s), so
     // require a staged set first — same contract as the commit button.
     if (!workspaceRoot || stagedFiles.length === 0) return;
+    setPrComposerError(null);
     setPrComposer({ title: commitMessage || "", body: "" });
   }
   async function submitPr() {
-    if (!workspaceRoot || !prComposer || !prComposer.title.trim()) return;
-    await runGitAction(submitPrOutcome(), () =>
-      createPrRequest(workspaceRoot, prComposer.title.trim(), prComposer.body.trim() || null)
-    );
+    if (!workspaceRoot || !prComposer || !prComposer.title.trim() || actionLoading !== null) return;
+    setPrComposerError(null);
+    await runGitAction(submitPrOutcome(), async () => {
+      try {
+        // The index may have changed in another terminal while this dialog was open.
+        const current = await fetchGitStatus(workspaceRoot);
+        setLocalStatus(current);
+        if (!current.files.some(file => file.staged)) {
+          throw new Error("No staged changes. Cancel this dialog, stage the files you want to include, then try again.");
+        }
+        return await createPrRequest(workspaceRoot, prComposer.title.trim(), prComposer.body.trim() || null);
+      } catch (error) {
+        setPrComposerError(errMessage(error));
+        void refreshStatus();
+        throw error;
+      }
+    });
   }
 
   // Keyboard shortcuts when the view is open.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (prComposer) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === "Enter" && commitMessage.trim() && stagedFiles.length > 0) {
         e.preventDefault();
@@ -1849,7 +1868,7 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [commitMessage, stagedFiles.length, branchMenuOpen, workspaceRoot, commit, createPr]);
+  }, [commitMessage, stagedFiles.length, branchMenuOpen, workspaceRoot, commit, createPr, prComposer]);
 
   if (!workspaceRoot) {
     return (
@@ -2176,64 +2195,48 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
         />
       )}
 
-      {prComposer && (
-        <div
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setPrComposer(null); }}
-          style={{
-            position: "absolute", inset: 0, zIndex: 20, display: "flex",
-            alignItems: "center", justifyContent: "center",
-            background: "color-mix(in srgb, var(--bg) 60%, transparent)",
-            backdropFilter: "blur(2px)",
-          }}
-        >
-          <div
-            className="glass-chrome"
-            style={{
-              width: 460, maxWidth: "90%", padding: 18, borderRadius: "var(--radius-md)",
-              border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 12,
-              boxShadow: "var(--panel-shadow)",
-            }}
-          >
-            <div style={{ fontWeight: 700, fontSize: 13, color: "var(--fg-strong)" }}>Open a pull request</div>
-            <input
-              autoFocus
-              value={prComposer.title}
-              placeholder="Pull request title"
-              onChange={(e) => setPrComposer({ ...prComposer, title: e.target.value })}
-              onKeyDown={(e) => { if (e.key === "Escape") setPrComposer(null); }}
-              aria-label="Pull request title"
-              className="klide-field"
-              style={{ height: 36, padding: "0 12px", fontSize: 13 }}
-            />
-            <textarea
-              value={prComposer.body}
-              placeholder="Description (optional)"
-              onChange={(e) => setPrComposer({ ...prComposer, body: e.target.value })}
-              onKeyDown={(e) => { if (e.key === "Escape") setPrComposer(null); }}
-              aria-label="Pull request description"
-              className="klide-field"
-              rows={5}
-              style={{ padding: "10px 12px", fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
-            />
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <TopAction onClick={() => setPrComposer(null)} title="Cancel">Cancel</TopAction>
-              <button
-                onClick={() => void submitPr()}
-                disabled={!prComposer.title.trim()}
-                title="Create the pull request"
-                style={{
-                  height: 32, padding: "0 14px", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: 12,
-                  cursor: prComposer.title.trim() ? "pointer" : "not-allowed",
-                  background: prComposer.title.trim() ? "var(--accent)" : "var(--bg-hover)",
-                  color: prComposer.title.trim() ? "var(--control-primary-fg)" : "var(--fg-subtle)",
-                  border: "1px solid " + (prComposer.title.trim() ? "color-mix(in srgb, var(--accent) 60%, var(--inset-ring))" : "var(--border)"),
-                }}
-              >
-                Create PR
-              </button>
+      {prComposer && createPortal(
+        <div className="klide-skills-scrim" style={{ zIndex: Z.modal }}
+          onMouseDown={event => { if (event.target === event.currentTarget && actionLoading === null) setPrComposer(null); }}>
+          <form className="klide-skills" role="dialog" aria-modal="true" aria-labelledby="pr-composer-title" aria-describedby="pr-composer-help"
+            style={{ width: "min(420px, calc(100vw - 32px))", height: "auto", maxHeight: "calc(100vh - 48px)" }}
+            onSubmit={event => { event.preventDefault(); void submitPr(); }}
+            onKeyDown={event => {
+              if (event.key === "Escape") { event.stopPropagation(); if (actionLoading === null) setPrComposer(null); }
+              if (event.key === "Tab") {
+                const fields = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled])')];
+                const first = fields[0], last = fields[fields.length - 1];
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+                else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+              }
+            }}>
+            <header className="klide-cmd-header" style={{ padding: "12px 16px" }}>
+              <span id="pr-composer-title" style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>Open a pull request</span>
+              <button type="button" className="klide-cmd-esc" aria-label="Close pull request dialog" disabled={actionLoading !== null} onClick={() => setPrComposer(null)}>Esc</button>
+            </header>
+            <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12, overflow: "auto" }}>
+              <div id="pr-composer-help" style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg-subtle)" }}>
+                {stagedFiles.length ? `${stagedFiles.length} staged ${stagedFiles.length === 1 ? "file" : "files"} will be committed to a new branch.` : "Stage the files you want to include before creating a pull request."}
+              </div>
+              <label style={{ display: "grid", gap: 6, fontSize: 11.5, color: "var(--fg-subtle)" }}>Title
+                <input autoFocus value={prComposer.title} placeholder="What does this change?" disabled={actionLoading !== null}
+                  onChange={event => setPrComposer({ ...prComposer, title: event.target.value })}
+                  aria-label="Pull request title" className="klide-field" style={{ height: 34, padding: "0 12px", fontSize: 13 }} />
+              </label>
+              <label style={{ display: "grid", gap: 6, fontSize: 11.5, color: "var(--fg-subtle)" }}>Description (optional)
+                <textarea value={prComposer.body} placeholder="Description (optional)" disabled={actionLoading !== null}
+                  onChange={event => setPrComposer({ ...prComposer, body: event.target.value })}
+                  aria-label="Pull request description" className="klide-field" rows={3}
+                  style={{ padding: "10px 12px", fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
+              </label>
+              {prComposerError && <div role="alert" style={{ fontSize: 12, lineHeight: 1.5, color: "var(--danger)" }}>{prComposerError}</div>}
             </div>
-          </div>
-        </div>
+            <footer style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
+              <button type="button" className="klide-button klide-button-ghost" disabled={actionLoading !== null} onClick={() => setPrComposer(null)} style={{ minHeight: 32, padding: "0 12px" }}>Cancel</button>
+              <button type="submit" className="klide-button klide-button-primary" disabled={!prComposer.title.trim() || stagedFiles.length === 0 || actionLoading !== null} style={{ minHeight: 32, padding: "0 16px" }}>{actionLoading !== null ? "Creating…" : "Create PR"}</button>
+            </footer>
+          </form>
+        </div>, document.body
       )}
     </div>
   );
