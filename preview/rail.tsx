@@ -4,7 +4,7 @@
 //   &picker=1        the folder menu open
 //   &quiet=1         nothing waiting
 //   &search=ses      the search field with a query
-//   &morph=1         click the switch after load (Sections ⇄ Agent morph)
+//   &morph=1         click the switch after load (Sections ⇄ Agent)
 import { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";

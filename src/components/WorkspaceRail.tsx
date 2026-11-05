@@ -1101,7 +1101,7 @@ const VIEWS: { id: ConversationView; label: string }[] = [
 
 /** The way the list is read, as one word — "Sections" or "Agent". A click
  *  turns it into the other: the word rolls over to the next one while its
- *  pill stretches to the new width, and the list below morphs with it. */
+ *  pill stretches to the new width. */
 function ViewSwitch({
   value,
   onChange,
@@ -1144,7 +1144,6 @@ function ViewSwitch({
           </span>
         ))}
       </span>
-      <SwitcherIcon size={10} />
       <span ref={measureRef} className="klide-rail-view-measure" aria-hidden="true">
         {VIEWS.map((v) => <span key={v.id}>{v.label}</span>)}
       </span>
@@ -1377,51 +1376,8 @@ export function WorkspaceRail({
 
   const searching = searchOpen && query.trim().length > 0;
 
-  /* Switching Sections ⇄ Agent is a morph, not a page change: every row is
-     measured where it stands, the other view renders, and each row then
-     travels from where it was to where it now is. A row only one view shows
-     fades in behind them. The entrance cascade stays out of it — the rows
-     are not arriving, they are moving. */
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const morphFrom = useRef<Map<string, DOMRect> | null>(null);
-  function switchView(next: ConversationView) {
-    if (next === view) return;
-    const body = bodyRef.current;
-    if (body && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      const from = new Map<string, DOMRect>();
-      for (const el of body.querySelectorAll<HTMLElement>("[data-convo-id]")) {
-        from.set(el.dataset.convoId!, el.getBoundingClientRect());
-      }
-      morphFrom.current = from;
-    }
-    setView(next);
-  }
-  useLayoutEffect(() => {
-    const from = morphFrom.current;
-    morphFrom.current = null;
-    const body = bodyRef.current;
-    if (!from || !body) return;
-    // `--ease-soft`, spelled out: the Web Animations API reads no variables.
-    const easing = "cubic-bezier(0.32, 0.72, 0, 1)";
-    for (const el of body.querySelectorAll<HTMLElement>("[data-convo-id]")) {
-      const was = from.get(el.dataset.convoId!);
-      if (!was) {
-        el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, delay: 140, easing, fill: "backwards" });
-        continue;
-      }
-      const now = el.getBoundingClientRect();
-      const dx = was.left - now.left;
-      const dy = was.top - now.top;
-      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-      el.animate(
-        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }],
-        { duration: 420, easing },
-      );
-    }
-    for (const el of body.querySelectorAll<HTMLElement>(".klide-rail-section-head")) {
-      el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, delay: 120, easing, fill: "backwards" });
-    }
-  }, [view]);
+  // Switching Sections ⇄ Agent swaps the list: the other view's rows come in
+  // with the same cascade as any list opening — no row travels.
 
   const row = (
     conversation: Conversation,
@@ -1433,7 +1389,7 @@ export function WorkspaceRail({
         key={conversation.id}
         convo={conversation}
         markBy={options.markBy}
-        revealDelay={morphFrom.current ? undefined : options.delay}
+        revealDelay={options.delay}
         showPin={options.showPin}
         where={folder && folder !== activeProjectRoot ? basename(folder) : undefined}
         selected={selectedIds.has(conversation.id)}
@@ -1472,7 +1428,6 @@ export function WorkspaceRail({
               key={key}
               label={providerName(group.provider)}
               icon={<ProviderLogo id={group.provider} size={13} />}
-              count={group.conversations.length}
               open={!folded.has(key)}
               onToggle={() => toggleFolded(key)}
             >
@@ -1676,10 +1631,10 @@ export function WorkspaceRail({
 
           <div className="klide-rail-convos-head">
             <h2 className="klide-rail-convos-label">{searching ? "Results" : "Conversations"}</h2>
-            {searching ? null : <ViewSwitch value={view} onChange={switchView} />}
+            {searching ? null : <ViewSwitch value={view} onChange={setView} />}
           </div>
 
-          <div className="klide-focus-rail-body" ref={bodyRef}>
+          <div className="klide-focus-rail-body">
             {!searching && !activeProjectRoot ? (
               <p className="klide-focus-rail-empty">Open a folder to start.</p>
             ) : null}
