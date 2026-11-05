@@ -487,6 +487,9 @@ function FolderCard({
           className="klide-rail-folder-menu popover-enter"
           onKeyDown={onMenuKey}
         >
+          {/* The folders scroll on their own, so a long list never pushes
+              Open folder… / Clone… out of reach. */}
+          <div className="klide-rail-folder-list">
           {folders.slice(0, FOLDER_MENU_LIMIT).map((folder) => {
             const here = folder === root;
             const waiting = waitingByFolder.get(folder) ?? 0;
@@ -517,6 +520,7 @@ function FolderCard({
               </button>
             );
           })}
+          </div>
           {cloning ? (
             <form
               className="klide-rail-folder-clone"

@@ -5302,6 +5302,13 @@ button:focus-visible .menu-leadout {
   font-size: 12px;
 }
 
+.klide-rail-folder-row .klide-rail-folder-mark {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
 .klide-rail-folder-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -5310,18 +5317,30 @@ button:focus-visible .menu-leadout {
   right: 0;
   z-index: 5;
   display: grid;
+  /* minmax(0, 1fr): a long path ellipsizes instead of widening the menu
+     past the card it hangs from. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
-  padding: 6px;
+  padding: 5px;
   border-radius: 12px;
   background: var(--bg-elevated);
   box-shadow: 0 0 0 1px var(--panel-border), var(--panel-shadow);
 }
 
+.klide-rail-folder-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  max-height: min(300px, 50vh);
+  overflow-y: auto;
+}
+
 .klide-rail-folder-row {
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px 6px 6px;
+  gap: 9px;
+  padding: 5px 8px 5px 5px;
   border-radius: 9px;
   text-align: left;
   color: var(--fg);
@@ -5351,17 +5370,16 @@ button:focus-visible .menu-leadout {
 
 .klide-rail-folder-row-name {
   color: var(--fg-strong);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 12.5px;
+  line-height: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Block, not flex: text-overflow only ellipsizes a block's own text. */
 .klide-rail-folder-detail {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  display: block;
   color: var(--fg-dim);
   font-size: 11px;
   line-height: 15px;
@@ -5375,18 +5393,22 @@ button:focus-visible .menu-leadout {
   color: var(--warning);
 }
 
+.klide-rail-folder-detail > svg {
+  vertical-align: -1px;
+}
+
 .klide-rail-folder-actions {
   display: flex;
   justify-content: center;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 8px 0 3px;
+  gap: 6px;
+  margin-top: 3px;
+  padding: 6px 0 2px;
   border-top: 1px solid var(--border);
 }
 
 .klide-rail-folder-action {
-  height: 26px;
-  padding: 0 11px;
+  height: 24px;
+  padding: 0 10px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--fg) 7%, transparent);
   color: var(--fg-strong);
