@@ -143,6 +143,23 @@ describe("runAttention", () => {
     stop();
   });
 
+  it("a run that finishes in a shown panel while the window is behind another app leaves no dot", () => {
+    rust.status = "running";
+    live.add("convo-1");
+    const release = showConversation("convo-1");
+    const stop = watchRunAttention();
+    vi.stubGlobal("document", { hasFocus: () => false, visibilityState: "visible", addEventListener() {}, removeEventListener() {} });
+    try {
+      live.delete("convo-1");
+      for (const fn of liveListeners) fn();
+      expect(finishedUnseenNow("convo-1")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      release();
+      stop();
+    }
+  });
+
   it("a run that finishes on screen leaves nothing to catch up on", () => {
     rust.status = "running";
     live.add("convo-1");
