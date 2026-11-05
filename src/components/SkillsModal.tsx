@@ -32,6 +32,9 @@ type Props = {
   onChange: (skills: Skill[]) => void;
   onReloadFilesystemSkills: () => Promise<void> | void;
   onClose: () => void;
+  /** Drawn inside the Library's window as its Skills tab: no scrim, no frame
+   *  of its own, and not a dialog — the Library is the dialog. */
+  embedded?: boolean;
 };
 
 type Tab = "skills" | "install" | "tools";
@@ -308,7 +311,7 @@ const codeInline: CSSProperties = {
 
 /* ============================================================ the modal ===*/
 
-export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, onClose }: Props) {
+export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, onClose, embedded = false }: Props) {
   const [tab, setTab] = useState<Tab>("skills");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTool, setSelectedTool] = useState<string>(SKILL_TOOLS[0]?.id ?? "");
@@ -437,13 +440,14 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
     }
   }
 
-  return (
-    <div
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      className="klide-skills-scrim"
-      style={{ zIndex: Z.modal }}
-    >
-      <div className="klide-skills" role="dialog" aria-modal="true" aria-label="Skills">
+  const body = (
+      <div
+        className="klide-skills"
+        data-embedded={embedded || undefined}
+        role={embedded ? "region" : "dialog"}
+        aria-modal={embedded ? undefined : true}
+        aria-label="Skills"
+      >
           <div className="klide-cmd-header">
             <SearchIcon />
             <input
@@ -463,7 +467,8 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
               autoComplete="off"
               aria-label={tab === "tools" ? "Search tools" : "Search skills"}
             />
-            <button className="klide-cmd-esc" onClick={onClose} aria-label="Close">Esc</button>
+            {/* Inside the Library its window carries the one close button. */}
+            {embedded ? null : <button className="klide-cmd-esc" onClick={onClose} aria-label="Close">Esc</button>}
           </div>
 
           {/* Body — sections, the list, the page */}
@@ -568,6 +573,15 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
             </main>
           </div>
       </div>
+  );
+  if (embedded) return body;
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      className="klide-skills-scrim"
+      style={{ zIndex: Z.modal }}
+    >
+      {body}
     </div>
   );
 }

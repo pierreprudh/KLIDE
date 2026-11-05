@@ -7,7 +7,7 @@ import { readSharedNotes, sharedNotesForConversation, sharedNotesSlot, type Shar
 import "../sharedNotes.css";
 import "./completionCard.css";
 
-const MemoryModal = lazy(() => import("../MemoryModal").then(module => ({ default: module.MemoryModal })));
+const LibraryModal = lazy(() => import("../LibraryModal").then(module => ({ default: module.LibraryModal })));
 
 export type SharedNotesSeed = { text: string; sourceConversationId: string };
 
@@ -69,7 +69,7 @@ export function SharedNotesControl({ workspaceRoot, conversationId, terminal, se
       </section>}
     </div>}
     {(memoryOpen || hasSeed) && createPortal(<Suspense fallback={<div role="status" className="shared-notes-loading">Opening Memory…</div>}>
-      <MemoryModal open workspaceRoot={workspaceRoot} conversationId={conversationId} initialSection="shared" sharedNotesSeed={hasSeed ? seed : null}
+      <LibraryModal open workspaceRoot={workspaceRoot} conversationId={conversationId} initialSection="shared" sharedNotesSeed={hasSeed ? seed : null}
         onClose={() => { setMemoryOpen(false); onSeedConsumed(); }} />
     </Suspense>, document.body)}
   </>;

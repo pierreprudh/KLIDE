@@ -508,6 +508,13 @@ _Avoid_: account manager, credential handler
 
 ### Prompt assembly
 
+**Library**:
+The one destination for what Kit brings into every Run: Project Memory (what
+it knows), Skills (how it works) and Foundations (the working notes a set of
+Conversations shares). One sidebar row, one window, a tab for each. The row
+speaks only when Memory has drafts waiting for review.
+_Avoid_: knowledge base, context (that is the Lens), settings
+
 **Skill**:
 A user-authored prompt extension injected into a run's system prompt when active.
 _Avoid_: plugin, extension, preset

@@ -1,4 +1,3 @@
-import { MemoryInboxIcon } from "./components/MemoryInboxIcon";
 import { registerGitOpener, type GitDestination } from "./gitNavigation";
 import {
   Fragment,
@@ -27,8 +26,10 @@ import {
   MissionIcon,
   ClockIcon,
   NewTaskIcon,
-  SkillsIcon,
+  LibraryIcon,
 } from "./icons";
+import type { LibrarySection } from "./components/LibraryModal";
+import { useMemoryReviewCount } from "./hooks/useMemoryReviewCount";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea, type EditorEmptyAction } from "./components/lazySurfaces";
@@ -157,7 +158,7 @@ const MissionControl = lazy(() => import("./components/MissionControl").then((m)
 const Scheduled = lazy(() => import("./components/Scheduled").then(m => ({ default: m.Scheduled })));
 const FocusMode = lazy(() => import("./components/FocusMode").then((m) => ({ default: m.FocusMode })));
 const GitReview = lazy(() => import("./components/GitReview").then((m) => ({ default: m.GitReview })));
-const MemoryModal = lazy(() => import("./components/MemoryModal").then((m) => ({ default: m.MemoryModal })));
+const LibraryModal = lazy(() => import("./components/LibraryModal").then((m) => ({ default: m.LibraryModal })));
 const ArtifactInspector = lazy(() => import("./components/ArtifactInspector").then((m) => ({ default: m.ArtifactInspector })));
 const WorktreesModal = lazy(() => import("./components/WorktreesModal").then((m) => ({ default: m.WorktreesModal })));
 const FileViewerPanel = lazy(() => import("./components/FileViewerPanel").then((m) => ({ default: m.FileViewerPanel })));
@@ -167,7 +168,7 @@ const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) =
 const KeyboardShortcuts = lazy(() => import("./components/KeyboardShortcuts").then((m) => ({ default: m.KeyboardShortcuts })));
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
-type ActivityPanel = Panel | "home";
+type ActivityPanel = Panel | "home" | "library";
 export type { HarnessSettings } from "./settingsStore";
 
 /** Documents whose best picture App keeps in memory for the viewer's first
@@ -339,7 +340,10 @@ function App() {
       cancelAnimationFrame(inner);
     };
   }, [focusTerminalOpen, focusTerminalMounted]);
-  const [memoryVisible, setMemoryVisible] = useState(false);
+  // The Library window and the tab it shows — Memory, Skills or Foundations
+  // behind one destination. Null while closed.
+  const [librarySection, setLibrarySection] = useState<LibrarySection | null>(null);
+  const memoryReviewCount = useMemoryReviewCount(workspaceRoot);
   const [worktreesVisible, setWorktreesVisible] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Bumped when the AI panel writes a new memory entry, so the modal
@@ -352,9 +356,6 @@ function App() {
   const [profileVisible, setProfileVisible] = useState(false);
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
-  );
-  const [skillsVisible, setSkillsVisible] = useState(
-    () => localStorage.getItem("klide-skills-visible") === "true"
   );
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [diffView, setDiffView] = useState<{ path: string; oldContent: string; newContent: string; isCreate: boolean } | null>(null);
@@ -661,7 +662,7 @@ function App() {
     if (added.length) {
       notify(added.length === 1 ? `Skill added — ${added[0].name}` : `${added.length} skills added`, {
         tone: "success",
-        action: { label: "Open Skills", run: () => setSkillsVisible(true) },
+        action: { label: "Open Skills", run: () => setLibrarySection("skills") },
       });
     }
     setSkills((prev) => mergeFilesystemSkills(prev, fsSkills));
@@ -897,8 +898,9 @@ function App() {
     home: overlay === null,
     explorer: overlay === null && (explorerVisible || sidebarSlot2 === "explorer"),
     git: overlay === "git-review",
-    memory: overlay === null && memoryVisible,
-    skills: overlay === null && (skillsVisible || sidebarSlot2 === "skills"),
+    library: overlay === null && librarySection !== null,
+    memory: overlay === null && librarySection === "memory",
+    skills: overlay === null && (librarySection === "skills" || sidebarSlot2 === "skills"),
     ai: overlay === null && aiVisible,
     runs: overlay === "runs",
     settings: overlay === "settings",
@@ -951,6 +953,12 @@ function App() {
       return;
     }
     // Sidebar views: normal click opens one at a time; ⌘+click stacks below.
+    // Skills is a Library tab now; only ⌘+click still stacks it under the
+    // Explorer as a sidebar view.
+    if (panel === "skills" && !meta) {
+      toggleLibrary("skills");
+      return;
+    }
     if (panel === "explorer" || panel === "skills") {
       if (meta) {
         // ⌘+click toggles the secondary slot in the explorer panel.
@@ -959,24 +967,19 @@ function App() {
         // Plain click: collapse any other sidebar view, then toggle this one.
         if (sidebarSlot2 === panel) setSidebarSlot2(null);
         if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
-        if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
         // Coming back from an overlay view (Mission Control,
         // Orchestrator, Git Review) the icon should always *show* the
         // panel — its visibility state still reads `true` from before the
         // user left, so a plain toggle would hide it and they'd have to
         // click twice to get back. Mirrors the AI-panel behaviour above.
         const cameFromOtherView = overlay !== null;
-        if (panel === "explorer") {
-          const willShow = cameFromOtherView ? true : !explorerVisible;
-          setExplorerVisible(willShow);
-          // In free mode the explorer is a FloatingPanel sharing the
-          // z-stack with the AI/terminal panels. Opening it must raise it
-          // to the front, otherwise it appears "in the background" behind a
-          // panel that happens to overlap its position.
-          if (willShow) focusPanel("explorer");
-        } else {
-          setSkillsVisible((cur) => cameFromOtherView ? true : !cur);
-        }
+        const willShow = cameFromOtherView ? true : !explorerVisible;
+        setExplorerVisible(willShow);
+        // In free mode the explorer is a FloatingPanel sharing the
+        // z-stack with the AI/terminal panels. Opening it must raise it
+        // to the front, otherwise it appears "in the background" behind a
+        // panel that happens to overlap its position.
+        if (willShow) focusPanel("explorer");
       }
       return;
     }
@@ -988,12 +991,19 @@ function App() {
       toggleOverlay("git-review");
       return;
     }
-    // Memory opens as a centered modal (like Skills) rather than a
-    // sidebar — its list+detail layout needs the room.
-    if (panel === "memory") {
-      setMemoryVisible((cur) => !cur);
+    // The Library opens as a centered window rather than a sidebar — its
+    // list+detail layouts need the room.
+    if (panel === "library" || panel === "memory") {
+      toggleLibrary(panel === "memory" ? "memory" : undefined);
       return;
     }
+  }
+
+  /** Open the Library on `section`, or close it when that tab is already the
+   *  one showing. With no section it opens on Memory — the tab that can have
+   *  something waiting for you. */
+  function toggleLibrary(section?: LibrarySection) {
+    setLibrarySection((cur) => (cur !== null && (section === undefined || cur === section) ? null : section ?? "memory"));
   }
 
   // ── The rail ─────────────────────────────────────────────────────────
@@ -1157,18 +1167,14 @@ function App() {
       onClick: () => openOverlay("scheduled"),
     },
     {
-      id: "memory",
-      label: "Memory",
-      icon: <MemoryInboxIcon />,
-      active: activityState.memory,
-      onClick: () => togglePanel("memory"),
-    },
-    {
-      id: "skills",
-      label: "Skills",
-      icon: <SkillsIcon size={15} />,
-      active: activityState.skills,
-      onClick: (meta) => togglePanel("skills", meta),
+      // Memory, Skills and Foundations behind one row. It speaks only when
+      // notes wait for review; Needs-you in the tree stays about conversations.
+      id: "library",
+      label: "Library",
+      icon: <LibraryIcon size={15} />,
+      active: activityState.library,
+      note: memoryReviewCount > 0 ? `${memoryReviewCount} to review` : undefined,
+      onClick: () => togglePanel("library"),
     },
     {
       // Last row, and a disclosure rather than a destination: the tree unfolds
@@ -1226,21 +1232,14 @@ function App() {
       onClick: () => openOverlay("scheduled"),
     },
     {
-      id: "memory",
-      label: "Memory",
-      icon: <MemoryInboxIcon />,
-      active: activityState.memory,
-      onClick: () => togglePanel("memory"),
-    },
-    {
-      id: "skills",
-      label: "Skills",
-      icon: <SkillsIcon size={15} />,
-      active: activityState.skills,
-      // Skills is a modal here. togglePanel treats it as a sidebar view and
-      // would collapse the free-mode explorer on the way, which Focus has no
-      // business touching.
-      onClick: () => setSkillsVisible((cur) => !cur),
+      // Memory, Skills and Foundations behind one row. It speaks only when
+      // notes wait for review; Needs-you in the tree stays about conversations.
+      id: "library",
+      label: "Library",
+      icon: <LibraryIcon size={15} />,
+      active: activityState.library,
+      note: memoryReviewCount > 0 ? `${memoryReviewCount} to review` : undefined,
+      onClick: () => togglePanel("library"),
     },
   ];
 
@@ -1791,7 +1790,7 @@ function App() {
           setMemoryRefreshKey((k) => k + 1);
           setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
         }}
-        onOpenMemory={() => setMemoryVisible(true)}
+        onOpenMemory={() => setLibrarySection("memory")}
         onSkillGenerated={() => void reloadFilesystemSkills()}
       />
     );
@@ -2849,7 +2848,7 @@ function App() {
 
   // "Save Memory" from Mission Control — fetch the run's transcript, ask
   // the model for a structured note, and write it to .klide/memory/. Then
-  // open the MemoryModal so the user can see the entry. Klide-only for
+  // open the Library on Memory so the user can see the entry. Klide-only for
   // now: external CLI runs have no provider+model we can call directly.
   async function saveMemoryFromRun(run: {
     id: string;
@@ -2888,7 +2887,7 @@ function App() {
         status: "done",
       });
       setMemoryRefreshKey((k) => k + 1);
-      setMemoryVisible(true);
+      setLibrarySection("memory");
       setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
     } catch (err) {
       setFileNotice(err instanceof Error ? err.message : String(err));
@@ -3344,6 +3343,11 @@ function App() {
     { id: "layout-focus", label: "Layout: Focus (chat)", action: () => { enterFocusHome(); setPaletteOpen(false); } },
     { id: "terminal-focus", label: "Terminal: Open in Focus", action: () => { setFocusTerminalOpen(true); setTerminalVisible(false); enterFocusHome(); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { openOverlay("runs"); setPaletteOpen(false); } },
+    { id: "scheduled", label: "View: Scheduled", action: () => { openOverlay("scheduled"); setPaletteOpen(false); } },
+    { id: "library", label: "View: Library", action: () => { setLibrarySection("memory"); setPaletteOpen(false); } },
+    { id: "library-memory", label: "Library: Memory", action: () => { setLibrarySection("memory"); setPaletteOpen(false); } },
+    { id: "library-skills", label: "Library: Skills", action: () => { setLibrarySection("skills"); setPaletteOpen(false); } },
+    { id: "library-foundations", label: "Library: Foundations", action: () => { setLibrarySection("shared"); setPaletteOpen(false); } },
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { back(); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { toggleOverlay("git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await createPr(workspaceRoot, "Klide changes", null); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
@@ -3743,11 +3747,8 @@ function App() {
                      very same handler the rail uses — one Git view, one Memory
                      modal, one Settings. */
                   onOpenPanel={(panel) => {
-                    // Skills is the one exception: togglePanel treats it as a
-                    // sidebar view and would collapse the free-mode explorer on
-                    // the way, which Focus has no business touching.
                     if (panel === "skills") {
-                      setSkillsVisible((cur) => !cur);
+                      toggleLibrary("skills");
                       return;
                     }
                     togglePanel(panel);
@@ -4361,35 +4362,27 @@ function App() {
           </>
         )}
       </div>
-      {skillsVisible && sidebarSlot2 !== "skills" && (
+      {librarySection !== null && (
         <Suspense fallback={null}>
-          <SkillsModal
+          <LibraryModal
             open
-            skills={skills}
-            onChange={updateSkills}
-            onReloadFilesystemSkills={reloadFilesystemSkills}
-            onClose={() => setSkillsVisible(false)}
-          />
-        </Suspense>
-      )}
-      {memoryVisible && (
-        <Suspense fallback={null}>
-          <MemoryModal
-            open
+            initialSection={librarySection}
+            onSectionChange={setLibrarySection}
             workspaceRoot={workspaceRoot}
             refreshKey={memoryRefreshKey}
+            skills={{ skills, onChange: updateSkills, onReloadFilesystemSkills: reloadFilesystemSkills }}
             onOpenInEditor={(path: string, content: string) => openFile(path, content)}
             onOpenTouchedFile={async (path: string) => {
               if (!workspaceRoot) return;
               try {
                 const content = await readWorkspaceTextFile(workspaceRoot, path);
                 openFile(path, content);
-                setMemoryVisible(false);
+                setLibrarySection(null);
               } catch (err) {
                 setFileNotice(err instanceof Error ? err.message : String(err));
               }
             }}
-            onClose={() => setMemoryVisible(false)}
+            onClose={() => setLibrarySection(null)}
           />
         </Suspense>
       )}
