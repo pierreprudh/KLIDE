@@ -866,7 +866,7 @@ function groupHistoryByProvider(conversations: Conversation[]): ProviderHistory[
 /** The entrance cascade: each row starts a beat after the one above, so a
  *  list opening reads as one wave down the rail. Capped, so a long list
  *  lands in a fraction of a second rather than a queue. */
-const REVEAL_STEP_MS = 22;
+const REVEAL_STEP_MS = 28;
 const REVEAL_STAGGER_CAP = 12;
 function revealDelay(index: number): string {
   return `${Math.min(Math.max(index, 0), REVEAL_STAGGER_CAP) * REVEAL_STEP_MS}ms`;

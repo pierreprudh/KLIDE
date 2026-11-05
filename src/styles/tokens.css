@@ -5487,30 +5487,37 @@ button:focus-visible .menu-leadout {
   flex-shrink: 0;
   /* Visible: the outgoing word's blur runs past the box mid-morph. */
   overflow: visible;
-  transition: width 600ms var(--ease-soft);
+  transition: width 720ms cubic-bezier(0.45, 0, 0.2, 1);
 }
 
 /* Both words share one cell; only the chosen one shows. */
 /* A morph, not a roll: both words sit in one place, on the same trailing
    edge, and one dissolves into the other — the old blurs and fades as the
    new comes into focus — while the box's width travels between them. */
+/* The outgoing word leaves quickly and the incoming one settles slowly,
+   a beat behind it, on a gentle in-out curve — the two overlap without
+   ever reading as two words at once. */
 .klide-rail-view-word {
   grid-area: 1 / 1;
   justify-self: end;
   white-space: nowrap;
   opacity: 0;
-  filter: blur(5px);
-  transform: scale(0.94);
+  filter: blur(4px);
+  transform: scale(0.96);
   transition:
-    opacity 600ms var(--ease-soft),
-    filter 600ms var(--ease-soft),
-    transform 600ms var(--ease-soft);
+    opacity 380ms cubic-bezier(0.45, 0, 0.2, 1),
+    filter 380ms cubic-bezier(0.45, 0, 0.2, 1),
+    transform 380ms cubic-bezier(0.45, 0, 0.2, 1);
 }
 
 .klide-rail-view-word[data-on] {
   opacity: 1;
   filter: none;
   transform: none;
+  transition:
+    opacity 640ms cubic-bezier(0.45, 0, 0.2, 1) 120ms,
+    filter 720ms cubic-bezier(0.45, 0, 0.2, 1) 120ms,
+    transform 720ms cubic-bezier(0.45, 0, 0.2, 1) 120ms;
 }
 
 /* Off-screen copies of the words, measured for the pill's width. */
@@ -5599,13 +5606,13 @@ button:focus-visible .menu-leadout {
    `--rail-reveal-delay`). `backwards`, not `both`: once played the row is
    released, so the final keyframe's transform never pins it. */
 .klide-focus-convo-row[data-reveal] {
-  animation: klide-rail-row-in 420ms var(--ease-soft) var(--rail-reveal-delay, 0ms) backwards;
+  animation: klide-rail-row-in 560ms cubic-bezier(0.45, 0, 0.2, 1) var(--rail-reveal-delay, 0ms) backwards;
 }
 
 @keyframes klide-rail-row-in {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.98);
+    transform: translateY(-3px) scale(0.985);
   }
   to {
     opacity: 1;

@@ -226,9 +226,12 @@ export function watchRunAttention(): () => void {
   const checked = new Set<string>();
   const sweep = () => {
     const live = getRunningConversationIds();
-    // A run that left the live set while its conversation was off screen
-    // finished without you: the rail says so until you open it.
-    for (const id of checked) if (!live.has(id) && !isOnScreen(id)) setFinishedUnseen(id, true);
+    // A run that left the live set while no panel showed its conversation
+    // finished without you: the rail says so until you open it. Shown in a
+    // panel counts as seen even while the window is behind another app —
+    // the conversation is right there when you come back, and a dot on the
+    // row you are reading would ask you to leave it and return to clear it.
+    for (const id of checked) if (!live.has(id) && !onScreen.has(id)) setFinishedUnseen(id, true);
     for (const id of checked) if (!live.has(id)) checked.delete(id);
     for (const id of live) {
       if (checked.has(id)) continue;
@@ -238,11 +241,19 @@ export function watchRunAttention(): () => void {
   };
   const stopSweep = subscribeRunningConversations(sweep);
   sweep();
+  // Coming back to the window settles what is on screen: anything marked
+  // finished that a panel is showing has now been seen.
+  const seen = () => { for (const id of onScreen.keys()) setFinishedUnseen(id, false); };
+  const onVisibility = () => { if (document.visibilityState === "visible") seen(); };
+  if (typeof window !== "undefined") window.addEventListener("focus", seen);
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
   return () => {
     stopped = true;
     unlisten?.();
     stopSweep();
     stopOutcomes();
+    if (typeof window !== "undefined") window.removeEventListener("focus", seen);
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
   };
 }
 
