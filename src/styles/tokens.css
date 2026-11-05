@@ -5460,8 +5460,8 @@ button:focus-visible .menu-leadout {
   font-weight: 400;
 }
 
-/* The view, as one word — no pill, no fill. A click rolls it over to the
-   other one: the old lifts out, the new rises in, unhurried. */
+/* The view, as one word — no pill, no fill. A click morphs it into the
+   other one. */
 .klide-rail-view-pick {
   position: relative;
   height: 22px;
@@ -5485,30 +5485,32 @@ button:focus-visible .menu-leadout {
   /* A flex item will not shrink below its content unless told it may. */
   min-width: 0;
   flex-shrink: 0;
-  overflow: hidden;
+  /* Visible: the outgoing word's blur runs past the box mid-morph. */
+  overflow: visible;
   transition: width 600ms var(--ease-soft);
 }
 
 /* Both words share one cell; only the chosen one shows. */
+/* A morph, not a roll: both words sit in one place, on the same trailing
+   edge, and one dissolves into the other — the old blurs and fades as the
+   new comes into focus — while the box's width travels between them. */
 .klide-rail-view-word {
   grid-area: 1 / 1;
+  justify-self: end;
   white-space: nowrap;
   opacity: 0;
-  transform: translateY(-70%);
+  filter: blur(5px);
+  transform: scale(0.94);
   transition:
-    opacity 360ms var(--ease-out),
+    opacity 600ms var(--ease-soft),
+    filter 600ms var(--ease-soft),
     transform 600ms var(--ease-soft);
 }
 
 .klide-rail-view-word[data-on] {
   opacity: 1;
+  filter: none;
   transform: none;
-}
-
-/* The word that is not on waits below, so the next one rises in. */
-.klide-rail-view-word:not([data-on]) ~ .klide-rail-view-word:not([data-on]),
-.klide-rail-view-word[data-on] ~ .klide-rail-view-word:not([data-on]) {
-  transform: translateY(70%);
 }
 
 /* Off-screen copies of the words, measured for the pill's width. */
@@ -5673,9 +5675,6 @@ button:focus-visible .menu-leadout {
   color: var(--warning);
 }
 
-.klide-rail-convo-lead[data-tone="done"] {
-  color: var(--accent);
-}
 
 .klide-rail-convo-text {
   flex: 1;
@@ -5859,6 +5858,39 @@ button:focus-visible .menu-leadout {
 .klide-focus-convo-row .klide-focus-convo-more:active {
   transform: translate(0, -50%) scale(0.92);
   transition-duration: 80ms;
+}
+
+/* Finished while you were elsewhere: a 6px accent point in the trailing
+   slot, cleared when the conversation is opened. */
+.klide-focus-convo-done {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+.klide-focus-convo-done-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  /* The loader it follows condenses into it: a small square drawing in to
+     one round point, on the rail's soft ease, no overshoot. */
+  animation: klide-convo-done-in 420ms var(--ease-soft) both;
+}
+@keyframes klide-convo-done-in {
+  from {
+    transform: scale(1.83);
+    border-radius: 2px;
+    opacity: 0.35;
+  }
+  to {
+    transform: scale(1);
+    border-radius: 50%;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-focus-convo-done-dot { animation: none; }
 }
 
 .klide-focus-convo-pinned {

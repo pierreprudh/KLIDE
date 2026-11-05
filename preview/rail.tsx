@@ -5,6 +5,7 @@
 //   &quiet=1         nothing waiting
 //   &search=ses      the search field with a query
 //   &morph=1         click the switch after load (Sections ⇄ Agent)
+//   &done=1          the running conversation finishes off screen (the dot)
 import { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -14,7 +15,7 @@ import "@fontsource/monaspace-neon/400.css";
 import "../src/styles/tokens.css";
 import { WorkspaceRail, type RailNavItem } from "../src/components/WorkspaceRail";
 import { GitIcon, LibraryIcon, MissionIcon, NewTaskIcon, TerminalIcon, FocusLayoutIcon } from "../src/icons";
-import { applyRunAttention, markNeedsYou } from "../src/runAttention";
+import { applyRunAttention, markNeedsYou, watchRunAttention } from "../src/runAttention";
 import { publishKlideConvo } from "../src/klideConvos";
 
 const params = new URLSearchParams(location.search);
@@ -113,3 +114,8 @@ if (q) setTimeout(() => {
 
 const morph = params.get("morph");
 if (morph) setTimeout(() => (document.querySelector(".klide-rail-view-pick") as HTMLElement | null)?.click(), 600);
+
+if (params.has("done")) {
+  watchRunAttention();
+  setTimeout(() => publishKlideConvo({ id: "b", title: "Rail grouping modes", status: "done", provider: "claude-code", messages: [], updatedMs: Date.now() } as unknown as Parameters<typeof publishKlideConvo>[0]), 1500);
+}
