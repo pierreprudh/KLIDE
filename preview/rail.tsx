@@ -81,7 +81,7 @@ function Page() {
     <div className="klide-app-row" style={{ height: "100vh", display: "flex" }}>
       <WorkspaceRail
         workspaceRoot={KIDE}
-        projects={[KIDE, WEB, DECK]}
+        projects={[KIDE, WEB, DECK, "/Users/pierre/Documents/Private/klide-acceptance", "/private/tmp/klide-btw-live-20261026", "/Users/pierre/Documents/Private/klide-delegate-smoke-with-a-long-name", "/Users/pierre/Documents/Private/usage_tool", "/Users/pierre/Documents/Private/Portfolio"]}
         newTask={{ id: "new-task", label: "New task", icon: <NewTaskIcon size={15} />, onClick: () => {} }}
         nav={nav}
         selectedConversationIds={selected}
