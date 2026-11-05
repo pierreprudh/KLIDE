@@ -49,7 +49,6 @@ import {
   PinIcon,
   SearchIcon,
   SidebarIcon,
-  SuccessIcon,
   SwitcherIcon,
 } from "../icons";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -575,9 +574,9 @@ function FolderCard({
 
 /* ────────────────────────────────────────────────────── conversation row ──
    One line: what is happening at the lead, the name, its age. The lead says
-   the one state you would act on — waiting on you (amber hand), working (the
-   panel's own loader), finished while you were away (accent check) — and
-   otherwise the mark of the agent the conversation began on. A row waiting on
+   waiting on you (amber hand) or working (the panel's own loader), and
+   otherwise wears the mark of the agent the conversation began on. Finished
+   while you were away is an accent point where the age goes. A row waiting on
    you is bold and takes a second line saying what it waits on. */
 
 function ConvoRow({
@@ -683,10 +682,6 @@ function ConvoRow({
     <span className="klide-rail-convo-lead" aria-hidden="true">
       <DotGridLoader size={11} color="var(--accent)" label="Running" />
     </span>
-  ) : finishedUnseen ? (
-    <span className="klide-rail-convo-lead" data-tone="done" aria-hidden="true">
-      <SuccessIcon size={15} />
-    </span>
   ) : (
     <span className="klide-rail-convo-lead" title={mark?.label} aria-hidden="true">
       {mark?.node}
@@ -788,7 +783,14 @@ function ConvoRow({
                   {displayTitle}
                 </span>
               </span>
-              {pinned && showPin ? (
+              {/* Finished while you were elsewhere: one accent point in the
+                  trailing slot until you open it — the only dot the rail
+                  draws. The lead keeps the agent's mark. */}
+              {finishedUnseen ? (
+                <span className="klide-focus-convo-time klide-focus-convo-done" aria-label="Finished">
+                  <span className="klide-focus-convo-done-dot" />
+                </span>
+              ) : pinned && showPin ? (
                 <span className="klide-focus-convo-time klide-focus-convo-pinned" title="Pinned" aria-label="Pinned">
                   <PinIcon size={11} />
                 </span>
@@ -1100,7 +1102,7 @@ const VIEWS: { id: ConversationView; label: string }[] = [
 ];
 
 /** The way the list is read, as one word — "Sections" or "Agent". A click
- *  turns it into the other: the word rolls over to the next one. */
+ *  morphs it into the other — one word dissolving into the next. */
 function ViewSwitch({
   value,
   onChange,
