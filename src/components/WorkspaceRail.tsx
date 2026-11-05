@@ -1100,8 +1100,7 @@ const VIEWS: { id: ConversationView; label: string }[] = [
 ];
 
 /** The way the list is read, as one word — "Sections" or "Agent". A click
- *  turns it into the other: the word rolls over to the next one while its
- *  pill stretches to the new width. */
+ *  turns it into the other: the word rolls over to the next one. */
 function ViewSwitch({
   value,
   onChange,
@@ -1111,7 +1110,7 @@ function ViewSwitch({
 }) {
   const current = VIEWS.find((v) => v.id === value) ?? VIEWS[0];
   const next = VIEWS[(VIEWS.indexOf(current) + 1) % VIEWS.length];
-  // Each word's width, so the pill can travel between them — `width: auto`
+  // Each word's width, so the box can travel between them — `width: auto`
   // does not transition.
   const measureRef = useRef<HTMLSpanElement>(null);
   const [widths, setWidths] = useState<Partial<Record<ConversationView, number>>>({});

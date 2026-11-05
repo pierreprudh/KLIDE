@@ -5460,25 +5460,23 @@ button:focus-visible .menu-leadout {
   font-weight: 400;
 }
 
-/* The view, as one word on a soft pill. A click rolls
-   the word over to the other one — the old lifts out, the new rises in — and
-   the pill's width travels between the two. */
+/* The view, as one word — no pill, no fill. A click rolls it over to the
+   other one: the old lifts out, the new rises in, unhurried. */
 .klide-rail-view-pick {
   position: relative;
   height: 22px;
   display: flex;
   align-items: center;
-  padding: 0 9px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-  color: var(--fg-strong);
+  padding: 0 6px;
+  border-radius: var(--radius-md);
+  color: var(--fg-subtle);
   font-size: var(--fs-xs);
-  transition: background var(--motion-fast) var(--ease-out);
+  transition: color var(--motion-fast) var(--ease-out);
 }
 
 .klide-rail-view-pick:hover,
 .klide-rail-view-pick:focus-visible {
-  background: color-mix(in srgb, var(--fg) 11%, transparent);
+  color: var(--fg-strong);
 }
 
 .klide-rail-view-words {
@@ -5488,7 +5486,7 @@ button:focus-visible .menu-leadout {
   min-width: 0;
   flex-shrink: 0;
   overflow: hidden;
-  transition: width 380ms var(--ease-soft);
+  transition: width 600ms var(--ease-soft);
 }
 
 /* Both words share one cell; only the chosen one shows. */
@@ -5498,8 +5496,8 @@ button:focus-visible .menu-leadout {
   opacity: 0;
   transform: translateY(-70%);
   transition:
-    opacity 220ms var(--ease-out),
-    transform 380ms var(--ease-soft);
+    opacity 360ms var(--ease-out),
+    transform 600ms var(--ease-soft);
 }
 
 .klide-rail-view-word[data-on] {
