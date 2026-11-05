@@ -12,6 +12,8 @@ import {
   mergePrTimeline,
   openPrInBrowserOutcome,
   prCounts,
+  prReadinessSignals,
+  prCheckPresentation,
   pullOutcome,
   pushOutcome,
   splitStatusFiles,
@@ -240,5 +242,45 @@ describe("branch menu — display and grouping", () => {
       ["feat/x", false, true, false, 2, 0],
     ]);
     expect(rows[0].lastSubject).toBe("local main");
+  });
+});
+
+
+describe("before-merge evidence", () => {
+  const base = { mergeable: "MERGEABLE", reviewDecision: "", checks: null };
+  it("distinguishes unavailable evidence from a reported empty rollup", () => {
+    expect(prReadinessSignals(base)[0].value).toBe("Unavailable");
+    expect(prReadinessSignals({ ...base, checks: [] })[0].value).toBe("None reported");
+  });
+  it("keeps failures, pending work, and skipped/unknown checks visible beside successes", () => {
+    const checks = ["SUCCESS", "FAILURE", "IN_PROGRESS", "SKIPPED", "NEW_STATE"].map(state => ({ name: state, state }));
+    expect(prReadinessSignals({ ...base, checks })[0]).toEqual({ label: "Checks", value: "1 failed · 1 pending · 1 passed · 2 other", tone: "attention" });
+  });
+  it.each(["ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"])("surfaces %s as needing attention", state => {
+    expect(prReadinessSignals({ ...base, checks: [{ name: "test", state }] })[0].tone).toBe("attention");
+  });
+  it("does not infer merge readiness from a successful check or approval", () => {
+    const signals = prReadinessSignals({ mergeable: "UNKNOWN", reviewDecision: "APPROVED", checks: [{ name: "test", state: "SUCCESS" }] });
+    expect(signals.map(s => s.value)).toEqual(["1 passed", "Done", "Not yet determined"]);
+  });
+  it("shows requested changes and conflicts independently", () => {
+    expect(prReadinessSignals({ ...base, mergeable: "CONFLICTING", reviewDecision: "CHANGES_REQUESTED" }).slice(1)).toEqual([
+      { label: "Review", value: "Changes requested", tone: "attention" },
+      { label: "Conflicts", value: "Resolve conflicts", tone: "attention" },
+    ]);
+  });
+  it("shows assigned reviewers independently of whether a review decision is available", () => {
+    expect(prReadinessSignals({ ...base, requestedReviewers: ["alice"] })[1].value).toBe("Assigned");
+    expect(prReadinessSignals({ ...base, reviewDecision: "APPROVED", requestedReviewers: ["alice"] })[1].value).toBe("Assigned");
+  });
+  it("reserves Done for approval and makes absent evidence quiet", () => {
+    expect(prReadinessSignals(base)[1]).toEqual({ label: "Review", value: "None reported", tone: "muted" });
+    expect(prReadinessSignals(base)[2].tone).toBe("muted");
+    expect(prReadinessSignals({ ...base, reviewDecision: "APPROVED", requestedReviewers: [] })[1]).toEqual({ label: "Review", value: "Done", tone: "success" });
+  });
+  it("does not present skipped or unknown checks as passed", () => {
+    expect(prCheckPresentation("SKIPPED")).toEqual({ label: "Skipped", tone: "muted" });
+    expect(prCheckPresentation("FUTURE_STATE")).toEqual({ label: "Unknown", tone: "muted" });
+    expect(prCheckPresentation("IN_PROGRESS").label).toBe("Running");
   });
 });

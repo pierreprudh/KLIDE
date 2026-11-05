@@ -52,6 +52,14 @@ pub(crate) struct PrCommit {
     created_at_ms: i64,
 }
 
+/// A check run or legacy commit status from GitHub's current-head rollup.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PrCheck {
+    name: String,
+    state: String,
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PullRequestDetails {
@@ -77,6 +85,12 @@ pub(crate) struct PullRequestDetails {
     /// "open" | "merged" | "closed" | "draft" — derived for the badge.
     badge: String,
     mergeable: String,
+    review_decision: String,
+    requested_reviewers: Option<Vec<String>>,
+    /// Authors of submitted reviews, independent of pending requests.
+    reviewed_by: Vec<String>,
+    /// None means unavailable; an empty list means GitHub reported no checks.
+    checks: Option<Vec<PrCheck>>,
     created_at_ms: i64,
     updated_at_ms: i64,
 }
@@ -607,6 +621,48 @@ fn parse_pr_view(json: &str, number: u32) -> Result<PullRequestDetails, String> 
         comment_thread,
         commits,
         mergeable: str_field(obj, "mergeable", "UNKNOWN"),
+        review_decision: str_field(obj, "reviewDecision", ""),
+        requested_reviewers: obj.get("reviewRequests").and_then(|v| v.as_array()).map(|requests| {
+            requests.iter().filter_map(|request| {
+                // gh exports flattened User/Team objects; also accept the
+                // GraphQL wrapper when replaying a captured response.
+                let reviewer = request.get("requestedReviewer").unwrap_or(request);
+                reviewer.get("login").or_else(|| reviewer.get("slug"))
+                    .and_then(|v| v.as_str()).filter(|name| !name.is_empty())
+                    .map(str::to_string)
+            }).collect()
+        }),
+        reviewed_by: obj.get("latestReviews").and_then(|v| v.as_array()).map(|reviews| {
+            let mut logins = Vec::new();
+            for review in reviews {
+                if !matches!(review.get("state").and_then(|v| v.as_str()), Some("APPROVED" | "CHANGES_REQUESTED" | "COMMENTED")) {
+                    continue;
+                }
+                if let Some(login) = review.get("author").and_then(|a| a.get("login")).and_then(|v| v.as_str()).filter(|login| !login.is_empty()) {
+                    if !logins.iter().any(|existing| existing == login) {
+                        logins.push(login.to_string());
+                    }
+                }
+            }
+            logins
+        }).unwrap_or_default(),
+        checks: obj.get("statusCheckRollup").and_then(|v| v.as_array()).map(|checks| {
+            checks.iter().map(|check| {
+                let field = |key| check.get(key).and_then(|v| v.as_str()).unwrap_or("");
+                let legacy = field("__typename") == "StatusContext";
+                let state = if legacy {
+                    field("state")
+                } else if field("status") == "COMPLETED" {
+                    field("conclusion")
+                } else {
+                    field("status")
+                };
+                PrCheck {
+                    name: if legacy { field("context") } else { field("name") }.to_string(),
+                    state: if state.is_empty() { "UNKNOWN" } else { state }.to_string(),
+                }
+            }).collect()
+        }),
         created_at_ms: ms_from_rfc3339(obj.get("createdAt")),
         updated_at_ms: ms_from_rfc3339(obj.get("updatedAt")),
     })
@@ -837,7 +893,7 @@ pub(crate) async fn git_pr_view(
                 "view",
                 &number.to_string(),
                 "--json",
-                "number,title,body,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,comments,commits,mergeable,createdAt,updatedAt",
+                "number,title,body,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,comments,commits,mergeable,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,createdAt,updatedAt",
             ],
         )?;
         parse_pr_view(&json, number)
@@ -1139,6 +1195,56 @@ git.example.com:
         assert_eq!(d.commits[0].author, "pierre");
         assert!(d.commits[0].created_at_ms > 0);
         assert!(d.created_at_ms < d.updated_at_ms);
+    }
+
+    #[test]
+    fn pr_view_keeps_reviewers_after_approval_without_pending_requests() {
+        let d = parse_pr_view(r#"{"number":12,"reviewDecision":"APPROVED","reviewRequests":[],"latestReviews":[
+            {"author":{"login":"alice"},"state":"APPROVED"},
+            {"author":{"login":"alice"},"state":"APPROVED"},
+            {"author":{"login":"bob"},"state":"COMMENTED"},
+            {"author":{"login":"draft"},"state":"PENDING"},
+            {"author":{"login":"dismissed"},"state":"DISMISSED"},
+            {"author":null,"state":"APPROVED"}
+        ]}"#, 12).unwrap();
+        assert!(d.requested_reviewers.unwrap().is_empty());
+        assert_eq!(d.reviewed_by, vec!["alice", "bob"]);
+        assert_eq!(d.review_decision, "APPROVED");
+        assert!(parse_pr_view(r#"{"number":12}"#, 12).unwrap().reviewed_by.is_empty());
+    }
+
+    #[test]
+    fn pr_view_reads_pending_user_and_team_reviewers() {
+        let d = parse_pr_view(r#"{"number":12,"reviewRequests":[
+            {"__typename":"User","login":"alice"},
+            {"__typename":"Team","slug":"design"},
+            {"requestedReviewer":{"login":"bob"}},
+            {"__typename":"User","login":""}
+        ]}"#, 12).unwrap();
+        assert_eq!(d.requested_reviewers.unwrap(), vec!["alice", "design", "bob"]);
+        assert!(parse_pr_view(r#"{"number":12}"#, 12).unwrap().requested_reviewers.is_none());
+        assert!(parse_pr_view(r#"{"number":12,"reviewRequests":[]}"#, 12).unwrap().requested_reviewers.unwrap().is_empty());
+    }
+
+    #[test]
+    fn pr_view_distinguishes_missing_and_empty_checks() {
+        assert!(parse_pr_view(r#"{"number":12}"#, 12).unwrap().checks.is_none());
+        assert!(parse_pr_view(r#"{"number":12,"statusCheckRollup":null}"#, 12).unwrap().checks.is_none());
+        assert!(parse_pr_view(r#"{"number":12,"statusCheckRollup":[]}"#, 12).unwrap().checks.unwrap().is_empty());
+    }
+
+    #[test]
+    fn pr_view_reads_check_runs_and_legacy_statuses_without_hiding_pending_work() {
+        let d = parse_pr_view(r#"{"number":12,"reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[
+            {"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"},
+            {"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""},
+            {"__typename":"StatusContext","context":"deploy","state":"PENDING"},
+            {"__typename":"CheckRun","name":"future"}
+        ]}"#, 12).unwrap();
+        assert_eq!(d.review_decision, "CHANGES_REQUESTED");
+        let checks = d.checks.unwrap();
+        assert_eq!(checks.iter().map(|c| c.state.as_str()).collect::<Vec<_>>(), vec!["FAILURE", "IN_PROGRESS", "PENDING", "UNKNOWN"]);
+        assert_eq!(checks[2].name, "deploy");
     }
 
     #[test]
