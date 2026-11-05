@@ -5460,7 +5460,7 @@ button:focus-visible .menu-leadout {
   font-weight: 400;
 }
 
-/* The view, as one word on a soft pill with a switcher glyph. A click rolls
+/* The view, as one word on a soft pill. A click rolls
    the word over to the other one — the old lifts out, the new rises in — and
    the pill's width travels between the two. */
 .klide-rail-view-pick {
@@ -5468,8 +5468,7 @@ button:focus-visible .menu-leadout {
   height: 22px;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px 0 9px;
+  padding: 0 9px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--fg) 7%, transparent);
   color: var(--fg-strong);
@@ -5480,11 +5479,6 @@ button:focus-visible .menu-leadout {
 .klide-rail-view-pick:hover,
 .klide-rail-view-pick:focus-visible {
   background: color-mix(in srgb, var(--fg) 11%, transparent);
-}
-
-.klide-rail-view-pick > svg {
-  flex-shrink: 0;
-  color: var(--fg-dim);
 }
 
 .klide-rail-view-words {
