@@ -5335,6 +5335,15 @@ button:focus-visible .menu-leadout {
   overflow-y: auto;
 }
 
+/* No scrollbar: WebKit's reserves a gutter, which stopped every row's
+   highlight short of the menu's right edge. The list still scrolls by wheel
+   or trackpad, and its cut-off last row says there is more. No
+   `scrollbar-width` either — it makes WebKit ignore this rule. */
+.klide-rail-folder-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .klide-rail-folder-row {
   min-width: 0;
   display: flex;
