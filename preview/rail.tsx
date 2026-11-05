@@ -4,6 +4,7 @@
 //   &picker=1        the folder menu open
 //   &quiet=1         nothing waiting
 //   &search=ses      the search field with a query
+//   &morph=Agent     click the switch after load (Sections ⇄ Agent morph)
 import { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -109,3 +110,9 @@ if (q) setTimeout(() => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }, 100);
 }, 300);
+
+const morph = params.get("morph");
+if (morph) setTimeout(() => {
+  const target = [...document.querySelectorAll<HTMLElement>(".klide-rail-view-pick button")].find((b) => b.textContent === morph);
+  target?.click();
+}, 600);
