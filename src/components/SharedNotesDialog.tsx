@@ -5,7 +5,7 @@ import { addMemoryDraft } from "../memoryDrafts";
 import { loadConversations } from "./ai/storedConversations";
 import type { Conversation } from "./ai/types";
 import type { SharedNotesSeed } from "./ai/SharedNotesControl";
-import { MemoryModal } from "./MemoryModal";
+import { LibraryModal } from "./LibraryModal";
 import { createPortal } from "react-dom";
 import "./sharedNotes.css";
 
@@ -222,6 +222,6 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
         </div>
       </div>
     </div>
-    {reviewOpen && createPortal(<div className="shared-notes-memory-review"><MemoryModal open={reviewOpen} workspaceRoot={workspaceRoot} initialDraftId={reviewDraftId} onClose={() => { setReviewOpen(false); requestAnimationFrame(() => root.current?.focus()); }} /></div>, document.body)}
+    {reviewOpen && createPortal(<div className="shared-notes-memory-review"><LibraryModal open={reviewOpen} workspaceRoot={workspaceRoot} initialDraftId={reviewDraftId} onClose={() => { setReviewOpen(false); requestAnimationFrame(() => root.current?.focus()); }} /></div>, document.body)}
   </>;
 }

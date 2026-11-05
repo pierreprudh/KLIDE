@@ -9,7 +9,7 @@ import { gitWorktreeList, gitWorktreeMerge, gitWorktreeRemove } from "../ipc/git
 // into the main checkout, or remove it. Backend lives in git.rs
 // (git_worktree_list / git_worktree_merge / git_worktree_remove); this view is
 // the thin operator UI over those. Same centered-overlay treatment as
-// MemoryModal.
+// LibraryModal.
 
 type Worktree = WorktreeInfo;
 

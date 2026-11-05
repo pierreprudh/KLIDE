@@ -150,7 +150,8 @@ Klide/
 │   │   ├── useCustomProviders.ts React subscription to the custom-provider store
 │   │   ├── usePortalMenu.ts     Body-portaled dropdown state
 │   │   ├── useSurface.ts        The Surface — which screen the app is on (Welcome / Focus / workbench)
-│   │   └── useUserInfo.ts       Cached local + GitHub identity for the rail footer
+│   │   ├── useUserInfo.ts       Cached local + GitHub identity for the rail footer
+│   │   └── useMemoryReviewCount.ts How many Memory notes wait for review — the Library row's "3 to review"
 │   ├── components/
 │   │   ├── WorkspaceRail.tsx    The app's one sidebar — actions, project/conversation tree, identity foot; shared by Focus + workbench
 │   │   ├── ActivityHeatmap.tsx  52-week run activity grid
@@ -183,7 +184,7 @@ Klide/
 │   │   ├── lazySurfaces.tsx     The heavy surfaces (Monaco, xterm, sheets) loaded on first render, not first paint
 │   │   ├── markdown.tsx         Hand-rolled markdown renderer (code highlighting, tool markers)
 │   │   ├── visualHtml.ts        Sanitize + scope model-authored markup for the inline visualizer
-│   │   ├── MemoryModal.tsx      Centered Memory handoff-notes modal (MemoryPanel.tsx: its body)
+│   │   ├── LibraryModal.tsx     The Library — Memory / Skills / Foundations tabs in one centered window (MemoryPanel.tsx: the Memory body)
 │   │   ├── MissionControl.tsx   Run board, attention/review, races + delegate handoff
 │   │   ├── MissionControlSkeleton.tsx Geometry-matched loading skeleton
 │   │   ├── missionControl/glyphs.tsx Mission Control's source marks + action glyphs, out of the board file
@@ -438,7 +439,7 @@ after an app restart. Full design + roadmap: `docs/delegate-session-replay.md`.
 Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (or future you) can pick up where the last session stopped.
 
 - **Storage** — `src-tauri/src/memory.rs` writes one versioned markdown file per entry with machine frontmatter (kind, review state, tags, source refs, supersession, Run/provider metadata) + structured body (Goal / Plan / Decisions / Files touched / Next steps / Notes). Markdown is authoritative; retrieval is local and deterministic. Commands: `memory_write`, `memory_list`, `memory_read`; Harness Tools: `memory_search`, `memory_read`.
-- **Frontend** — `src/memory.ts` typed data layer; `MemoryPanel` is the list+detail body; `MemoryModal` is the centered overlay (same pattern as `SkillsModal`).
+- **Frontend** — `src/memory.ts` typed data layer; `MemoryPanel` is the list+detail body; it is the Memory tab of `LibraryModal`, the centered Library window that also holds Skills (`SkillsModal` embedded) and Foundations.
 - **Trigger** — the AI panel header has a "Summarize" bookmark button (`src/components/ai/summarize.ts`) that calls the model once with a structured prompt, parses the response, and writes via `memory_write`. The first user message becomes the title; file paths are extracted from the conversation; the model produces Notes + Decisions + Goal.
 
 ### Documents (a run makes a real workbook)

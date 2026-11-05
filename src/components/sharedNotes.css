@@ -198,6 +198,7 @@
 .shared-notes-embedded .shared-notes-header { display:none; }
 .memory-sections { display:flex; gap:4px; margin-left:12px; }
 .memory-sections button { padding:6px 10px; border:0; border-radius:6px; color:var(--fg-subtle); background:transparent; font:12px var(--font-ui); cursor:pointer; }
+.memory-section-note { margin-left:6px; color:var(--warning); font-size:11px; }
 .memory-sections button[aria-selected="true"] { color:var(--fg-strong); background:var(--bg-hover); }
 .memory-sections button:focus-visible, .sn-shared-entry button:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; }
 .shared-notes-dock { position:fixed; inset:0 0 0 auto; width:min(700px,80vw); display:flex; z-index:100000; background:var(--bg-elevated); border-left:1px solid var(--border); }

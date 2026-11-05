@@ -86,6 +86,9 @@ export type RailNavItem = {
   /** When defined, the row is a disclosure — a chevron turns with it. Explorer
    *  uses it: the tree unfolds under the row rather than opening a surface. */
   expanded?: boolean;
+  /** A few words at the row's trailing edge when the destination has
+   *  something waiting — the Library's "3 to review". Absent otherwise. */
+  note?: string;
   onClick: (meta: boolean) => void;
 };
 
@@ -355,6 +358,7 @@ function NavRow({
   onClick,
   active = false,
   expanded,
+  note,
 }: {
   icon: ReactNode;
   label: string;
@@ -362,6 +366,8 @@ function NavRow({
   active?: boolean;
   /** When defined, the row is a disclosure — a small chevron turns with it. */
   expanded?: boolean;
+  /** Something waiting there, in words. */
+  note?: string;
 }) {
   return (
     <button
@@ -375,6 +381,7 @@ function NavRow({
     >
       <span className="klide-focus-nav-icon">{icon}</span>
       <span className="klide-focus-nav-label">{label}</span>
+      {note ? <span className="klide-focus-nav-note">{note}</span> : null}
       {expanded !== undefined && (
         <span className="klide-focus-nav-chevron" data-expanded={expanded || undefined} aria-hidden>
           <svg
@@ -1604,6 +1611,7 @@ export function WorkspaceRail({
                 label={item.label}
                 active={item.active}
                 expanded={item.expanded}
+                note={item.note}
                 onClick={(meta) => {
                   onNavigateAway?.();
                   item.onClick(meta);

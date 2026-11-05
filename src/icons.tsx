@@ -28,6 +28,7 @@ import { ArrowUUpLeft } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 import { Play } from "@phosphor-icons/react/dist/csr/Play";
 import { Pause } from "@phosphor-icons/react/dist/csr/Pause";
 import { Clock } from "@phosphor-icons/react/dist/csr/Clock";
+import { Books } from "@phosphor-icons/react/dist/csr/Books";
 import { ArrowSquareOut } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { Code } from "@phosphor-icons/react/dist/csr/Code";
 import { DotsThree } from "@phosphor-icons/react/dist/csr/DotsThree";
@@ -163,6 +164,11 @@ export function SkillsIcon(p: GlyphProps) {
  *  a bookmark. One mark for the writing end and the reading end. */
 export function MemoryIcon(p: GlyphProps) {
   return <Icon as={BookmarkSimple} {...p} />;
+}
+
+/** The Library — Memory, Skills and Foundations behind one destination. */
+export function LibraryIcon(p: GlyphProps) {
+  return <Icon as={Books} {...p} />;
 }
 
 /** Mission Control — three bodies in one frame: "many runs, one board". */
