@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { MissionViewTabs } from "./missionControl/MissionViewTabs";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -28,6 +29,12 @@ import "./scheduled.css";
 type Props = {
   workspaceRoot: string | null; defaultProvider: ProviderId; defaultModel: string;
   harnessSettings: HarnessSettings; initialSelectedId?: string | null; selectionVersion?: number;
+  /** Back to Mission Control's runs. When given, the header is Mission
+   *  Control's — its title and its Runs / Scheduled tabs — since Scheduled is
+   *  one of its two views. */
+  onShowRuns?: () => void;
+  /** Something wrong with a schedule, in words ("1 failed"). */
+  scheduledNote?: string;
   onOpenRun: (id: string) => void;
 };
 
@@ -122,7 +129,11 @@ export function Scheduled(props: Props) {
 
   return <section className="scheduled-page shell-enter" aria-label="Scheduled">
     <header className="scheduled-header">
-      <h1>Scheduled</h1>
+      {props.onShowRuns ? <>
+        <h1 className="scheduled-mission-title">Mission Control</h1>
+        <MissionViewTabs value="scheduled" scheduledNote={props.scheduledNote} onChange={(view) => { if (view === "runs") props.onShowRuns?.(); }} />
+        <span style={{ flex: 1 }} />
+      </> : <h1>Scheduled</h1>}
       <button type="button" className="scheduled-new" onClick={e => { editorOpener.current = e.currentTarget; setCreating(true); setEditing(false); setMenu(null); setError(null); }}>
         <NewTaskIcon size={14} /> New schedule
       </button>

@@ -1,6 +1,7 @@
 import { RunActivityTabs, type RunActivityView } from "./missionControl/RunActivityTabs";
 import { RunTimeline } from "./missionControl/RunTimeline";
 import { MissionLibrary } from "./missionControl/MissionLibrary";
+import { MissionViewTabs } from "./missionControl/MissionViewTabs";
 import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listProviderModels } from "../ipc/aiProviders";
@@ -3978,9 +3979,16 @@ export function MissionControl({
   summarizingFromRunId,
   onSelectedRunChange,
   initialSelectedRunId,
+  onShowScheduled,
+  scheduledNote,
 }: {
   workspaceRoot: string | null;
   theme: ThemeId;
+  /** Switch to the Scheduled view. Absent where Mission Control is drawn
+   *  without one, and then the Runs / Scheduled tabs are not shown. */
+  onShowScheduled?: () => void;
+  /** Something wrong with a schedule, in words — rides on the Scheduled tab. */
+  scheduledNote?: string;
   onResumeKlideRun?: (runId: string) => void;
   /** The Run the detail pane is showing, as it changes — null when none, and
    *  again when this surface unmounts. The host lights the matching row in
@@ -4555,6 +4563,9 @@ export function MissionControl({
           <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
             Mission Control
           </h1>
+          {onShowScheduled ? (
+            <MissionViewTabs value="runs" scheduledNote={scheduledNote} onChange={(view) => { if (view === "scheduled") onShowScheduled(); }} />
+          ) : null}
           {projectOptions.length > 0 && (
             <ProjectSwitcher value={projectFilter} options={projectOptions} onChange={setProjectFilter} />
           )}

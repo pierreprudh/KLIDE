@@ -18,6 +18,8 @@
 .scheduled-page :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .scheduled-header { min-height: 56px; padding: 0 20px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .scheduled-header h1 { font-size: 14px; font-weight: 500; color: var(--fg-strong); }
+/* Drawn as Mission Control's Scheduled view: its title, same weight and gap. */
+.scheduled-header h1.scheduled-mission-title { font-weight: 600; margin: 0; }
 .scheduled-new, .scheduled-run, .scheduled-cancel, .scheduled-choose {
   height: 30px;
   display: inline-flex;

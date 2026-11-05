@@ -27,4 +27,4 @@ mockIPC((command, payload) => {
   if (command.includes("read") && command.includes("file")) throw new Error("No project rules in this fixture");
   return [];
 });
-ReactDOM.createRoot(document.getElementById("root")!).render(<div style={{height:"100vh",display:"flex"}}><Scheduled workspaceRoot={params.has("no-workspace") ? null : "/fixture/klide"} defaultProvider="codex" defaultModel="gpt-5.4" harnessSettings={{}} onOpenRun={() => {}} /></div>);
+ReactDOM.createRoot(document.getElementById("root")!).render(<div style={{height:"100vh",display:"flex"}}><Scheduled workspaceRoot={params.has("no-workspace") ? null : "/fixture/klide"} defaultProvider="codex" defaultModel="gpt-5.4" harnessSettings={{}} onOpenRun={() => {}} onShowRuns={params.has("mission") ? () => {} : undefined} scheduledNote={params.has("failed") ? "1 failed" : undefined} /></div>);

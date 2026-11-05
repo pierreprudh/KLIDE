@@ -24,12 +24,12 @@ import {
   FolderIcon,
   GitIcon,
   MissionIcon,
-  ClockIcon,
   NewTaskIcon,
   LibraryIcon,
 } from "./icons";
 import type { LibrarySection } from "./components/LibraryModal";
 import { useMemoryReviewCount } from "./hooks/useMemoryReviewCount";
+import { useFailedScheduleCount } from "./hooks/useFailedScheduleCount";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea, type EditorEmptyAction } from "./components/lazySurfaces";
@@ -344,6 +344,8 @@ function App() {
   // behind one destination. Null while closed.
   const [librarySection, setLibrarySection] = useState<LibrarySection | null>(null);
   const memoryReviewCount = useMemoryReviewCount(workspaceRoot);
+  const failedSchedules = useFailedScheduleCount();
+  const scheduledNote = failedSchedules > 0 ? `${failedSchedules} failed` : undefined;
   const [worktreesVisible, setWorktreesVisible] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Bumped when the AI panel writes a new memory entry, so the modal
@@ -1156,15 +1158,10 @@ function App() {
       id: "runs",
       label: "Mission Control",
       icon: <MissionIcon size={15} />,
-      active: activityState.runs,
+      // Scheduled is Mission Control's second view, so either keeps the row lit.
+      active: activityState.runs || overlay === "scheduled",
+      note: scheduledNote,
       onClick: () => togglePanel("runs"),
-    },
-    {
-      id: "scheduled",
-      label: "Scheduled",
-      icon: <ClockIcon size={15} />,
-      active: overlay === "scheduled",
-      onClick: () => openOverlay("scheduled"),
     },
     {
       // Memory, Skills and Foundations behind one row. It speaks only when
@@ -1221,15 +1218,10 @@ function App() {
       id: "runs",
       label: "Mission Control",
       icon: <MissionIcon size={15} />,
-      active: activityState.runs,
+      // Scheduled is Mission Control's second view, so either keeps the row lit.
+      active: activityState.runs || overlay === "scheduled",
+      note: scheduledNote,
       onClick: () => openOverlay("runs"),
-    },
-    {
-      id: "scheduled",
-      label: "Scheduled",
-      icon: <ClockIcon size={15} />,
-      active: overlay === "scheduled",
-      onClick: () => openOverlay("scheduled"),
     },
     {
       // Memory, Skills and Foundations behind one row. It speaks only when
@@ -3647,7 +3639,8 @@ function App() {
             ) : overlay === "scheduled" ? (
               <Suspense fallback={null}>
                 <Scheduled workspaceRoot={workspaceRoot} defaultProvider={focusShownProvider} defaultModel={focusShownModel} initialSelectedId={scheduledSelection?.id} selectionVersion={scheduledSelection?.version}
-                  harnessSettings={harnessSettings} onOpenRun={runId => void resumeKlideRun(runId)} />
+                  harnessSettings={harnessSettings} onOpenRun={runId => void resumeKlideRun(runId)}
+                  onShowRuns={() => openOverlay("runs")} scheduledNote={scheduledNote} />
               </Suspense>
             ) : overlay === "runs" ? (
               <Suspense fallback={<MissionControlSkeleton />}>
@@ -3666,6 +3659,8 @@ function App() {
                   onForkRunInWorktree={forkRunInWorktree}
                   onMergeWorktreeRun={mergeWorktreeRun}
                   summarizingFromRunId={summarizingFromRun}
+                  onShowScheduled={() => openOverlay("scheduled")}
+                  scheduledNote={scheduledNote}
                 />
               </Suspense>
             ) : activeGrid ? (

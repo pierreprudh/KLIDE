@@ -151,7 +151,8 @@ Klide/
 │   │   ├── usePortalMenu.ts     Body-portaled dropdown state
 │   │   ├── useSurface.ts        The Surface — which screen the app is on (Welcome / Focus / workbench)
 │   │   ├── useUserInfo.ts       Cached local + GitHub identity for the rail footer
-│   │   └── useMemoryReviewCount.ts How many Memory notes wait for review — the Library row's "3 to review"
+│   │   ├── useMemoryReviewCount.ts How many Memory notes wait for review — the Library row's "3 to review"
+│   │   └── useFailedScheduleCount.ts How many schedules failed — Mission Control's row and Scheduled tab ("1 failed")
 │   ├── components/
 │   │   ├── WorkspaceRail.tsx    The app's one sidebar — actions, project/conversation tree, identity foot; shared by Focus + workbench
 │   │   ├── ActivityHeatmap.tsx  52-week run activity grid
@@ -188,6 +189,7 @@ Klide/
 │   │   ├── MissionControl.tsx   Run board, attention/review, races + delegate handoff
 │   │   ├── MissionControlSkeleton.tsx Geometry-matched loading skeleton
 │   │   ├── missionControl/glyphs.tsx Mission Control's source marks + action glyphs, out of the board file
+│   │   ├── missionControl/MissionViewTabs.tsx Runs / Scheduled — Mission Control's two views, the same tab strip in both headers
 │   │   ├── MissionGraph.tsx     Mission dependency graph view + dependency editing
 │   │   ├── MissionFlow.tsx       Shared Mission plan canvas (conversation + Mission Control)
 │   │   ├── ProfileModal.tsx     Local IDE profile (avatar + identity + workspace)
