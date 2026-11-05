@@ -31,6 +31,9 @@ export type RunAttention =
 /** conversation id → the things it waits on (its own run, or a worker's). */
 const waiting = new Map<string, Set<string>>();
 let needsYou: ReadonlySet<string> = new Set();
+/** conversation id → what its own run last asked, in its words. A worker's
+ *  asking has no words here (it comes through `worker:status`). */
+const askedFor = new Map<string, string>();
 const listeners = new Set<() => void>();
 /** conversation id → how many mounted, visible panels show it. */
 const onScreen = new Map<string, number>();
@@ -41,6 +44,7 @@ let finishedUnseen: ReadonlySet<string> = new Set();
 
 function publish() {
   needsYou = new Set(waiting.keys());
+  for (const id of [...askedFor.keys()]) if (!needsYou.has(id)) askedFor.delete(id);
   for (const fn of listeners) fn();
 }
 
@@ -72,6 +76,22 @@ export function useNeedsYou(conversationId: string): boolean {
     () => needsYouNow(conversationId),
     () => false,
   );
+}
+
+/** Every conversation waiting on you, as one set — the rail's Needs you
+ *  section. A new set on every change, so it can key a memo. */
+export function useNeedsYouIds(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    () => needsYou,
+    () => needsYou,
+  );
+}
+
+/** What the conversation is waiting on, in a line — "Edit src/session.ts",
+ *  or the question it asked. Absent when only a worker of it asks. */
+export function needsYouSummary(conversationId: string): string | undefined {
+  return askedFor.get(conversationId);
 }
 
 /** Did this conversation finish while you were elsewhere? Cleared when it is
@@ -125,6 +145,8 @@ export function applyRunAttention(attention: RunAttention): void {
     toastFor.delete(runId);
     return;
   }
+  const summary = attention.summary?.replace(/\s+/g, " ").trim();
+  if (summary) askedFor.set(conversationId, attention.kind === "question" ? `Asks: ${summary}` : summary);
   markNeedsYou(conversationId, runId, true);
   if (isOnScreen(conversationId) || toastFor.has(runId)) return;
   playSound("attention");

@@ -43,6 +43,8 @@ import { ArrowUp } from "@phosphor-icons/react/dist/csr/ArrowUp";
 import { StackSimple } from "@phosphor-icons/react/dist/csr/StackSimple";
 import { BookmarkSimple } from "@phosphor-icons/react/dist/csr/BookmarkSimple";
 import { CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { CaretUpDown } from "@phosphor-icons/react/dist/csr/CaretUpDown";
+import { HandPalm } from "@phosphor-icons/react/dist/csr/HandPalm";
 import { Cards } from "@phosphor-icons/react/dist/csr/Cards";
 import { FileText } from "@phosphor-icons/react/dist/csr/FileText";
 import { ChatTeardrop } from "@phosphor-icons/react/dist/csr/ChatTeardrop";
@@ -241,6 +243,16 @@ export function DeleteIcon(p: GlyphProps) {
 /** "More" — the rest of a row's actions, folded behind three dots. */
 export function MoreIcon(p: GlyphProps) {
   return <Icon as={DotsThree} {...p} />;
+}
+
+/** A conversation waiting on you — an approval or a question. */
+export function NeedsYouIcon(p: GlyphProps) {
+  return <Icon as={HandPalm} {...p} />;
+}
+
+/** A switcher: the control opens a list to pick another one from. */
+export function SwitcherIcon(p: GlyphProps) {
+  return <Icon as={CaretUpDown} {...p} />;
 }
 
 /** A conversation the person keeps at the top of its group. */

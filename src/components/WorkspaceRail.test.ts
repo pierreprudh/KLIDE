@@ -11,6 +11,7 @@ import {
   RAIL_MIN_WIDTH,
   railDragWidth,
   railFromEdge,
+  railConversationSections,
   railProjectRoots,
   retrievableConversation,
   visibleProviderConversations,
@@ -206,5 +207,59 @@ describe("rail conversation disclosure", () => {
       "conversation-4",
       "conversation-5",
     ]);
+  });
+});
+
+describe("rail conversation sections", () => {
+  const WEB = "/Users/pierre/Sites/website";
+  const at = (id: string, updatedAt: number, cwd: string): Conversation => ({ id, title: id, msgs: [], updatedAt, cwd });
+  const conversations = [
+    at("old", 1, KIDE),
+    at("pinned", 2, KIDE),
+    at("asking-here", 3, KIDE),
+    at("asking-there", 4, WEB),
+    at("there", 5, WEB),
+    at("new", 6, KIDE),
+  ];
+  const folderOf = (c: Conversation) => (c.cwd === WEB ? WEB : KIDE);
+  const ids = (list: Conversation[]) => list.map((c) => c.id);
+
+  it("gathers what waits on you from every folder, newest first", () => {
+    const sections = railConversationSections(
+      conversations, folderOf, KIDE, new Set(["asking-here", "asking-there"]), new Set(["pinned"]),
+    );
+    expect(ids(sections.needs)).toEqual(["asking-there", "asking-here"]);
+    expect(ids(sections.pinned)).toEqual(["pinned"]);
+    // Another folder's conversations stay out unless they wait on you.
+    expect(ids(sections.recent)).toEqual(["new", "old"]);
+  });
+
+  it("shows a conversation once: waiting on you takes it out of Pinned", () => {
+    const sections = railConversationSections(
+      conversations, folderOf, KIDE, new Set(["pinned"]), new Set(["pinned"]),
+    );
+    expect(ids(sections.needs)).toEqual(["pinned"]);
+    expect(sections.pinned).toEqual([]);
+  });
+
+  it("with no folder open, only what waits on you", () => {
+    const sections = railConversationSections(conversations, folderOf, null, new Set(["there"]), new Set());
+    expect(ids(sections.needs)).toEqual(["there"]);
+    expect(sections.recent).toEqual([]);
+  });
+});
+
+describe("rail list window", () => {
+  const conversations = Array.from({ length: 12 }, (_, index): Conversation => ({
+    id: `c${index + 1}`,
+    title: `C${index + 1}`,
+    msgs: [],
+    updatedAt: 12 - index,
+  }));
+
+  it("takes its own row limit, keeping an open row inside it", () => {
+    const visible = visibleProviderConversations(conversations, false, new Set(["c12"]), 10);
+    expect(visible).toHaveLength(10);
+    expect(visible[visible.length - 1]?.id).toBe("c12");
   });
 });

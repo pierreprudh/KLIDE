@@ -424,6 +424,14 @@ export const SETTINGS = {
     key: "klide-rail-collapsed",
     fallback: () => false,
   } as SettingDef<boolean>,
+  /** How the sidebar lays out this folder's conversations: in sections
+   *  (Needs you, Pinned, Recent) or grouped by the agent each began on. Set
+   *  from the rail's own switch, so it carries no Settings row. */
+  railConversationView: {
+    key: "klide-rail-conversation-view",
+    fallback: () => "sections",
+    normalize: (value: unknown) => (value === "agent" ? "agent" : "sections"),
+  } as SettingDef<"sections" | "agent">,
   aiModel: {
     key: "klide-ai-model",
     // Legacy fallback chain: the pre-rename Ollama-only key, then the Ollama

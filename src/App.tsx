@@ -1058,7 +1058,7 @@ function App() {
     setFocusChatActive(false);
   }
 
-  /** Resume a conversation the rail's tree points at, into an AI panel. Focus
+  /** Resume a conversation a rail row points at, into an AI panel. Focus
    *  does the same work against its own canvas (see `onOpenConversation` on
    *  <FocusMode>) — one set of rules, one surface each. */
   function openConversationInAiPanel(convo: Conversation) {
@@ -1097,7 +1097,7 @@ function App() {
     openOverlay("runs");
   }
 
-  /** Land a stored conversation exactly where a click in the rail's tree
+  /** Land a stored conversation exactly where a click on a rail row
    *  would — Focus's canvas or an AI panel, raised if it is already open.
    *  False when no stored conversation has that id. */
   function openConversationById(conversationId: string): boolean {
@@ -1135,13 +1135,13 @@ function App() {
     return () => registerScheduleOpener(null);
   }, [openOverlay]);
 
+  const railNewTask: RailNavItem = {
+    id: "new-task",
+    label: "New task",
+    icon: <NewTaskIcon size={15} />,
+    onClick: () => startWorkbenchTask(),
+  };
   const railNav: RailNavItem[] = [
-    {
-      id: "new-task",
-      label: "New task",
-      icon: <NewTaskIcon size={15} />,
-      onClick: () => startWorkbenchTask(),
-    },
     {
       id: "git",
       label: "Git",
@@ -1149,7 +1149,7 @@ function App() {
       active: activityState.git,
       onClick: () => togglePanel("git"),
     },
-    // No AI row. The rail's tree below is already the AI surface — it lists
+    // No AI row. The rail's conversations below are already the AI surface — they list
     // every conversation and marks the open ones — so a row that only toggles
     // the panel holding them was the same idea stated twice. Showing and
     // hiding the panel lives in the command palette now, and every handoff
@@ -1165,7 +1165,7 @@ function App() {
     },
     {
       // Memory, Skills and Foundations behind one row. It speaks only when
-      // notes wait for review; Needs-you in the tree stays about conversations.
+      // notes wait for review; Needs you in the list stays about conversations.
       id: "library",
       label: "Library",
       icon: <LibraryIcon size={15} />,
@@ -1196,13 +1196,13 @@ function App() {
    *  fresh panel there, Mission Control is an overlay either way, and Focus has
    *  no Explorer row because it has no editor to open a file into. Everything
    *  else is the same destination reached the same way. */
+  const focusRailNewTask: RailNavItem = {
+    id: "new-task",
+    label: "New task",
+    icon: <NewTaskIcon size={15} />,
+    onClick: () => startFocusTask(),
+  };
   const focusRailNav: RailNavItem[] = [
-    {
-      id: "new-task",
-      label: "New task",
-      icon: <NewTaskIcon size={15} />,
-      onClick: () => startFocusTask(),
-    },
     {
       // Git Review is a full-window surface, not a panel, so Focus reaches the
       // very same one the workbench does. It earns its own row: the git island
@@ -1225,7 +1225,7 @@ function App() {
     },
     {
       // Memory, Skills and Foundations behind one row. It speaks only when
-      // notes wait for review; Needs-you in the tree stays about conversations.
+      // notes wait for review; Needs you in the list stays about conversations.
       id: "library",
       label: "Library",
       icon: <LibraryIcon size={15} />,
@@ -1707,7 +1707,7 @@ function App() {
         }}
         onOpenPeerConversation={(conversationId) => {
           // The peer link's card names another thread; land it exactly where a
-          // click in the rail's tree would — raised if it is already open.
+          // click on a rail row would — raised if it is already open.
           openConversationById(conversationId);
         }}
         onFileWritten={onAgentWrote}
@@ -3500,10 +3500,10 @@ function App() {
             <WorkspaceRail
               workspaceRoot={workspaceRoot}
               projects={recentFolders}
+              newTask={focusBase ? focusRailNewTask : railNewTask}
               nav={focusBase ? focusRailNav : railNav}
-              activeProvider={aiPanels[0]?.provider ?? "ollama"}
               /* The focused pane's conversation is the one you are looking at,
-                 so it takes the tree's active route; the rest are marked as
+                 so it wears the rail's selected surface; the rest are marked as
                  merely open. In Focus the panel bindings are the truth while a
                  chat is up — they follow a drop into the split — and the local
                  click state covers the apology row and the moment between a
@@ -3518,6 +3518,8 @@ function App() {
                 }
                 changeRoot(root);
               }}
+              onOpenFolder={() => void openFolderDialog()}
+              onCloneRepo={cloneRepo}
               onOpenConversation={(convo) => {
                 if (focusBase) {
                   setFocusSelectedConvoId(convo.id);
