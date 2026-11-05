@@ -1107,8 +1107,29 @@ function ViewSwitch({
   value: ConversationView;
   onChange: (view: ConversationView) => void;
 }) {
+  // The soft fill behind the chosen word is one shape that slides from one
+  // word to the other, stretching to its width — the switch morphs rather
+  // than blinking between two states.
+  const groupRef = useRef<HTMLDivElement>(null);
+  const [fill, setFill] = useState<{ left: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const chosen = groupRef.current?.querySelector<HTMLElement>("[aria-checked='true']");
+      if (chosen) setFill({ left: chosen.offsetLeft, width: chosen.offsetWidth });
+    };
+    measure();
+    // The words are measured in the UI font; measure again once it is in.
+    void document.fonts?.ready.then(measure);
+  }, [value]);
   return (
-    <div className="klide-rail-view-pick" role="radiogroup" aria-label="Show conversations">
+    <div ref={groupRef} className="klide-rail-view-pick" role="radiogroup" aria-label="Show conversations">
+      {fill ? (
+        <span
+          className="klide-rail-view-fill"
+          aria-hidden="true"
+          style={{ transform: `translateX(${fill.left}px)`, width: fill.width }}
+        />
+      ) : null}
       {VIEWS.map(({ id, label }, index) => (
         <button
           key={id}
@@ -1185,7 +1206,7 @@ export function WorkspaceRail({
   const [query, setQuery] = useState("");
   const { username, hostname, avatarUrl } = useUserInfo();
   const searchRef = useRef<HTMLInputElement>(null);
-  // Folded headings, by key: "needs", "pinned", "recent", "agent:<provider>".
+  // Folded headings, by key: "needs", "pinned", "agent:<provider>".
   // Everything starts open; the session remembers what you folded.
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const needsYouIds = useNeedsYouIds();
@@ -1203,7 +1224,7 @@ export function WorkspaceRail({
    *  somewhere other than its row, so its row has to be findable. */
   function unfoldFor(provider: ProviderId | undefined) {
     setFolded((prev) => {
-      const keys = ["needs", "pinned", "recent", `agent:${provider ?? "ollama"}`];
+      const keys = ["needs", "pinned", `agent:${provider ?? "ollama"}`];
       if (!keys.some((key) => prev.has(key))) return prev;
       const next = new Set(prev);
       for (const key of keys) next.delete(key);
@@ -1357,6 +1378,52 @@ export function WorkspaceRail({
 
   const searching = searchOpen && query.trim().length > 0;
 
+  /* Switching Sections ⇄ Agent is a morph, not a page change: every row is
+     measured where it stands, the other view renders, and each row then
+     travels from where it was to where it now is. A row only one view shows
+     fades in behind them. The entrance cascade stays out of it — the rows
+     are not arriving, they are moving. */
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const morphFrom = useRef<Map<string, DOMRect> | null>(null);
+  function switchView(next: ConversationView) {
+    if (next === view) return;
+    const body = bodyRef.current;
+    if (body && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const from = new Map<string, DOMRect>();
+      for (const el of body.querySelectorAll<HTMLElement>("[data-convo-id]")) {
+        from.set(el.dataset.convoId!, el.getBoundingClientRect());
+      }
+      morphFrom.current = from;
+    }
+    setView(next);
+  }
+  useLayoutEffect(() => {
+    const from = morphFrom.current;
+    morphFrom.current = null;
+    const body = bodyRef.current;
+    if (!from || !body) return;
+    // `--ease-soft`, spelled out: the Web Animations API reads no variables.
+    const easing = "cubic-bezier(0.32, 0.72, 0, 1)";
+    for (const el of body.querySelectorAll<HTMLElement>("[data-convo-id]")) {
+      const was = from.get(el.dataset.convoId!);
+      if (!was) {
+        el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, delay: 140, easing, fill: "backwards" });
+        continue;
+      }
+      const now = el.getBoundingClientRect();
+      const dx = was.left - now.left;
+      const dy = was.top - now.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      el.animate(
+        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }],
+        { duration: 420, easing },
+      );
+    }
+    for (const el of body.querySelectorAll<HTMLElement>(".klide-rail-section-head")) {
+      el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, delay: 120, easing, fill: "backwards" });
+    }
+  }, [view]);
+
   const row = (
     conversation: Conversation,
     options: { markBy?: "agent" | "model"; showPin?: boolean; delay?: string } = {},
@@ -1367,7 +1434,7 @@ export function WorkspaceRail({
         key={conversation.id}
         convo={conversation}
         markBy={options.markBy}
-        revealDelay={options.delay}
+        revealDelay={morphFrom.current ? undefined : options.delay}
         showPin={options.showPin}
         where={folder && folder !== activeProjectRoot ? basename(folder) : undefined}
         selected={selectedIds.has(conversation.id)}
@@ -1455,20 +1522,18 @@ export function WorkspaceRail({
             <div className="klide-rail-list">{sections.pinned.map((c, i) => row(c, { delay: revealDelay(i) }))}</div>
           </RailSection>
         ) : null}
+        {/* The rest of the folder needs no heading: every list here is
+            newest first, so "Recent" said nothing. */}
         {sections.recent.length > 0 ? (
-          <RailSection
-            label="Recent"
-            open={!folded.has("recent")}
-            onToggle={() => toggleFolded("recent")}
-          >
+          <div className="klide-rail-rest">
             <RowList
               rows={sections.recent}
               limit={RECENT_ROW_LIMIT}
               keepIds={openIds}
-              label="recent conversations"
+              label="conversations"
               render={(c, delay) => row(c, { delay })}
             />
-          </RailSection>
+          </div>
         ) : null}
       </>
     );
@@ -1612,10 +1677,10 @@ export function WorkspaceRail({
 
           <div className="klide-rail-convos-head">
             <h2 className="klide-rail-convos-label">{searching ? "Results" : "Conversations"}</h2>
-            {searching ? null : <ViewSwitch value={view} onChange={setView} />}
+            {searching ? null : <ViewSwitch value={view} onChange={switchView} />}
           </div>
 
-          <div className="klide-focus-rail-body">
+          <div className="klide-focus-rail-body" ref={bodyRef}>
             {!searching && !activeProjectRoot ? (
               <p className="klide-focus-rail-empty">Open a folder to start.</p>
             ) : null}

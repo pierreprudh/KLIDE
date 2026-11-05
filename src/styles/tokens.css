@@ -5463,8 +5463,27 @@ button:focus-visible .menu-leadout {
 /* The two views as two words: the one you are on in full ink on a soft
    fill, the other quiet until you point at it. */
 .klide-rail-view-pick {
+  position: relative;
   display: flex;
   gap: 2px;
+}
+
+/* One fill, sliding to the chosen word and stretching to its width. */
+.klide-rail-view-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 22px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  pointer-events: none;
+  transition:
+    transform 380ms var(--ease-soft),
+    width 380ms var(--ease-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-rail-view-fill { transition: none; }
 }
 
 .klide-rail-view-pick > button {
@@ -5480,12 +5499,16 @@ button:focus-visible .menu-leadout {
   color: var(--fg-strong);
 }
 
-.klide-rail-view-pick > button[aria-checked="true"] {
-  color: var(--fg-strong);
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
+.klide-rail-view-pick > button {
+  position: relative;
 }
 
-.klide-rail-section + .klide-rail-section {
+.klide-rail-view-pick > button[aria-checked="true"] {
+  color: var(--fg-strong);
+}
+
+.klide-rail-section + .klide-rail-section,
+.klide-rail-section + .klide-rail-rest {
   margin-top: 10px;
 }
 
