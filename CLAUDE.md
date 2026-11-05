@@ -91,7 +91,7 @@ Klide/
 │   ├── workspaceFs.ts           Workspace-rooted fs invokes (join, list, read)
 │   ├── projectPaths.ts          Path normalization + project/worktree ownership checks
 │   ├── recentFolders.ts         Recent-folder ordering (remember on open, promote on work)
-│   ├── focusHistory.ts          Focus rail history expand/collapse rules
+│   ├── focusHistory.ts          Rail order memory — agent groups hold their place while rows follow recency
 │   ├── railSelection.ts         Which rail row is 'you are here' — the click wins until the panel binding knows it
 │   ├── pinnedConversations.ts   Rail pins — a persisted id list, pinned rows lead their provider group
 │   ├── railDestinations.tsx     Foot-of-rail destinations shared by both rails
@@ -154,7 +154,7 @@ Klide/
 │   │   ├── useMemoryReviewCount.ts How many Memory notes wait for review — the Library row's "3 to review"
 │   │   └── useFailedScheduleCount.ts How many schedules failed — Mission Control's row and Scheduled tab ("1 failed")
 │   ├── components/
-│   │   ├── WorkspaceRail.tsx    The app's one sidebar — actions, project/conversation tree, identity foot; shared by Focus + workbench
+│   │   ├── WorkspaceRail.tsx    The app's one sidebar — folder card, actions, conversations (Sections / By agent), one-line foot; shared by Focus + workbench
 │   │   ├── ActivityHeatmap.tsx  52-week run activity grid
 │   │   ├── AiPanel.tsx          AI chat panel host + run interaction surface
 │   │   ├── AnchoredWorkbench.tsx Anchored layout shell — sidebar, tabs, editor, terminal, AI panels

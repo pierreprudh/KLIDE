@@ -60,7 +60,7 @@ _Avoid_: second supervisor, per-host admission, remote fallback, background runn
 
 **Schedule**:
 A saved clock trigger with its own instructions, Workspace, agent/model, and
-Run history, managed from Scheduled in the sidebar. Each occurrence starts a
+Run history, managed from Mission Control's Scheduled tab. Each occurrence starts a
 fresh standalone Run through the existing Run host. One-time or fixed-interval;
 repeats skip missed intervals and wait for the previous occurrence to settle.
 A persistent per-user local service owns the clock on this Mac, even when

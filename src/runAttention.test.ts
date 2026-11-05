@@ -28,7 +28,7 @@ vi.mock("./runningConversations", () => ({
 }));
 
 import { playSound } from "./sound";
-import { applyRunAttention, finishedUnseenNow, markNeedsYou, needsYouNow, resetRunAttention, showConversation, watchRunAttention } from "./runAttention";
+import { applyRunAttention, finishedUnseenNow, markNeedsYou, needsYouNow, needsYouSummary, resetRunAttention, showConversation, watchRunAttention } from "./runAttention";
 
 const ask = { runId: "convo-1", state: "asking" as const, kind: "permission" as const, requestId: "perm_1", summary: "Run npm test" };
 
@@ -51,6 +51,21 @@ describe("runAttention", () => {
     applyRunAttention({ runId: "convo-1", state: "clear" });
     expect(needsYouNow("convo-1")).toBe(false);
     expect(dismissed).toEqual([t.id]);
+  });
+
+  it("says what the conversation waits on, in its words, until it stops", () => {
+    applyRunAttention(ask);
+    expect(needsYouSummary("convo-1")).toBe("Run npm test");
+    applyRunAttention({ runId: "convo-1", state: "clear" });
+    expect(needsYouSummary("convo-1")).toBeUndefined();
+    applyRunAttention({ ...ask, kind: "question", requestId: "q_1", summary: "Monthly  or\nyearly first?" });
+    expect(needsYouSummary("convo-1")).toBe("Asks: Monthly or yearly first?");
+  });
+
+  it("a worker asking has no words of its own to say", () => {
+    markNeedsYou("convo-1", "worker-1", true);
+    expect(needsYouNow("convo-1")).toBe(true);
+    expect(needsYouSummary("convo-1")).toBeUndefined();
   });
 
   it("the conversation on screen shows its own card: no toast, but the rail still knows", () => {
