@@ -37,6 +37,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -589,6 +590,7 @@ function ConvoRow({
   showPin = false,
   onTogglePin,
   markBy = "agent",
+  revealDelay,
   where,
   selected = false,
   open = false,
@@ -611,6 +613,10 @@ function ConvoRow({
    *  run's), or — under an agent's own heading, which already says whose it
    *  is — the model it ran on. */
   markBy?: "agent" | "model";
+  /** Where this row falls in its list's entrance cascade. Read once, when the
+   *  row arrives — a re-sort must not replay it. Absent: the row just appears
+   *  (search results). */
+  revealDelay?: string;
   /** The folder it belongs to, when that is not the one you are in. */
   where?: string;
   selected?: boolean;
@@ -630,6 +636,7 @@ function ConvoRow({
   // A background worker it dispatched counts: the conversation is still
   // getting work done, and may be waiting on you (src/workerStatus.ts).
   const hasLiveWorker = useHasLiveWorker(convo.id);
+  const [entranceDelay] = useState(revealDelay);
   const running = useIsConversationRunning(convo.id) || hasLiveWorker;
   // Waiting on you outranks working: it is the one row state you act on.
   const needsYou = useNeedsYou(convo.id);
@@ -699,6 +706,12 @@ function ConvoRow({
       data-menu-open={menuAt ? true : undefined}
       /* How the slide finds this row again after the list re-sorts. */
       data-convo-id={convo.id}
+      data-reveal={entranceDelay !== undefined || undefined}
+      style={
+        entranceDelay !== undefined
+          ? ({ "--rail-reveal-delay": entranceDelay } as CSSProperties)
+          : undefined
+      }
       onContextMenu={
         hasMenu
           ? (e) => {
@@ -846,6 +859,15 @@ function groupHistoryByProvider(conversations: Conversation[]): ProviderHistory[
       updatedAt: groupedConversations[0]?.updatedAt ?? 0,
     };
   }).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** The entrance cascade: each row starts a beat after the one above, so a
+ *  list opening reads as one wave down the rail. Capped, so a long list
+ *  lands in a fraction of a second rather than a queue. */
+const REVEAL_STEP_MS = 22;
+const REVEAL_STAGGER_CAP = 12;
+function revealDelay(index: number): string {
+  return `${Math.min(Math.max(index, 0), REVEAL_STAGGER_CAP) * REVEAL_STEP_MS}ms`;
 }
 
 /** Rows an agent's group shows before "More". */
@@ -1015,16 +1037,43 @@ function RowList({
   keepIds: ReadonlySet<string>;
   /** What "More" shows more of, for its accessible name. */
   label: string;
-  render: (conversation: Conversation) => ReactNode;
+  /** `delay` is the row's place in the entrance cascade. */
+  render: (conversation: Conversation, delay: string) => ReactNode;
 }) {
   const [showAll, setShowAll] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const startHeight = useRef<number | null>(null);
   const visible = visibleProviderConversations(rows, showAll, keepIds, limit);
   useRowSlide(ref, visible.map((c) => c.id).join());
+
+  /* `height: auto` cannot transition, so More / Less measures the list before
+     and after and lets the browser travel between the two, while the rows
+     that arrive cascade in inside it. */
+  useLayoutEffect(() => {
+    const list = ref.current;
+    const from = startHeight.current;
+    startHeight.current = null;
+    if (!list || from === null) return;
+    const to = list.getBoundingClientRect().height;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || Math.abs(to - from) < 1) return;
+    list.style.overflow = "hidden";
+    const animation = list.animate(
+      [{ height: `${from}px` }, { height: `${to}px` }],
+      // `--ease-soft`, spelled out: the Web Animations API reads no variables.
+      { duration: showAll ? 420 : 340, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+    );
+    const release = () => list.style.removeProperty("overflow");
+    animation.addEventListener("finish", release, { once: true });
+    animation.addEventListener("cancel", release, { once: true });
+    return () => animation.cancel();
+  }, [showAll]);
+
   return (
     <>
       <div ref={ref} className="klide-rail-list">
-        {visible.map(render)}
+        {/* Rows that arrive with More start their own wave from the top of
+            what is new, not from the bottom of what was already there. */}
+        {visible.map((c, index) => render(c, revealDelay(showAll ? index - limit : index)))}
       </div>
       {rows.length > limit ? (
         <button
@@ -1032,9 +1081,12 @@ function RowList({
           className="klide-focus-more-conversations"
           aria-expanded={showAll}
           aria-label={`${showAll ? "Show fewer" : "Show all"} ${label}`}
-          onClick={() => setShowAll((shown) => !shown)}
+          onClick={() => {
+            startHeight.current = ref.current?.getBoundingClientRect().height ?? null;
+            setShowAll((shown) => !shown);
+          }}
         >
-          {showAll ? "Less" : `${rows.length - visible.length} more`}
+          {showAll ? "Less" : "More"}
         </button>
       ) : null}
     </>
@@ -1044,7 +1096,7 @@ function RowList({
 type ConversationView = "sections" | "agent";
 const VIEWS: { id: ConversationView; label: string }[] = [
   { id: "sections", label: "Sections" },
-  { id: "agent", label: "By agent" },
+  { id: "agent", label: "Agent" },
 ];
 
 /** The two ways to read the list, as two words at the head's trailing edge. */
@@ -1307,7 +1359,7 @@ export function WorkspaceRail({
 
   const row = (
     conversation: Conversation,
-    options: { markBy?: "agent" | "model"; showPin?: boolean } = {},
+    options: { markBy?: "agent" | "model"; showPin?: boolean; delay?: string } = {},
   ) => {
     const folder = folderById.get(conversation.id);
     return (
@@ -1315,6 +1367,7 @@ export function WorkspaceRail({
         key={conversation.id}
         convo={conversation}
         markBy={options.markBy}
+        revealDelay={options.delay}
         showPin={options.showPin}
         where={folder && folder !== activeProjectRoot ? basename(folder) : undefined}
         selected={selectedIds.has(conversation.id)}
@@ -1362,7 +1415,7 @@ export function WorkspaceRail({
                 limit={CONVERSATION_ROW_LIMIT}
                 keepIds={new Set([...openIds, ...pinnedIds])}
                 label={`${providerName(group.provider)} conversations`}
-                render={(c) => row(c, { markBy: "model", showPin: true })}
+                render={(c, delay) => row(c, { markBy: "model", showPin: true, delay })}
               />
             </RailSection>
           );
@@ -1390,7 +1443,7 @@ export function WorkspaceRail({
             open={!folded.has("needs")}
             onToggle={() => toggleFolded("needs")}
           >
-            <div className="klide-rail-list">{sections.needs.map((c) => row(c))}</div>
+            <div className="klide-rail-list">{sections.needs.map((c, i) => row(c, { delay: revealDelay(i) }))}</div>
           </RailSection>
         ) : null}
         {sections.pinned.length > 0 ? (
@@ -1399,7 +1452,7 @@ export function WorkspaceRail({
             open={!folded.has("pinned")}
             onToggle={() => toggleFolded("pinned")}
           >
-            <div className="klide-rail-list">{sections.pinned.map((c) => row(c))}</div>
+            <div className="klide-rail-list">{sections.pinned.map((c, i) => row(c, { delay: revealDelay(i) }))}</div>
           </RailSection>
         ) : null}
         {sections.recent.length > 0 ? (
@@ -1413,7 +1466,7 @@ export function WorkspaceRail({
               limit={RECENT_ROW_LIMIT}
               keepIds={openIds}
               label="recent conversations"
-              render={(c) => row(c)}
+              render={(c, delay) => row(c, { delay })}
             />
           </RailSection>
         ) : null}

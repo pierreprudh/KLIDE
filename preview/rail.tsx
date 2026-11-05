@@ -39,6 +39,9 @@ const CONVOS = [
   convo("j", "Hermes .env alignment", KIDE, "opencode", "openrouter/qwen3-coder", 3 * d),
   convo("k", "Gateway restore on stop", KIDE, "claude-code", "claude-opus-4-6", 4 * d),
   convo("l", "PDF drop card", KIDE, "codex", "gpt-5.4", 5 * d),
+  convo("n", "Delegate spawn debugging", KIDE, "claude-code", "claude-sonnet-4-6", 6 * d),
+  convo("o", "Prompt caching breakpoints", KIDE, "claude-code", "claude-opus-4-6", 7 * d),
+  convo("p", "Worker acceptance pass", KIDE, "codex", "gpt-5.4", 8 * d),
 ];
 localStorage.setItem("klide-conversations", JSON.stringify(CONVOS));
 localStorage.setItem("klide.pinnedConversations", JSON.stringify(["d", "m"]));
