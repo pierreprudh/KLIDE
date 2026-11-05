@@ -1099,7 +1099,9 @@ const VIEWS: { id: ConversationView; label: string }[] = [
   { id: "agent", label: "Agent" },
 ];
 
-/** The two ways to read the list, as two words at the head's trailing edge. */
+/** The way the list is read, as one word — "Sections" or "Agent". A click
+ *  turns it into the other: the word rolls over to the next one while its
+ *  pill stretches to the new width, and the list below morphs with it. */
 function ViewSwitch({
   value,
   onChange,
@@ -1107,49 +1109,46 @@ function ViewSwitch({
   value: ConversationView;
   onChange: (view: ConversationView) => void;
 }) {
-  // The soft fill behind the chosen word is one shape that slides from one
-  // word to the other, stretching to its width — the switch morphs rather
-  // than blinking between two states.
-  const groupRef = useRef<HTMLDivElement>(null);
-  const [fill, setFill] = useState<{ left: number; width: number } | null>(null);
+  const current = VIEWS.find((v) => v.id === value) ?? VIEWS[0];
+  const next = VIEWS[(VIEWS.indexOf(current) + 1) % VIEWS.length];
+  // Each word's width, so the pill can travel between them — `width: auto`
+  // does not transition.
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const [widths, setWidths] = useState<Partial<Record<ConversationView, number>>>({});
   useLayoutEffect(() => {
     const measure = () => {
-      const chosen = groupRef.current?.querySelector<HTMLElement>("[aria-checked='true']");
-      if (chosen) setFill({ left: chosen.offsetLeft, width: chosen.offsetWidth });
+      const spans = measureRef.current?.children;
+      if (!spans) return;
+      const next: Partial<Record<ConversationView, number>> = {};
+      VIEWS.forEach((v, i) => { next[v.id] = (spans[i] as HTMLElement | undefined)?.offsetWidth; });
+      setWidths(next);
     };
     measure();
     // The words are measured in the UI font; measure again once it is in.
     void document.fonts?.ready.then(measure);
-  }, [value]);
+  }, []);
+  const width = widths[value];
   return (
-    <div ref={groupRef} className="klide-rail-view-pick" role="radiogroup" aria-label="Show conversations">
-      {fill ? (
-        <span
-          className="klide-rail-view-fill"
-          aria-hidden="true"
-          style={{ transform: `translateX(${fill.left}px)`, width: fill.width }}
-        />
-      ) : null}
-      {VIEWS.map(({ id, label }, index) => (
-        <button
-          key={id}
-          type="button"
-          role="radio"
-          aria-checked={value === id}
-          tabIndex={value === id ? 0 : -1}
-          onClick={() => onChange(id)}
-          onKeyDown={(event) => {
-            if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
-            event.preventDefault();
-            const next = VIEWS[(index + 1) % VIEWS.length];
-            onChange(next.id);
-            (event.currentTarget.parentElement?.children[VIEWS.indexOf(next)] as HTMLElement | undefined)?.focus();
-          }}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
+    <button
+      type="button"
+      className="klide-rail-view-pick"
+      data-sound="tap"
+      aria-label={`Conversations by ${current.label.toLowerCase()} — show by ${next.label.toLowerCase()}`}
+      title={`Show by ${next.label.toLowerCase()}`}
+      onClick={() => onChange(next.id)}
+    >
+      <span className="klide-rail-view-words" style={width ? { width } : undefined} aria-hidden="true">
+        {VIEWS.map((v) => (
+          <span key={v.id} className="klide-rail-view-word" data-on={v.id === value || undefined}>
+            {v.label}
+          </span>
+        ))}
+      </span>
+      <SwitcherIcon size={10} />
+      <span ref={measureRef} className="klide-rail-view-measure" aria-hidden="true">
+        {VIEWS.map((v) => <span key={v.id}>{v.label}</span>)}
+      </span>
+    </button>
   );
 }
 
