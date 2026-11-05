@@ -77,7 +77,7 @@ import type { Conversation } from "./ai/types";
 import type { ProviderId } from "../agent/types";
 import { providerName } from "../agent/providers";
 import { DotGridLoader, ProviderLogo } from "./ai/icons";
-import { conversationMark } from "../modelIdentity";
+import { conversationMark, makerMark, modelIdentity } from "../modelIdentity";
 import { setConversationDrag } from "../conversationDrag";
 import { useIsConversationRunning } from "../runningConversations";
 import { useHasLiveWorker } from "../workerStatus";
@@ -588,7 +588,7 @@ function ConvoRow({
   pinned = false,
   showPin = false,
   onTogglePin,
-  showMark = true,
+  markBy = "agent",
   where,
   selected = false,
   open = false,
@@ -607,9 +607,10 @@ function ConvoRow({
    *  already says it. */
   showPin?: boolean;
   onTogglePin?: () => void;
-  /** Lead with the agent's mark when nothing is happening. Off under an
-   *  agent's own heading, which already says whose it is. */
-  showMark?: boolean;
+  /** Which mark leads when nothing is happening: the agent's (its first
+   *  run's), or — under an agent's own heading, which already says whose it
+   *  is — the model it ran on. */
+  markBy?: "agent" | "model";
   /** The folder it belongs to, when that is not the one you are in. */
   where?: string;
   selected?: boolean;
@@ -619,7 +620,13 @@ function ConvoRow({
 }) {
   // What ran this thread: the CLI if a delegate ran it, else the model's
   // maker, else the provider that hosted it — its first run's, always.
-  const mark = conversationMark(convo.model, convo.provider, 15);
+  const mark = markBy === "model"
+    ? (() => {
+        const node = makerMark(convo.model, convo.provider, 15);
+        const name = modelIdentity(convo.model)?.name ?? convo.model ?? undefined;
+        return node ? { node, label: name && name !== "default" ? name : "Default model" } : null;
+      })()
+    : conversationMark(convo.model, convo.provider, 15);
   // A background worker it dispatched counts: the conversation is still
   // getting work done, and may be waiting on you (src/workerStatus.ts).
   const hasLiveWorker = useHasLiveWorker(convo.id);
@@ -674,8 +681,8 @@ function ConvoRow({
       <SuccessIcon size={15} />
     </span>
   ) : (
-    <span className="klide-rail-convo-lead" title={showMark ? mark?.label : undefined} aria-hidden="true">
-      {showMark ? mark?.node : null}
+    <span className="klide-rail-convo-lead" title={mark?.label} aria-hidden="true">
+      {mark?.node}
     </span>
   );
 
@@ -1300,14 +1307,14 @@ export function WorkspaceRail({
 
   const row = (
     conversation: Conversation,
-    options: { showMark?: boolean; showPin?: boolean } = {},
+    options: { markBy?: "agent" | "model"; showPin?: boolean } = {},
   ) => {
     const folder = folderById.get(conversation.id);
     return (
       <ConvoRow
         key={conversation.id}
         convo={conversation}
-        showMark={options.showMark}
+        markBy={options.markBy}
         showPin={options.showPin}
         where={folder && folder !== activeProjectRoot ? basename(folder) : undefined}
         selected={selectedIds.has(conversation.id)}
@@ -1355,7 +1362,7 @@ export function WorkspaceRail({
                 limit={CONVERSATION_ROW_LIMIT}
                 keepIds={new Set([...openIds, ...pinnedIds])}
                 label={`${providerName(group.provider)} conversations`}
-                render={(c) => row(c, { showMark: false, showPin: true })}
+                render={(c) => row(c, { markBy: "model", showPin: true })}
               />
             </RailSection>
           );
