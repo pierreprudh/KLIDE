@@ -53,6 +53,6 @@ const replies: Record<string, unknown> = {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <div style={{ height: "100vh", display: "flex", background: "var(--bg)" }}>
-    <MissionControl workspaceRoot="/fixture" theme={theme as never} initialSelectedRunId={params.get("select")} onOpenInAiPanel={(o) => console.log("open", o)} onForkRun={() => {}} onForkRunInWorktree={() => {}} onContinueRunInFocus={() => {}} onSaveMemory={() => {}} onResumeKlideRun={() => {}} />
+    <MissionControl workspaceRoot="/fixture" theme={theme as never} initialSelectedRunId={params.get("select")} onOpenInAiPanel={(o) => console.log("open", o)} onForkRun={() => {}} onForkRunInWorktree={() => {}} onContinueRunInFocus={() => {}} onSaveMemory={() => {}} onResumeKlideRun={() => {}} onShowScheduled={() => {}} scheduledNote={params.has("failed") ? "1 failed" : undefined} />
   </div>
 );
