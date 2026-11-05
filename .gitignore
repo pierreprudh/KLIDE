@@ -46,6 +46,7 @@ docs/*
 !docs/MISSION_ORCHESTRATION.md
 !docs/OPENCODE_DELEGATE.md
 !docs/PROVIDER_RESOURCES.md
+!docs/REMOTE_MACHINES.md
 !docs/SCHEDULED_RUNS.md
 !docs/SOFTWARE_FACTORY.md
 !docs/shared-notes.md
