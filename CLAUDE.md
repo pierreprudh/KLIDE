@@ -154,7 +154,7 @@ Klide/
 │   │   ├── useMemoryReviewCount.ts How many Memory notes wait for review — the Library row's "3 to review"
 │   │   └── useFailedScheduleCount.ts How many schedules failed — Mission Control's row and Scheduled tab ("1 failed")
 │   ├── components/
-│   │   ├── WorkspaceRail.tsx    The app's one sidebar — folder card, actions, conversations (Sections / By agent), one-line foot; shared by Focus + workbench
+│   │   ├── WorkspaceRail.tsx    The app's one sidebar — folder card, actions, conversations (Sections / Agent), one-line foot; shared by Focus + workbench
 │   │   ├── ActivityHeatmap.tsx  52-week run activity grid
 │   │   ├── AiPanel.tsx          AI chat panel host + run interaction surface
 │   │   ├── AnchoredWorkbench.tsx Anchored layout shell — sidebar, tabs, editor, terminal, AI panels

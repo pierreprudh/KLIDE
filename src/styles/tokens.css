@@ -4826,6 +4826,8 @@ button:focus-visible .menu-leadout {
   --rail-icon: 16px;
   --rail-gap: 9px;
   --rail-step: calc(var(--rail-icon) + var(--rail-gap));
+  /* How far a heading's conversations step in under it. */
+  --rail-indent: 12px;
   /* One gap between every pair of sibling rows. */
   --rail-row-gap: 2px;
   /* One fill for every row in the rail, at every level: quiet under the
@@ -5109,18 +5111,18 @@ button:focus-visible .menu-leadout {
   gap: var(--rail-row-gap);
 }
 
-/* "4 more" under a folded list — words only, in the title column, so it
-   reads as the list's own tail rather than another row. */
+/* More / Less under a folded list — one quiet word, centred under the
+   list, so it reads as the list's own tail rather than another row. */
 .klide-focus-more-conversations {
-  width: auto;
+  width: fit-content;
   height: calc(var(--rail-row-h) - 6px);
   display: flex;
   align-items: center;
-  padding: 0 var(--rail-row-pad) 0 calc(var(--rail-row-pad) + var(--rail-step));
+  margin: 2px auto 0;
+  padding: 0 12px;
   border-radius: var(--radius-lg);
   color: var(--fg-dim);
   font-size: 11.5px;
-  text-align: left;
   cursor: pointer;
   transition: var(--rail-fill-motion);
 }
@@ -5538,6 +5540,37 @@ button:focus-visible .menu-leadout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1px;
+}
+
+/* Under a heading, its conversations step in, so the heading reads as the
+   thing they belong to. */
+.klide-rail-section > .klide-rail-list {
+  margin-left: var(--rail-indent);
+}
+
+/* A row arriving — a list opening, a heading unfolding, More — fades and
+   settles into place, a beat after the row above it (WorkspaceRail sets
+   `--rail-reveal-delay`). `backwards`, not `both`: once played the row is
+   released, so the final keyframe's transform never pins it. */
+.klide-focus-convo-row[data-reveal] {
+  animation: klide-rail-row-in 420ms var(--ease-soft) var(--rail-reveal-delay, 0ms) backwards;
+}
+
+@keyframes klide-rail-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-focus-convo-row[data-reveal] {
+    animation: none;
+  }
 }
 
 /* Another folder has something waiting — said under the agents' lists,
