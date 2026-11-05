@@ -175,6 +175,13 @@ export type PrCommit = {
 export type PullRequestDetails = PullRequest & {
   body: string;
   mergeable: string;
+  reviewDecision: string;
+  /** Pending review requests, users or team slugs; null = unavailable. */
+  requestedReviewers: string[] | null;
+  /** Authors of submitted reviews, retained after a request is fulfilled. */
+  reviewedBy: string[];
+  /** null = unavailable; [] = no reported checks. Current PR head only. */
+  checks: { name: string; state: string }[] | null;
   commentThread: PrComment[];
   commits: PrCommit[];
   /** Unix millis. */

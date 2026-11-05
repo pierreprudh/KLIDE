@@ -273,3 +273,48 @@ export function mergeBranchesForMenu(
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
 }
+
+// These are observations, not permission to merge: required-check policy,
+// unresolved review threads and local validation are not in this snapshot.
+export type PrSignalTone = "quiet" | "attention" | "success" | "muted";
+export type PrReadinessSignal = { label: string; value: string; tone: PrSignalTone };
+const FAILED_CHECK_STATES = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"]);
+const PENDING_CHECK_STATES = new Set(["PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED"]);
+
+export function prCheckPresentation(state: string): { label: string; tone: PrSignalTone } {
+  if (FAILED_CHECK_STATES.has(state)) return { label: state === "CANCELLED" ? "Cancelled" : state === "TIMED_OUT" ? "Timed out" : state === "ACTION_REQUIRED" ? "Action needed" : state === "STALE" ? "Stale" : "Failed", tone: "attention" };
+  if (PENDING_CHECK_STATES.has(state)) return { label: state === "IN_PROGRESS" ? "Running" : "Pending", tone: "quiet" };
+  if (state === "SUCCESS") return { label: "Passed", tone: "success" };
+  return { label: state === "SKIPPED" ? "Skipped" : state === "NEUTRAL" ? "Neutral" : "Unknown", tone: "muted" };
+}
+
+export function prReadinessSignals(
+  detail: Pick<PullRequestDetails, "mergeable" | "reviewDecision" | "checks"> & Partial<Pick<PullRequestDetails, "requestedReviewers">>,
+): PrReadinessSignal[] {
+  const checks = detail.checks;
+  let checkValue = "Unavailable";
+  let checkTone: PrSignalTone = "muted";
+  if (checks) {
+    if (checks.length === 0) checkValue = "None reported";
+    else {
+      const failed = checks.filter(c => FAILED_CHECK_STATES.has(c.state)).length;
+      const pending = checks.filter(c => PENDING_CHECK_STATES.has(c.state)).length;
+      const passed = checks.filter(c => c.state === "SUCCESS").length;
+      const other = checks.length - failed - pending - passed;
+      checkValue = [failed ? `${failed} failed` : "", pending ? `${pending} pending` : "", passed ? `${passed} passed` : "", other ? `${other} other` : ""].filter(Boolean).join(" · ");
+      checkTone = failed ? "attention" : passed === checks.length ? "success" : pending ? "quiet" : "muted";
+    }
+  }
+  const assigned = (detail.requestedReviewers?.length ?? 0) > 0;
+  const review: PrReadinessSignal = detail.reviewDecision === "CHANGES_REQUESTED"
+    ? { label: "Review", value: "Changes requested", tone: "attention" }
+    : assigned ? { label: "Review", value: "Assigned", tone: "quiet" }
+    : detail.reviewDecision === "APPROVED" ? { label: "Review", value: "Done", tone: "success" }
+    : detail.reviewDecision === "REVIEW_REQUIRED" ? { label: "Review", value: "Required", tone: "quiet" }
+    : { label: "Review", value: "None reported", tone: "muted" };
+  return [
+    { label: "Checks", value: checkValue, tone: checkTone },
+    review,
+    { label: "Conflicts", value: detail.mergeable === "CONFLICTING" ? "Resolve conflicts" : detail.mergeable === "MERGEABLE" ? "None reported" : "Not yet determined", tone: detail.mergeable === "CONFLICTING" ? "attention" : "muted" },
+  ];
+}

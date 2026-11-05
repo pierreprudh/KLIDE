@@ -17,6 +17,8 @@ import type { GitStatus } from "../src/gitTypes";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") ?? "klide-light";
+const reviewState = params.get("review") ?? "assigned";
+const reviewDecision = ({ assigned: "REVIEW_REQUIRED", done: "APPROVED", changes: "CHANGES_REQUESTED", none: "" } as Record<string, string>)[reviewState] ?? "";
 document.documentElement.dataset.theme = theme;
 
 const now = Math.floor(Date.now() / 1000);
@@ -74,10 +76,23 @@ diff --git a/src/session.ts b/src/session.ts
 @@ -0,0 +1,1 @@
 +export type Session = { id: string };`, additions: 4, deletions: 1,
   },
+  git_pr_view: {
+    ...pr(321, "Git Review on rounded cards", "open"), body: "Keep the review and delivery flow in one place.",
+    mergeable: "MERGEABLE", reviewDecision,
+    requestedReviewers: reviewState === "assigned" ? ["alice"] : [],
+    reviewedBy: reviewState === "done" || reviewState === "changes" ? ["alice"] : [],
+    checks: [{ name: "Build", state: "SUCCESS" }, { name: "Tests", state: "FAILURE" }, { name: "Preview deployment", state: "IN_PROGRESS" }],
+    commits: [], commentThread: [], createdAtMs: Date.now() - 86400000,
+  },
   git_pr_list: [pr(321, "Git Review on rounded cards", "open"), pr(318, "Commit graph density zoom", "draft")],
 };
 (window as any).__TAURI_INTERNALS__ = {
-  invoke: async (cmd: string, args?: { path?: string }) => {
+  invoke: async (cmd: string, args?: { path?: string; number?: number }) => {
+    if (cmd === "git_pr_view" && args?.number === 318) {
+      return { ...(replies.git_pr_view as object), ...pr(318, "Commit graph density zoom", "draft"),
+        body: "Adjust the graph row spacing without changing the commit layout.",
+        reviewDecision: "", requestedReviewers: [], reviewedBy: [], checks: [], commits: [], commentThread: [] };
+    }
     if (cmd === "git_diff") {
       const path = args?.path ?? "";
       if (path === "CONTEXT.md") return { path, diff: DIFF, additions: 2, deletions: 0 };
@@ -95,7 +110,11 @@ diff --git a/src/session.ts b/src/session.ts
 };
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <div style={{ height: "100vh", display: "flex" }}>
-    <GitReview workspaceRoot="/fixture" gitStatus={status} onRefreshGitStatus={() => {}} onOpenFile={(path) => console.log("open", path)} />
+  <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+    {params.has("readiness") && <nav aria-label="Preview review states" style={{ display: "flex", gap: 12, padding: "8px 16px", fontSize: 11, borderBottom: "1px solid var(--border)", color: "var(--fg-subtle)" }}>
+      <span>Sample review</span>
+      {["assigned", "done", "changes", "none"].map(state => <a key={state} href={`?readiness&review=${state}&theme=${theme}`} style={{ color: state === reviewState ? "var(--fg-strong)" : "var(--fg-dim)", textDecoration: "none", fontWeight: state === reviewState ? 600 : 400 }}>{state === "changes" ? "Changes requested" : state[0].toUpperCase() + state.slice(1)}</a>)}
+    </nav>}
+    <div style={{ flex: 1, minHeight: 0, display: "flex" }}><GitReview initialPr={params.has("readiness") ? { root: "/fixture", pr: 321, nonce: 1 } : undefined} workspaceRoot="/fixture" gitStatus={status} onRefreshGitStatus={() => {}} onOpenFile={(path) => console.log("open", path)} /></div>
   </div>
 );
