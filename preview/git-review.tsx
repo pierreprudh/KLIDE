@@ -18,7 +18,7 @@ import type { GitStatus } from "../src/gitTypes";
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") ?? "klide-light";
 const reviewState = params.get("review") ?? "assigned";
-const reviewDecision = ({ assigned: "REVIEW_REQUIRED", done: "APPROVED", changes: "CHANGES_REQUESTED", none: "" } as Record<string, string>)[reviewState] ?? "";
+const reviewDecision = ({ assigned: "REVIEW_REQUIRED", done: "APPROVED", changes: "CHANGES_REQUESTED", none: "", merged: "APPROVED" } as Record<string, string>)[reviewState] ?? "";
 document.documentElement.dataset.theme = theme;
 
 const now = Math.floor(Date.now() / 1000);
@@ -52,8 +52,8 @@ const DIFF = `diff --git a/CONTEXT.md b/CONTEXT.md
  The domain language of Klide — a minimalist AI-first IDE. Reviews use this vocabulary; code drifts, not it.
  
  ## Core product principle: harness and model independence`;
-const pr = (n: number, title: string, badge: "open" | "draft") => ({
-  number: n, title, state: "OPEN", isDraft: badge === "draft", author: "pierreprudh", headRef: `polish/pr-${n}`, baseRef: "main",
+const pr = (n: number, title: string, badge: "open" | "draft" | "merged") => ({
+  number: n, title, state: badge === "merged" ? "MERGED" : "OPEN", isDraft: badge === "draft", author: "pierreprudh", headRef: `polish/pr-${n}`, baseRef: "main",
   url: `https://github.com/pierreprudh/KLIDE/pull/${n}`, additions: 120, deletions: 34, changedFiles: 4, comments: 2,
   commentAuthors: ["pierreprudh"], updatedAtMs: Date.now() - n * 60000, badge, isCurrentBranch: false,
 });
@@ -77,17 +77,23 @@ diff --git a/src/session.ts b/src/session.ts
 +export type Session = { id: string };`, additions: 4, deletions: 1,
   },
   git_pr_view: {
-    ...pr(321, "Git Review on rounded cards", "open"), body: "Keep the review and delivery flow in one place.",
+    ...pr(321, "Git Review on rounded cards", reviewState === "merged" ? "merged" : "open"), body: "Keep the review and delivery flow in one place.",
     mergeable: "MERGEABLE", reviewDecision,
     requestedReviewers: reviewState === "assigned" ? ["alice"] : [],
-    reviewedBy: reviewState === "done" || reviewState === "changes" ? ["alice"] : [],
+    reviewedBy: reviewState === "done" || reviewState === "changes" || reviewState === "merged" ? ["alice"] : [],
     checks: [{ name: "Build", state: "SUCCESS" }, { name: "Tests", state: "FAILURE" }, { name: "Preview deployment", state: "IN_PROGRESS" }],
     commits: [], commentThread: [], createdAtMs: Date.now() - 86400000,
   },
-  git_pr_list: [pr(321, "Git Review on rounded cards", "open"), pr(318, "Commit graph density zoom", "draft")],
+  git_pr_list: [pr(321, "Git Review on rounded cards", reviewState === "merged" ? "merged" : "open"), pr(318, "Commit graph density zoom", "draft")],
 };
+let prIndexEmpty = false;
 (window as any).__TAURI_INTERNALS__ = {
   invoke: async (cmd: string, args?: { path?: string; number?: number }) => {
+    if (cmd === "git_status" && prIndexEmpty) return { ...status, files: status.files.map(file => ({ ...file, staged: false })) };
+    if (cmd === "create_pr" && params.has("prError")) {
+      prIndexEmpty = true;
+      throw new Error("No staged changes — stage files before opening a PR.");
+    }
     if (cmd === "git_pr_view" && args?.number === 318) {
       return { ...(replies.git_pr_view as object), ...pr(318, "Commit graph density zoom", "draft"),
         body: "Adjust the graph row spacing without changing the commit layout.",
@@ -113,7 +119,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
     {params.has("readiness") && <nav aria-label="Preview review states" style={{ display: "flex", gap: 12, padding: "8px 16px", fontSize: 11, borderBottom: "1px solid var(--border)", color: "var(--fg-subtle)" }}>
       <span>Sample review</span>
-      {["assigned", "done", "changes", "none"].map(state => <a key={state} href={`?readiness&review=${state}&theme=${theme}`} style={{ color: state === reviewState ? "var(--fg-strong)" : "var(--fg-dim)", textDecoration: "none", fontWeight: state === reviewState ? 600 : 400 }}>{state === "changes" ? "Changes requested" : state[0].toUpperCase() + state.slice(1)}</a>)}
+      {["assigned", "done", "changes", "none", "merged"].map(state => <a key={state} href={`?readiness&review=${state}&theme=${theme}`} style={{ color: state === reviewState ? "var(--fg-strong)" : "var(--fg-dim)", textDecoration: "none", fontWeight: state === reviewState ? 600 : 400 }}>{state === "changes" ? "Changes requested" : state[0].toUpperCase() + state.slice(1)}</a>)}
     </nav>}
     <div style={{ flex: 1, minHeight: 0, display: "flex" }}><GitReview initialPr={params.has("readiness") ? { root: "/fixture", pr: 321, nonce: 1 } : undefined} workspaceRoot="/fixture" gitStatus={status} onRefreshGitStatus={() => {}} onOpenFile={(path) => console.log("open", path)} /></div>
   </div>
