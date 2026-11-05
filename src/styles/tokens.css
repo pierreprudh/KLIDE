@@ -5460,51 +5460,80 @@ button:focus-visible .menu-leadout {
   font-weight: 400;
 }
 
-/* The two views as two words: the one you are on in full ink on a soft
-   fill, the other quiet until you point at it. */
+/* The view, as one word on a soft pill with a switcher glyph. A click rolls
+   the word over to the other one — the old lifts out, the new rises in — and
+   the pill's width travels between the two. */
 .klide-rail-view-pick {
   position: relative;
-  display: flex;
-  gap: 2px;
-}
-
-/* One fill, sliding to the chosen word and stretching to its width. */
-.klide-rail-view-fill {
-  position: absolute;
-  top: 0;
-  left: 0;
   height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 0 9px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--fg) 7%, transparent);
-  pointer-events: none;
+  color: var(--fg-strong);
+  font-size: var(--fs-xs);
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.klide-rail-view-pick:hover,
+.klide-rail-view-pick:focus-visible {
+  background: color-mix(in srgb, var(--fg) 11%, transparent);
+}
+
+.klide-rail-view-pick > svg {
+  flex-shrink: 0;
+  color: var(--fg-dim);
+}
+
+.klide-rail-view-words {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* A flex item will not shrink below its content unless told it may. */
+  min-width: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width 380ms var(--ease-soft);
+}
+
+/* Both words share one cell; only the chosen one shows. */
+.klide-rail-view-word {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(-70%);
   transition:
-    transform 380ms var(--ease-soft),
-    width 380ms var(--ease-soft);
+    opacity 220ms var(--ease-out),
+    transform 380ms var(--ease-soft);
+}
+
+.klide-rail-view-word[data-on] {
+  opacity: 1;
+  transform: none;
+}
+
+/* The word that is not on waits below, so the next one rises in. */
+.klide-rail-view-word:not([data-on]) ~ .klide-rail-view-word:not([data-on]),
+.klide-rail-view-word[data-on] ~ .klide-rail-view-word:not([data-on]) {
+  transform: translateY(70%);
+}
+
+/* Off-screen copies of the words, measured for the pill's width. */
+.klide-rail-view-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.klide-rail-view-measure > span {
+  position: absolute;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .klide-rail-view-fill { transition: none; }
-}
-
-.klide-rail-view-pick > button {
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  color: var(--fg-dim);
-  font-size: var(--fs-xs);
-  transition: var(--rail-fill-motion);
-}
-
-.klide-rail-view-pick > button:hover {
-  color: var(--fg-strong);
-}
-
-.klide-rail-view-pick > button {
-  position: relative;
-}
-
-.klide-rail-view-pick > button[aria-checked="true"] {
-  color: var(--fg-strong);
+  .klide-rail-view-words,
+  .klide-rail-view-word { transition: none; }
 }
 
 .klide-rail-section + .klide-rail-section,
