@@ -1585,7 +1585,7 @@ export function WorkspaceRail({
             ) : null}
             <input
               ref={searchRef}
-              className="klide-focus-brand-search"
+              className="klide-rail-search"
               type="search"
               name="conversation-search"
               aria-label="Search conversations"
@@ -1600,7 +1600,7 @@ export function WorkspaceRail({
                   setQuery("");
                 }
               }}
-              placeholder="Search conversations…"
+              placeholder="Search…"
             />
             <button
               type="button"
