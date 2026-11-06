@@ -39,6 +39,7 @@ export function Tooltip({
   description,
   placement = "top",
   delay = 0,
+  showOnClick = false,
   children,
 }: {
   /** Tooltip content. When empty/null the child renders untouched. */
@@ -52,6 +53,8 @@ export function Tooltip({
   placement?: Placement;
   /** Hover delay (ms). 0 = appear immediately on hover. */
   delay?: number;
+  /** Briefly show the same hint after activating a compact control. */
+  showOnClick?: boolean;
   children: ReactElement;
 }) {
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -147,6 +150,14 @@ export function Tooltip({
       if (typeof existing === "function") existing(node);
       else if (existing && typeof existing === "object") existing.current = node;
     },
+    onClick: (e: React.MouseEvent) => {
+      (childProps.onClick as ((e: React.MouseEvent) => void) | undefined)?.(e);
+      if (showOnClick && !e.defaultPrevented) {
+        clearTimer();
+        setOpen(true);
+        timer.current = window.setTimeout(closeNow, 1200);
+      }
+    },
     onMouseEnter: (e: React.MouseEvent) => {
       openSoon();
       (childProps.onMouseEnter as ((e: React.MouseEvent) => void) | undefined)?.(e);
@@ -156,7 +167,7 @@ export function Tooltip({
       (childProps.onMouseLeave as ((e: React.MouseEvent) => void) | undefined)?.(e);
     },
     // Show on *keyboard* focus only (`:focus-visible`) for accessibility — a
-    // mouse click won't pop it (and so it can't get stuck after a click).
+    // mouse click won't pop it unless showOnClick opts into a timed hint.
     onFocus: (e: React.FocusEvent) => {
       let keyboard = true;
       try {

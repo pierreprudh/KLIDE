@@ -18,7 +18,10 @@ import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
 import { SharedNotesControl, type SharedNotesSeed } from "./ai/SharedNotesControl";
 import { sharedNotesTerminalPrompt } from "../sharedNotes";
-import { transcriptWindowStart, TRANSCRIPT_PAGE_TURNS } from "./ai/transcriptWindow";
+import { transcriptWindowStart, transcriptWindowEnd, TRANSCRIPT_PAGE_TURNS } from "./ai/transcriptWindow";
+import { rangeAroundMessage, type ConversationMatch } from "./ai/transcriptNavigation";
+import { ConversationSearchBar, type ConversationSearchHandle } from "./ai/ConversationSearchBar";
+import { useConversationReveal } from "./ai/useConversationReveal";
 import { wakeTurnMode } from "./ai/wake";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
@@ -1605,7 +1608,7 @@ export function AiPanel({
           <div>
             {nodes.slice(run.start, liveStart)}
             {answer?.role === "assistant" && (
-              <div style={{ display: "flex", gap: 10, margin: "3px 0" }}>
+              <div data-conversation-thinking={run.answer} style={{ display: "flex", gap: 10, margin: "3px 0" }}>
                 <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <ThinkingBlock text={extractThinking(answer)} streaming={false} thinkingMs={answer.thinkingMs} />
@@ -2536,7 +2539,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [transcriptWindow, setTranscriptWindow] = useState<{ id: string; start: number | null }>({ id: currentId, start: null });
+  const [transcriptWindow, setTranscriptWindow] = useState<{ id: string; start: number | null; end?: number | null }>({ id: currentId, start: null });
   if (transcriptWindow.id !== currentId) {
     setTranscriptWindow({ id: currentId, start: null });
   }
@@ -2544,7 +2547,29 @@ This user request requires workspace inspection. Before answering, you MUST call
   const transcriptStart = transcriptWindow.id === currentId && transcriptWindow.start !== null
     ? Math.min(transcriptWindow.start, recentTranscriptStart)
     : recentTranscriptStart;
-  const prependScroll = useRef<{ id: string; top: number; height: number } | null>(null);
+  const transcriptEnd = transcriptWindow.id === currentId && transcriptWindow.end != null
+    ? Math.min(transcriptWindow.end, msgs.length) : msgs.length;
+  const conversationSearchRef = useRef<ConversationSearchHandle>(null);
+  const messageReveal = useConversationReveal(currentId, msgs, scrollRef, !delegateSession && (!!fill || visible));
+  function revealConversationMessage(index: number, match?: ConversationMatch) {
+    const message = msgs[index];
+    const owner = message?.role === "system" && message.steering && parseDeliveryReason(message.steering.reason) && msgs[index + 1]?.role === "assistant"
+      ? index + 1 : toolPairing.claimed.get(index) ?? index;
+    const range = rangeAroundMessage(msgs, owner);
+    stickToBottomRef.current = false;
+    setStickToBottom(false);
+    prependScroll.current = null;
+    setTranscriptWindow({ id: currentId, start: range.start, end: range.end < msgs.length ? range.end : null });
+    setOpenToolRuns(previous => {
+      const next = new Set(previous);
+      for (const run of toolRuns) {
+        if ((owner >= run.start && owner < run.end) || (run.answer === owner && match?.field === "Reasoning")) next.add(run.start);
+      }
+      return next;
+    });
+    messageReveal.reveal(owner, match);
+  }
+  const prependScroll = useRef<{ id: string; index: number; offset: number } | null>(null);
 
   // Restore before paint; native anchoring is disabled on this scroller so it
   // cannot compensate for the same prepend a second time.
@@ -2553,19 +2578,26 @@ This user request requires workspace inspection. Before answering, you MUST call
     prependScroll.current = null;
     const el = scrollRef.current;
     if (anchor?.id === currentId && el) {
-      el.scrollTop = anchor.top + el.scrollHeight - anchor.height;
+      const row = el.querySelector<HTMLElement>(`[data-conversation-message="${anchor.index}"]`);
+      if (row) el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset;
     } else if (el && stickToBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [currentId, transcriptStart]);
+  }, [currentId, transcriptStart, transcriptEnd]);
 
   function showEarlierMessages() {
     const el = scrollRef.current;
     if (!el || transcriptStart === 0) return;
-    prependScroll.current = { id: currentId, top: el.scrollTop, height: el.scrollHeight };
+    const top = el.getBoundingClientRect().top;
+    const anchor = Array.from(el.querySelectorAll<HTMLElement>("[data-conversation-message]"))
+      .find(row => row.getBoundingClientRect().bottom > top);
+    prependScroll.current = anchor ? { id: currentId, index: Number(anchor.dataset.conversationMessage), offset: anchor.getBoundingClientRect().top - top } : null;
     stickToBottomRef.current = false;
     setStickToBottom(false);
-    setTranscriptWindow({ id: currentId, start: transcriptWindowStart(msgs, TRANSCRIPT_PAGE_TURNS, transcriptStart) });
+    messageReveal.clear();
+    const start = transcriptWindowStart(msgs, TRANSCRIPT_PAGE_TURNS, transcriptStart);
+    const end = transcriptWindowEnd(msgs, start);
+    setTranscriptWindow({ id: currentId, start, end: end < msgs.length ? end : null });
   }
   const taRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -2621,6 +2653,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   }, []);
 
   function forceStickToBottom() {
+    messageReveal.clear();
     setTranscriptWindow({ id: currentId, start: null });
     stickToBottomRef.current = true;
     setStickToBottom(true);
@@ -2632,7 +2665,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const isStuck = distanceFromBottom <= STICK_THRESHOLD_PX;
+    const isStuck = transcriptEnd === msgs.length && distanceFromBottom <= STICK_THRESHOLD_PX;
     // A reader's window stays put while new exchanges arrive below it.
     if (!isStuck && transcriptWindow.start === null) {
       setTranscriptWindow({ id: currentId, start: transcriptStart });
@@ -4177,7 +4210,21 @@ This user request requires workspace inspection. Before answering, you MUST call
     <aside
       className={`shared-notes-host ${variant === "focus" ? "klide-focus-ai-surface" : "floating-panel"}`}
       aria-label="AI conversation"
+      tabIndex={-1}
+      onPointerDownCapture={(e) => {
+        if (!delegateSession && e.target instanceof Element && !e.target.closest("button, a, input, textarea, select, summary, [tabindex='0'], [contenteditable='true']")) {
+          e.currentTarget.focus({ preventScroll: true });
+        }
+      }}
       style={{ minWidth: 0, width: fill ? "100%" : width, height: fill ? "100%" : undefined, margin: fill ? 0 : "4px 4px 4px 0", display: fill || visible ? "flex" : "none", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}
+      onKeyDownCapture={(e) => {
+        if (!delegateSession && e.key === "Escape" && conversationSearchRef.current?.dismiss()) {
+          e.preventDefault(); e.stopPropagation(); return;
+        }
+        if (!delegateSession && conversationSearchRef.current && (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+          e.preventDefault(); e.stopPropagation(); conversationSearchRef.current?.find();
+        }
+      }}
       onDragOver={(e) => { if (canAttachFiles && Array.from(e.dataTransfer?.types ?? []).includes("Files")) { e.preventDefault(); setFileDragOver(true); } }}
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFileDragOver(false); }}
       onDrop={(e) => {
@@ -4340,6 +4387,12 @@ This user request requires workspace inspection. Before answering, you MUST call
 
 
       <div ref={canvasRef} style={{ position: "relative", flex: 1, minHeight: 0, display: "flex" }}>
+        {!delegateSession && msgs.length > 0 && (
+          <ConversationSearchBar key={currentId} ref={conversationSearchRef} messages={msgs}
+            insetRight={variant === "focus" ? focusGutterRight : undefined}
+            onReveal={revealConversationMessage} onCloseSearch={messageReveal.clear} />
+        )}
+
         <div
           ref={scrollRef}
           onScroll={updateStickFromScroll}
@@ -4437,7 +4490,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         {stackToolRuns(msgs.map((m, i) => {
           // Keep absolute indices for retry, branching, tool groups, and
           // observer slots, but do not construct older message bodies.
-          if (i < transcriptStart) return null;
+          if (i < transcriptStart || i >= transcriptEnd) return null;
           if (m.role === "system" && m.completion) {
             const completion = m.completion;
             // In Focus the latest result waits in the island column instead,
@@ -4794,7 +4847,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     // Claude Code's `/config` usage is a menu in its terminal
                     // app; headless it is a list, so draw the menu here.
                     ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
-                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, responseCost: responseCostTotals.get(i), workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i), inRun: foldedTurns.inRun.has(i), questionVerdict: foldedTurns.verdicts.byQuestion.get(i), dropVerdict: foldedTurns.verdicts.replies.has(i) })}</>}
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { results: attachedResults, responseCost: responseCostTotals.get(i), workspaceRoot, onOpenRun: onOpenRunInMissionControl, thinkingOverride: messageReveal.reasoningIndex === i ? extractThinking(m) : delegationThoughts.get(i), hideThinking: foldedTurns.answers.has(i) && !(messageReveal.reasoningIndex === i && !toolRuns.some(run => run.answer === i)), inRun: foldedTurns.inRun.has(i), questionVerdict: foldedTurns.verdicts.byQuestion.get(i), dropVerdict: foldedTurns.verdicts.replies.has(i) })}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
@@ -4828,8 +4881,18 @@ This user request requires workspace inspection. Before answering, you MUST call
               <div data-observer-slot={i} className="github-observer-message-slot" />
             </div>
           );
-        }))}
+        }).map((node, index) => node == null ? null : (
+          <div key={index} data-conversation-message={index}>{node}</div>
+        )))}
         </ObserverConnections>
+        {!delegateSession && transcriptEnd < msgs.length && <div style={{ textAlign: "center", margin: "12px 0" }}>
+          <button type="button" className="conversation-page-button" onClick={() => {
+            messageReveal.clear();
+            const end = transcriptWindowEnd(msgs, transcriptEnd);
+            setTranscriptWindow({ id: currentId, start: transcriptEnd, end: end < msgs.length ? end : null });
+            if (scrollRef.current) scrollRef.current.scrollTop = 0;
+          }}>Show later messages</button>
+        </div>}
         <ConversationObservers key={currentId} runId={currentId} msgs={msgs} messageRoot={scrollRef.current}
           onGithubPresence={onGithubPresence}
           sidebar={variant === "focus" ? { target: observerSidebarTarget, folded: column.planFolded, onUnfold: () => setSidePanelHidden(false) } : undefined}
@@ -4865,7 +4928,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           const showWorking =
             (streaming || terminalTurn !== null) && !pendingDiff && !pendingPermission && !pendingQuestion &&
             !tailInRun && !tailPlaceholder && !tailStreamingText && !tailThinking && !tailQueuedUser;
-          if (!showWorking) return null;
+          if (!showWorking || transcriptEnd < msgs.length) return null;
           if (!streaming) return <WorkingRow label={terminalTurn === "waiting" ? "Waiting for you in the terminal" : "Working in the terminal"} />;
           // The timer counts from the turn's own start, so it survives the
           // row unmounting while a tool runs and remounting after. A reply a

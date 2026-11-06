@@ -1,0 +1,34 @@
+/* Same surface and control treatment as ToastHost: token shadow, 12px card,
+   13px text, muted circular actions. No additional frame around the input. */
+.conversation-search-action { background: transparent; color: var(--fg-dim); cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+.conversation-search-action:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--fg-strong); }
+.conversation-search-action:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.conversation-search-action:disabled { color: var(--fg-dim); background: transparent; cursor: default; }
+.conversation-search-input { flex: 1; width: 80px; min-width: 0; padding: 0; background: transparent; color: var(--fg-strong); font: inherit; font-size: var(--fs-base); line-height: 18px; }
+.conversation-search-bar .conversation-search-input,
+.conversation-search-bar .conversation-search-input:focus,
+.conversation-search-bar .conversation-search-input:focus-visible { appearance: none; -webkit-appearance: none; border: 0; outline: none; box-shadow: none; border-radius: 0; }
+.conversation-search-input::placeholder { color: var(--fg-subtle); }
+.conversation-search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.conversation-message-target { scroll-margin-top: 100px; }
+.conversation-revealing .klide-tool-run-body { transition: none !important; }
+::highlight(klide-conversation-match) { background-color: var(--accent-soft); color: inherit; }
+.conversation-page-button { border: 0; border-radius: var(--radius-md); background: transparent; color: var(--fg-subtle); padding: 8px 12px; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.conversation-page-button:hover { color: var(--fg-strong); background: var(--bg-hover); }
+
+.conversation-search-count { min-width: 36px; text-align: right; }
+.klide-switch.conversation-search-reasoning { position: relative; box-sizing: border-box; width: 20px; height: 12px; padding: 1px; margin: 0 4px; border-color: var(--panel-border); box-shadow: none; cursor: pointer; transition: background-color var(--motion-med) var(--ease-out), border-color var(--motion-med) var(--ease-out); }
+.klide-switch.conversation-search-reasoning .klide-switch-knob { width: 8px; height: 8px; background: var(--fg-subtle); transition: transform var(--motion-med) var(--ease-out), background-color var(--motion-med) var(--ease-out); }
+.klide-switch.conversation-search-reasoning[data-checked="true"] .klide-switch-knob { transform: translateX(8px); background: var(--bg-elevated); }
+.conversation-search-bar[data-open="true"] { animation: conversation-search-in var(--motion-slow) var(--ease-out) both; }
+.conversation-search-bar[data-open="false"] { pointer-events: none; animation: conversation-search-out var(--motion-med) var(--ease-out) both; }
+@keyframes conversation-search-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes conversation-search-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .conversation-search-bar[data-open] { animation: none; }
+  .conversation-search-bar[data-open="false"] { opacity: 0; }
+  .klide-switch.conversation-search-reasoning, .klide-switch.conversation-search-reasoning .klide-switch-knob { transition: none; }
+}
+
+/* Keep the small track easy to click without enlarging its visible shape. */
+.klide-switch.conversation-search-reasoning::after { content: ""; position: absolute; inset: -6px -3px; border-radius: inherit; }

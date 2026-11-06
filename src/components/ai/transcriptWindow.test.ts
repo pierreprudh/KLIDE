@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Msg } from "./types";
-import { transcriptWindowStart, TRANSCRIPT_PAGE_TURNS } from "./transcriptWindow";
+import { transcriptWindowStart, transcriptWindowEnd, TRANSCRIPT_PAGE_TURNS } from "./transcriptWindow";
 
 function exchanges(count: number): Msg[] {
   return Array.from({ length: count }, (_, i): Msg[] => [
@@ -27,6 +27,17 @@ describe("transcript rendering window", () => {
     expect(earlier).toBe(10 * 4);
     expect(transcriptWindowStart(messages, TRANSCRIPT_PAGE_TURNS, earlier)).toBe(0);
     expect(messages).toHaveLength(200);
+  });
+
+  it("bounds forward pages and reaches the end without moving backwards", () => {
+    const messages = exchanges(100);
+    expect(transcriptWindowEnd(messages, 0)).toBe(96);
+    expect(transcriptWindowEnd(messages, 96)).toBe(192);
+    expect(transcriptWindowEnd(messages, 96 * 4)).toBe(messages.length);
+    // Prepending 16 exchanges keeps 8 of the old page for its scroll anchor.
+    const start = transcriptWindowStart(messages, TRANSCRIPT_PAGE_TURNS, 76 * 4);
+    expect(start).toBe(60 * 4);
+    expect(transcriptWindowEnd(messages, start)).toBe(84 * 4);
   });
 
   it("keeps the active answer mounted even with many queued prompts", () => {
