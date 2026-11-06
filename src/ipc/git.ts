@@ -151,6 +151,8 @@ export type PullRequest = {
   updatedAtMs: number;
   badge: "open" | "merged" | "closed" | "draft";
   isCurrentBranch: boolean;
+  /** null = unavailable; [] = no reported checks. Current PR head only. */
+  checks: { name: string; state: string }[] | null;
 };
 
 /** Mirrors `PrComment`. */
@@ -180,8 +182,6 @@ export type PullRequestDetails = PullRequest & {
   requestedReviewers: string[] | null;
   /** Authors of submitted reviews, retained after a request is fulfilled. */
   reviewedBy: string[];
-  /** null = unavailable; [] = no reported checks. Current PR head only. */
-  checks: { name: string; state: string }[] | null;
   commentThread: PrComment[];
   commits: PrCommit[];
   /** Unix millis. */

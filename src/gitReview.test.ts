@@ -14,6 +14,7 @@ import {
   prCounts,
   prReadinessSignals,
   prCheckPresentation,
+  prCheckSummary,
   pullOutcome,
   pushOutcome,
   splitStatusFiles,
@@ -51,6 +52,7 @@ function pr(number: number, badge: PullRequest["badge"]): PullRequest {
     updatedAtMs: 0,
     badge,
     isCurrentBranch: false,
+    checks: null,
   };
 }
 
@@ -258,6 +260,21 @@ describe("before-merge evidence", () => {
   });
   it.each(["ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"])("surfaces %s as needing attention", state => {
     expect(prReadinessSignals({ ...base, checks: [{ name: "test", state }] })[0].tone).toBe("attention");
+  });
+  it("labels PR 429's cancelled check without reporting a failure", () => {
+    const checks = ["SUCCESS", "SUCCESS", "CANCELLED", "SUCCESS", "SUCCESS"].map(state => ({ name: "CI", state }));
+    expect(prCheckSummary(checks)).toEqual({ passed: 4, total: 5, summary: "1 cancelled", value: "1 cancelled · 4 passed", tone: "attention" });
+    expect(prReadinessSignals({ ...base, checks })[0].value).toBe("1 cancelled · 4 passed");
+  });
+  it("keeps failures and cancellations distinct when both are reported", () => {
+    const checks = ["FAILURE", "CANCELLED", "IN_PROGRESS"].map(state => ({ name: "CI", state }));
+    expect(prCheckSummary(checks).summary).toBe("1 failed · 1 cancelled · 1 pending");
+  });
+  it("preserves unavailable, empty, passed, and unknown rollups", () => {
+    expect(prCheckSummary(null).summary).toBe("Unavailable");
+    expect(prCheckSummary([]).summary).toBe("None reported");
+    expect(prCheckSummary([{ name: "CI", state: "SUCCESS" }]).summary).toBe("Passed");
+    expect(prCheckSummary([{ name: "CI", state: "FUTURE_STATE" }]).summary).toBe("See results");
   });
   it("does not infer merge readiness from a successful check or approval", () => {
     const signals = prReadinessSignals({ mergeable: "UNKNOWN", reviewDecision: "APPROVED", checks: [{ name: "test", state: "SUCCESS" }] });
