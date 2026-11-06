@@ -388,14 +388,15 @@ export function applyConversationSessionTransition(
   return next;
 }
 
-/** Build the durable Conversation snapshot. Empty sessions are intentionally
- * not persisted; a trailing empty assistant placeholder is removed. */
+/** Build the durable Conversation snapshot. An unsent draft can name an empty
+ * session without becoming a sent message. Empty assistant placeholders are removed. */
 export function snapshotConversationSession(
   session: ConversationSession,
   updatedAt = Date.now(),
+  draft = "",
 ): Conversation | null {
   const messages = messagesForPersist(session.messages);
-  if (messages.length === 0) return null;
+  if (messages.length === 0 && !draft) return null;
   // The first stamped message is the thread's start. `upsertConversation`
   // keeps whatever the stored record already had, so this only ever sets it
   // on the first save.
@@ -403,7 +404,7 @@ export function snapshotConversationSession(
   return {
     sideQuestionOf: session.sideQuestionOf,
     id: session.conversationId,
-    title: deriveTitle(messages),
+    title: deriveTitle(messages.length ? messages : [{ role: "user", content: draft }]),
     msgs: messages,
     updatedAt,
     createdAt: (firstStamped as { ts?: number } | undefined)?.ts ?? updatedAt,

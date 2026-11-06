@@ -1,3 +1,4 @@
+import { composerDraftKey, useComposerDraft } from "./ai/composerDraft";
 import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
 import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from "../hooks/useLlamaSetupMode";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
@@ -1564,7 +1565,7 @@ function FocusComposer({
     seed,
     onSeedConsumed,
   } = controls;
-  const [draft, setDraft] = useState("");
+  const { text: draft, setText: setDraft, attachments, setAttachments } = useComposerDraft(composerDraftKey(workspaceRoot, "focus-start"));
   // A link's prompt replaces the draft and waits, cursor at the end, for you
   // to read it and press Enter — a link can put words here but never send them.
   useEffect(() => {
@@ -1581,9 +1582,6 @@ function FocusComposer({
   }, [seed?.id]);
   const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
   const [focused, setFocused] = useState(false);
-  // Photos and documents staged on the first turn. They ride the handoff into
-  // the AI panel with the text, so a Focus task can start from a screenshot.
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dropping, setDropping] = useState(false);
   const [supportsVision, setSupportsVision] = useState(false);
   // Who describes a photo when this model cannot see one, or null when nobody
@@ -1759,8 +1757,8 @@ function FocusComposer({
 
   // Vision is a per-model fact. A blind model no longer strands a staged
   // photo on its own: the eyes effect below asks who could describe it, and
-  // drops the photos only when nobody can (documents are text — they always
-  // travel).
+  // retains staged photos while metadata loads (documents are text — they
+  // always travel).
   useEffect(() => {
     let cancelled = false;
     queryModelSupportsVision(provider, model)
@@ -1778,7 +1776,7 @@ function FocusComposer({
   const eyesSetting = eyesSettingOf(harnessSettings);
   const eyesSettingKey = eyesSetting ? `${eyesSetting.provider}/${eyesSetting.model}` : "";
   useEffect(() => {
-    if (supportsVision || isDelegateProvider(provider)) {
+    if (supportsVision || (isDelegateProvider(provider) && provider !== "opencode")) {
       setEyes(null);
       return;
     }
@@ -1787,12 +1785,10 @@ function FocusComposer({
       .then((found) => {
         if (cancelled) return;
         setEyes(found);
-        if (!found) setAttachments((prev) => prev.filter((a) => !a.dataUri));
       })
       .catch(() => {
         if (cancelled) return;
         setEyes(null);
-        setAttachments((prev) => prev.filter((a) => !a.dataUri));
       });
     return () => {
       cancelled = true;
@@ -1805,9 +1801,8 @@ function FocusComposer({
     if (autoFocus) taRef.current?.focus();
   }, [autoFocus]);
 
-  // A delegate CLI takes text on its stdin only — the same rule the AI panel
-  // composer applies.
-  const canAttachFiles = !isDelegateProvider(provider);
+  // OpenCode accepts native file attachments in Focus, as in the AI panel.
+  const canAttachFiles = !isDelegateProvider(provider) || provider === "opencode";
 
   // A wired skill typed into the composer reads as itself. The draft still
   // holds `/visualise ` — that is what the model is sent — and the textarea

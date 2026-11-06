@@ -679,7 +679,7 @@ pub async fn capabilities(
             let mut caps = resolve_with(&OllamaHttp, metadata_provider, &source.model, allow_activation_probe).await?;
             // Effort belongs to the underlying source, not the delegate's
             // native model manifest. Unknown local/custom wire controls stay hidden.
-            caps.supports_vision = false;
+            if provider != "opencode" { caps.supports_vision = false; }
             if source.provider == crate::harness_source::NOUS {
                 let model = source.model.clone();
                 caps.reasoning_levels = crate::blocking::run_infallible(move ||
@@ -755,8 +755,8 @@ async fn resolve_uncached(
 
     // A Delegate CLI: the CLI's own facts. Codex publishes a per-model window
     // and effort set in its manifest; Claude Code accepts a CLI-wide effort
-    // vocabulary; OpenCode V2 publishes reasoning variants per model. Every Delegate uses tools; none
-    // takes an image through Klide's composer.
+    // vocabulary; OpenCode V2 publishes reasoning variants per model. Every Delegate uses tools; OpenCode
+    // also accepts images through its native file flag.
     if providers::is_subscription_provider(provider) {
         let entry = providers::lookup(provider);
         let opencode = if provider == "opencode" {
@@ -788,7 +788,7 @@ async fn resolve_uncached(
                 context_window,
                 supports_tools: true,
                 supports_chat: true,
-                supports_vision: false,
+                supports_vision: provider == "opencode" && opencode.as_ref().and_then(|facts| facts.supports_vision).unwrap_or(names.vision),
                 reasoning_levels,
                 price_class,
                 maker: names.maker,

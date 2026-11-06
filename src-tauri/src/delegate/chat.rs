@@ -242,7 +242,7 @@ pub async fn run_subscription_chat(
         // A resumed session already holds the history, so re-sending it would
         // say everything twice. Send what is new — and if there is no new user
         // message to send, fall back to the full fold rather than an empty turn.
-        .filter(|_| !latest_user_message(&messages).is_empty());
+        .filter(|_| !latest_user_message(&messages).is_empty() || messages.iter().rev().find(|m| m["role"] == "user").and_then(|m| m["images"].as_array()).is_some_and(|images| !images.is_empty()));
     // A `/` command the CLI said it runs goes out as typed even on a cold
     // start: folded under Klide's preamble it would reach the model as prose.
     let cli_command = super::cli_commands::leading_command(adapter.id(), &cwd, &latest_user_message(&messages));
@@ -280,6 +280,9 @@ pub async fn run_subscription_chat(
         // also reach the next ACP session rather than resume stale history.
         if let Some(key) = key.as_deref() { forget_session(key); }
     }
+    let images = if adapter.id() == "opencode" {
+        Some(super::opencode_images::Images::stage(&messages, resume.is_some()).await?)
+    } else { None };
     let content = if uses_acp {
         let emitted = AtomicBool::new(false);
         // No cold retry after an ACP prompt: tools may already have changed
@@ -293,11 +296,13 @@ pub async fn run_subscription_chat(
         }
     } else { match adapter.chat_stream_invocation(&cwd, &spec) {
         Some(command) => {
+            let mut command = command?;
+            if let Some(images) = &images { images.attach(&mut command); }
             let emitted = AtomicBool::new(false);
             match run_stream_turn(
                 adapter,
                 &spec,
-                with_command_instructions(command?, adapter, cli_command.as_deref(), &messages),
+                with_command_instructions(command, adapter, cli_command.as_deref(), &messages),
                 prompt,
                 label,
                 &cwd,
@@ -318,9 +323,11 @@ pub async fn run_subscription_chat(
                     }
                     let _ = err;
                     let cold = ChatSpec { resume: None, ..spec };
-                    let command = adapter
+                    let mut command = adapter
                         .chat_stream_invocation(&cwd, &cold)
                         .ok_or_else(|| format!("{label} has no structured mode"))??;
+                    let cold_images = if adapter.id() == "opencode" { Some(super::opencode_images::Images::stage(&messages, false).await?) } else { None };
+                    if let Some(images) = &cold_images { images.attach(&mut command); }
                     run_stream_turn(
                         adapter,
                         &cold,

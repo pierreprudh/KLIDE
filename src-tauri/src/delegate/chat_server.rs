@@ -549,6 +549,12 @@ mod tests {
             command.env("KLIDE_HOOK_URL",&hook_url);
             for (name, dir) in [("XDG_DATA_HOME","data"),("XDG_CONFIG_HOME","config"),("XDG_STATE_HOME","state"),("XDG_CACHE_HOME","cache")] { command.env(name,format!("{root}/{dir}")); }
             if turn == 2 { command.args(["--command","review"]); }
+            let image_messages = serde_json::json!([{"role":"user","images":["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg=="]}]);
+            let images = if turn < 2 {
+                Some(super::super::opencode_images::Images::stage(image_messages.as_array().unwrap(), turn > 0).await.unwrap())
+            } else { None };
+            if let Some(images) = &images { images.attach(&mut command); }
+
             let chunks: Arc<Mutex<Vec<String>>> = Arc::default();
             let sink = chunks.clone();
             let thinking: Arc<Mutex<Vec<String>>> = Arc::default();

@@ -641,6 +641,7 @@ pub(crate) fn opencode_cached_models() -> Option<Vec<String>> {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OpenCodeModelFacts {
+    pub supports_vision: Option<bool>,
     pub reasoning_levels: Vec<String>,
     pub context_window: Option<usize>,
     pub max_output_tokens: Option<usize>,
@@ -658,7 +659,7 @@ fn opencode_catalog(value: &serde_json::Value) -> Option<OpenCodeVariants> {
             variant.get("id")?.as_str().filter(|id| !id.trim().is_empty()).map(str::to_owned)
         }).collect();
         let limit = |key: &str| model.get("limit")?.get(key)?.as_u64().and_then(|v| usize::try_from(v).ok()).filter(|v| *v > 0);
-        catalog.insert(format!("{provider}/{id}"), OpenCodeModelFacts { reasoning_levels: levels, context_window: limit("context"), max_output_tokens: limit("output") });
+        catalog.insert(format!("{provider}/{id}"), OpenCodeModelFacts { reasoning_levels: levels, context_window: limit("context"), max_output_tokens: limit("output"), supports_vision: model.pointer("/capabilities/input").and_then(|v| v.as_array()).map(|inputs| inputs.iter().any(|v| v.as_str() == Some("image"))) });
     }
     Some(catalog)
 }
@@ -1229,11 +1230,13 @@ mod tests {
         let catalog = opencode_catalog(&serde_json::json!({"data":[
             {"providerID":"opencode-go","id":"minimax-m3","variants":[{"id":"none","settings":{"thinking":{"type":"disabled"}}},{"id":"thinking","settings":{"thinking":{"type":"adaptive"}}}]},
             {"providerID":"opencode-go","id":"glm-5.3-flash","variants":[{"id":"low","settings":{"reasoningEffort":"low"}},{"id":"high","settings":{"reasoningEffort":"high"}}]},
-            {"providerID":"mock","id":"plain","limit":{"context":1000000,"output":131072},"variants":[{"id":"batch","body":{"service_tier":"flex"}}]}
+            {"providerID":"mock","id":"plain","capabilities":{"input":["text","image"]},"limit":{"context":1000000,"output":131072},"variants":[{"id":"batch","body":{"service_tier":"flex"}}]}
         ]})).unwrap();
         assert_eq!(catalog["opencode-go/minimax-m3"].reasoning_levels, ["none", "thinking"]);
         assert_eq!(catalog["opencode-go/glm-5.3-flash"].reasoning_levels, ["low", "high"]);
         assert!(catalog["mock/plain"].reasoning_levels.is_empty());
+        assert_eq!(catalog["mock/plain"].supports_vision, Some(true));
+        assert_eq!(catalog["opencode-go/minimax-m3"].supports_vision, None);
         assert_eq!(catalog["mock/plain"].context_window, Some(1_000_000));
         assert_eq!(catalog["mock/plain"].max_output_tokens, Some(131_072));
         assert_eq!(catalog["opencode-go/minimax-m3"].context_window, None);

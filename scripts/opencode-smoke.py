@@ -18,9 +18,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class Model(BaseHTTPRequestHandler):
     variants = []
+    image_counts = []
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         self.variants.append(body.get("klide_variant"))
+        self.image_counts.append(sum(1 for message in body.get("messages", []) if isinstance(message.get("content"), list) for part in message["content"] if part.get("type") == "image_url"))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream" if body.get("stream") else "application/json")
         self.end_headers()
@@ -92,6 +94,7 @@ def main():
                 settings = {"provider": {"mock": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": url, "apiKey": "mock"}, "models": {"mock": {"name": "Mock"}}}}, "command": {"review": {"template": "Review the current changes. $ARGUMENTS"}}}
             settings["model"] = "mock/mock"
             if major == "2":
+                settings["providers"]["mock"]["models"]["mock"]["capabilities"] = {"input": ["text", "image"], "output": ["text"]}
                 settings["providers"]["mock"]["models"]["mock"]["limit"] = {"context": 1000000, "output": 131072}
                 settings["providers"]["mock"]["models"]["mock"]["variants"] = [{"id": "high", "settings": {"reasoningEffort": "high"}, "body": {"klide_variant": "high"}}]
             (config / "opencode.json").write_text(json.dumps(settings))
@@ -107,6 +110,7 @@ def main():
                     "cargo", "test", "--manifest-path", str(repo / "src-tauri" / "Cargo.toml"), "--lib",
                     "v2_mock_interactive_terminal_starts_and_resumes", "--", "--ignored", "--nocapture",
                 ], cwd=repo, env=env, check=True, timeout=120)
+                assert max(Model.image_counts, default=0) >= 2, f"Images lost on new/resumed turns: {Model.image_counts}"
                 # OpenCode may also generate a session title with the model.
                 assert len(Model.variants) >= 5 and set(Model.variants) == {"high"}, f"Effort variant lost on new/resumed/command turn: {Model.variants}"
         finally:

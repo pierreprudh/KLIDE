@@ -2,6 +2,7 @@
 // a Markdown note, code, and a long name. Hover a card for its ✕. Below it,
 // the same card on a sent message (read-only), above the asker's bubble.
 // `?theme=light|dark`.
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
@@ -20,12 +21,17 @@ const attachments = [
 ];
 
 function Preview() {
+  const [staged, setStaged] = useState<typeof attachments>([]);
   return (
     <main style={{ width: 620, margin: "24px auto", fontFamily: "var(--font-ui)", color: "var(--fg)" }}>
       {/* Inside the composer's own surface, so the card's fill is judged
           against the surface it actually sits on. */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <button onClick={() => setStaged(current => [...current, attachments[current.length % attachments.length]])}>Add file</button>
+        <button onClick={() => setStaged([])}>Clear files</button>
+      </div>
       <div className="klide-composer-surface" style={{ paddingBottom: 40 }}>
-        <AttachmentTray attachments={attachments} onRemove={() => {}} />
+        <AttachmentTray attachments={staged} onRemove={index => setStaged(current => current.filter((_, i) => i !== index))} />
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", marginTop: 32, paddingRight: 32 }}>
         <div style={{ marginBottom: 6 }}>
