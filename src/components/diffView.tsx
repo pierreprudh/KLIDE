@@ -19,6 +19,8 @@ import { memo, useState, type ReactNode } from "react";
 import { ChevronIcon, OpenInEditorIcon } from "../icons";
 import { gitStatusMark } from "../gitStatusMark";
 import { FileTypeIcon } from "./fileMarks";
+import type { GitImageDiff } from "../ipc/git";
+import { ImageDiffView } from "./ImageDiffView";
 import {
   commentFromBlocks,
   fileOfBlock,
@@ -284,6 +286,7 @@ type DiffViewProps = {
   limit: number;
   /** Optional per-file status + counts for the file header rows. */
   fileCounts?: Map<string, FileCount>;
+  imageDiffs?: Map<string, GitImageDiff>;
   /** Enables line comments: gutter click selects, an inline composer sends
    *  the note + its line anchor back to the host for routing to the agent. */
   onLineComment?: (comment: DiffLineComment) => void;
@@ -300,7 +303,7 @@ type DiffViewProps = {
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel, onOpenFile, inset = true }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment, commentActionLabel, onOpenFile, inset = true }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Line-comment selection: block indices, anchor→head (⇧-click moves head).
@@ -459,6 +462,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
       {cards.map((card) => {
         const counts = card.path != null ? fileCounts?.get(card.path) : undefined;
         const collapsed = card.path != null && collapsedFiles.has(card.path);
+        const image = card.path != null ? imageDiffs?.get(card.path) : undefined;
         // The path wears its status colour (amber modified, green new, red
         // deleted) — the same reading as every file list in the app.
         const mark = counts ? gitStatusMark(counts.status) : null;
@@ -479,7 +483,7 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
                   {card.path}
                 </span>
                 <span style={{ flex: 1 }} />
-                {counts && (
+                {counts && !image && (
                   <span style={{ fontSize: 10.5, flexShrink: 0 }}>
                     <span style={{ color: "var(--diff-add)" }}>+{counts.additions}</span>{" "}
                     <span style={{ color: "var(--diff-remove)" }}>−{counts.deletions}</span>
@@ -502,7 +506,8 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
                 <ChevronIcon open={!collapsed} size={11} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
               </div>
             )}
-            {card.rows.length > 0 && (
+            {image && !collapsed && <ImageDiffView key={card.path} path={card.path!} image={image} />}
+            {!image && card.rows.length > 0 && (
               <div className="klide-scroll-slim" style={{ overflowX: "auto", padding: "4px 0" }}>
                 <div style={{ width: "max-content", minWidth: "100%" }}>{card.rows}</div>
               </div>

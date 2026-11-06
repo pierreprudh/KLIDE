@@ -28,6 +28,12 @@ const status: GitStatus = {
     { path: "src/auth.ts", status: "M", staged: true },
     { path: "CONTEXT.md", status: "M", staged: false },
     { path: "src/session.ts", status: "A", staged: false },
+    ...(params.has("images") ? [
+      { path: "assets/logo.svg", status: "M", staged: false },
+      { path: "assets/new.svg", status: "??", staged: false },
+      { path: "assets/old.svg", status: "D", staged: false },
+      { path: "assets/broken.png", status: "M", staged: false },
+    ] : []),
   ],
 };
 const commits = [
@@ -104,6 +110,13 @@ let prIndexEmpty = false;
     }
     if (cmd === "git_diff") {
       const path = args?.path ?? "";
+      if (path.startsWith("assets/")) {
+        const svg = (color: string) => ({ dataUri: `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"><rect x="32" y="24" width="176" height="112" rx="24" fill="${color}"/></svg>`)}`, error: null });
+        return { path, diff: "", additions: 0, deletions: 0, image: {
+          before: path.includes("new") ? null : svg("#7e9181"),
+          after: path.includes("old") ? null : path.includes("broken") ? { dataUri: "data:image/png;base64,broken", error: null } : svg("#b19070"),
+        } };
+      }
       if (path === "CONTEXT.md") return { path, diff: DIFF, additions: 2, deletions: 0 };
       return {
         path,

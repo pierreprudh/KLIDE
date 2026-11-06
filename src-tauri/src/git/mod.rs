@@ -6,6 +6,7 @@
 // `github` submodule.
 
 pub(crate) mod github;
+mod image_diff;
 
 use std::process::Command;
 
@@ -28,6 +29,8 @@ pub(crate) struct GitDiff {
     diff: String,
     additions: usize,
     deletions: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<image_diff::ImageDiff>,
 }
 
 #[derive(serde::Serialize)]
@@ -264,6 +267,16 @@ pub(crate) async fn git_diff(
     staged: bool,
 ) -> Result<GitDiff, String> {
     blocking(move || {
+        if crate::mime_for_path(&path).starts_with("image/") {
+            let image = image_diff::load(&workspace_root, &path, staged)?;
+            return Ok(GitDiff {
+                path,
+                diff: String::new(),
+                additions: 0,
+                deletions: 0,
+                image: Some(image),
+            });
+        }
         let diff = if staged {
             git_output(&workspace_root, &["diff", "--cached", "--", &path])?
         } else {
@@ -293,6 +306,7 @@ pub(crate) async fn git_diff(
             diff,
             additions,
             deletions,
+            image: None,
         })
     })
     .await
@@ -1915,6 +1929,124 @@ detached
             .await
             .expect("clean diff");
         assert!(clean.diff.trim().is_empty());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn git_diff_images_compare_index_worktree_and_head_bytes() {
+        use base64::Engine;
+        let (base, repo) = temp_repo("image-diff");
+        let path = std::path::Path::new(&repo).join("picture.PNG");
+        let uri = |bytes: &[u8]| {
+            format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            )
+        };
+        // Deliberately non-UTF8 bytes: image diffs must never use a text reader.
+        std::fs::write(&path, [0x89, 0xff, 1]).unwrap();
+        let new = serde_json::to_value(
+            git_diff(repo.clone(), "picture.PNG".into(), false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(new["image"]["before"].is_null());
+        assert_eq!(new["image"]["after"]["dataUri"], uri(&[0x89, 0xff, 1]));
+        run_git(&repo, &["add", "--", "picture.PNG"]).unwrap();
+        run_git(&repo, &["commit", "-m", "image"]).unwrap();
+        std::fs::write(&path, [0x89, 0xff, 2]).unwrap();
+        run_git(&repo, &["add", "--", "picture.PNG"]).unwrap();
+        std::fs::write(&path, [0x89, 0xff, 3]).unwrap();
+        let work = serde_json::to_value(
+            git_diff(repo.clone(), "picture.PNG".into(), false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(work["image"]["before"]["dataUri"], uri(&[0x89, 0xff, 2]));
+        assert_eq!(work["image"]["after"]["dataUri"], uri(&[0x89, 0xff, 3]));
+        let staged = serde_json::to_value(
+            git_diff(repo.clone(), "picture.PNG".into(), true)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(staged["image"]["before"]["dataUri"], uri(&[0x89, 0xff, 1]));
+        assert_eq!(staged["image"]["after"]["dataUri"], uri(&[0x89, 0xff, 2]));
+        std::fs::remove_file(&path).unwrap();
+        let deleted = serde_json::to_value(
+            git_diff(repo.clone(), "picture.PNG".into(), false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(deleted["image"]["after"].is_null());
+        run_git(&repo, &["add", "--", "picture.PNG"]).unwrap();
+        let deleted = serde_json::to_value(
+            git_diff(repo.clone(), "picture.PNG".into(), true)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(deleted["image"]["before"]["dataUri"], uri(&[0x89, 0xff, 1]));
+        assert!(deleted["image"]["after"].is_null());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn git_diff_images_handle_unborn_head_svg_size_and_containment() {
+        let (base, repo) = temp_repo("image-diff-limits");
+        // Orphan index: a staged addition in a repository without HEAD.
+        run_git(&repo, &["checkout", "--orphan", "fresh"]).unwrap();
+        run_git(&repo, &["rm", "-rf", "."]).unwrap();
+        let path = std::path::Path::new(&repo).join("image with spaces.svg");
+        std::fs::write(&path, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+        run_git(&repo, &["add", "--", "image with spaces.svg"]).unwrap();
+        let staged = serde_json::to_value(
+            git_diff(repo.clone(), "image with spaces.svg".into(), true)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(staged["image"]["before"].is_null());
+        assert!(staged["image"]["after"]["dataUri"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/svg+xml;base64,"));
+        let large = std::path::Path::new(&repo).join("large.png");
+        std::fs::File::create(large)
+            .unwrap()
+            .set_len(crate::workspace::USER_MAX_READ_BYTES + 1)
+            .unwrap();
+        let oversized = serde_json::to_value(
+            git_diff(repo.clone(), "large.png".into(), false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(oversized["image"]["after"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("too large"));
+        assert!(git_diff(repo.clone(), "../outside.png".into(), false)
+            .await
+            .is_err());
+        #[cfg(unix)]
+        {
+            let outside = base.join("outside.png");
+            std::fs::write(&outside, "private").unwrap();
+            std::os::unix::fs::symlink(outside, std::path::Path::new(&repo).join("link.png"))
+                .unwrap();
+            let linked = serde_json::to_value(
+                git_diff(repo.clone(), "link.png".into(), false)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(linked["image"]["after"]["dataUri"].is_null());
+            assert!(linked["image"]["after"]["error"].is_string());
+        }
         let _ = std::fs::remove_dir_all(base);
     }
 
