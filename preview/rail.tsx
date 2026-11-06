@@ -122,3 +122,7 @@ if (params.has("done")) {
 }
 
 if (params.has("searchopen")) setTimeout(() => (document.querySelector('[aria-label="Search conversations"][aria-expanded]') as HTMLElement | null)?.click(), 300);
+
+// ?searchopen=1&at=200 — freeze the open motion at 200ms to look at it.
+const at = params.get("at");
+if (at) setTimeout(() => { for (const a of document.getAnimations()) { a.pause(); a.currentTime = Number(at); } }, 320);

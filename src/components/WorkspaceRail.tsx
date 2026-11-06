@@ -1567,10 +1567,11 @@ export function WorkspaceRail({
             onCloneRepo={onCloneRepo}
           />
 
-          {/* New task and search share a line. Opening search, New task
-              folds to its + and the field grows in from the search button
-              beside it — the same line, so the list it filters never moves.
-              Both are always mounted: the fold is a transition, not a swap. */}
+          {/* New task and search share a line. Opening search morphs the
+              search button into the field: the field opens out of the
+              button's own square toward the +, which is all New task keeps.
+              Nothing reflows — the field lies over the line and is revealed
+              by a clip, so the motion stays on the compositor and smooth. */}
           <div className="klide-rail-actions" data-searching={searchOpen || undefined}>
             {newTask ? (
               <NavRow
@@ -1613,7 +1614,14 @@ export function WorkspaceRail({
                 setQuery("");
               }}
             >
-              {searchOpen ? <CloseIcon size={RAIL_GLYPH} /> : <SearchIcon size={RAIL_GLYPH} />}
+              {/* Both glyphs, stacked: the magnifier turns away as the ✕ turns
+                  in, so the button morphs instead of swapping. */}
+              <span className="klide-rail-search-glyph" data-glyph="search" aria-hidden="true">
+                <SearchIcon size={RAIL_GLYPH} />
+              </span>
+              <span className="klide-rail-search-glyph" data-glyph="close" aria-hidden="true">
+                <CloseIcon size={RAIL_GLYPH} />
+              </span>
             </button>
           </div>
 
