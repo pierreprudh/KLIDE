@@ -9,7 +9,7 @@
 //
 // A sent message shows the same card (`AttachmentCard`, no remove button), so
 // a file looks the same before and after it went.
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { AgentAttachment as Attachment } from "../../agent/types";
 import { FileTypeIcon } from "../fileMarks";
 import { conversationMark } from "../../modelIdentity";
@@ -45,12 +45,25 @@ export function AttachmentTray({
    *  chosen model sees for itself. */
   eyes?: Eyes | null;
 }) {
-  if (attachments.length === 0) return null;
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const measure = () => setHeight(content.getBoundingClientRect().height);
+    measure();
+    // Measure the inner row so wrapping and subsequent additions animate too.
+    // Observing the animated wrapper would feed its own height back into itself.
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
   const hasPhoto = attachments.some(isPhotoAttachment);
   const note = eyes ? `Described by ${eyesName(eyes)}` : null;
   const mark = eyes ? conversationMark(eyes.model, eyes.provider as ProviderId, 14)?.node : null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding, alignItems: "center" }}>
+    <div className="composer-attachment-tray" style={{ height }}>
+    <div ref={contentRef} style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: attachments.length ? padding : 0, alignItems: "center" }}>
       {attachments.map((a, i) => (
         <AttachmentTile
           key={`${a.path}-${i}`}
@@ -66,6 +79,7 @@ export function AttachmentTray({
           {note}
         </span>
       )}
+    </div>
     </div>
   );
 }
@@ -106,6 +120,7 @@ function AttachmentTile({
   const size = attachment.dataUri || attachment.content ? attachmentSize(attachment) : null;
   return (
     <div
+      className={sent ? undefined : "composer-attachment-tile"}
       role={sent && onOpen ? "button" : undefined}
       tabIndex={sent && onOpen ? 0 : undefined}
       onClick={sent ? onOpen : undefined}

@@ -1,3 +1,4 @@
+import { forgetComposerDrafts } from "./composerDraft";
 // The Stored conversation index — the durable record of AI-panel
 // Conversations (CONTEXT.md: "Stored conversation"). This module owns the
 // conversation index (load / save / upsert / persist), the
@@ -796,6 +797,7 @@ export function renameStoredConversation(id: string, title: string): Conversatio
 }
 
 export function forgetStoredConversation(id: string): Conversation[] {
+  forgetComposerDrafts(id);
   const next = saveConversations(
     loadConversations<Conversation>().filter((conv) => conv.id !== id),
   );
@@ -812,5 +814,6 @@ export function forgetStoredConversation(id: string): Conversation[] {
 
 /** Forget the whole local index. */
 export function clearStoredConversations(): Conversation[] {
+  for (const conversation of loadConversations<Conversation>()) forgetComposerDrafts(conversation.id);
   return saveConversations<Conversation>([]);
 }

@@ -28,6 +28,7 @@ mod hosted_sessions;
 pub mod home;
 mod omp;
 mod opencode;
+mod opencode_images;
 mod runs;
 pub mod status;
 

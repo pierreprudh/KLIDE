@@ -1,3 +1,4 @@
+import { composerDraftKey, readComposerDraft, useComposerDraft } from "./ai/composerDraft";
 import { playSound } from "../sound";
 import { ContextDetailFlyout } from "./ai/ContextDetailFlyout";
 import { SideQuestionToggle } from "./ai/SideQuestionToggle";
@@ -175,7 +176,7 @@ import { agentPickForConversation, routedModelString } from "../agent/harnessSou
 import { readHarnessSourceSupport } from "../ipc/hermes";
 import { conversationMark } from "../modelIdentity";
 import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
-import { ATTACH_ACCEPT, isPhotoAttachment, pastedTextAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
+import { ATTACH_ACCEPT, pastedTextAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { extractPdfText } from "../ipc/pdf";
 import { AttachmentCard, AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
@@ -1110,7 +1111,8 @@ export function AiPanel({
     // go through selectProvider below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [input, setInput] = useState("");
+  const draftKey = composerDraftKey(workspaceRoot, currentId);
+  const { text: input, setText: setInput, attachments: pendingAttachments, setAttachments: setPendingAttachments } = useComposerDraft(draftKey);
   const [composerFocused, setComposerFocused] = useState(false);
   // Mode / reflection / context popovers live in `usePortalMenu` (declared
   // with the mode + reflection menus below) — same names, so render is unchanged.
@@ -1262,10 +1264,6 @@ export function AiPanel({
     () => Boolean(resumeConversation) || conversationSession.messages.length > 0,
   );
   const manuallyInspectedModelRef = useRef<string | null>(null);
-  // Photos and documents pasted/dropped into the composer, staged until the
-  // turn is sent. A photo needs a model that can see it; a document is text
-  // and reaches every model, so the two are gated separately (see stageFiles).
-  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   // Whether a file is being dragged over the panel (drives the drop overlay).
   const [fileDragOver, setFileDragOver] = useState(false);
   // A conversation image opened full-size (data URI), or null when closed.
@@ -1403,7 +1401,7 @@ export function AiPanel({
   // Two different facts, long conflated behind one flag.
   //
   // `providerDelegatesWork` — a *capability*: this provider edits the
-  // workspace itself, so Goal mode needs no tool probe, images can't be sent,
+  // workspace itself, so Goal mode needs no tool probe,
   // and the context lens has nothing to add.
   //
   // `delegateSession` — a *surface*: the conversation IS the CLI's interactive
@@ -2057,14 +2055,13 @@ export function AiPanel({
     if (attachments.length) setPendingAttachments((prev) => [...prev, ...attachments]);
   }
 
-  // A delegate CLI takes text on its stdin and nothing else, so attaching is
-  // off there entirely. Everywhere else the composer accepts files and lets
-  // the staging rules decide what each one becomes.
-  const canAttachFiles = !providerDelegatesWork;
+  // Focus can attach files through OpenCode's native file flag. Interactive
+  // terminals still take text through their PTY.
+  const canAttachFiles = !providerDelegatesWork || (provider === "opencode" && !delegateSession);
 
   // Vision is a per-model fact, but a blind model no longer refuses a photo
   // on its own: ask Rust who would describe it (the same question Focus's
-  // start stage asks), and drop staged photos only when nobody can.
+  // start stage asks), and let the run resolve any photos the chosen model cannot see.
   const [eyes, setEyes] = useState<Eyes | null>(null);
   const eyesSetting = eyesSettingOf(harnessSettings);
   const eyesSettingKey = eyesSetting ? `${eyesSetting.provider}/${eyesSetting.model}` : "";
@@ -2077,7 +2074,8 @@ export function AiPanel({
     const blind = () => {
       if (cancelled) return;
       setEyes(null);
-      setPendingAttachments((prev) => prev.filter((a) => !isPhotoAttachment(a)));
+      // Keep restored attachments while capabilities are loading. The run
+      // reports an unreadable photo; navigation must never erase a draft.
     };
     resolveEyes(provider, model, eyesSetting, workspaceRoot)
       .then((found) => {
@@ -2727,7 +2725,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     setMeasuredUsageTokens(null);
     setReportedContextWindow(null);
     setCompactError(null);
-    setInput("");
     // The auto-save notice belongs to the previous conversation — clear it
     // so the fresh chat starts on a clean slate.
     if (autoMemoryTimerRef.current !== null) {
@@ -3109,6 +3106,17 @@ This user request requires workspace inspection. Before answering, you MUST call
     return () => observer.disconnect();
   }, [autosizeComposer]);
 
+  const hasUnsentDraft = !!input || pendingAttachments.length > 0;
+  useEffect(() => {
+    if (!hasUnsentDraft) return;
+    persistConversationSessionBinding(panelId ?? "ai-main", conversationSessionRef.current);
+    if (msgsRef.current.length === 0) {
+      const snapshot = snapshotConversationSession(conversationSessionRef.current, Date.now(), input || pendingAttachments[0]?.path);
+      if (snapshot) setConversations(persistConversation(snapshot));
+    }
+  }, [currentId, hasUnsentDraft, panelId]);
+  const unsentTitle = msgs.length === 0 ? input || pendingAttachments[0]?.path || "" : "";
+
   // Persist the conversation — debounced (trailing). Streaming commits a new
   // session object every ~50 ms, and each persist is a full index round-trip
   // (JSON.parse + stringify of up to 100 conversations) on the main thread;
@@ -3116,7 +3124,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   // a panel that goes away inside the debounce window.
   const persistTimerRef = useRef<number | null>(null);
   useEffect(() => {
-    const snapshot = snapshotConversationSession(conversationSession);
+    const snapshot = snapshotConversationSession(conversationSession, Date.now(), unsentTitle);
     if (!snapshot) return;
     if (persistTimerRef.current !== null) window.clearTimeout(persistTimerRef.current);
     persistTimerRef.current = window.setTimeout(() => {
@@ -3129,14 +3137,16 @@ This user request requires workspace inspection. Before answering, you MUST call
         persistTimerRef.current = null;
       }
     };
-  }, [conversationSession]);
+  }, [conversationSession, unsentTitle]);
 
   // Flush whatever the latest commit was on unmount so a view switch
   // mid-stream doesn't drop the in-flight conversation. `msgsRef` is
   // already kept in sync above, and the persist effect above will
   // have run for the most recent state when React re-rendered.
   useEffect(() => () => {
-    const snapshot = snapshotConversationSession(conversationSessionRef.current);
+    const session = conversationSessionRef.current;
+    const draft = readComposerDraft(composerDraftKey(session.workspaceRoot, session.conversationId));
+    const snapshot = snapshotConversationSession(session, Date.now(), draft.text || draft.attachments[0]?.path);
     if (snapshot) persistConversation(snapshot);
     // Everything mutable reads through the Conversation Session ref: this []
     // cleanup otherwise sees first-render values after a history or Provider
@@ -3271,8 +3281,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     setModelSupportsVision(inspection.supportsVision);
     setContextLimit(inspection.contextLimit);
     setMaxOutputTokens(inspection.maxOutputTokens ?? null);
-    // Losing vision (a model switch) no longer drops staged photos here: the
-    // eyes effect drops them only when nobody can describe them for this model.
+    // Keep staged photos through model changes and metadata loading. Rust
+    // resolves their vision/fallback gate when the turn is actually sent.
   }
 
   async function activateModelInspectionForSend(): Promise<ModelInspection> {
@@ -4100,7 +4110,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   const sidePanelWorking = btwActivity?.parentId === currentId && btwActivity.active;
   const sidePanelHasHistory = (btwActivity?.parentId === currentId && btwActivity.hasContent) || conversations.some(conversation => conversation.sideQuestionOf === currentId && conversation.msgs.length > 0);
   const sideQuestionDraft = !sideQuestionParent && sideQuestionDirective(input) !== null;
-  const canSend = sideQuestionDraft || (!!(skillToken ? draftBody.trim() : input.trim()) && !serverStarting && !compacting && terminalTurn !== "running");
+  const canSend = sideQuestionDraft || ((!!(skillToken ? draftBody.trim() : input.trim()) || (canAttachFiles && pendingAttachments.length > 0)) && !serverStarting && !compacting && terminalTurn !== "running");
   // Hover-revealed "Send to both" over the send button (race panels only).
   const [raceSendHover, setRaceSendHover] = useState(false);
   const acceptanceMode = modificationAcceptanceMode(

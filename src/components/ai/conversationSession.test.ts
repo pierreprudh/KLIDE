@@ -497,6 +497,15 @@ describe("applyConversationSessionTransition — transitions carry their persist
 });
 
 describe("snapshotConversationSession", () => {
+  it("keeps an unsent conversation discoverable without inventing a user message", () => {
+    const empty = session({ messages: [] });
+    expect(snapshotConversationSession(empty, 5)).toBeNull();
+    const draft = snapshotConversationSession(empty, 5, "Finish this later")!;
+    expect(draft.title).toBe("Finish this later");
+    expect(draft.msgs).toEqual([]);
+    expect(draft.id).toBe(empty.conversationId);
+  });
+
   it("persists one coherent Conversation and removes a trailing empty assistant placeholder", () => {
     const snapshot = snapshotConversationSession(
       session({ messages: [userMessage, { role: "assistant", content: "" }] }),

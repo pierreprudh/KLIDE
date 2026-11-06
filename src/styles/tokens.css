@@ -8516,6 +8516,27 @@ input.klide-rail-search:focus-visible {
     box-shadow 340ms var(--ease-soft);
 }
 
+/* The measured tray gives the composer real intermediate heights as files
+   arrive or wrap onto another row. The textarea and footer move with it. */
+.composer-attachment-tray {
+  overflow: hidden;
+  transition: height var(--motion-slower) var(--ease-soft);
+}
+
+.composer-attachment-tile {
+  animation: composer-attachment-arrive var(--motion-slow) var(--ease-soft) both;
+}
+
+@keyframes composer-attachment-arrive {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-attachment-tray { transition: none; }
+  .composer-attachment-tile { animation: none; }
+}
+
 .klide-composer-surface::before {
   content: "";
   position: absolute;
