@@ -41,6 +41,11 @@ service logs are under `<app data>/scheduled-host/`. It points to the current
 Klide executable. Keep the installed app in place. An updated app replaces a
 responsive idle service; active or unreachable owners are left alone, with a
 visible service error if an update cannot safely proceed.
+When only the executable's build changes, the idle service restarts in place;
+its unchanged launch-agent file is preserved and the job is not unregistered.
+Only changes to the registration (such as the executable path or PATH) replace
+the file and reload the job, avoiding repeated macOS background-item notices
+for ordinary rebuilds and service retries.
 
 The Mac must be awake and the user logged in. Sleep suspends work; shutdown or
 logout stops the service. After waking or logging in, each overdue schedule
