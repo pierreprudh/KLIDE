@@ -24,6 +24,7 @@ import {
   loadConversations,
   loadPanelSession,
   persistConversation,
+  refreshConversations,
   renameStoredConversation,
   suggestConversationTitle,
   saveConversations,
@@ -643,6 +644,53 @@ describe("the conversation index on disk", () => {
     expect(writes).toEqual([]);
   });
 
+  it("shows another app instance's OpenCode conversation when the window regains focus", async () => {
+    const { sink, files, writes } = fakeSink([conversation({ id: "here" })]);
+    await hydrateConversationStore(sink);
+    const elsewhere = conversation({ id: "elsewhere", provider: "opencode", updatedAt: 20 });
+    files.set(elsewhere.id, JSON.stringify(elsewhere));
+    let updates = 0;
+    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, () => updates++);
+
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["elsewhere", "here"]);
+    expect(updates).toBe(1);
+    expect(writes).toEqual([]);
+  });
+
+  it("preserves unsaved turns and deletions while reading another instance's history", async () => {
+    const { sink, files } = fakeSink([conversation({ id: "editing" }), conversation({ id: "deleted" })]);
+    await hydrateConversationStore(sink);
+    const read = sink.load;
+    let finishRead!: (result: Awaited<ReturnType<ConversationSink["load"]>>) => void;
+    sink.load = () => new Promise((resolve) => { finishRead = resolve; });
+    const refresh = refreshConversations();
+    await Promise.resolve();
+    const snapshot = await read();
+    persistConversation(conversation({ id: "editing", msgs: [{ role: "user", content: "new turn" }] }));
+    forgetStoredConversation("deleted");
+    finishRead(snapshot);
+    await refresh;
+    await flushConversations();
+
+    expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["editing"]);
+    expect(JSON.parse(files.get("editing")!).msgs[0].content).toBe("new turn");
+    expect(files.has("deleted")).toBe(false);
+  });
+
+  it("keeps history available if the refresh fails, and retries on the next focus", async () => {
+    const { sink } = fakeSink([conversation({ id: "here" })]);
+    await hydrateConversationStore(sink);
+    const read = sink.load;
+    sink.load = async () => { throw new Error("database temporarily unavailable"); };
+    expect(await refreshConversations()).toBe(false);
+    expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["here"]);
+    sink.load = read;
+    expect(await refreshConversations()).toBe(true);
+  });
+
   it("holds far more than the browser quota allowed", async () => {
     const { sink } = fakeSink();
     await hydrateConversationStore(sink);
@@ -651,6 +699,52 @@ describe("the conversation index on disk", () => {
       persistConversation(conversation({ id: `c${i}`, updatedAt: i, msgs: [{ role: "user", content: big }] }));
     }
     expect(loadConversations<Conversation>()).toHaveLength(40);
+  });
+
+  it("waits for an in-flight save and coalesces repeated focus events", async () => {
+    const { sink } = fakeSink();
+    await hydrateConversationStore(sink);
+    const write = sink.write;
+    let finishWrite!: () => void;
+    const pendingWrite = new Promise<void>((resolve) => { finishWrite = resolve; });
+    sink.write = async (records, removed) => {
+      await pendingWrite;
+      await write(records, removed);
+    };
+    const read = vi.spyOn(sink, "load");
+    persistConversation(conversation({ id: "saving" }));
+    const flush = flushConversations();
+    await Promise.resolve();
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("focus"));
+    const refresh = refreshConversations();
+    expect(read).not.toHaveBeenCalled();
+    finishWrite();
+    await flush;
+    await refresh;
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["saving"]);
+  });
+
+  it("flushes pending saves when leaving the window so another instance can read them", async () => {
+    const { sink, files } = fakeSink();
+    await hydrateConversationStore(sink);
+    persistConversation(conversation({ id: "new-opencode", provider: "opencode" }));
+    window.dispatchEvent(new Event("blur"));
+    await Promise.resolve();
+
+    expect(files.has("new-opencode")).toBe(true);
+  });
+
+  it("picks up remote deletions without writing the refreshed index back", async () => {
+    const { sink, files, writes } = fakeSink([conversation({ id: "deleted-elsewhere" })]);
+    await hydrateConversationStore(sink);
+    files.delete("deleted-elsewhere");
+    await refreshConversations();
+
+    expect(loadConversations()).toEqual([]);
+    expect(writes).toEqual([]);
   });
 
   it("migrates and retains more than 300 conversations without pruning", async () => {

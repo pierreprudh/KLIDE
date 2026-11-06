@@ -210,6 +210,8 @@ type DiskIndex = {
   removed: Set<string>;
   timer: ReturnType<typeof setTimeout> | null;
   flushing: Promise<boolean>;
+  refreshing: Promise<boolean> | null;
+  dispose?: () => void;
 };
 
 let disk: DiskIndex | null = null;
@@ -285,6 +287,46 @@ export function flushConversations(): Promise<boolean> {
   return disk ? flushIndex(disk) : Promise.resolve(true);
 }
 
+/** Pick up conversations saved by another app instance. Share the write
+ * queue so a read cannot race an in-flight flush; edits made while reading
+ * remain dirty and take priority over their older disk snapshots. */
+export function refreshConversations(): Promise<boolean> {
+  const index = disk;
+  if (!index) return Promise.resolve(true);
+  if (index.refreshing) return index.refreshing;
+  const refresh = index.flushing.then(async () => {
+    try {
+      const loaded = await index.sink.load();
+      const records = healRecords<Conversation>(JSON.parse(loaded.json));
+      if (disk !== index) return false;
+      // A partially unreadable index must not hide previously readable rows.
+      const byId = new Map(
+        (loaded.skipped > 0 ? index.records : []).map((record) => [record.id, record]),
+      );
+      for (const record of records) byId.set(record.id, record);
+      for (const record of index.records) {
+        if (index.dirty.has(record.id)) byId.set(record.id, record);
+      }
+      for (const id of index.removed) byId.delete(id);
+      const next = [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+      const changed = JSON.stringify(next) !== JSON.stringify(index.records);
+      if (changed) {
+        index.records = next;
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(CONVERSATIONS_CHANGED_EVENT));
+        }
+      }
+      return true;
+    } catch {
+      // Keep the current history usable; the next focus retries the read.
+      return false;
+    }
+  });
+  index.flushing = refresh;
+  index.refreshing = refresh.finally(() => { index.refreshing = null; });
+  return index.refreshing;
+}
+
 /** Whether the index is on disk (the app) or in localStorage (no backend). */
 export function conversationsOnDisk(): boolean {
   return disk !== null;
@@ -320,9 +362,20 @@ export async function hydrateConversationStore(sink: ConversationSink = tauriSin
     removed: new Set(),
     timer: null,
     flushing: Promise.resolve(true),
+    refreshing: null,
   };
   if (typeof window !== "undefined") {
-    window.addEventListener("pagehide", () => void flushConversations());
+    const target = window;
+    const flush = () => { void flushConversations(); };
+    const refresh = () => { void refreshConversations(); };
+    target.addEventListener("pagehide", flush);
+    target.addEventListener("blur", flush);
+    target.addEventListener("focus", refresh);
+    disk.dispose = () => {
+      target.removeEventListener("pagehide", flush);
+      target.removeEventListener("blur", flush);
+      target.removeEventListener("focus", refresh);
+    };
   }
   if (loaded.skipped > 0) {
     notifyUser(
@@ -342,6 +395,7 @@ export async function hydrateConversationStore(sink: ConversationSink = tauriSin
 /** Tests only: drop the disk index and go back to localStorage. */
 export function resetConversationStoreForTests(): void {
   if (disk?.timer) clearTimeout(disk.timer);
+  disk?.dispose?.();
   disk = null;
 }
 

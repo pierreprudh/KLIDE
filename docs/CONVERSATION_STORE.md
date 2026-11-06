@@ -91,6 +91,13 @@ One connection per database is opened on first use and kept
 (`conversation_store.rs`, `with_store`). The renderer flushes every 400 ms
 while a turn streams; each flush is one `IMMEDIATE` transaction.
 
+Each app instance has its own in-memory index. On window focus it reloads the
+shared SQLite history and notifies the rail, so conversations saved in another
+instance become visible without restarting. Refreshes share the write queue;
+unsaved local edits and deletions take priority over the loaded snapshots.
+Leaving the window flushes pending index writes. A failed refresh retains the
+current history and retries on the next focus.
+
 ## The two migrations
 
 Both run automatically on the first launch of a build that has them.
