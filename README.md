@@ -46,6 +46,8 @@ A single centered conversation on any agent: a local model, a hosted API, or a s
 
 <img src=".github/assets/focus.png" alt="Klide focus mode: the project and conversation rail on the left, one centered conversation where the answer folds its work to a single line and draws an inline diagram of how two files relate" width="900" />
 
+Press **⌘F** to open the search bar and find text in the current conversation, including folded tool activity. Recorded reasoning is excluded unless you enable **Include reasoning** with the search bar’s reasoning switch. **Jump to latest** returns to live output.
+
 ### Workbench — the editor, with every agent on one canvas
 
 The editor-first layout: explorer, tabs, Monaco, terminal, and AI panels. Anchor the panels, pick a fixed preset, build a grid, or float them freely over the editor — run a hosted model and the delegate CLIs side by side, each in its own live terminal, compare their answers, and keep the file you are reviewing open behind them.
