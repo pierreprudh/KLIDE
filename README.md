@@ -44,7 +44,7 @@ Open a folder, start a new project, or clone a repository from one quiet page, w
 
 A single centered conversation on any agent: a local model, a hosted API, or a subscription CLI running headless, with no API key anywhere in Klide. Everything a run did before its answer folds to one line, a plan or a question opens as a card beside the conversation, an answer can draw a diagram in place, `⌘N` opens a second conversation beside the first, and the shared terminal docks under the canvas so a run keeps streaming while you shell.
 
-<img src=".github/assets/focus.png" alt="Klide focus mode: the project and conversation rail on the left, one centered conversation where the answer folds its work to a single line and draws an inline diagram of how two files relate" width="900" />
+<img src=".github/assets/focus.png" alt="Klide focus mode: the rail with conversations grouped by agent on the left, a centered start stage asking what to build with recent conversations to continue, the Git island in the corner, and the composer on an OpenCode agent" width="900" />
 
 Press **⌘F** to open the search bar and find text in the current conversation, including folded tool activity. Recorded reasoning is excluded unless you enable **Include reasoning** with the search bar’s reasoning switch. **Jump to latest** returns to live output.
 
