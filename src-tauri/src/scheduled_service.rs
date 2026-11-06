@@ -118,6 +118,60 @@ fn launchctl(args: &[&std::ffi::OsStr]) -> Result<std::process::Output, String> 
         .map_err(|e| format!("Cannot run launchctl: {e}"))
 }
 
+// Called only after a responsive host is known to be idle, or no job is loaded.
+// Keep launchctl injectable so tests never register real background items.
+#[cfg(target_os = "macos")]
+fn activate_registration(
+    plist: &Path,
+    contents: &str,
+    domain: &str,
+    job: &str,
+    same: bool,
+    loaded: bool,
+    mut control: impl FnMut(&[&std::ffi::OsStr]) -> Result<std::process::Output, String>,
+) -> Result<(), String> {
+    use std::ffi::OsStr;
+    // macOS watches this file. A rebuild changes the host's build id, not
+    // necessarily its registration; replacing identical bytes can notify again.
+    if !same {
+        std::fs::create_dir_all(plist.parent().unwrap()).map_err(|e| e.to_string())?;
+        crate::durable::write_atomic_private(plist, contents.as_bytes())?;
+    }
+    if loaded && same {
+        // The caller holds the dispatch lease and verified this host is idle.
+        // Restart it in place rather than removing/re-adding a background item.
+        let output = control(&[OsStr::new("kickstart"), OsStr::new("-k"), OsStr::new(job)])?;
+        if !output.status.success() {
+            return Err(format!(
+                "Cannot restart the local service: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        return Ok(());
+    }
+    if loaded {
+        let output = control(&[OsStr::new("bootout"), OsStr::new(job)])?;
+        if !output.status.success() {
+            return Err(format!(
+                "Cannot update the local service: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
+    let output = control(&[
+        OsStr::new("bootstrap"),
+        OsStr::new(domain),
+        plist.as_os_str(),
+    ])?;
+    if !output.status.success() {
+        return Err(format!(
+            "Cannot enable the local service: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn ensure(data: &Path) -> Result<ServiceInfo, String> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -175,8 +229,6 @@ pub(crate) fn ensure(data: &Path) -> Result<ServiceInfo, String> {
         } else if current.error.is_some() {
             return Err(current.error.unwrap());
         }
-        std::fs::create_dir_all(plist.parent().unwrap()).map_err(|e| e.to_string())?;
-        crate::durable::write_atomic_private(&plist, contents.as_bytes())?;
         let domain = format!("gui/{}", unsafe { libc::geteuid() });
         let job = format!("{domain}/{}", label(data));
         let loaded = launchctl(&[OsStr::new("print"), OsStr::new(&job)])?
@@ -195,36 +247,7 @@ pub(crate) fn ensure(data: &Path) -> Result<ServiceInfo, String> {
             }
             return Err("The local service is starting or unreachable. Existing work was left alone; try again.".into());
         }
-        if loaded && (!same || current.running && !current.compatible) {
-            let output = launchctl(&[OsStr::new("bootout"), OsStr::new(&job)])?;
-            if !output.status.success() {
-                return Err(format!(
-                    "Cannot update the local service: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
-        }
-        if !loaded || !same || current.running && !current.compatible {
-            let output = launchctl(&[
-                OsStr::new("bootstrap"),
-                OsStr::new(&domain),
-                plist.as_os_str(),
-            ])?;
-            if !output.status.success() {
-                return Err(format!(
-                    "Cannot enable the local service: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
-        } else {
-            let output = launchctl(&[OsStr::new("kickstart"), OsStr::new(&job)])?;
-            if !output.status.success() {
-                return Err(format!(
-                    "Cannot start the local service: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
-        }
+        activate_registration(&plist, &contents, &domain, &job, same, loaded, launchctl)?;
         for _ in 0..40 {
             let info = status(data);
             if info.compatible {
@@ -259,6 +282,94 @@ pub(crate) async fn agent_schedule_service_enable(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rebuilding_an_idle_service_keeps_its_registration_and_plist() {
+        use std::os::unix::{fs::MetadataExt, process::ExitStatusExt};
+        let dir = std::env::temp_dir().join(format!("klide-registration-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plist = dir.join("service.plist");
+        std::fs::write(&plist, "unchanged registration").unwrap();
+        let original = std::fs::metadata(&plist).unwrap().ino();
+        let mut commands = Vec::new();
+        for _ in 0..3 {
+            activate_registration(
+                &plist,
+                "unchanged registration",
+                "gui/501",
+                "gui/501/test",
+                true,
+                true,
+                |args| {
+                    commands.push(
+                        args.iter()
+                            .map(|arg| arg.to_string_lossy().into_owned())
+                            .collect::<Vec<_>>(),
+                    );
+                    Ok(std::process::Output {
+                        status: std::process::ExitStatus::from_raw(0),
+                        stdout: Vec::new(),
+                        stderr: Vec::new(),
+                    })
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::metadata(&plist).unwrap().ino(),
+                original,
+                "a rebuild must not replace an unchanged launch-agent file"
+            );
+        }
+        assert_eq!(
+            commands,
+            vec![vec!["kickstart", "-k", "gui/501/test"]; 3],
+            "a rebuild should restart the idle host without unregistering it"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn first_install_and_changed_definitions_still_register() {
+        use std::os::unix::process::ExitStatusExt;
+        for (same, loaded, expected) in [
+            (false, false, vec!["bootstrap"]),
+            (false, true, vec!["bootout", "bootstrap"]),
+            (true, false, vec!["bootstrap"]),
+        ] {
+            let dir = std::env::temp_dir().join(format!(
+                "klide-registration-{}-{same}-{loaded}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let plist = dir.join("service.plist");
+            if same || loaded {
+                std::fs::write(&plist, if same { "definition" } else { "old definition" }).unwrap();
+            }
+            let mut commands = Vec::new();
+            activate_registration(
+                &plist,
+                "definition",
+                "gui/501",
+                "gui/501/test",
+                same,
+                loaded,
+                |args| {
+                    commands.push(args[0].to_string_lossy().into_owned());
+                    Ok(std::process::Output {
+                        status: std::process::ExitStatus::from_raw(0),
+                        stdout: Vec::new(),
+                        stderr: Vec::new(),
+                    })
+                },
+            )
+            .unwrap();
+            assert_eq!(commands, expected);
+            assert_eq!(std::fs::read_to_string(&plist).unwrap(), "definition");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
     #[test]
     fn launch_agent_escapes_paths_and_uses_only_non_secret_environment() {
         let plist = definition(
