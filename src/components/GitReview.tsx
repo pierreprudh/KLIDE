@@ -90,6 +90,7 @@ import {
   type GitBranch,
   type GitTag,
   type GitLog,
+  type GitDiff,
   type GitStash,
   type PullRequest,
   type PullRequestDetails,
@@ -147,7 +148,7 @@ type DiffViewerProps = {
   onOpenFile?: (path: string) => void;
 };
 
-type LoadedDiff = { path: string; diff: string; additions: number; deletions: number };
+type LoadedDiff = GitDiff;
 
 /** The section's diffs stacked, one card per file with room between them;
  *  picking a file in the list scrolls its card into view. */
@@ -194,6 +195,10 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
   const blocks = useMemo(() => {
     const out: DiffBlock[] = [];
     for (const d of diffs ?? []) {
+      if (d.image) {
+        out.push({ kind: "file", path: d.path });
+        continue;
+      }
       if (!d.diff.trim()) continue;
       const parsed = parseDiffBlocks(d.diff.replace(/\n$/, "").split("\n"));
       // A single-file diff may arrive without its `diff --git` header — the
@@ -203,6 +208,8 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
     }
     return out;
   }, [diffs]);
+
+  const imageDiffs = useMemo(() => new Map((diffs ?? []).flatMap(d => d.image ? [[d.path, d.image] as const] : [])), [diffs]);
 
   const fileCounts = useMemo(() => {
     const byPath = new Map(files.map((f) => [f.path, f.status]));
@@ -292,6 +299,7 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
           blocks={blocks}
           limit={DIFF_RENDER_LIMIT}
           fileCounts={fileCounts}
+          imageDiffs={imageDiffs}
           inset={false}
           onOpenFile={onOpenFile}
           onLineComment={(c) => void sendLineComment(c)}

@@ -28,7 +28,11 @@ export type GitDiff = {
   diff: string;
   additions: number;
   deletions: number;
+  image?: GitImageDiff;
 };
+
+export type GitImageSide = { dataUri: string | null; error: string | null };
+export type GitImageDiff = { before: GitImageSide | null; after: GitImageSide | null };
 
 /** Mirrors `GitBranchDiffFile`. */
 export type GitBranchDiffFile = {
@@ -214,8 +218,8 @@ export function gitDiscard(workspaceRoot: string, path: string): Promise<void> {
   return invoke("git_discard", { workspaceRoot, path });
 }
 
-/** One file's diff, working tree or index. Untracked files come back as a
- *  synthesized new-file diff (with a hunk header), not empty. */
+/** One file's diff, working tree or index. Images return before/after data
+ *  URIs; untracked text files return a synthesized new-file diff. */
 export function gitDiff(workspaceRoot: string, path: string, staged: boolean): Promise<GitDiff> {
   return invoke<GitDiff>("git_diff", { workspaceRoot, path, staged });
 }
