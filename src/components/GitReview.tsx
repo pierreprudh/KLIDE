@@ -46,6 +46,7 @@ import {
   prCounts as derivePrCounts,
   prReadinessSignals,
   prCheckPresentation,
+  prCheckSummary,
   type PrSignalTone,
   pullOutcome,
   pushOutcome,
@@ -872,6 +873,7 @@ function PRCard({ pr, selected, detail, detailLoading, nowMs, onSelect, onOpen, 
               )}
             </div>
           </div>
+          <PRCompactChecks checks={pr.checks} />
           {pr.commentAuthors.length > 0 && (
             <div style={{ marginTop: 9 }}>
               <CommenterStack authors={pr.commentAuthors} />
@@ -991,16 +993,24 @@ const readinessColor = (tone: PrSignalTone) => ({
   success: "var(--success)", muted: "var(--fg-dim)",
 })[tone];
 
+function PRCompactChecks({ checks }: Pick<PullRequest, "checks">) {
+  const status = prCheckSummary(checks);
+  return (
+    <div aria-label={`Checks: ${status.value}`} title="Latest GitHub checks for the PR head"
+      style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 6, marginTop: 7, fontSize: 11, lineHeight: 1.5 }}>
+      <span style={{ color: "var(--fg-dim)" }}>Checks</span>
+      {status.total > 0 && <span style={{ color: "var(--fg-subtle)", fontVariantNumeric: "tabular-nums" }}>{status.passed}/{status.total}</span>}
+      <span style={{ color: readinessColor(status.tone), fontWeight: status.tone === "muted" ? 400 : 500 }}>{status.summary}</span>
+    </div>
+  );
+}
+
 function PRMergeReadiness({ detail }: { detail: PullRequestDetails }) {
   const [checksOpen, setChecksOpen] = useState(false);
   const merged = detail.badge === "merged";
   const [checks, review, conflicts] = prReadinessSignals(detail);
   const reportedChecks = detail.checks ?? [];
-  const passed = reportedChecks.filter(check => check.state === "SUCCESS").length;
-  const failed = reportedChecks.filter(check => prCheckPresentation(check.state).tone === "attention").length;
-  const pending = reportedChecks.filter(check => prCheckPresentation(check.state).tone === "quiet").length;
-  const checkSummary = failed ? `${failed} failed` : pending ? `${pending} pending`
-    : passed === reportedChecks.length ? "Passed" : "See results";
+  const { passed, summary: checkSummary } = prCheckSummary(detail.checks);
   const rowStyle = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minHeight: 28 } as const;
   const reviewers = [...new Set([...(detail.requestedReviewers ?? []), ...(detail.reviewedBy ?? [])])];
   return (

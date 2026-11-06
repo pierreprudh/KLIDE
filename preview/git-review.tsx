@@ -52,10 +52,13 @@ const DIFF = `diff --git a/CONTEXT.md b/CONTEXT.md
  The domain language of Klide — a minimalist AI-first IDE. Reviews use this vocabulary; code drifts, not it.
  
  ## Core product principle: harness and model independence`;
+const previewChecks = params.has("cancelled")
+  ? ["SUCCESS", "SUCCESS", "CANCELLED", "SUCCESS", "SUCCESS"].map((state, index) => ({ name: ["Frontend tests and build", "Review", "Rust tests", "Rust on ubuntu-latest", "Rust on windows-latest"][index], state }))
+  : [{ name: "Build", state: "SUCCESS" }, { name: "Tests", state: "FAILURE" }, { name: "Preview deployment", state: "IN_PROGRESS" }];
 const pr = (n: number, title: string, badge: "open" | "draft" | "merged") => ({
   number: n, title, state: badge === "merged" ? "MERGED" : "OPEN", isDraft: badge === "draft", author: "pierreprudh", headRef: `polish/pr-${n}`, baseRef: "main",
   url: `https://github.com/pierreprudh/KLIDE/pull/${n}`, additions: 120, deletions: 34, changedFiles: 4, comments: 2,
-  commentAuthors: ["pierreprudh"], updatedAtMs: Date.now() - n * 60000, badge, isCurrentBranch: false,
+  commentAuthors: ["pierreprudh"], updatedAtMs: Date.now() - n * 60000, badge, isCurrentBranch: false, checks: n === 321 ? previewChecks : [],
 });
 const replies: Record<string, unknown> = {
   git_status: status,
@@ -81,7 +84,7 @@ diff --git a/src/session.ts b/src/session.ts
     mergeable: "MERGEABLE", reviewDecision,
     requestedReviewers: reviewState === "assigned" ? ["alice"] : [],
     reviewedBy: reviewState === "done" || reviewState === "changes" || reviewState === "merged" ? ["alice"] : [],
-    checks: [{ name: "Build", state: "SUCCESS" }, { name: "Tests", state: "FAILURE" }, { name: "Preview deployment", state: "IN_PROGRESS" }],
+    checks: previewChecks,
     commits: [], commentThread: [], createdAtMs: Date.now() - 86400000,
   },
   git_pr_list: [pr(321, "Git Review on rounded cards", reviewState === "merged" ? "merged" : "open"), pr(318, "Commit graph density zoom", "draft")],

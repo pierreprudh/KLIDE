@@ -33,6 +33,8 @@ pub(crate) struct PullRequest {
     badge: String,
     /// True if this PR targets the current branch.
     is_current_branch: bool,
+    /// Latest GitHub PR-head checks, also shown while the card is collapsed.
+    checks: Option<Vec<PrCheck>>,
 }
 
 #[derive(serde::Serialize)]
@@ -522,6 +524,7 @@ fn parse_pr_list(json: &str, current_branch: &str) -> Result<Vec<PullRequest>, S
                 .unwrap_or(0) as i32,
             comments,
             comment_authors,
+            checks: parse_pr_checks(obj.get("statusCheckRollup")),
             updated_at_ms: ms_from_rfc3339(obj.get("updatedAt")),
         });
     }
@@ -529,6 +532,26 @@ fn parse_pr_list(json: &str, current_branch: &str) -> Result<Vec<PullRequest>, S
     // reads chronologically regardless of the open/merged/closed mix.
     prs.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
     Ok(prs)
+}
+
+fn parse_pr_checks(value: Option<&serde_json::Value>) -> Option<Vec<PrCheck>> {
+    value.and_then(|v| v.as_array()).map(|checks| {
+        checks.iter().map(|check| {
+            let field = |key| check.get(key).and_then(|v| v.as_str()).unwrap_or("");
+            let legacy = field("__typename") == "StatusContext";
+            let state = if legacy {
+                field("state")
+            } else if field("status") == "COMPLETED" {
+                field("conclusion")
+            } else {
+                field("status")
+            };
+            PrCheck {
+                name: if legacy { field("context") } else { field("name") }.to_string(),
+                state: if state.is_empty() { "UNKNOWN" } else { state }.to_string(),
+            }
+        }).collect()
+    })
 }
 
 /// Parse `gh pr view --json …` output. Pure — fixture-tested below.
@@ -646,23 +669,7 @@ fn parse_pr_view(json: &str, number: u32) -> Result<PullRequestDetails, String> 
             }
             logins
         }).unwrap_or_default(),
-        checks: obj.get("statusCheckRollup").and_then(|v| v.as_array()).map(|checks| {
-            checks.iter().map(|check| {
-                let field = |key| check.get(key).and_then(|v| v.as_str()).unwrap_or("");
-                let legacy = field("__typename") == "StatusContext";
-                let state = if legacy {
-                    field("state")
-                } else if field("status") == "COMPLETED" {
-                    field("conclusion")
-                } else {
-                    field("status")
-                };
-                PrCheck {
-                    name: if legacy { field("context") } else { field("name") }.to_string(),
-                    state: if state.is_empty() { "UNKNOWN" } else { state }.to_string(),
-                }
-            }).collect()
-        }),
+        checks: parse_pr_checks(obj.get("statusCheckRollup")),
         created_at_ms: ms_from_rfc3339(obj.get("createdAt")),
         updated_at_ms: ms_from_rfc3339(obj.get("updatedAt")),
     })
@@ -868,7 +875,7 @@ pub(crate) async fn git_pr_list(workspace_root: String) -> Result<Vec<PullReques
                 "--limit",
                 "50",
                 "--json",
-                "number,title,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,comments,updatedAt",
+                "number,title,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,comments,statusCheckRollup,updatedAt",
             ],
         )?;
         let current_branch = git_output(&workspace_root, &["branch", "--show-current"])
@@ -1150,6 +1157,27 @@ git.example.com:
         assert_eq!(prs[0].badge, "open");
         assert_eq!(prs[0].updated_at_ms, 0);
         assert!(!prs[0].is_current_branch);
+    }
+
+    #[test]
+    fn pr_list_includes_current_head_checks_before_expansion() {
+        let prs = parse_pr_list(r#"[
+            {"number":429,"state":"MERGED","statusCheckRollup":[
+                {"__typename":"CheckRun","name":"Frontend","status":"COMPLETED","conclusion":"SUCCESS"},
+                {"__typename":"CheckRun","name":"Rust tests","status":"COMPLETED","conclusion":"CANCELLED"},
+                {"__typename":"StatusContext","context":"deploy","state":"PENDING"}
+            ]},
+            {"number":430,"statusCheckRollup":[]},
+            {"number":431}
+        ]"#, "").unwrap();
+        let checks = prs[0].checks.as_ref().unwrap();
+        assert_eq!(checks.len(), 3);
+        assert_eq!(checks[0].state, "SUCCESS");
+        assert_eq!(checks[1].name, "Rust tests");
+        assert_eq!(checks[1].state, "CANCELLED");
+        assert_eq!(checks[2].state, "PENDING");
+        assert!(prs[1].checks.as_ref().unwrap().is_empty());
+        assert!(prs[2].checks.is_none());
     }
 
     const PR_VIEW_JSON: &str = r#"{
