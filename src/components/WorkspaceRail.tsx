@@ -1567,29 +1567,12 @@ export function WorkspaceRail({
             onCloneRepo={onCloneRepo}
           />
 
-          {/* New task and search share a line. Searching, the field takes
-              the line over, so opening it never moves the list it filters. */}
-          <div className="klide-rail-actions">
-            {searchOpen ? (
-              <input
-                ref={searchRef}
-                className="klide-focus-brand-search"
-                type="search"
-                name="conversation-search"
-                aria-label="Search conversations"
-                autoComplete="off"
-                spellCheck={false}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setSearchOpen(false);
-                    setQuery("");
-                  }
-                }}
-                placeholder="Search conversations…"
-              />
-            ) : newTask ? (
+          {/* New task and search share a line. Opening search, New task
+              folds to its + and the field grows in from the search button
+              beside it — the same line, so the list it filters never moves.
+              Both are always mounted: the fold is a transition, not a swap. */}
+          <div className="klide-rail-actions" data-searching={searchOpen || undefined}>
+            {newTask ? (
               <NavRow
                 icon={newTask.icon}
                 label={newTask.label}
@@ -1599,9 +1582,26 @@ export function WorkspaceRail({
                   newTask.onClick(meta);
                 }}
               />
-            ) : (
-              <span className="klide-rail-actions-fill" />
-            )}
+            ) : null}
+            <input
+              ref={searchRef}
+              className="klide-focus-brand-search"
+              type="search"
+              name="conversation-search"
+              aria-label="Search conversations"
+              autoComplete="off"
+              spellCheck={false}
+              value={query}
+              inert={!searchOpen}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setSearchOpen(false);
+                  setQuery("");
+                }
+              }}
+              placeholder="Search conversations…"
+            />
             <button
               type="button"
               className="klide-focus-brand-action"
