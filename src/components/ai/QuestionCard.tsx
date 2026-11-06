@@ -210,17 +210,30 @@ function ChoiceRows({ choices, onChoose, current, flush, labels, other, onOther,
     if (!autoFocus) return;
     const active = document.activeElement as HTMLElement | null;
     const typing = !!active && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
-    if (!typing) listRef.current?.focus({ preventScroll: true });
+    if (!typing) listRef.current?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
   }, [autoFocus]);
   return (
     <div
       ref={listRef}
-      role="listbox"
+      role="group"
       aria-label="Answers"
       tabIndex={-1}
       onKeyDown={(e) => {
         // The "Something else…" box takes its own keys; a letter there is text.
         if ((e.target as HTMLElement).tagName === "TEXTAREA") return;
+        // These are immediate-answer buttons, not a selection widget. Tab
+        // visits each action; arrows are an additional way to scan the rows.
+        if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+          const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(":scope > button"));
+          const index = buttons.findIndex(button => button === e.target);
+          if (index >= 0) {
+            e.preventDefault();
+            const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1
+              : (index + (e.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+            buttons[next]?.focus();
+          }
+          return;
+        }
         const at = choiceIndexForKey(e);
         if (at >= 0 && at < choices.options.length) {
           e.preventDefault();
@@ -243,8 +256,6 @@ function ChoiceRows({ choices, onChoose, current, flush, labels, other, onOther,
           <button
             key={option}
             type="button"
-            role="option"
-            aria-selected={option === current}
             data-current={option === current ? "1" : undefined}
             className="klide-choice-row"
             onClick={() => onChoose(option)}

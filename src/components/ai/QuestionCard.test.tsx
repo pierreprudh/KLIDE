@@ -34,6 +34,11 @@ describe("QuestionCard", () => {
     expect(html).toContain(`<span style="min-width:0;overflow-wrap:anywhere">${options[0]}</span>`);
     expect(html).not.toContain("white-space:nowrap");
     expect(html).toContain("Something else…");
+    // Choosing an answer performs an action immediately; expose ordinary
+    // buttons rather than promising listbox selection semantics.
+    expect(html).toContain('role="group" aria-label="Answers"');
+    expect(html).not.toContain('role="listbox"');
+    expect(html).not.toContain('role="option"');
   });
 
   it("keeps model lists mono and takes no typed answer on a dispatch", () => {

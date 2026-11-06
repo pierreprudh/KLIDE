@@ -13,16 +13,20 @@ const q = new URLSearchParams(location.search);
 
 function Card(props: { question: string; options?: string[]; typed?: string }) {
   const [answer, setAnswer] = useState(props.typed ?? "");
+  const [result, setResult] = useState("");
   return (
+    <div>
     <QuestionCard
       question={props.question}
       choices={props.options ? { options: props.options } : undefined}
       answer={answer}
       onAnswerChange={setAnswer}
-      onSubmit={() => {}}
-      onChoose={() => {}}
-      onSkip={() => {}}
+      onSubmit={() => setResult(`Sent: ${answer}`)}
+      onChoose={(choice) => setResult(`Chosen: ${choice}`)}
+      onSkip={() => setResult("Skipped")}
     />
+    {result && <p role="status" style={{ margin: "4px 14px 0", fontSize: 13 }}>{result}</p>}
+    </div>
   );
 }
 
