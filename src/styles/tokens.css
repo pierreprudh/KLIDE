@@ -5963,6 +5963,31 @@ input.klide-rail-search:focus-visible {
   }
 }
 
+/* Waiting titles carry the Working label's light sweep, slowed down with a
+   broad crest and a readable base. Paint the text layer itself for WebKit;
+   let a title rewrite finish before starting the continuous sweep. */
+.klide-focus-convo-title[data-waiting="true"]:not([data-swapping]) .klide-focus-convo-title-in {
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--fg-strong) 80%, var(--fg-subtle)) 30%,
+    color-mix(in srgb, var(--accent) 65%, var(--fg-strong)) 50%,
+    color-mix(in srgb, var(--fg-strong) 80%, var(--fg-subtle)) 70%
+  );
+  background-size: 250% 100%;
+  animation: ai-shimmer-text 2.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-focus-convo-title[data-waiting="true"]:not([data-swapping]) .klide-focus-convo-title-in {
+    animation: none;
+    background-image: none;
+    color: var(--fg-strong);
+  }
+}
+
 /* Where you are: the row lifts — the full fill and a hairline, its name in
    full ink. */
 .klide-focus-convo-row[data-selected="true"] {
