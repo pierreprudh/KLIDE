@@ -5451,10 +5451,10 @@ button:focus-visible .menu-leadout {
 
 /* New task and search on one line. Opening search, New task folds to its +
    (its words fade, its box narrows to a square) while the field grows in
-   beside it; closing plays it back. One curve, one duration, so the two
-   read as one movement. */
+   beside it; closing plays it back. One long decelerating curve for the
+   geometry, shorter fades riding on it, so the two read as one movement. */
 .klide-rail-actions {
-  --rail-search-motion: 420ms cubic-bezier(0.45, 0, 0.2, 1);
+  --rail-search-move: 560ms cubic-bezier(0.32, 0.72, 0, 1);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -5466,13 +5466,13 @@ button:focus-visible .menu-leadout {
   min-width: var(--rail-row-h);
   overflow: hidden;
   transition:
-    flex-grow var(--rail-search-motion),
-    padding var(--rail-search-motion),
+    flex-grow var(--rail-search-move),
+    padding var(--rail-search-move),
     var(--rail-fill-motion);
 }
 
 .klide-rail-actions > .klide-focus-nav-row .klide-focus-nav-label {
-  transition: opacity 240ms cubic-bezier(0.45, 0, 0.2, 1) 120ms;
+  transition: opacity 280ms var(--ease-out) 180ms;
 }
 
 .klide-rail-actions[data-searching] > .klide-focus-nav-row {
@@ -5483,38 +5483,59 @@ button:focus-visible .menu-leadout {
 
 .klide-rail-actions[data-searching] > .klide-focus-nav-row .klide-focus-nav-label {
   opacity: 0;
-  transition-delay: 0ms;
-  transition-duration: 160ms;
+  transition: opacity 160ms var(--ease-out);
 }
 
-.klide-rail-actions > .klide-focus-brand-search {
+/* The field is a soft fill in the rows' own shape — no box, no hairline, no
+   ring: the caret and the fill say it is a field. */
+.klide-rail-search {
   flex: 0 1 0;
   min-width: 0;
   height: var(--rail-row-h);
-  padding-inline: 0;
-  /* Closed, it takes back the gap and its own hairline, so New task and the
-     search button sit exactly where they did before. */
-  margin-left: -6px;
-  border-color: transparent;
+  padding: 0;
+  /* Closed, it takes back the gap before it, so New task and the search
+     button sit exactly where they did. */
+  margin-left: -4px;
+  border: 0;
+  border-radius: var(--radius-lg);
   background: transparent;
+  color: var(--fg-strong);
+  font-family: inherit;
+  font-size: 12.5px;
   opacity: 0;
   transition:
-    flex-grow var(--rail-search-motion),
-    padding var(--rail-search-motion),
-    margin var(--rail-search-motion),
-    opacity 260ms cubic-bezier(0.45, 0, 0.2, 1),
-    border-color var(--rail-search-motion),
-    background var(--rail-search-motion);
+    flex-grow var(--rail-search-move),
+    padding var(--rail-search-move),
+    margin var(--rail-search-move),
+    background 280ms var(--ease-out),
+    opacity 200ms var(--ease-out);
 }
 
-.klide-rail-actions[data-searching] > .klide-focus-brand-search {
+.klide-rail-actions[data-searching] > .klide-rail-search {
   flex-grow: 1;
   padding-inline: 10px;
   margin-left: 0;
-  border-color: var(--border);
-  background: var(--bg);
+  background: var(--rail-fill-active);
   opacity: 1;
-  transition-delay: 0ms, 0ms, 0ms, 80ms, 0ms, 0ms;
+  transition:
+    flex-grow var(--rail-search-move),
+    padding var(--rail-search-move),
+    margin var(--rail-search-move),
+    background 320ms var(--ease-out) 60ms,
+    opacity 320ms var(--ease-out) 100ms;
+}
+
+.klide-rail-search::placeholder {
+  color: var(--fg-dim);
+}
+
+.klide-rail-search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input.klide-rail-search:focus-visible {
+  outline: none !important;
 }
 
 .klide-rail-actions > .klide-focus-brand-action {
@@ -5522,6 +5543,16 @@ button:focus-visible .menu-leadout {
   width: var(--rail-row-h);
   height: var(--rail-row-h);
   border-radius: var(--radius-lg);
+}
+
+/* Open, the close button is just its ✕ — the field beside it carries the
+   fill. */
+.klide-rail-actions[data-searching] > .klide-focus-brand-action {
+  background: none;
+}
+
+.klide-rail-actions[data-searching] > .klide-focus-brand-action:hover {
+  background: var(--rail-fill-hover);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -8796,12 +8827,6 @@ button:focus-visible .menu-leadout {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
-}
-
-/* The rail's search field reveals as chrome; rows lean on background/color
-   transitions — no per-row keyframes. */
-.klide-focus-brand-search {
-  animation: chrome-enter 320ms var(--ease-soft) both;
 }
 
 @media (max-width: 1080px) {
