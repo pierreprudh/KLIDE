@@ -5509,7 +5509,9 @@ button:focus-visible .menu-leadout {
   padding: 0 calc(var(--rail-row-h) + 2px) 0 10px;
   border: 0;
   border-radius: var(--radius-lg);
-  background: var(--rail-fill-active);
+  /* Neutral, never the theme's selection fill: Cerulean paints the active
+     row blue, and a field is not a selection. */
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--fg-strong);
   font-family: inherit;
   font-size: 12.5px;
