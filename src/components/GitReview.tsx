@@ -1001,14 +1001,29 @@ const readinessColor = (tone: PrSignalTone) => ({
   success: "var(--success)", muted: "var(--fg-dim)",
 })[tone];
 
-function PRCompactChecks({ checks }: Pick<PullRequest, "checks">) {
+function PRCheckResult({ checks, showCount = true }: Pick<PullRequest, "checks"> & { showCount?: boolean }) {
   const status = prCheckSummary(checks);
   return (
+    <span style={{ display: "inline-flex", flexWrap: "wrap", justifyContent: "flex-end", alignItems: "baseline", columnGap: 8, rowGap: 2 }}>
+      {showCount && status.total > 0 && <span title={`${status.passed} of ${status.total} checks passed`} style={{ color: "var(--fg-subtle)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{status.passed}/{status.total}</span>}
+      {status.summary.split(" · ").map(label => (
+        <span key={label} style={{ color: readinessColor(status.tone), fontWeight: status.tone === "muted" ? 400 : 500, whiteSpace: "nowrap" }}>{label}</span>
+      ))}
+    </span>
+  );
+}
+
+function PRCompactChecks({ checks }: Pick<PullRequest, "checks">) {
+  const status = prCheckSummary(checks);
+  const hasCancellation = checks?.some(check => check.state === "CANCELLED") ?? false;
+  return (
     <div aria-label={`Checks: ${status.value}`} title="Latest GitHub checks for the PR head"
-      style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 6, marginTop: 7, fontSize: 11, lineHeight: 1.5 }}>
-      <span style={{ color: "var(--fg-dim)" }}>Checks</span>
-      {status.total > 0 && <span style={{ color: "var(--fg-subtle)", fontVariantNumeric: "tabular-nums" }}>{status.passed}/{status.total}</span>}
-      <span style={{ color: readinessColor(status.tone), fontWeight: status.tone === "muted" ? 400 : 500 }}>{status.summary}</span>
+      style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginTop: 8, fontSize: 11, lineHeight: 1.5 }}>
+      <span style={{ display: "inline-flex", alignItems: "baseline", gap: 8, flexShrink: 0 }}>
+        <span style={{ color: "var(--fg-dim)" }}>Checks</span>
+        {hasCancellation && <span title={`${status.passed} of ${status.total} checks passed`} style={{ color: "var(--fg-subtle)", fontVariantNumeric: "tabular-nums" }}>{status.passed}/{status.total}</span>}
+      </span>
+      <PRCheckResult checks={checks} showCount={!hasCancellation} />
     </div>
   );
 }
@@ -1018,7 +1033,6 @@ function PRMergeReadiness({ detail }: { detail: PullRequestDetails }) {
   const merged = detail.badge === "merged";
   const [checks, review, conflicts] = prReadinessSignals(detail);
   const reportedChecks = detail.checks ?? [];
-  const { passed, summary: checkSummary } = prCheckSummary(detail.checks);
   const rowStyle = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, minHeight: 28 } as const;
   const reviewers = [...new Set([...(detail.requestedReviewers ?? []), ...(detail.reviewedBy ?? [])])];
   return (
@@ -1042,10 +1056,7 @@ function PRMergeReadiness({ detail }: { detail: PullRequestDetails }) {
         <details open={checksOpen} onToggle={event => setChecksOpen(event.currentTarget.open)}>
           <summary role="button" aria-expanded={checksOpen} aria-label={`Checks: ${checks.value}`} style={{ ...rowStyle, cursor: "pointer", listStyle: "none" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--fg-subtle)" }}>Checks <ChevronIcon open={checksOpen} size={12} style={{ color: "var(--fg-dim)" }} /></span>
-            <span style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-              <span title={`${passed} of ${reportedChecks.length} checks passed`} style={{ fontVariantNumeric: "tabular-nums", color: "var(--fg-dim)", fontSize: 10.5 }}>{passed}/{reportedChecks.length}</span>
-              <span style={{ color: readinessColor(checks.tone), fontWeight: 500 }}>{checkSummary}</span>
-            </span>
+            <PRCheckResult checks={detail.checks} />
           </summary>
           <div style={{ borderLeft: "1px solid var(--border)", margin: "2px 0 10px 2px", paddingLeft: 10, display: "grid", gap: 7 }}>
             {reportedChecks.map((check, index) => {
