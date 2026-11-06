@@ -5747,6 +5747,26 @@ input.klide-rail-search:focus-visible {
   color: var(--fg-strong);
 }
 
+/* By agent: the group you're in reads like a hovered heading; the others
+   step back, their marks quieted too so a brand colour doesn't pull focus. */
+.klide-rail-section-head[data-current] {
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-slower) var(--ease-soft);
+}
+
+.klide-rail-section-head[data-current="true"] {
+  color: var(--fg-strong);
+}
+
+.klide-rail-section-icon {
+  transition: opacity var(--motion-slower) var(--ease-soft);
+}
+
+.klide-rail-section-head[data-current="false"]:not(:hover) .klide-rail-section-icon {
+  opacity: 0.5;
+}
+
 /* Needs you's heading speaks in the waiting tone, like its rows' leads. */
 .klide-rail-section-head[data-tone="needs"] {
   color: var(--warning);

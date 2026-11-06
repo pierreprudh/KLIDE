@@ -1002,6 +1002,7 @@ function RailSection({
   open,
   onToggle,
   tone,
+  current,
   children,
 }: {
   label: string;
@@ -1011,6 +1012,9 @@ function RailSection({
   onToggle: () => void;
   /** Needs you's heading speaks in the waiting tone. */
   tone?: "needs";
+  /** By agent: the group holding the conversation you're in reads at full
+   *  strength, the others quiet — `undefined` when no group is current. */
+  current?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -1020,6 +1024,7 @@ function RailSection({
         className="klide-rail-section-head"
         aria-expanded={open}
         data-tone={tone}
+        data-current={current === undefined ? undefined : String(current)}
         onClick={onToggle}
       >
         {icon ? <span className="klide-rail-section-icon" aria-hidden="true">{icon}</span> : null}
@@ -1427,16 +1432,23 @@ export function WorkspaceRail({
       <div className="klide-rail-list">{filtered.map((c) => row(c, { showPin: true }))}</div>
     );
   } else if (view === "agent") {
+    const currentAgentProvider = agentGroups.find((g) =>
+      g.conversations.some((c) => selectedIds.has(c.id)),
+    )?.provider;
     conversationBody = (
       <>
         {agentGroups.map((group) => {
           const key = `agent:${group.provider}`;
+          const current = currentAgentProvider === undefined
+            ? undefined
+            : group.provider === currentAgentProvider;
           const ordered = orderPinnedFirst(group.conversations, pinnedIds);
           return (
             <RailSection
               key={key}
               label={providerName(group.provider)}
               icon={<ProviderLogo id={group.provider} size={13} />}
+              current={current}
               open={!folded.has(key)}
               onToggle={() => toggleFolded(key)}
             >
