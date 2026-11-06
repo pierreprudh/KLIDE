@@ -5561,6 +5561,12 @@ input.klide-rail-search:focus-visible {
   box-shadow: none;
 }
 
+/* WebKit on macOS paints the caret in the system accent — blue — unless told
+   otherwise; the field's caret is the text's own ink. */
+.klide-rail-search {
+  caret-color: var(--fg-strong);
+}
+
 /* The button stays above the field, in the same square the field grows
    from. */
 .klide-rail-actions > .klide-focus-brand-action {

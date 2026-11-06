@@ -8,6 +8,8 @@
 .conversation-search-bar .conversation-search-input,
 .conversation-search-bar .conversation-search-input:focus,
 .conversation-search-bar .conversation-search-input:focus-visible { appearance: none; -webkit-appearance: none; border: 0; outline: none; box-shadow: none; border-radius: 0; }
+/* WebKit on macOS paints the caret in the system accent (blue) by default. */
+.conversation-search-input { caret-color: var(--fg-strong); }
 .conversation-search-input::placeholder { color: var(--fg-subtle); }
 .conversation-search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
 .conversation-message-target { scroll-margin-top: 100px; }
