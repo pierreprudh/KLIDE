@@ -768,7 +768,11 @@ function ConvoRow({
           {lead}
           <span className="klide-rail-convo-text">
             <span className="klide-rail-convo-line">
-              <span className="klide-focus-convo-title" data-swapping={swap ? true : undefined}>
+              <span
+                className="klide-focus-convo-title"
+                data-waiting={needsYou || undefined}
+                data-swapping={swap ? true : undefined}
+              >
                 {swap ? (
                   <span
                     key={`out-${swap.key}`}
