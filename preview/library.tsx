@@ -29,6 +29,7 @@ const proposal = (draftId: string, title: string) => ({
   createdAtMs: now - 3600e3, workspaceRoot: root, why: "Seen in two runs this week.", evidence: "", evidenceHash: "x",
 });
 mockIPC((command) => {
+  if (command === "shared_notes_read") return { revision: 1, sets: [{ id: "fixture-foundations", title: "Working conventions", body: "Keep the interface calm and keyboard accessible.", conversationIds: [], archived: false, updatedAtMs: now }] };
   if (command === "memory_list") return [entry("durable", "Durable writes go through durable.rs", 3), entry("agent", "A conversation keeps its first agent", 9)];
   if (command === "memory_proposals_list") return [proposal("p1", "Mission attempts fast-forward on accept"), proposal("p2", "Never stage peer hunks with -U0"), proposal("p3", "Ollama num_ctx is the gauge's window")];
   if (command === "app_user_info") return { username: "Pierre", hostname: "MacBook-Pro" };

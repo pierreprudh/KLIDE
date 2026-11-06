@@ -252,9 +252,25 @@ function RailEdge({
       <div
         className="klide-rail-edge"
         role="separator"
+        tabIndex={0}
         aria-orientation="vertical"
         aria-label={collapsed ? "Show the sidebar" : "Resize the sidebar"}
+        aria-valuemin={0}
+        aria-valuemax={RAIL_MAX_WIDTH}
+        aria-valuenow={collapsed ? 0 : width}
+        aria-valuetext={collapsed ? "Collapsed" : `${width} pixels`}
         title={collapsed ? "Drag to show the sidebar" : "Drag to resize · double-click to fold"}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onToggle();
+          } else if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+            e.preventDefault();
+            const next = e.key === "Home" ? RAIL_MIN_WIDTH : e.key === "End" ? RAIL_MAX_WIDTH
+              : collapsed ? RAIL_MIN_WIDTH : width + (e.key === "ArrowRight" ? 10 : -10);
+            onEdgeReleased(Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, next)), collapsed);
+          }
+        }}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           e.preventDefault();

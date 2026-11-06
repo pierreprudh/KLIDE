@@ -1,6 +1,7 @@
 import "./sharedNotes.css";
 import "./memoryPanel.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useModalFocus } from "../hooks/useModalFocus";
 import { MemoryPanel } from "./MemoryPanel";
 import { Z } from "../zLayers";
 import { LibraryIcon } from "../icons";
@@ -80,6 +81,7 @@ export function LibraryModal({
   onClose,
 }: Props) {
   const modalRoot = useRef<HTMLDivElement>(null);
+  useModalFocus(modalRoot, open);
   const [section, setSectionState] = useState(initialSection);
   function setSection(next: LibrarySection) {
     setSectionState(next);
@@ -116,6 +118,7 @@ export function LibraryModal({
   return (
     <div
       ref={modalRoot}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label="Library"
