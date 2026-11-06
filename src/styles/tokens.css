@@ -5825,7 +5825,7 @@ input.klide-rail-search:focus-visible {
   padding-block: 4px;
 }
 
-/* What is happening, at the lead — or the agent's mark when nothing is. */
+/* The agent's mark, or an attention mark when waiting on you. */
 .klide-rail-convo-lead {
   width: var(--rail-icon);
   height: 16px;
@@ -5956,6 +5956,14 @@ input.klide-rail-search:focus-visible {
    what means "here". Nothing is added to the row: no dot, no badge, no pill. */
 .klide-focus-convo-row[data-open="true"] {
   color: var(--fg-strong);
+}
+
+.klide-focus-convo-live {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .klide-focus-convo-time {

@@ -682,10 +682,6 @@ function ConvoRow({
     <span className="klide-rail-convo-lead" data-tone="needs" aria-hidden="true">
       <NeedsYouIcon size={15} />
     </span>
-  ) : running ? (
-    <span className="klide-rail-convo-lead" aria-hidden="true">
-      <DotGridLoader size={11} color="var(--accent)" label="Running" />
-    </span>
   ) : (
     <span className="klide-rail-convo-lead" title={mark?.label} aria-hidden="true">
       {mark?.node}
@@ -787,10 +783,14 @@ function ConvoRow({
                   {displayTitle}
                 </span>
               </span>
-              {/* Finished while you were elsewhere: one accent point in the
-                  trailing slot until you open it — the only dot the rail
-                  draws. The lead keeps the agent's mark. */}
-              {finishedUnseen ? (
+              {/* Working replaces the age, as it does inside the chat; the
+                  lead keeps the agent's mark. Waiting on you takes priority.
+                  Once finished off screen, one point stays until opened. */}
+              {running && !needsYou ? (
+                <span className="klide-focus-convo-live">
+                  <DotGridLoader size={11} color="var(--accent)" label="Working" />
+                </span>
+              ) : finishedUnseen ? (
                 <span className="klide-focus-convo-time klide-focus-convo-done" aria-label="Finished">
                   <span className="klide-focus-convo-done-dot" />
                 </span>
