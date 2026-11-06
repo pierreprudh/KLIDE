@@ -5449,28 +5449,86 @@ button:focus-visible .menu-leadout {
   line-height: 1.4;
 }
 
-/* New task and search on one line. Searching, the field takes the line. */
+/* New task and search on one line. Opening search, New task folds to its +
+   (its words fade, its box narrows to a square) while the field grows in
+   beside it; closing plays it back. One curve, one duration, so the two
+   read as one movement. */
 .klide-rail-actions {
+  --rail-search-motion: 420ms cubic-bezier(0.45, 0, 0.2, 1);
   display: flex;
   align-items: center;
   gap: 4px;
   margin-bottom: var(--rail-row-gap);
 }
 
-.klide-rail-actions > .klide-focus-nav-row,
-.klide-rail-actions-fill {
-  flex: 1;
-  min-width: 0;
+.klide-rail-actions > .klide-focus-nav-row {
+  flex: 1 1 0;
+  min-width: var(--rail-row-h);
+  overflow: hidden;
+  transition:
+    flex-grow var(--rail-search-motion),
+    padding var(--rail-search-motion),
+    var(--rail-fill-motion);
+}
+
+.klide-rail-actions > .klide-focus-nav-row .klide-focus-nav-label {
+  transition: opacity 240ms cubic-bezier(0.45, 0, 0.2, 1) 120ms;
+}
+
+.klide-rail-actions[data-searching] > .klide-focus-nav-row {
+  flex-grow: 0;
+  /* The + sits centred in its square. */
+  padding-inline: calc((var(--rail-row-h) - var(--rail-icon)) / 2);
+}
+
+.klide-rail-actions[data-searching] > .klide-focus-nav-row .klide-focus-nav-label {
+  opacity: 0;
+  transition-delay: 0ms;
+  transition-duration: 160ms;
 }
 
 .klide-rail-actions > .klide-focus-brand-search {
+  flex: 0 1 0;
+  min-width: 0;
   height: var(--rail-row-h);
+  padding-inline: 0;
+  /* Closed, it takes back the gap and its own hairline, so New task and the
+     search button sit exactly where they did before. */
+  margin-left: -6px;
+  border-color: transparent;
+  background: transparent;
+  opacity: 0;
+  transition:
+    flex-grow var(--rail-search-motion),
+    padding var(--rail-search-motion),
+    margin var(--rail-search-motion),
+    opacity 260ms cubic-bezier(0.45, 0, 0.2, 1),
+    border-color var(--rail-search-motion),
+    background var(--rail-search-motion);
+}
+
+.klide-rail-actions[data-searching] > .klide-focus-brand-search {
+  flex-grow: 1;
+  padding-inline: 10px;
+  margin-left: 0;
+  border-color: var(--border);
+  background: var(--bg);
+  opacity: 1;
+  transition-delay: 0ms, 0ms, 0ms, 80ms, 0ms, 0ms;
 }
 
 .klide-rail-actions > .klide-focus-brand-action {
+  flex-shrink: 0;
   width: var(--rail-row-h);
   height: var(--rail-row-h);
   border-radius: var(--radius-lg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-rail-actions > *,
+  .klide-rail-actions .klide-focus-nav-label {
+    transition: none !important;
+  }
 }
 
 /* ── Conversations ───────────────────────────────────────────────────────

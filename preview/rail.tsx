@@ -4,6 +4,7 @@
 //   &picker=1        the folder menu open
 //   &quiet=1         nothing waiting
 //   &search=ses      the search field with a query
+//   &searchopen=1    the search field open, empty
 //   &morph=1         click the switch after load (Sections ⇄ Agent)
 //   &done=1          the running conversation finishes off screen (the dot)
 import { useState } from "react";
@@ -102,7 +103,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(<Page />);
 if (params.has("picker")) setTimeout(() => (document.querySelector(".klide-rail-folder") as HTMLElement | null)?.click(), 300);
 const q = params.get("search");
 if (q) setTimeout(() => {
-  (document.querySelector('[aria-label="Search conversations"]') as HTMLElement | null)?.click();
+  (document.querySelector('[aria-label="Search conversations"][aria-expanded]') as HTMLElement | null)?.click();
   setTimeout(() => {
     const input = document.querySelector<HTMLInputElement>('input[name="conversation-search"]');
     if (!input) return;
@@ -119,3 +120,5 @@ if (params.has("done")) {
   watchRunAttention();
   setTimeout(() => publishKlideConvo({ id: "b", title: "Rail grouping modes", status: "done", provider: "claude-code", messages: [], updatedMs: Date.now() } as unknown as Parameters<typeof publishKlideConvo>[0]), 1500);
 }
+
+if (params.has("searchopen")) setTimeout(() => (document.querySelector('[aria-label="Search conversations"][aria-expanded]') as HTMLElement | null)?.click(), 300);
