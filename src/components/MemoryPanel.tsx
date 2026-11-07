@@ -1,12 +1,11 @@
-import "./memoryPanel.css";
 import { notify } from "../toast";
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
-  type ReactNode,
 } from "react";
 import {
   listMemory,
@@ -16,6 +15,7 @@ import {
   relativeMemoryTime,
   writeMemory,
   type MemoryEntry,
+  type MemoryKind,
 } from "../memory";
 import {
   subscribeMemoryDrafts,
@@ -30,6 +30,25 @@ import {
   memoryMatchNote,
   parseMemoryQuery,
 } from "../memorySearch";
+import { useSlidingHighlight } from "../hooks/useSlidingHighlight";
+import {
+  DetailAction,
+  Highlight,
+  NavRail,
+  PencilIcon,
+  SearchIcon,
+  SectionLabel,
+  ViewToggle,
+  fieldStyle,
+  labelStyle,
+  renderMarkdown,
+  type NavItem,
+} from "./library/parts";
+
+// Project Memory as the Library's Memory tab — the same body as Skills: the
+// command menu's field on top, the sections on the left, the list beside
+// them, and the page. Saved notes group by kind; proposals wait under
+// "To review" and are kept or dismissed from their page.
 
 type Props = {
   workspaceRoot: string | null;
@@ -40,192 +59,80 @@ type Props = {
   /** Bumped when the AI panel writes a new entry, to force a refresh. */
   refreshKey?: number;
   initialDraftId?: string | null;
-  width: number;
-  visible: boolean;
-  fill?: boolean;
 };
+
+type View = "saved" | "review";
 
 /* ------------------------------------------------------------------ icons */
 
-function RefreshIcon() {
+function NavSavedIcon() {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-      <path d="M21 4v5h-5" />
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 3.5h12a1 1 0 0 1 1 1v16l-7-4-7 4v-16a1 1 0 0 1 1-1z" />
+    </svg>
+  );
+}
+function NavReviewIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 13.5l2.6-7.2A1.5 1.5 0 0 1 7.5 5.3h9a1.5 1.5 0 0 1 1.4 1l2.6 7.2" />
+      <path d="M3.5 13.5V18a1.5 1.5 0 0 0 1.5 1.5h14a1.5 1.5 0 0 0 1.5-1.5v-4.5h-5l-1.5 2.5h-4L8.5 13.5z" />
     </svg>
   );
 }
 
-function SearchIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="11" cy="11" r="7" />
-      <path d="M20 20l-3.2-3.2" />
-    </svg>
-  );
+/* ------------------------------------------------------------- vocabulary */
+
+const KIND_ORDER: MemoryKind[] = ["decision", "convention", "pattern", "fact", "failure", "handoff", "run"];
+const KIND_GROUP: Record<MemoryKind, string> = {
+  decision: "Decisions",
+  convention: "Conventions",
+  pattern: "Patterns",
+  fact: "Facts",
+  failure: "Failures",
+  handoff: "Handoffs",
+  run: "Run notes",
+};
+const KIND_ONE: Record<MemoryKind, string> = {
+  decision: "Decision",
+  convention: "Convention",
+  pattern: "Pattern",
+  fact: "Fact",
+  failure: "Failure",
+  handoff: "Handoff",
+  run: "Run note",
+};
+
+/** "3d ago" → "3d": the row's hint column is narrow and always about age. */
+function age(ts: number): string {
+  const t = relativeMemoryTime(ts);
+  return t === "just now" ? "now" : t.replace(/ ago$/, "");
 }
 
-function EyeIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
-      <circle cx="12" cy="12" r="2.6" />
-    </svg>
-  );
-}
-
-function CodeIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M9 8l-4 4 4 4" />
-      <path d="M15 8l4 4-4 4" />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M7 3.5h7l4 4V20H7z" />
-      <path d="M14 3.5v4h4" />
-    </svg>
-  );
-}
-
-function BookmarkIcon() {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
-    </svg>
-  );
-}
-
-/* --------------------------------------------------- tiny inline markdown */
-
-let mdKey = 0;
-function inline(text: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /\*\*(.+?)\*\*|`([^`]+)`/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[1] !== undefined) {
-      out.push(
-        <strong key={mdKey++} style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
-          {m[1]}
-        </strong>
-      );
-    } else {
-      out.push(
-        <code
-          key={mdKey++}
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            background: "var(--bg-elevated)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-xs)",
-            padding: "1px 5px",
-          }}
-        >
-          {m[2]}
-        </code>
-      );
-    }
-    last = m.index + m[0].length;
+/** One line under a row's title — what it says beyond its title, if anything. */
+function summaryOf(e: { title: string; goal: string; notes: string }): string | null {
+  const title = e.title.trim().toLowerCase();
+  for (const text of [e.goal, e.notes]) {
+    const t = text.trim();
+    if (t && t.toLowerCase() !== title) return t.split("\n")[0];
   }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+  return null;
 }
 
-function renderInlineMarkdown(text: string): ReactNode {
-  return <>{inline(text)}</>;
-}
-
-/* -------------------------------------------------------- shared styles */
-
-function iconBtn(active: boolean): React.CSSProperties {
-  return {
-    width: 28,
-    height: 28,
-    display: "grid",
-    placeItems: "center",
-    color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-    background: "transparent",
+/** A saved note's body as markdown — its lists under small headings, then its
+ *  free notes. The title and goal are drawn above the paper, not repeated. */
+function noteMarkdown(e: MemoryEntry): string {
+  const parts: string[] = [];
+  const list = (heading: string, items: string[]) => {
+    if (items.length) parts.push(`### ${heading}\n${items.map((i) => `- ${i}`).join("\n")}`);
   };
+  list("Decisions", e.decisions);
+  list("Plan", e.plan);
+  list("Next steps", e.nextSteps);
+  if (e.notes.trim()) parts.push(e.notes.trim());
+  return parts.join("\n\n");
 }
-function segBtn(active: boolean): React.CSSProperties {
-  return {
-    width: 28,
-    height: 24,
-    display: "grid",
-    placeItems: "center",
-    borderRadius: "var(--radius-xs)",
-    color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-    background: active ? "var(--bg-hover)" : "transparent",
-  };
-}
+
 /* ============================================================== panel === */
 
 export function MemoryPanel({
@@ -234,23 +141,26 @@ export function MemoryPanel({
   onOpenTouchedFile,
   refreshKey = 0,
   initialDraftId = null,
-  width: _width,
-  visible,
-  fill,
 }: Props) {
+  const [view, setView] = useState<View>(initialDraftId ? "review" : "saved");
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rawContent, setRawContent] = useState<string | null>(null);
   const [rawLoading, setRawLoading] = useState(false);
   const [query, setQuery] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
   const [rawView, setRawView] = useState(false);
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(initialDraftId);
 
-  // Pending memory drafts (from finished runs) awaiting accept / edit / skip.
+  // A lesson proposed while the Library is open lands on its page.
+  useEffect(() => {
+    if (!initialDraftId) return;
+    setView("review");
+    setSelectedDraftId(initialDraftId);
+  }, [initialDraftId]);
+
+  // Pending memory drafts (from finished runs) awaiting keep / dismiss.
   // The store snapshot is shared across panels; filter to this workspace.
   const localDrafts = useSyncExternalStore(subscribeMemoryDrafts, getMemoryDrafts);
   const [proposals, setProposals] = useState<MemoryDraft[]>([]);
@@ -288,30 +198,46 @@ export function MemoryPanel({
     () => allDrafts.filter((d) => d.workspaceRoot === workspaceRoot && (!d.automatic || Date.now() - d.createdAtMs < MEMORY_DRAFT_TTL)),
     [allDrafts, workspaceRoot]
   );
-  const selectedDraft =
-    drafts.find((d) => d.draftId === selectedDraftId) ?? null;
   // A failed inbox poll clears itself on the next good one; an action's
   // error stays until the next action.
   const shownError = error ?? proposalError;
 
-  // Accept a draft: write it to durable memory, drop the draft, refresh, and
-  // select the new entry. Skip just drops the draft.
+  async function refresh() {
+    if (!workspaceRoot) return;
+    setError(null);
+    try {
+      const list = await listMemory(workspaceRoot);
+      setEntries(list);
+      setSelectedId((current) => (list.some((e) => e.id === current) ? current : (list[0]?.id ?? null)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, [workspaceRoot, refreshKey]);
+
+  // Keep a draft: write it to durable memory and drop it. The next proposal
+  // opens in its place; the last one hands over to the note it became.
   async function acceptDraft(draft: MemoryDraft) {
     if (!workspaceRoot || savingDraftId) return;
     setSavingDraftId(draft.draftId);
     try {
-      const { draftId, createdAtMs, workspaceRoot: _ws, automatic: _auto, why: _why, evidence: _evidence, backendProposal: _backend, ...input } = draft;
+      const { draftId, createdAtMs: _created, workspaceRoot: _ws, automatic: _auto, why: _why, evidence: _evidence, backendProposal: _backend, ...input } = draft;
       if (draft.backendProposal) reviewGeneration.current += 1;
       const entry = draft.backendProposal
         ? await reviewMemoryProposal(workspaceRoot, draftId, { title: draft.title, notes: draft.notes, goal: draft.goal, decisions: draft.decisions })
         : await writeMemory(workspaceRoot, input);
       if (draft.backendProposal) setProposals((items) => items.filter((p) => p.draftId !== draftId));
       else removeMemoryDraft(draftId);
-      // Only the draft that was open closes; Keep on another row leaves the
-      // editor (and its unsaved edits) alone.
-      setSelectedDraftId((open) => (open === draftId ? null : open));
+      const next = drafts.find((d) => d.draftId !== draftId) ?? null;
+      setSelectedDraftId(next?.draftId ?? null);
       await refresh();
-      if (entry) setSelectedId(entry.id);
+      if (!next) {
+        setView("saved");
+        if (entry) setSelectedId(entry.id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -334,7 +260,7 @@ export function MemoryPanel({
           await refresh();
         }
       } else dismissMemoryDraft(draft);
-      setSelectedDraftId((open) => (open === draft.draftId ? null : open));
+      setSelectedDraftId(drafts.find((d) => d.draftId !== draft.draftId)?.draftId ?? null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -342,72 +268,73 @@ export function MemoryPanel({
     }
   }
 
-  async function refresh() {
-    if (!workspaceRoot) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await listMemory(workspaceRoot);
-      setEntries(list);
-      if (list.length && !list.some((e) => e.id === selectedId)) {
-        setSelectedId(list[0].id);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  // Load raw markdown on selection (for the "Source" view).
   useEffect(() => {
-    void refresh();
-  }, [workspaceRoot, refreshKey]);
-
-  // Load raw markdown on selection (for the "Source" tab).
-  useEffect(() => {
-    if (!workspaceRoot || !selectedId) {
-      setRawContent(null);
-      return;
-    }
+    let cancelled = false;
     const entry = entries.find((e) => e.id === selectedId);
-    if (!entry) {
+    if (!workspaceRoot || !entry) {
       setRawContent(null);
       return;
     }
     setRawLoading(true);
     setRawContent(null);
     readMemory(workspaceRoot, entry.relPath)
-      .then((c) => {
-        if (!cancelled) setRawContent(c);
-      })
-      .catch(() => {
-        if (!cancelled) setRawContent(null);
-      })
-      .finally(() => {
-        if (!cancelled) setRawLoading(false);
-      });
-    let cancelled = false;
-    return () => {
-      cancelled = true;
-    };
+      .then((c) => { if (!cancelled) setRawContent(c); })
+      .catch(() => { if (!cancelled) setRawContent(null); })
+      .finally(() => { if (!cancelled) setRawLoading(false); });
+    return () => { cancelled = true; };
   }, [workspaceRoot, selectedId, entries]);
 
-  // Memory v4 search: bare terms match anywhere; `file:` / `run:` /
+  // Memory search: bare terms match anywhere; `file:` / `run:` /
   // `decision:` scope to that facet (see memorySearch.ts).
   const parsedQuery = useMemo(() => parseMemoryQuery(query), [query]);
   const filtered = useMemo(() => {
     if (!query.trim()) return entries;
     return entries.filter((e) => matchesMemoryQuery(e, parsedQuery));
   }, [entries, query, parsedQuery]);
+  const filteredDrafts = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return drafts;
+    return drafts.filter((d) => [d.title, d.notes, d.goal, d.why ?? ""].some((t) => t.toLowerCase().includes(q)));
+  }, [drafts, query]);
 
-  /** Facet click-through from the detail pane ("browse by"): filter the list
-   *  by this run / file and make the query visible + editable. */
-  function searchFacet(facetQuery: string) {
-    setQuery(facetQuery);
-    setSearchOpen(true);
+  // The list in the order it is drawn, so ↑ / ↓ follow the rows on screen.
+  const groups = useMemo(
+    () => KIND_ORDER
+      .map((kind) => ({ kind, label: KIND_GROUP[kind], items: filtered.filter((e) => e.kind === kind) }))
+      .concat([{ kind: "run" as MemoryKind, label: "Other", items: filtered.filter((e) => !KIND_ORDER.includes(e.kind)) }])
+      .filter((g) => g.items.length > 0),
+    [filtered],
+  );
+  const orderedIds = view === "saved"
+    ? groups.flatMap((g) => g.items.map((e) => e.id))
+    : filteredDrafts.map((d) => d.draftId);
+
+  // The review page always shows a proposal while there is one.
+  useEffect(() => {
+    if (view !== "review") return;
+    if (!drafts.some((d) => d.draftId === selectedDraftId)) setSelectedDraftId(drafts[0]?.draftId ?? null);
+  }, [view, drafts, selectedDraftId]);
+
+  const selected = view === "saved" ? entries.find((e) => e.id === selectedId) ?? null : null;
+  const selectedDraft = view === "review" ? drafts.find((d) => d.draftId === selectedDraftId) ?? null : null;
+
+  function select(id: string) {
+    if (view === "saved") { setSelectedId(id); setRawView(false); }
+    else setSelectedDraftId(id);
+  }
+  function step(delta: 1 | -1) {
+    if (orderedIds.length === 0) return;
+    const current = view === "saved" ? selectedId : selectedDraftId;
+    const at = current ? orderedIds.indexOf(current) : -1;
+    select(orderedIds[at < 0 ? 0 : Math.max(0, Math.min(orderedIds.length - 1, at + delta))]);
   }
 
-  const selected = entries.find((e) => e.id === selectedId) ?? null;
+  /** "Browse by" from a page: filter saved notes by this run / file. */
+  function searchFacet(facetQuery: string) {
+    setView("saved");
+    setQuery(facetQuery);
+  }
 
   async function openInEditor(entry: MemoryEntry) {
     if (!onOpenInEditor || !workspaceRoot) return;
@@ -419,390 +346,151 @@ export function MemoryPanel({
     }
   }
 
-  return (
-    <aside
-      className="memory-panel"
-      style={{
-        width: fill ? "100%" : _width,
-        height: fill ? "100%" : undefined,
-        margin: fill ? 0 : "4px 0 4px 4px",
-        display: fill || visible ? "flex" : "none",
-        flexDirection: "column",
-        flexShrink: 0,
-        overflow: "hidden",
-      }}
-    >
-      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-        {/* -------- list -------- */}
-        <div
-          className="memory-sidebar"
-          style={{
-            width: 292,
-            flexShrink: 0,
-            borderRight: "1px solid var(--border)",
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-          }}
-        >
-          <div
-            style={{
-              height: 44,
-              flexShrink: 0,
-              padding: "0 8px 0 14px",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                flex: 1,
-                fontSize: 11,
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-                color: "var(--fg-subtle)",
-                fontWeight: 500,
-              }}
-            >
-              <BookmarkIcon />
-              Saved memories
-            </span>
-            <button
-              onClick={() => setSearchOpen((o) => !o)}
-              aria-label="Search"
-              style={iconBtn(searchOpen)}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.color = "var(--fg-strong)")
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.color = searchOpen
-                  ? "var(--fg-strong)"
-                  : "var(--fg-subtle)")
-              }
-            >
-              <SearchIcon />
-            </button>
-            <button
-              onClick={() => void refresh()}
-              aria-label="Refresh"
-              title={loading ? "Refreshing" : "Refresh"}
-              style={iconBtn(false)}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.color = "var(--fg-strong)")
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.color = "var(--fg-subtle)")
-              }
-            >
-              <RefreshIcon />
-            </button>
-          </div>
-          {searchOpen && (
-            <div style={{ padding: "0 10px 8px" }}>
-              <input
-                autoFocus
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                aria-label="Search memories"
-                placeholder="Search memories"
-                style={{
-                  width: "100%",
-                  fontSize: 12,
-                  padding: "6px 9px",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  background: "var(--bg)",
-                  color: "var(--fg-strong)",
-                  outline: "none",
-                }}
-              />
-            </div>
-          )}
-          <div
-            style={{
-              flex: 1,
-              overflowY: "auto",
-              padding: "2px 8px 10px",
-              minHeight: 0,
-            }}
-          >
-            {drafts.length > 0 && (
-              <>
-                <div
-                  className="memory-group-label"
-                  style={{
-                    padding: "4px 4px 6px",
-                    fontSize: 10,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    color: "var(--accent)",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  For review
-                </div>
-                {drafts.map((d) => {
-                  const active = d.draftId === selectedDraftId;
-                  return (
-                    <div className="memory-draft-row" key={d.draftId}>
-                    <button
-                      type="button"
-                      className="memory-list-item"
-                      aria-pressed={active}
-                      onClick={() => {
-                        setSelectedDraftId(d.draftId);
-                        setSelectedId(null);
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 500,
-                          color: "var(--fg-strong)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {d.title}
-                      </div>
-                      <div
-                        className="memory-draft-meta"
-                        style={{
-                          marginTop: 6,
-                          fontSize: 10.5,
-                          color: "var(--fg-dim)",
-                          fontFamily: "var(--font-mono)",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        <span style={{ marginLeft: "auto" }}>
-                          {relativeMemoryTime(d.createdAtMs)}
-                        </span>
-                      </div>
-                    </button>
-                    <div className="memory-row-actions">
-                      <button type="button" disabled={savingDraftId !== null} aria-label={`Keep memory: ${d.title}`} onClick={() => void acceptDraft(d)}>
-                        {savingDraftId === d.draftId ? "Keeping…" : "Keep"}
-                      </button>
-                      <button type="button" disabled={savingDraftId !== null} aria-label={`Dismiss memory: ${d.title}`} onClick={() => {
-                        void dismissDraft(d);
-                      }}>Dismiss</button>
-                    </div>
-                    </div>
-                  );
-                })}
-                {(filtered.length > 0 || workspaceRoot) && (
-                  <div
-                    style={{
-                      margin: "2px 4px 8px",
-                      borderTop: "1px solid var(--border)",
-                    }}
-                  />
-                )}
-              </>
-            )}
-            {!workspaceRoot && (
-              <div
-                style={{
-                  padding: "14px 8px",
-                  color: "var(--fg-subtle)",
-                  fontSize: 12,
-                  lineHeight: 1.55,
-                }}
-              >
-                Open a folder to start a project memory.
-              </div>
-            )}
-            {workspaceRoot && shownError && (
-              <div
-                style={{
-                  padding: "10px 8px",
-                  color: "var(--danger)",
-                  fontSize: 12,
-                }}
-              >
-                {shownError}
-              </div>
-            )}
-            {workspaceRoot && !shownError && filtered.length === 0 && (
-              <div
-                style={{
-                  padding: "14px 8px",
-                  color: "var(--fg-subtle)",
-                  fontSize: 12,
-                  lineHeight: 1.55,
-                }}
-              >
-                {entries.length === 0
-                  ? "Useful lessons will appear here as you work. You choose what stays."
-                  : "No entries match this filter."}
-              </div>
-            )}
-            {filtered.map((e) => {
-              const active = e.id === selectedId;
-              // Why this row matched, when the evidence isn't already visible
-              // (a hit in files touched / decisions / run id).
-              const matchNote = query.trim() ? memoryMatchNote(e, parsedQuery) : null;
-              return (
-                    <button
-                      type="button"
-                      className="memory-list-item"
-                      aria-pressed={active}
-                      key={e.id}
-                      onClick={() => {
-                    setSelectedId(e.id);
-                    setSelectedDraftId(null);
-                  }}
-                    >
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 500,
-                      color: "var(--fg-strong)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {e.title}
-                  </div>
-                  {(e.goal || e.notes) && (
-                    <div
-                      style={{
-                        fontSize: 11.5,
-                        color: "var(--fg-subtle)",
-                        marginTop: 4,
-                        lineHeight: 1.45,
-                        display: "-webkit-box",
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                      }}
-                    >
-                      {e.goal || e.notes}
-                    </div>
-                  )}
-                  {matchNote && (
-                    <div
-                      style={{
-                        marginTop: 5,
-                        fontSize: 10.5,
-                        fontFamily: "var(--font-mono)",
-                        color: "var(--accent)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                      title={matchNote}
-                    >
-                      {matchNote}
-                    </div>
-                  )}
-                  <div
-                    style={{
-                      marginTop: 7,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    {e.mode && (
-                      <span
-                        style={{
-                          fontSize: 10.5,
-                          color: "var(--accent)",
-                          fontFamily: "var(--font-mono)",
-                        }}
-                      >
-                        {e.mode}
-                      </span>
-                    )}
-                    {e.provider && (
-                      <span
-                        style={{
-                          fontSize: 10.5,
-                          color: "var(--fg-dim)",
-                          fontFamily: "var(--font-mono)",
-                        }}
-                      >
-                        {e.provider}
-                      </span>
-                    )}
-                    {e.provider && e.model && (
-                      <span style={{ color: "var(--fg-dim)" }}>·</span>
-                    )}
-                    {e.model && (
-                      <span
-                        style={{
-                          fontSize: 10.5,
-                          color: "var(--fg-dim)",
-                          fontFamily: "var(--font-mono)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          maxWidth: 110,
-                        }}
-                      >
-                        {e.model}
-                      </span>
-                    )}
-                    <span
-                      style={{
-                        marginLeft: "auto",
-                        fontSize: 10.5,
-                        color: "var(--fg-dim)",
-                        fontFamily: "var(--font-mono)",
-                      }}
-                    >
-                      {relativeMemoryTime(e.createdAtMs)}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+  const navItems: NavItem<View>[] = [
+    { id: "saved", label: "Saved", icon: <NavSavedIcon />, count: entries.length },
+    { id: "review", label: "To review", icon: <NavReviewIcon />, count: drafts.length },
+  ];
 
-        {/* -------- detail -------- */}
-        <div className="memory-detail" style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
-          {selectedDraft ? (
-            <DraftReview
-              key={selectedDraft.draftId}
-              draft={selectedDraft}
-              saving={savingDraftId !== null}
-              onAccept={(edited) => void acceptDraft(edited)}
-              onSkip={() => {
-                void dismissDraft(selectedDraft);
-              }}
-            />
-          ) : !selected ? (
-            <EmptyDetail />
-          ) : (
-            <MemoryDetail
-              entry={selected}
-              rawView={rawView}
-              setRawView={setRawView}
-              rawContent={rawContent}
-              rawLoading={rawLoading}
-              onOpenInEditor={() => void openInEditor(selected)}
-              onOpenTouchedFile={onOpenTouchedFile}
-              onSearchRun={(runId) => searchFacet(`run:${runId}`)}
-            />
-          )}
-        </div>
+  const activeKey = view === "saved" ? selectedId : selectedDraftId;
+  const hl = useSlidingHighlight(activeKey, `${view}|${orderedIds.join("|")}`);
+
+  return (
+    <div className="klide-skills" data-embedded role="region" aria-label="Memory">
+      <div className="klide-cmd-header">
+        <SearchIcon />
+        <input
+          className="klide-cmd-input"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") { e.preventDefault(); step(1); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); step(-1); }
+          }}
+          placeholder={view === "saved" ? "Search memories…" : "Search proposals…"}
+          title={view === "saved" ? "Narrow with file:, run: or decision:" : undefined}
+          spellCheck={false}
+          autoComplete="off"
+          aria-label={view === "saved" ? "Search memories" : "Search proposals"}
+        />
+        {query.trim() && view === "saved" && <span className="klide-cmd-hint">file: · run: · decision:</span>}
       </div>
-    </aside>
+
+      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+        <nav aria-label="Sections" className="klide-skills-column" style={{ width: 196 }}>
+          <NavRail navItems={navItems} tab={view} onTabChange={setView} />
+        </nav>
+
+        <main style={{ flex: 1, minWidth: 0, display: "flex" }} className="skills-tab-in" key={view}>
+          <aside aria-label={view === "saved" ? "Saved memories" : "Proposed memories"} className="klide-skills-column" style={{ width: 300 }}>
+            <div className="klide-skills-list" role="listbox" aria-label={view === "saved" ? "Memories" : "Proposals"} {...hl.list}>
+              <Highlight at={hl.indicator} />
+              {!workspaceRoot ? (
+                <ListNote>Open a folder to start a project memory.</ListNote>
+              ) : shownError ? (
+                <ListNote tone="error">{shownError}</ListNote>
+              ) : view === "saved" ? (
+                filtered.length === 0 ? (
+                  <ListNote>
+                    {entries.length === 0
+                      ? "Useful lessons will appear here as you work. You choose what stays."
+                      : `No memories matching "${query.trim()}"`}
+                  </ListNote>
+                ) : groups.map((group) => (
+                  <Fragment key={group.label}>
+                    <div className="klide-cmd-heading">{group.label}</div>
+                    {group.items.map((e) => {
+                      const active = e.id === selectedId;
+                      const note = query.trim() ? memoryMatchNote(e, parsedQuery) : null;
+                      const sub = note ?? summaryOf(e);
+                      return (
+                        <div
+                          key={e.id}
+                          {...hl.row(e.id)}
+                          onClick={() => select(e.id)}
+                          className="klide-cmd-option klide-skill-option"
+                          role="option"
+                          aria-selected={active}
+                          data-active={active || undefined}
+                        >
+                          <div className="klide-skill-text">
+                            <span>{e.title}</span>
+                            {sub && <small title={sub}>{sub}</small>}
+                          </div>
+                          <span className="klide-cmd-hint">{age(e.createdAtMs)}</span>
+                        </div>
+                      );
+                    })}
+                  </Fragment>
+                ))
+              ) : filteredDrafts.length === 0 ? (
+                <ListNote>
+                  {drafts.length === 0
+                    ? "Nothing to review. Lessons Kit proposes wait here until you keep or dismiss them."
+                    : `No proposals matching "${query.trim()}"`}
+                </ListNote>
+              ) : (
+                <>
+                  <div className="klide-cmd-heading">Proposed</div>
+                  {filteredDrafts.map((d) => {
+                    const active = d.draftId === selectedDraftId;
+                    const sub = d.why?.trim() || summaryOf(d);
+                    return (
+                      <div
+                        key={d.draftId}
+                        {...hl.row(d.draftId)}
+                        onClick={() => select(d.draftId)}
+                        className="klide-cmd-option klide-skill-option"
+                        role="option"
+                        aria-selected={active}
+                        data-active={active || undefined}
+                      >
+                        <div className="klide-skill-text">
+                          <span>{d.title}</span>
+                          {sub && <small title={sub}>{sub}</small>}
+                        </div>
+                        <span className="klide-cmd-hint">{age(d.createdAtMs)}</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          </aside>
+
+          <div style={{ flex: 1, minWidth: 0, overflow: "auto" }} className="skills-tab-in" key={selected?.id ?? selectedDraft?.draftId ?? "empty"}>
+            {selectedDraft ? (
+              <DraftReview
+                draft={selectedDraft}
+                saving={savingDraftId !== null}
+                onAccept={(edited) => void acceptDraft(edited)}
+                onSkip={() => void dismissDraft(selectedDraft)}
+              />
+            ) : selected ? (
+              <MemoryDetail
+                entry={selected}
+                rawView={rawView}
+                setRawView={setRawView}
+                rawContent={rawContent}
+                rawLoading={rawLoading}
+                onOpenInEditor={onOpenInEditor ? () => void openInEditor(selected) : undefined}
+                onOpenTouchedFile={onOpenTouchedFile}
+                onSearchRun={(runId) => searchFacet(`run:${runId}`)}
+              />
+            ) : (
+              <EmptyDetail view={view} />
+            )}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function ListNote({ children, tone }: { children: string; tone?: "error" }) {
+  return (
+    <div style={{ padding: "18px 12px", fontSize: 12, lineHeight: 1.55, color: tone === "error" ? "var(--danger)" : "var(--fg-dim)" }}>
+      {children}
+    </div>
   );
 }
 
@@ -823,390 +511,109 @@ function MemoryDetail({
   setRawView: (v: boolean) => void;
   rawContent: string | null;
   rawLoading: boolean;
-  onOpenInEditor: () => void;
+  onOpenInEditor?: () => void;
   onOpenTouchedFile?: (path: string) => void;
   /** Filter the list to every note written from this run ("browse by run"). */
   onSearchRun?: (runId: string) => void;
 }) {
+  const body = noteMarkdown(entry);
+  const goal = entry.goal.trim();
+  const showGoal = goal && goal.toLowerCase() !== entry.title.trim().toLowerCase();
+  const raw = rawContent?.trim() ?? "";
+  const lineCount = raw ? raw.split("\n").length : 0;
   return (
-    <div className="memory-document">
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <h2
-          style={{
-            flex: 1,
-            minWidth: 0,
-            margin: 0,
-            fontSize: 19,
-            fontWeight: 600,
-            color: "var(--fg-strong)",
-            letterSpacing: "-0.01em",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
+    <div style={{ padding: "32px 36px", maxWidth: 780 }}>
+      {/* Title row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <h1 style={{ flex: 1, minWidth: 0, margin: 0, fontSize: 22, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.018em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.title}>
           {entry.title}
-        </h2>
-        <button
-          onClick={onOpenInEditor}
-          style={{
-            height: 28,
-            padding: "0 12px",
-            borderRadius: "var(--radius-sm)",
-            fontSize: 12.5,
-            color: "var(--fg)",
-            background: "transparent",
-            border: "1px solid var(--border)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--bg-hover)";
-            e.currentTarget.style.color = "var(--fg-strong)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "var(--fg)";
-          }}
-        >
-          Open in editor
-        </button>
+        </h1>
+        {onOpenInEditor && (
+          <DetailAction label="Open in editor" onClick={onOpenInEditor}><PencilIcon /></DetailAction>
+        )}
       </div>
 
-      <div
-        style={{
-          marginTop: 10,
-          fontSize: 12,
-          color: "var(--fg-subtle)",
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-          alignItems: "center",
-        }}
-      >
+      {/* Meta strip */}
+      <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", rowGap: 6, columnGap: 22, alignItems: "center", fontSize: 12, color: "var(--fg-subtle)" }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{KIND_ONE[entry.kind] ?? entry.kind}</span>
         <span>Written {relativeMemoryTime(entry.createdAtMs)}</span>
-        {entry.mode && (
-          <>
-            <span style={{ color: "var(--fg-dim)" }}>·</span>
-            <span>{entry.mode}</span>
-          </>
-        )}
-        {entry.provider && (
-          <>
-            <span style={{ color: "var(--fg-dim)" }}>·</span>
-            <span>{entry.provider}</span>
-          </>
-        )}
-        {entry.model && (
-          <>
-            <span style={{ color: "var(--fg-dim)" }}>·</span>
-            <span style={{ fontFamily: "var(--font-mono)" }}>{entry.model}</span>
-          </>
+        {(entry.provider || entry.model) && (
+          <span>{[entry.provider, entry.model].filter(Boolean).join(" · ")}</span>
         )}
         {entry.runId && (
-          <>
-            <span style={{ color: "var(--fg-dim)" }}>·</span>
-            <button
-              onClick={onSearchRun ? () => onSearchRun(entry.runId!) : undefined}
-              title="Show every note written from this run"
-              style={{
-                border: "none",
-                background: "transparent",
-                padding: 0,
-                font: "inherit",
-                fontFamily: "var(--font-mono)",
-                color: "var(--fg-subtle)",
-                cursor: onSearchRun ? "pointer" : "default",
-                textDecoration: "none",
-              }}
-              onMouseEnter={(e) => {
-                if (onSearchRun) {
-                  e.currentTarget.style.color = "var(--fg-strong)";
-                  e.currentTarget.style.textDecoration = "underline";
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "var(--fg-subtle)";
-                e.currentTarget.style.textDecoration = "none";
-              }}
-            >
-              run {entry.runId.length > 18 ? `${entry.runId.slice(0, 18)}…` : entry.runId}
-            </button>
-          </>
+          <button
+            onClick={onSearchRun ? () => onSearchRun(entry.runId!) : undefined}
+            title="Show every note written from this run"
+            className="memory-run-link"
+          >
+            run {entry.runId.length > 18 ? `${entry.runId.slice(0, 18)}…` : entry.runId}
+          </button>
         )}
       </div>
 
-      {/* segmented Preview / Source view */}
-      <div
-        style={{
-          marginTop: 18,
-          display: "flex",
-          alignItems: "center",
-          marginBottom: 8,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 10.5,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            color: "var(--fg-subtle)",
-            fontWeight: 500,
-          }}
-        >
-          Note
-        </span>
-        <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", gap: 2 }}>
-          <button
-            onClick={() => setRawView(false)}
-            aria-label="Preview"
-            title="Preview"
-            style={segBtn(!rawView)}
-            onMouseEnter={(e) => {
-              if (rawView) e.currentTarget.style.color = "var(--fg-strong)";
-            }}
-            onMouseLeave={(e) => {
-              if (rawView) e.currentTarget.style.color = "var(--fg-strong)";
-              else e.currentTarget.style.color = "var(--fg-subtle)";
-            }}
-          >
-            <EyeIcon />
-          </button>
-          <button
-            onClick={() => setRawView(true)}
-            aria-label="Source"
-            title="Source"
-            style={segBtn(rawView)}
-            onMouseEnter={(e) => {
-              if (!rawView) e.currentTarget.style.color = "var(--fg-strong)";
-            }}
-            onMouseLeave={(e) => {
-              if (rawView) e.currentTarget.style.color = "var(--fg-strong)";
-              else e.currentTarget.style.color = "var(--fg-subtle)";
-            }}
-          >
-            <CodeIcon />
-          </button>
-        </div>
-      </div>
+      {showGoal && (
+        <blockquote className="klide-quote" style={{ marginTop: 20, fontSize: 13 }}>
+          {goal}
+        </blockquote>
+      )}
 
-      <div
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-md)",
-          background: "var(--bg)",
-          padding: "16px 20px",
-        }}
-      >
-        {rawView ? (
-          rawLoading ? (
-            <div style={{ color: "var(--fg-subtle)", fontSize: 12 }}>
-              Loading source…
-            </div>
-          ) : rawContent ? (
-            <pre
-              style={{
-                margin: 0,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontFamily: "var(--font-mono)",
-                fontSize: 12,
-                lineHeight: 1.65,
-                color: "var(--fg)",
-              }}
-            >
-              {rawContent}
-            </pre>
-          ) : (
-            <div style={{ color: "var(--fg-subtle)", fontSize: 12 }}>
-              Could not read the source file.
-            </div>
-          )
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {entry.goal && (
-              <Section title="Goal">{renderInlineMarkdown(entry.goal)}</Section>
-            )}
-            {entry.plan.length > 0 && (
-              <Section title="Plan">
-                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
-                  {entry.plan.map((line, i) => (
-                    <li key={i} style={{ fontSize: 13, color: "var(--fg)" }}>
-                      {renderInlineMarkdown(line)}
-                    </li>
-                  ))}
-                </ul>
-              </Section>
-            )}
-            {entry.decisions.length > 0 && (
-              <Section title="Decisions">
-                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
-                  {entry.decisions.map((line, i) => (
-                    <li key={i} style={{ fontSize: 13, color: "var(--fg)" }}>
-                      {renderInlineMarkdown(line)}
-                    </li>
-                  ))}
-                </ul>
-              </Section>
-            )}
-            {entry.filesTouched.length > 0 && (
-              <Section title="Files touched">
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 6,
-                    marginTop: 2,
-                  }}
-                >
-                  {entry.filesTouched.map((path) => (
-                    <FileChip key={path} path={path} onOpen={onOpenTouchedFile} />
-                  ))}
-                </div>
-              </Section>
-            )}
-            {entry.nextSteps.length > 0 && (
-              <Section title="Next steps">
-                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
-                  {entry.nextSteps.map((line, i) => (
-                    <li key={i} style={{ fontSize: 13, color: "var(--fg)" }}>
-                      {renderInlineMarkdown(line)}
-                    </li>
-                  ))}
-                </ul>
-              </Section>
-            )}
-            {entry.notes && (
-              <Section title="Notes">
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 13,
-                    lineHeight: 1.6,
-                    color: "var(--fg)",
-                  }}
-                >
-                  {renderInlineMarkdown(entry.notes)}
-                </p>
-              </Section>
-            )}
-            {nothingToShow(entry) && (
-              <div style={{ color: "var(--fg-subtle)", fontSize: 13 }}>
-                This entry has no content yet.
-              </div>
+      {/* Files touched — the Skills page's tool list, but each opens */}
+      {entry.filesTouched.length > 0 && (
+        <section style={{ marginTop: 28 }}>
+          <SectionLabel>Files touched</SectionLabel>
+          <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", rowGap: 8, columnGap: 22, fontSize: 11.5, fontFamily: "var(--font-mono)", color: "var(--fg)" }}>
+            {entry.filesTouched.map((path) => onOpenTouchedFile ? (
+              <button key={path} title={`Open ${path}`} onClick={() => onOpenTouchedFile(path)} className="memory-file-link">{path}</button>
+            ) : (
+              <span key={path} style={{ whiteSpace: "nowrap" }}>{path}</span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* The note on paper */}
+      <section style={{ marginTop: 32 }}>
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <SectionLabel>Note</SectionLabel>
+          <div style={{ flex: 1 }} />
+          <ViewToggle raw={rawView} onChange={setRawView} />
+        </div>
+        <div className="klide-paper" style={{ marginTop: 10 }}>
+          <div className="klide-paper-header">
+            <span style={{ color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.relPath}>{entry.relPath}</span>
+            <span style={{ flex: 1 }} />
+            {raw && <>
+              <span style={{ color: "var(--fg-dim)", flexShrink: 0 }}>{lineCount} {lineCount === 1 ? "line" : "lines"}</span>
+              <span style={{ color: "var(--fg-dim)", marginLeft: 10, flexShrink: 0 }}>{raw.length} chars</span>
+            </>}
+          </div>
+          <div style={{ padding: "18px 26px" }}>
+            {rawView ? (
+              rawLoading ? (
+                <div style={{ color: "var(--fg-subtle)", fontSize: 13 }}>Loading source…</div>
+              ) : rawContent ? (
+                <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.7, color: "var(--fg)" }}>{rawContent}</pre>
+              ) : (
+                <div style={{ color: "var(--fg-subtle)", fontSize: 13 }}>Could not read the source file.</div>
+              )
+            ) : body ? (
+              <div>{renderMarkdown(body)}</div>
+            ) : (
+              <div style={{ color: "var(--fg-subtle)", fontSize: 13 }}>{showGoal ? "Nothing more than its goal." : "This note has no content yet."}</div>
             )}
           </div>
-        )}
-      </div>
-
-      <div
-        style={{
-          marginTop: 14,
-          fontSize: 11,
-          color: "var(--fg-dim)",
-          fontFamily: "var(--font-mono)",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {entry.relPath}
-      </div>
+        </div>
+      </section>
     </div>
-  );
-}
-
-function nothingToShow(e: MemoryEntry): boolean {
-  return (
-    !e.goal &&
-    e.plan.length === 0 &&
-    e.decisions.length === 0 &&
-    e.filesTouched.length === 0 &&
-    e.nextSteps.length === 0 &&
-    !e.notes
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="memory-section">
-      <div
-        style={{
-          fontSize: 10.5,
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          color: "var(--fg-subtle)",
-          fontWeight: 500,
-          marginBottom: 6,
-        }}
-      >
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function FileChip({
-  path,
-  onOpen,
-}: {
-  path: string;
-  onOpen?: (path: string) => void;
-}) {
-  const clickable = !!onOpen;
-  const Element = clickable ? "button" : "span";
-  return (
-    <Element
-      title={path}
-      onClick={clickable ? () => onOpen(path) : undefined}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        fontSize: 11,
-        fontFamily: "var(--font-mono)",
-        color: "var(--fg-subtle)",
-        background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-xs)",
-        padding: "2px 7px",
-        maxWidth: "100%",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        cursor: clickable ? "pointer" : "default",
-      }}
-      onMouseEnter={(e) => {
-        if (!clickable) return;
-        e.currentTarget.style.color = "var(--fg-strong)";
-        e.currentTarget.style.borderColor = "var(--border-strong)";
-        e.currentTarget.style.background = "var(--bg-hover)";
-      }}
-      onMouseLeave={(e) => {
-        if (!clickable) return;
-        e.currentTarget.style.color = "var(--fg-subtle)";
-        e.currentTarget.style.borderColor = "var(--border)";
-        e.currentTarget.style.background = "var(--bg-elevated)";
-      }}
-    >
-      <FileIcon />
-      {path}
-    </Element>
   );
 }
 
 /* ====================================================== draft review === */
 
-// Editable review of a pending memory draft. Local state seeded from the
-// draft (the component is keyed by draftId, so picking another draft remounts
-// it fresh). Accept builds the edited note and hands it back to be written;
-// Skip discards. Files-touched stays read-only — it's extracted, not authored.
+// Editable review of a proposed memory — the Skills edit form's shape. Local
+// state seeded from the draft (the page is keyed by draftId, so picking
+// another remounts it fresh). Keep hands the edited note back to be written;
+// Dismiss discards. Files touched stays read-only — it's extracted, not authored.
 function DraftReview({
   draft,
   saving,
@@ -1222,6 +629,10 @@ function DraftReview({
   const [goal, setGoal] = useState(draft.goal);
   const [notes, setNotes] = useState(draft.notes);
   const [decisionsText, setDecisionsText] = useState(draft.decisions.join("\n"));
+  const canKeep = title.trim().length > 0;
+  // A proposal often repeats its title as goal and decision; then those
+  // fields fold away rather than read as the same line three times.
+  const echoesTitle = [draft.goal, ...draft.decisions].every((t) => !t.trim() || t.trim() === draft.title.trim());
 
   function accept() {
     onAccept({
@@ -1236,58 +647,109 @@ function DraftReview({
     });
   }
 
+  const id = (name: string) => `mr-${name}-${draft.draftId}`;
   return (
-    <article className="memory-review">
-      <label className="memory-title-label">
-        <span className="memory-sr-only">Memory title</span>
-        <input className="memory-title-input" value={title} onChange={(e) => setTitle(e.target.value)} />
-      </label>
-      <label className="memory-field">
-        <span className="memory-sr-only">What to remember</span>
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} />
-      </label>
-      <details className="memory-evidence">
-        <summary>Details</summary>
-        {draft.why && <p>{draft.why}</p>}
-        {draft.evidence && <blockquote>{draft.evidence}</blockquote>}
-        {draft.sourceRefs.map((ref) => <p key={ref.id}>{ref.label ?? ref.sourceType}: <code>{ref.id}</code></p>)}
-        <label className="memory-field"><span>Goal</span><textarea value={goal} onChange={(e) => setGoal(e.target.value)} rows={2} /></label>
-        <label className="memory-field"><span>Decisions · one per line</span><textarea value={decisionsText} onChange={(e) => setDecisionsText(e.target.value)} rows={3} /></label>
-        {draft.filesTouched.length > 0 && <Section title="Files touched"><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{draft.filesTouched.map((path) => <FileChip key={path} path={path} />)}</div></Section>}
+    <div style={{ padding: "32px 36px", maxWidth: 720 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <h2 style={{ flex: 1, minWidth: 0, margin: 0, fontSize: 19, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.014em" }}>
+          Keep this lesson?
+        </h2>
+        <button onClick={onSkip} disabled={saving} className="klide-button klide-button-ghost" style={{ minHeight: 30, padding: "0 12px", color: "var(--fg-subtle)" }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}>
+          Dismiss
+        </button>
+        <button
+          onClick={accept}
+          disabled={saving || !canKeep}
+          className={canKeep ? "klide-button klide-button-primary" : "klide-button klide-button-secondary"}
+          style={{ minHeight: 30, padding: "0 14px" }}
+        >
+          {saving ? "Keeping…" : "Keep"}
+        </button>
+      </div>
+      <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", rowGap: 6, columnGap: 22, alignItems: "center", fontSize: 12, color: "var(--fg-subtle)" }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{KIND_ONE[draft.kind] ?? draft.kind}</span>
+        <span>Proposed {relativeMemoryTime(draft.createdAtMs)}</span>
+        {draft.automatic && <span>after a finished run</span>}
+      </div>
+      {draft.why?.trim() && (
+        <blockquote className="klide-quote" style={{ marginTop: 18, fontSize: 13, WebkitLineClamp: 3 }}>
+          {draft.why.trim()}
+        </blockquote>
+      )}
+
+      <div style={{ marginTop: 26, marginBottom: 18 }}>
+        <label style={labelStyle} htmlFor={id("title")}>Title</label>
+        <input id={id("title")} value={title} onChange={(e) => setTitle(e.target.value)} style={fieldStyle} />
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <label style={labelStyle} htmlFor={id("notes")}>What to remember</label>
+        <textarea id={id("notes")} value={notes} onChange={(e) => setNotes(e.target.value)} rows={5}
+          style={{ ...fieldStyle, minHeight: 110, resize: "vertical", lineHeight: 1.65 }} />
+      </div>
+      <details className="memory-more" open={!echoesTitle}>
+        <summary>Goal and decisions</summary>
+        <div style={{ marginTop: 14, marginBottom: 18 }}>
+          <label style={labelStyle} htmlFor={id("goal")}>Goal</label>
+          <input id={id("goal")} value={goal} onChange={(e) => setGoal(e.target.value)} style={fieldStyle} />
+        </div>
+        <div style={{ marginBottom: 22 }}>
+          <label style={labelStyle} htmlFor={id("decisions")}>Decisions, one per line</label>
+          <textarea id={id("decisions")} value={decisionsText} onChange={(e) => setDecisionsText(e.target.value)} rows={3}
+            style={{ ...fieldStyle, resize: "vertical", lineHeight: 1.65 }} />
+        </div>
       </details>
-      <footer className="memory-review-footer">
-        <div><button className="memory-secondary" disabled={saving} onClick={onSkip}>Dismiss</button><button className="memory-primary" disabled={saving} onClick={accept}>{saving ? "Keeping…" : "Keep"}</button></div>
-      </footer>
-    </article>
+
+      {draft.filesTouched.length > 0 && (
+        <section style={{ marginBottom: 22 }}>
+          <SectionLabel>Files touched</SectionLabel>
+          <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", rowGap: 8, columnGap: 22, fontSize: 11.5, fontFamily: "var(--font-mono)", color: "var(--fg)" }}>
+            {draft.filesTouched.map((path) => <span key={path} style={{ whiteSpace: "nowrap" }}>{path}</span>)}
+          </div>
+        </section>
+      )}
+
+      {(draft.evidence?.trim() || draft.sourceRefs.length > 0) && (
+        <section style={{ marginBottom: 26 }}>
+          <SectionLabel>Evidence</SectionLabel>
+          <div className="klide-paper" style={{ marginTop: 10 }}>
+            {draft.sourceRefs.length > 0 && (
+              <div className="klide-paper-header">
+                {draft.sourceRefs.map((ref) => (
+                  <span key={ref.id} title={ref.id} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {ref.label ?? ref.sourceType} {ref.id.length > 14 ? `${ref.id.slice(0, 14)}…` : ref.id}
+                  </span>
+                ))}
+              </div>
+            )}
+            {draft.evidence?.trim() && (
+              <pre style={{ margin: 0, padding: "14px 18px", maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.7, color: "var(--fg)" }}>
+                {draft.evidence.trim()}
+              </pre>
+            )}
+          </div>
+        </section>
+      )}
+
+    </div>
   );
 }
 
-function EmptyDetail() {
+function EmptyDetail({ view }: { view: View }) {
   return (
-    <div
-      style={{
-        height: "100%",
-        display: "grid",
-        placeItems: "center",
-        color: "var(--fg-subtle)",
-        textAlign: "center",
-        padding: 24,
-      }}
-    >
-      <div>
-        <div
-          style={{
-            color: "var(--fg)",
-            marginBottom: 8,
-            fontSize: 21,
-            letterSpacing: "-0.025em",
-            fontWeight: 500,
-          }}
-        >
-          Select a memory
+    <div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--fg-subtle)", textAlign: "center", padding: 40 }}>
+      <div style={{ maxWidth: 320 }}>
+        <div style={{ width: 44, height: 44, borderRadius: "var(--radius-md)", background: "var(--bg-elevated)", border: "1px solid var(--border)", display: "grid", placeItems: "center", margin: "0 auto 14px", color: "var(--fg-subtle)" }}>
+          {view === "saved" ? <NavSavedIcon /> : <NavReviewIcon />}
         </div>
-        <div style={{ fontSize: 12, lineHeight: 1.55, maxWidth: 280 }}>
-          Review a draft or browse saved memories.
+        <div style={{ color: "var(--fg-strong)", marginBottom: 6, fontSize: 14, fontWeight: 600 }}>
+          {view === "saved" ? "No memory selected" : "Nothing to review"}
+        </div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.55, color: "var(--fg-subtle)" }}>
+          {view === "saved"
+            ? "Pick a note from the list to read what Kit remembers about this project."
+            : "When Kit finds a lasting lesson in a run, it waits here for you to keep or dismiss."}
         </div>
       </div>
     </div>

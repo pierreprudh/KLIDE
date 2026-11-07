@@ -224,17 +224,14 @@ export function LibraryModal({
             flexDirection: "column",
           }}
         >
-          <div hidden={section !== "memory"} style={{ flex: 1, minHeight: 0, display: section === "memory" ? "flex" : "none", flexDirection: "column" }}>
-          <MemoryPanel
-            fill
-            visible
-            width={0}
-            workspaceRoot={workspaceRoot}
-            refreshKey={refreshKey}
-            initialDraftId={initialDraftId}
-            onOpenInEditor={onOpenInEditor}
-            onOpenTouchedFile={onOpenTouchedFile}
-          />
+          <div hidden={section !== "memory"} style={{ flex: 1, minHeight: 0, display: section === "memory" ? "flex" : "none" }}>
+            <MemoryPanel
+              workspaceRoot={workspaceRoot}
+              refreshKey={refreshKey}
+              initialDraftId={initialDraftId}
+              onOpenInEditor={onOpenInEditor}
+              onOpenTouchedFile={onOpenTouchedFile}
+            />
           </div>
           {skills && section === "skills" ? (
             <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
