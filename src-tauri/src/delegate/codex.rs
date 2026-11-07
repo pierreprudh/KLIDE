@@ -365,6 +365,15 @@ impl RunParser for CodexRunParser {
     }
 }
 
+#[derive(Default)]
+struct CodexSessionMeta {
+    id: Option<String>,
+    cwd: Option<String>,
+    branch: Option<String>,
+    parent_id: Option<String>,
+    guardian_review: bool,
+}
+
 fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<AgentRun> {
     use std::io::BufRead;
     // Codex rollout files can be hundreds of MB — tool outputs are written
@@ -377,7 +386,8 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
     const MAX_PARSE_LINE: usize = 32 * 1024;
     let file = std::fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
-    let (mut id, mut cwd, mut branch, mut model) = (None, None, None, None);
+    let mut meta = CodexSessionMeta::default();
+    let mut model = None;
     let mut count: u32 = 0;
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
     let mut files: HashSet<String> = HashSet::new();
@@ -394,7 +404,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
             // so parse it; keep skipping oversized response_item tool output.
             if is_session_meta_line(&line) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
-                    capture_session_meta(v.get("payload"), &mut id, &mut cwd, &mut branch);
+                    capture_session_meta(v.get("payload"), &mut meta);
                 }
             } else {
                 count += 1; // oversized line = a tool-output response_item
@@ -408,7 +418,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         let payload = v.get("payload");
         match v.get("type").and_then(|t| t.as_str()) {
             Some("session_meta") => {
-                capture_session_meta(payload, &mut id, &mut cwd, &mut branch);
+                capture_session_meta(payload, &mut meta);
             }
             Some("turn_context") if model.is_none() => {
                 if let Some(m) = payload
@@ -484,6 +494,13 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
             _ => {}
         }
     }
+    let CodexSessionMeta {
+        id,
+        cwd,
+        branch,
+        parent_id,
+        guardian_review,
+    } = meta;
     let id = id.unwrap_or_else(|| {
         path.file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -496,10 +513,14 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         crate::pricing::list_price_cost(model.as_deref().unwrap_or(""), input_tokens, output_tokens);
     Some(AgentRun {
         status: transcript_status(updated_ms, transcript_state),
-        title: index
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| "Codex session".to_string()),
+        title: if guardian_review {
+            "Guardian review".to_string()
+        } else {
+            index
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| "Codex session".to_string())
+        },
         project: cwd.as_deref().and_then(project_name),
         id,
         path: path.to_string_lossy().to_string(),
@@ -517,7 +538,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         cost_usd,
         subagent_count: 0, // Codex's rollout log doesn't expose sub-agent calls.
         last_event,
-        parent_id: None,
+        parent_id,
         klide_hosted: false,
     })
 }
@@ -526,28 +547,34 @@ fn is_session_meta_line(line: &str) -> bool {
     line.contains(r#""type":"session_meta""#) || line.contains(r#""type": "session_meta""#)
 }
 
-fn capture_session_meta(
-    payload: Option<&serde_json::Value>,
-    id: &mut Option<String>,
-    cwd: &mut Option<String>,
-    branch: &mut Option<String>,
-) {
+fn capture_session_meta(payload: Option<&serde_json::Value>, meta: &mut CodexSessionMeta) {
     let Some(p) = payload else {
         return;
     };
-    if id.is_none() {
-        *id = p.get("id").and_then(|x| x.as_str()).map(str::to_string);
+    if meta.id.is_none() {
+        meta.id = p.get("id").and_then(|x| x.as_str()).map(str::to_string);
     }
-    if cwd.is_none() {
-        *cwd = p.get("cwd").and_then(|x| x.as_str()).map(str::to_string);
+    if meta.cwd.is_none() {
+        meta.cwd = p.get("cwd").and_then(|x| x.as_str()).map(str::to_string);
     }
-    if branch.is_none() {
-        *branch = p
+    if meta.branch.is_none() {
+        meta.branch = p
             .get("git")
             .and_then(|g| g.get("branch"))
             .and_then(|b| b.as_str())
             .map(str::to_string);
     }
+    // Codex records the actual owning thread, including for Guardian reviews.
+    // Preserve that lineage rather than guessing from titles, cwd or timing.
+    if meta.parent_id.is_none() {
+        meta.parent_id = p
+            .get("parent_thread_id")
+            .and_then(Value::as_str)
+            .filter(|parent| !parent.trim().is_empty() && Some(*parent) != meta.id.as_deref())
+            .map(str::to_string);
+    }
+    meta.guardian_review |= p.get("thread_source").and_then(Value::as_str) == Some("guardian_review")
+        || p.pointer("/source/subagent/other").and_then(Value::as_str) == Some("guardian");
 }
 
 impl Codex {
@@ -865,6 +892,32 @@ mod tests {
     }
 
     #[test]
+    fn guardian_reviews_keep_their_parent_and_label() {
+        let home = temp_home("guardian-parent");
+        let p = home.join("rollout-review.jsonl");
+        // Desktop reviews include a large instructions blob; exercise both
+        // metadata paths so the size cutoff cannot lose the parent again.
+        for padding in [0, 40 * 1024] {
+            let meta = serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": "review-1",
+                    "parent_thread_id": "parent-1",
+                    "cwd": "/Users/x/proj",
+                    "source": {"subagent": {"other": "guardian"}},
+                    "thread_source": "guardian_review",
+                    "base_instructions": {"text": "x".repeat(padding)}
+                }
+            });
+            std::fs::write(&p, format!("{meta}\n")).unwrap();
+            let run = parse_run(&p, &HashMap::new()).unwrap();
+            assert_eq!(run.parent_id.as_deref(), Some("parent-1"));
+            assert_eq!(run.title, "Guardian review");
+            assert_eq!(run.message_count, 0);
+        }
+    }
+
+    #[test]
     fn parses_a_rollout_and_skips_oversized_lines() {
         let home = temp_home("parse");
         let p = home.join("rollout-1.jsonl");
@@ -874,6 +927,7 @@ mod tests {
         let run = parse_run(&p, &index).unwrap();
         assert_eq!(run.id, "sess-1");
         assert_eq!(run.title, "My thread");
+        assert_eq!(run.parent_id, None, "standalone sessions stay standalone");
         assert_eq!(run.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(run.git_branch.as_deref(), Some("main"));
         assert_eq!(run.message_count, 2); // the normal item + the oversized one

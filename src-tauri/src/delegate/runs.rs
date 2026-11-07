@@ -57,7 +57,7 @@ pub struct AgentRun {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>, // set when we can infer parent from spawn mapping
+    pub parent_id: Option<String>, // explicit transcript lineage or Klide spawn mapping
     /// The CLI saved this session because Klide drove it headless for a
     /// conversation of its own (`delegate::chat`). That conversation is
     /// already a row, so the board leaves this copy out; following or

@@ -4246,9 +4246,8 @@ export function MissionControl({
     [tasks, convos, runs, workspaceRoot, dismissedBoardRuns, ledgerMetadata, showArchived]
   );
 
-  // Parent links come exclusively from the Rust spawn mapping
-  // (`by_delegate`/`by_external` in list_agent_runs), which records a real
-  // parentId only when Klide actually spawned the delegate. We deliberately
+  // Parent links come from explicit delegate transcript lineage (including
+  // Codex Guardian reviews) or Rust's recorded Klide spawn mappings. We deliberately
   // do NOT infer parents from project + time proximity: a user's own Claude
   // Code / Codex sessions share the workspace and overlap in time with Klide
   // conversations, and a fuzzy heuristic wrongly adopted them as children of

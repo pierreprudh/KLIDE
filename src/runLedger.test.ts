@@ -321,6 +321,29 @@ describe("board model", () => {
 });
 
 describe("buildChildIndex", () => {
+  it("keeps a finished Guardian review under its running Codex parent across board sections", () => {
+    const all = build({
+      runs: [
+        diskRun({ id: "codex-parent", source: "codex", status: "running", updatedMs: Date.now() }),
+        diskRun({
+          id: "guardian-review",
+          source: "codex",
+          title: "Guardian review",
+          parentId: "codex-parent",
+          status: "done",
+        }),
+      ],
+    });
+    const sections = groupLedgerBySection(all);
+    const index = buildChildIndex(all, all);
+
+    expect(index.topLevel(sections.running).map((e) => e.id)).toEqual(["codex-parent"]);
+    expect(index.topLevel(sections.blocked)).toEqual([]);
+    expect(index.topLevel(sections.ready_for_review)).toEqual([]);
+    expect(index.topLevel(sections.done)).toEqual([]);
+    expect(index.childrenOf("codex-parent").map((e) => e.title)).toEqual(["Guardian review"]);
+  });
+
   it("nests children under a visible parent", () => {
     const all = build({
       runs: [diskRun({ id: "parent" }), diskRun({ id: "kid", parentId: "parent" })],
