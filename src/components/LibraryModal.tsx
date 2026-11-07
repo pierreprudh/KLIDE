@@ -88,8 +88,10 @@ export function LibraryModal({
     onSectionChange?.(next);
   }
   const [sharedDirty, setSharedDirty] = useState(false);
+  // A lesson proposed from Foundations opens on Memory's review page.
+  const [lessonDraftId, setLessonDraftId] = useState<string | null>(null);
   useEffect(() => { if (open) setSectionState(initialSection); }, [open, initialSection]);
-  useEffect(() => { if (open) setSharedDirty(false); }, [open]);
+  useEffect(() => { if (open) { setSharedDirty(false); setLessonDraftId(null); } }, [open]);
   const reviewCount = useMemoryReviewCount(open ? workspaceRoot : null);
   const sections: { id: LibrarySection; label: string; note?: string }[] = [
     { id: "memory", label: "Memory", note: reviewCount > 0 ? `${reviewCount} to review` : undefined },
@@ -228,7 +230,7 @@ export function LibraryModal({
             <MemoryPanel
               workspaceRoot={workspaceRoot}
               refreshKey={refreshKey}
-              initialDraftId={initialDraftId}
+              initialDraftId={lessonDraftId ?? initialDraftId}
               onOpenInEditor={onOpenInEditor}
               onOpenTouchedFile={onOpenTouchedFile}
             />
@@ -248,9 +250,10 @@ export function LibraryModal({
             </div>
           ) : null}
           {workspaceRoot && <div hidden={section !== "shared"} style={{ flex: 1, minHeight: 0, display: section === "shared" ? "flex" : "none" }}>
-            {section === "shared" || sharedDirty ? <Suspense fallback={<p>Loading foundations…</p>}>
-              <SharedNotesEditor embedded workspaceRoot={workspaceRoot} conversationId={conversationId} seed={sharedNotesSeed}
-                onDirtyChange={setSharedDirty} onChanged={() => {}} onClose={close} />
+            {section === "shared" || sharedDirty ? <Suspense fallback={null}>
+              <SharedNotesEditor workspaceRoot={workspaceRoot} conversationId={conversationId} seed={sharedNotesSeed}
+                onDirtyChange={setSharedDirty} onChanged={() => {}}
+                onOpenMemory={(draftId) => { if (draftId) setLessonDraftId(draftId); setSection("memory"); }} />
             </Suspense> : null}
           </div>}
         </div>

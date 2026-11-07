@@ -193,6 +193,27 @@ export function DetailAction({ label, onClick, danger = false, children }: { lab
   );
 }
 
+/** The on / off switch beside a row or a page title. */
+export function Toggle({ on, onClick, label, disabled = false }: { on: boolean; onClick: () => void; label: string; disabled?: boolean }) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        flexShrink: 0, width: 30, height: 18, borderRadius: 999, padding: 0, position: "relative", opacity: disabled ? 0.45 : 1, cursor: disabled ? "default" : "pointer",
+        background: on ? "var(--accent)" : "var(--border-strong)",
+        transition: "background var(--motion-med) var(--ease-out)",
+      }}
+    >
+      <span style={{ position: "absolute", top: 2, left: on ? 14 : 2, width: 14, height: 14, borderRadius: "50%", background: "var(--control-primary-fg)", transition: "left var(--motion-med) var(--ease-out)" }} />
+    </button>
+  );
+}
+
 /** The command menu's highlight, placed by `useSlidingHighlight`. */
 export function Highlight({ at }: { at: ReturnType<typeof useSlidingHighlight>["indicator"] }) {
   if (!at) return null;
