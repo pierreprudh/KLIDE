@@ -29,7 +29,11 @@ const proposal = (draftId: string, title: string) => ({
   createdAtMs: now - 3600e3, workspaceRoot: root, why: "Seen in two runs this week: both accepted attempts were fast-forwarded onto the Mission branch.", evidence: "missions/isolation.rs: accept → commit → git merge --ff-only klide/mission-<id>", evidenceHash: "x", filesTouched: ["src-tauri/src/missions/isolation.rs"],
 });
 mockIPC((command) => {
-  if (command === "shared_notes_read") return { revision: 1, sets: [{ id: "fixture-foundations", title: "Working conventions", body: "Keep the interface calm and keyboard accessible.", conversationIds: [], archived: false, updatedAtMs: now }] };
+  if (command === "shared_notes_read") return { revision: 1, sets: [
+    { id: "fixture-foundations", title: "Working conventions", body: "Keep the interface calm and keyboard accessible.\n\nDecisions so far\n- Library tabs share one body\n- No chips, no status dots\n\nOpen questions\n- Should Foundations sync to the phone companion?", conversationIds: ["c-focus", "c-review"], archived: false, updatedAtMs: now - 2 * 3600e3 },
+    { id: "billing", title: "Billing migration", body: "", conversationIds: [], archived: false, updatedAtMs: now - 5 * 86400e3 },
+    { id: "old", title: "v0.5 race dogfood", body: "Done.", conversationIds: ["c-old"], archived: true, updatedAtMs: now - 40 * 86400e3 },
+  ] };
   if (command === "memory_list") return [
     entry("durable", "Durable writes go through durable.rs", 3, {
       goal: "Never let a reader see a torn Mission or Transcript file.",

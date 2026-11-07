@@ -1,99 +1,111 @@
-import { DocumentIcon, MissionIcon, MemoryIcon, NewTaskIcon, CloseIcon, ReplayIcon, SendIcon, MoreIcon, CheckIcon, SearchIcon } from "../icons";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { applySharedNotes, readSharedNotes, sharedNoteLesson, sharedNotesForConversation, type SharedNotesAction, type SharedNotesStore } from "../sharedNotes";
 import { addMemoryDraft } from "../memoryDrafts";
+import { relativeTime } from "../time";
+import { useSlidingHighlight } from "../hooks/useSlidingHighlight";
 import { loadConversations } from "./ai/storedConversations";
 import type { Conversation } from "./ai/types";
 import type { SharedNotesSeed } from "./ai/SharedNotesControl";
-import { LibraryModal } from "./LibraryModal";
-import { createPortal } from "react-dom";
+import {
+  DetailAction,
+  Highlight,
+  NavRail,
+  PlusIcon,
+  SearchIcon,
+  SectionLabel,
+  Toggle,
+  TrashIcon,
+  fieldStyle,
+  labelStyle,
+  type NavItem,
+} from "./library/parts";
 import "./sharedNotes.css";
 
-type Tab = "notes" | "conversations" | "memory";
-const TABS: Tab[] = ["notes", "conversations", "memory"];
+// Foundations as the Library's third tab — the Skills body again: the command
+// menu's field on top, Active / Archived on the left with "New foundation"
+// under the hairline, the list beside them, and one page per foundation:
+// its notes on paper, the conversations that receive them, and a lesson to
+// propose for Project Memory.
 
-const noteIcons = {
-  note: DocumentIcon, people: MissionIcon, memory: MemoryIcon, plus: NewTaskIcon,
-  close: CloseIcon, refresh: ReplayIcon, arrow: SendIcon, more: MoreIcon,
-  check: CheckIcon, search: SearchIcon,
-};
-function Icon({ name, size = 16 }: { name: keyof typeof noteIcons; size?: number }) {
-  const Glyph = noteIcons[name];
-  return <Glyph size={size} style={name === "arrow" ? { transform: "rotate(90deg)" } : undefined} />;
+type View = "active" | "archived";
+const MAX_BYTES = 12_000;
+
+function NavActiveIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 3.5h7l4 4V20.5H7z" />
+      <path d="M14 3.5v4h4" />
+      <path d="M10 12h5M10 15.5h5" />
+    </svg>
+  );
+}
+function NavArchivedIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 5h17v4h-17z" />
+      <path d="M5 9v10.5h14V9" />
+      <path d="M10 13h4" />
+    </svg>
+  );
 }
 
-export default function SharedNotesDialog({ workspaceRoot, conversationId, seed, onChanged, onClose, embedded = false, onDirtyChange }: {
+function plural(n: number, one: string) { return `${n} ${one}${n === 1 ? "" : "s"}`; }
+
+export default function SharedNotesDialog({ workspaceRoot, conversationId, seed, onChanged, onDirtyChange, onOpenMemory }: {
   workspaceRoot: string; conversationId: string; seed: SharedNotesSeed | null;
-  embedded?: boolean; onDirtyChange?: (dirty: boolean) => void;
-  onChanged: (store: SharedNotesStore) => void; onClose: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  onChanged: (store: SharedNotesStore) => void;
+  /** Hand over to the Memory tab — with a proposed lesson open, or just the tab. */
+  onOpenMemory?: (draftId: string | null) => void;
 }) {
   const [store, setStore] = useState<SharedNotesStore | null>(null);
+  const [view, setView] = useState<View>("active");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ title: "", body: "" });
-  const [newTitle, setNewTitle] = useState("");
   const [creating, setCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<Tab>("notes");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [lessonOpen, setLessonOpen] = useState(false);
   const [lessonTitle, setLessonTitle] = useState("");
   const [lesson, setLesson] = useState("");
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
   const [seedAdded, setSeedAdded] = useState(false);
-  const [deleteArmed, setDeleteArmed] = useState(false);
   const selection = useRef("");
-  const root = useRef<HTMLDivElement>(null);
-  const returnFocus = useRef(document.activeElement);
   const set = store?.sets.find(item => item.id === selectedId);
   const dirty = !!set && (draft.title !== set.title || draft.body !== set.body);
   const hasLessonDraft = !!lesson.trim() || !!lessonTitle.trim();
-  useEffect(() => { onDirtyChange?.(dirty || hasLessonDraft || !!(seed && !seedAdded)); }, [dirty, hasLessonDraft, seed, seedAdded, onDirtyChange]);
+  const pending = dirty || hasLessonDraft || !!(seed && !seedAdded);
+  useEffect(() => { onDirtyChange?.(pending); }, [pending, onDirtyChange]);
   const [conversations] = useState(() => loadConversations<Conversation>().filter(item => item.cwd === workspaceRoot));
 
   function adopt(next: SharedNotesStore) { setStore(next); onChanged(next); }
   function select(id: string | null, next = store) {
-    const selected = next?.sets.find(item => item.id === id);
-    setSelectedId(selected?.id ?? null);
-    setDraft({ title: selected?.title ?? "", body: selected?.body ?? "" });
-    setLesson(""); setLessonTitle(""); setDeleteArmed(false); setSettingsOpen(false); setTab("notes"); selection.current = "";
+    const picked = next?.sets.find(item => item.id === id);
+    setSelectedId(picked?.id ?? null);
+    setDraft({ title: picked?.title ?? "", body: picked?.body ?? "" });
+    setLesson(""); setLessonTitle(""); setLessonOpen(false); setStatus(""); selection.current = "";
+    if (picked) { setCreating(false); setView(picked.archived ? "archived" : "active"); }
   }
+  /** Leaving a page with unsaved words asks first. */
+  function leave(): boolean {
+    return !(dirty || hasLessonDraft) || window.confirm("Discard your unsaved Foundations changes?");
+  }
+
   useEffect(() => {
     let alive = true;
     void readSharedNotes(workspaceRoot).then(next => {
       if (!alive) return;
       adopt(next);
-      select(sharedNotesForConversation(next, conversationId)?.id ?? next.sets[0]?.id ?? null, next);
+      select(sharedNotesForConversation(next, conversationId)?.id ?? next.sets.find(item => !item.archived)?.id ?? next.sets[0]?.id ?? null, next);
       if (!next.sets.length) setCreating(true);
-    }).catch(error => { if (alive) setError(String(error)); });
-    root.current?.focus();
-    return () => { alive = false; if (returnFocus.current instanceof HTMLElement) returnFocus.current.focus(); };
-    // The parent keys the dialog by Workspace and Conversation.
+    }).catch(err => { if (alive) setError(String(err)); });
+    return () => { alive = false; };
+    // The Library keys this tab by Workspace and Conversation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function close() {
-    if (busy) return;
-    if ((dirty || lesson.trim() || lessonTitle.trim() || (seed && !seedAdded)) && !window.confirm("Close without saving this Foundations draft?")) return;
-    onClose();
-  }
-  function keyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (reviewOpen) return;
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      if (settingsOpen) setSettingsOpen(false); else close();
-    }
-
-  }
-  function tabKeyDown(event: KeyboardEvent<HTMLButtonElement>, current: Tab) {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    const index = event.key === "Home" ? 0 : event.key === "End" ? 2 : (TABS.indexOf(current) + (event.key === "ArrowRight" ? 1 : 2)) % 3;
-    setTab(TABS[index]);
-    root.current?.querySelector<HTMLButtonElement>(`#shared-tab-${TABS[index]}`)?.focus();
-  }
   async function mutate(action: SharedNotesAction) {
     if (!store || busy) return;
     setBusy(true); setError(""); setStatus("");
@@ -102,16 +114,20 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
       adopt(next);
       if (action.type === "create") {
         select(sharedNotesForConversation(next, conversationId)?.id ?? next.sets[next.sets.length - 1]?.id ?? null, next);
-        setNewTitle(""); setCreating(false);
+        setNewTitle("");
+        setStatus("Created.");
       } else if (action.type === "edit") {
         const saved = next.sets.find(item => item.id === action.id);
         if (saved) setDraft({ title: saved.title, body: saved.body });
         selection.current = "";
-      }
-      else if (action.type === "delete") select(null, next);
-      setSettingsOpen(false);
-      setStatus(action.type === "edit" ? "Saved. Linked conversations will use these notes on their next turn." : "Sharing updated.");
-    } catch (error) { setError(String(error)); }
+        setStatus("Saved. Linked conversations use these notes on their next turn.");
+      } else if (action.type === "delete") {
+        select(next.sets.find(item => !item.archived)?.id ?? null, next);
+      } else if (action.type === "archive") {
+        setView(action.archived ? "archived" : "active");
+        setStatus(action.archived ? "Archived. Conversations no longer receive these notes." : "Restored.");
+      } else setStatus("Sharing updated.");
+    } catch (err) { setError(String(err)); }
     finally { setBusy(false); }
   }
   async function reload() {
@@ -119,109 +135,365 @@ export default function SharedNotesDialog({ workspaceRoot, conversationId, seed,
     try {
       const next = await readSharedNotes(workspaceRoot);
       adopt(next); setError("");
-      setStatus(selectedId && !next.sets.some(set => set.id === selectedId)
-        ? "This set was deleted. Copy your draft before choosing another set."
-        : "Reloaded. Your draft is unchanged; compare the saved version before saving.");
-    } catch (error) { setError(String(error)); }
+      setStatus(selectedId && !next.sets.some(item => item.id === selectedId)
+        ? "This foundation was deleted elsewhere. Copy your draft before choosing another."
+        : "Reloaded. Your draft is unchanged.");
+    } catch (err) { setError(String(err)); }
     finally { setBusy(false); }
   }
-  function extractLesson() {
-    if (selection.current.trim()) setLesson(selection.current.trim().slice(0, 4000));
-    if (!lessonTitle.trim()) setLessonTitle(draft.title);
-    setTab("memory");
-  }
-  const members = set ? [...new Set([conversationId, ...conversations.map(item => item.id), ...set.conversationIds])].filter(Boolean) : [];
-  const bytes = new TextEncoder().encode(draft.body).length;
-  const filteredSets = store?.sets.filter(item => item.title.toLowerCase().includes(query.toLowerCase())) ?? [];
 
-  return <>
-    <div className={embedded ? "shared-notes-embedded" : "shared-notes-dock"} inert={reviewOpen} aria-hidden={reviewOpen || undefined}>
-      <div className="shared-notes-dialog" role="complementary" aria-labelledby="shared-notes-title" tabIndex={-1} ref={root} onKeyDown={keyDown}>
-        <header className="shared-notes-header">
-          <div className="shared-notes-app-icon"><Icon name="note" size={18} /></div>
-          <h2 id="shared-notes-title">Foundations</h2><span className="shared-notes-header-caption">Workspace</span>
-          <div className="shared-notes-header-actions">
-            <button className="sn-icon-button" type="button" onClick={() => void reload()} disabled={busy} aria-label="Reload foundations" title="Reload foundations"><Icon name="refresh" /></button>
-            <span className="sn-header-divider" />
-            <button className="sn-icon-button sn-close" type="button" onClick={close} aria-label="Close foundations" title="Close" disabled={busy}><Icon name="close" /></button>
-          </div>
-        </header>
-        <div className="shared-notes-layout">
-          <nav className="shared-notes-list" aria-label="Shared note sets">
-            <div className="sn-sidebar-heading"><span>Your foundations</span><button className="sn-icon-button" type="button" aria-label="Create a foundation" title="Create a foundation" onClick={() => setCreating(!creating)} disabled={busy || dirty || hasLessonDraft}><Icon name="plus" size={15} /></button></div>
-            <label className="sn-search"><Icon name="search" size={14} /><input aria-label="Find foundations" placeholder="Find a foundation…" value={query} onChange={event => setQuery(event.target.value)} /></label>
-            {creating && <form className="sn-create-form" onSubmit={event => { event.preventDefault(); if (newTitle.trim() && !dirty && !busy) void mutate({ type: "create", title: newTitle, conversationId }); }}>
-              <input aria-label="Foundation name" autoFocus value={newTitle} maxLength={160} onChange={event => setNewTitle(event.target.value)} placeholder="Name your initiative" />
-              <div className="shared-notes-actions"><button type="button" className="sn-button sn-ghost" onClick={() => setCreating(false)}>Cancel</button><button type="submit" className="sn-button sn-primary" disabled={!store || busy || dirty || hasLessonDraft || !newTitle.trim()}>Create set</button></div>
-            </form>}
-            <div className="sn-set-scroll">
-              {[false, true].map(archived => {
-                const sets = filteredSets.filter(item => item.archived === archived);
-                return sets.length > 0 ? <div className="sn-set-group" key={String(archived)}>{archived && <span className="sn-section-label">Archived</span>}{sets.map(item => <button className="sn-set-row" type="button" key={item.id} aria-pressed={item.id === selectedId} disabled={busy || dirty || !!lesson.trim() || !!lessonTitle.trim()} onClick={() => select(item.id)}>
-                  <span className="sn-set-mark"><Icon name="note" size={16} /></span><span className="sn-set-copy"><span>{item.title}</span><small>{item.conversationIds.length} conversation{item.conversationIds.length === 1 ? "" : "s"}</small></span>{item.id === selectedId && <span className="sn-selection-dot" />}
-                </button>)}</div> : null;
-              })}
-              {store && !filteredSets.length && <p className="sn-list-empty">{query ? "No matching foundations." : "A little context for your next conversation."}</p>}
-            </div>
-            <div className="sn-sidebar-footer"><Icon name="people" size={15} /><span>One context.<br />Any provider.</span></div>
-          </nav>
-          <div className="sn-main">
-            <div className="sn-feedback" aria-live="polite">
-              {error && <div className="sn-alert" role="alert">{error}</div>}
-              {status && !error && <div className="sn-status" role="status"><Icon name="check" size={14} />{status}</div>}
-            </div>
-            {selectedId ? <>
-              <div className="sn-document-heading">
-                <div className="sn-document-meta"><span className="sn-eyebrow">Working context</span><span className={`sn-badge${set?.archived ? " sn-badge-muted" : ""}`}><span />{set?.archived ? "Archived" : "Shared"}</span>
-                  {set && <div className="sn-settings"><button type="button" className="sn-icon-button" aria-label="Foundation options" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}><Icon name="more" /></button>{settingsOpen && <div className="sn-settings-menu">
-                    <button type="button" disabled={busy || dirty} onClick={() => void mutate({ type: "archive", id: set.id, archived: !set.archived })}>{set.archived ? "Restore foundation" : "Archive foundation"}</button>
-                    <button type="button" className="sn-danger" disabled={busy || dirty} onClick={() => { if (deleteArmed) void mutate({ type: "delete", id: set.id }); else setDeleteArmed(true); }}>{deleteArmed ? "Confirm delete notes and links" : "Delete foundation"}</button>
-                    {deleteArmed && <button type="button" onClick={() => setDeleteArmed(false)}>Cancel delete</button>}
-                  </div>}</div>}
+  const sets = store?.sets ?? [];
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return sets.filter(item => item.archived === (view === "archived")
+      && (!q || item.title.toLowerCase().includes(q) || item.body.toLowerCase().includes(q)));
+  }, [sets, view, query]);
+  const ids = filtered.map(item => item.id);
+  const hl = useSlidingHighlight(creating ? null : selectedId, `${view}|${ids.join("|")}`);
+
+  function pick(id: string) {
+    if (id === selectedId && !creating) return;
+    if (!leave()) return;
+    select(id);
+  }
+  function step(delta: 1 | -1) {
+    if (!ids.length) return;
+    const at = selectedId ? ids.indexOf(selectedId) : -1;
+    pick(ids[at < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, at + delta))]);
+  }
+  function startCreate() {
+    if (!leave()) return;
+    setCreating(true); setView("active"); setStatus(""); setError("");
+  }
+
+  const navItems: NavItem<View>[] = [
+    { id: "active", label: "Foundations", icon: <NavActiveIcon />, count: sets.filter(item => !item.archived).length },
+    { id: "archived", label: "Archived", icon: <NavArchivedIcon />, count: sets.filter(item => item.archived).length },
+  ];
+
+  return (
+    <div className="klide-skills" data-embedded role="region" aria-label="Foundations">
+      <div className="klide-cmd-header">
+        <SearchIcon />
+        <input
+          className="klide-cmd-input"
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === "ArrowDown") { event.preventDefault(); step(1); }
+            else if (event.key === "ArrowUp") { event.preventDefault(); step(-1); }
+          }}
+          placeholder="Search foundations…"
+          spellCheck={false}
+          autoComplete="off"
+          aria-label="Search foundations"
+        />
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+        <nav aria-label="Sections" className="klide-skills-column" style={{ width: 196 }}>
+          <NavRail navItems={navItems} tab={view} onTabChange={next => { setView(next); setCreating(false); }}
+            action={{ label: "New foundation", icon: <PlusIcon />, onClick: startCreate }} />
+        </nav>
+
+        <main style={{ flex: 1, minWidth: 0, display: "flex" }} className="skills-tab-in" key={view}>
+          <aside aria-label="Foundation list" className="klide-skills-column" style={{ width: 300 }}>
+            <div className="klide-skills-list" role="listbox" aria-label="Foundations" {...hl.list}>
+              <Highlight at={hl.indicator} />
+              {!store && !error ? null : filtered.length === 0 ? (
+                <div style={{ padding: "18px 12px", fontSize: 12, lineHeight: 1.55, color: "var(--fg-dim)" }}>
+                  {query.trim()
+                    ? `No foundations matching "${query.trim()}"`
+                    : view === "archived"
+                      ? "Archived foundations are kept for reference and no longer reach conversations."
+                      : "A little shared context for your next conversations."}
                 </div>
-                <label className="sn-document-title"><span className="sn-sr-only">Title</span><input value={draft.title} maxLength={160} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} disabled={busy || !set} placeholder="Untitled notes" /></label>
-                <p>The decisions, questions, and next steps your conversations share.</p>
-                <div className="sn-tabs" role="tablist" aria-label="Foundations sections">{TABS.map(item => <button type="button" role="tab" key={item} id={`shared-tab-${item}`} aria-selected={tab === item} aria-controls={`shared-panel-${item}`} tabIndex={tab === item ? 0 : -1} onKeyDown={event => tabKeyDown(event, item)} onClick={() => { setTab(item); setSettingsOpen(false); }}>
-                  <Icon name={item === "notes" ? "note" : item === "conversations" ? "people" : "memory"} size={14} />{item === "notes" ? "Notes" : item === "conversations" ? "Conversations" : "Project Memory"}{item === "conversations" && <span className="sn-count">{set?.conversationIds.length ?? 0}</span>}
-                </button>)}</div>
+              ) : (
+                <>
+                  <div className="klide-cmd-heading">{view === "archived" ? "Archived" : "Shared"}</div>
+                  {filtered.map(item => {
+                    const active = !creating && item.id === selectedId;
+                    return (
+                      <div
+                        key={item.id}
+                        {...hl.row(item.id)}
+                        onClick={() => pick(item.id)}
+                        className="klide-cmd-option klide-skill-option"
+                        role="option"
+                        aria-selected={active}
+                        data-active={active || undefined}
+                        data-disabled={item.archived || undefined}
+                      >
+                        <div className="klide-skill-text">
+                          <span>{item.title || "Untitled"}</span>
+                          <small>{plural(item.conversationIds.length, "conversation")}</small>
+                        </div>
+                        <span className="klide-cmd-hint">{relativeTime(item.updatedAtMs).replace(/ ago$/, "")}</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          </aside>
+
+          <div style={{ flex: 1, minWidth: 0, overflow: "auto" }} className="skills-tab-in" key={creating ? "new" : selectedId ?? "empty"}>
+            {creating ? (
+              <CreateForm
+                title={newTitle}
+                setTitle={setNewTitle}
+                busy={busy || !store}
+                error={error}
+                onCreate={() => void mutate({ type: "create", title: newTitle.trim(), conversationId })}
+                onCancel={sets.length ? () => setCreating(false) : undefined}
+              />
+            ) : set ? (
+              <div style={{ padding: "32px 36px", maxWidth: 780 }}>
+                {/* Title row — the name is the field; actions beside it */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label style={{ flex: 1, minWidth: 0 }}>
+                    <span className="sn-sr-only">Title</span>
+                    <input className="sn-title-input" value={draft.title} maxLength={160} disabled={busy}
+                      onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} placeholder="Untitled foundation" />
+                  </label>
+                  {dirty ? <>
+                    <button className="klide-button klide-button-ghost" style={{ minHeight: 30, padding: "0 12px", color: "var(--fg-subtle)" }} disabled={busy}
+                      onClick={() => { setDraft({ title: set.title, body: set.body }); selection.current = ""; }}>Discard</button>
+                    <button className="klide-button klide-button-primary" style={{ minHeight: 30, padding: "0 14px" }}
+                      disabled={busy || !draft.title.trim() || bytes(draft.body) > MAX_BYTES}
+                      onClick={() => void mutate({ type: "edit", id: set.id, ...draft })}>{busy ? "Saving…" : "Save"}</button>
+                  </> : <>
+                    <Toggle on={!set.archived} disabled={busy}
+                      label={set.archived ? `Restore ${set.title}` : `Archive ${set.title}`}
+                      onClick={() => void mutate({ type: "archive", id: set.id, archived: !set.archived })} />
+                    <div style={{ width: 1, height: 18, background: "var(--border)", margin: "0 4px" }} />
+                    <DetailAction label="Delete foundation" danger onClick={() => {
+                      if (window.confirm(`Delete "${set.title}"? Its notes and conversation links are removed.`)) void mutate({ type: "delete", id: set.id });
+                    }}><TrashIcon /></DetailAction>
+                  </>}
+                </div>
+
+                {/* Meta strip */}
+                <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", rowGap: 6, columnGap: 22, alignItems: "center", fontSize: 12, color: "var(--fg-subtle)" }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{set.archived ? "Archived" : "Shared"}</span>
+                  <span>{set.archived ? "Not supplied to conversations" : `Reaches ${plural(set.conversationIds.length, "conversation")}`}</span>
+                  <span>Updated {relativeTime(set.updatedAtMs)}</span>
+                  <button className="sn-quiet-link" onClick={() => void reload()} disabled={busy}>Reload</button>
+                </div>
+                {(error || status) && (
+                  <p role={error ? "alert" : "status"} style={{ margin: "12px 0 0", fontSize: 12, color: error ? "var(--danger)" : "var(--fg-subtle)" }}>{error || status}</p>
+                )}
+
+                <blockquote className="klide-quote" style={{ marginTop: 20, fontSize: 13 }}>
+                  The decisions, questions and next steps your conversations share — on any provider.
+                </blockquote>
+
+                {seed && !seedAdded && (
+                  <section style={{ marginTop: 28 }}>
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                      <SectionLabel>An answer worth keeping</SectionLabel>
+                      <div style={{ flex: 1 }} />
+                      <button className="klide-button klide-button-secondary" style={{ minHeight: 28, padding: "0 12px" }} disabled={set.archived || busy}
+                        onClick={() => {
+                          setDraft(previous => ({ ...previous, body: `${previous.body}${previous.body.trim() ? "\n\n" : ""}From conversation ${seed.sourceConversationId}:\n${seed.text}` }));
+                          setSeedAdded(true);
+                        }}>Add to notes</button>
+                    </div>
+                    <div className="klide-paper" style={{ marginTop: 10 }}>
+                      <pre className="sn-paper-text" style={{ maxHeight: 160, overflow: "auto" }}>{seed.text}</pre>
+                    </div>
+                  </section>
+                )}
+
+                {/* The notes on paper */}
+                <section style={{ marginTop: 28 }}>
+                  <SectionLabel>Notes</SectionLabel>
+                  <div className="klide-paper" style={{ marginTop: 10 }}>
+                    <div className="klide-paper-header">
+                      <span style={{ color: "var(--fg-subtle)" }}>Working notes</span>
+                      <span style={{ flex: 1 }} />
+                      <span style={{ color: bytes(draft.body) > MAX_BYTES ? "var(--danger)" : "var(--fg-dim)" }}>
+                        {bytes(draft.body).toLocaleString()} / {MAX_BYTES.toLocaleString()} bytes
+                      </span>
+                    </div>
+                    <textarea
+                      className="sn-paper-editor"
+                      aria-label="Notes"
+                      value={draft.body}
+                      disabled={busy}
+                      onChange={event => setDraft(previous => ({ ...previous, body: event.target.value }))}
+                      onSelect={event => { const field = event.currentTarget; selection.current = field.value.slice(field.selectionStart, field.selectionEnd); }}
+                      placeholder={"What should the next conversation know?\n\nDecisions so far\nOpen questions\nWhat comes next"}
+                    />
+                  </div>
+                  {dirty && (
+                    <details className="sn-more">
+                      <summary>Compare saved version</summary>
+                      <div className="klide-paper" style={{ marginTop: 10 }}>
+                        <pre className="sn-paper-text">{set.body || "No saved notes yet."}</pre>
+                      </div>
+                    </details>
+                  )}
+                </section>
+
+                {/* Who receives them */}
+                <ConversationsSection
+                  setId={set.id}
+                  linkedIds={set.conversationIds}
+                  conversationId={conversationId}
+                  conversations={conversations}
+                  disabled={busy || dirty || set.archived}
+                  note={dirty ? "Save or discard your edits before changing who shares them." : set.archived ? "Restore this foundation to share it again." : null}
+                  onToggle={(id, linked) => void mutate({ type: "attach", id: linked ? null : set.id, conversationId: id })}
+                />
+
+                {/* A lasting lesson */}
+                <section style={{ marginTop: 32 }}>
+                  <div style={{ display: "flex", alignItems: "center" }}>
+                    <SectionLabel>Lasting lesson</SectionLabel>
+                    <div style={{ flex: 1 }} />
+                    {onOpenMemory && <button className="sn-quiet-link" onClick={() => onOpenMemory(null)}>Open Project Memory</button>}
+                  </div>
+                  {!lessonOpen ? (
+                    <p style={{ margin: "10px 0 0", fontSize: 12.5, lineHeight: 1.6, color: "var(--fg-subtle)" }}>
+                      Select a passage in the notes, then{" "}
+                      <button className="sn-quiet-link sn-inline-link" disabled={dirty || busy} onClick={() => {
+                        if (selection.current.trim()) setLesson(selection.current.trim().slice(0, 4000));
+                        if (!lessonTitle.trim()) setLessonTitle(draft.title);
+                        setLessonOpen(true);
+                      }}>propose it for Project Memory</button>. You review it before it is kept.
+                    </p>
+                  ) : (
+                    <div style={{ marginTop: 14 }}>
+                      <div style={{ marginBottom: 16 }}>
+                        <label style={labelStyle} htmlFor={`sn-lesson-title-${set.id}`}>Lesson title</label>
+                        <input id={`sn-lesson-title-${set.id}`} value={lessonTitle} maxLength={160} onChange={event => setLessonTitle(event.target.value)} placeholder="A clear, reusable takeaway" style={fieldStyle} />
+                      </div>
+                      <div style={{ marginBottom: 18 }}>
+                        <label style={labelStyle} htmlFor={`sn-lesson-${set.id}`}>What to remember</label>
+                        <textarea id={`sn-lesson-${set.id}`} value={lesson} maxLength={4000} onChange={event => setLesson(event.target.value)} rows={5}
+                          placeholder="The lesson, with the file paths or test results that support it…"
+                          style={{ ...fieldStyle, minHeight: 110, resize: "vertical", lineHeight: 1.65 }} />
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <button className="klide-button klide-button-primary" style={{ minHeight: 32, padding: "0 16px" }}
+                          disabled={!lessonTitle.trim() || !lesson.trim() || busy || dirty}
+                          onClick={() => {
+                            const proposed = addMemoryDraft(sharedNoteLesson(set, lessonTitle, lesson), workspaceRoot, { why: `Selected by you from the foundation "${set.title}".`, evidence: set.body });
+                            setLesson(""); setLessonTitle(""); setLessonOpen(false);
+                            if (onOpenMemory) onOpenMemory(proposed?.draftId ?? null);
+                            else setStatus("Proposed. Review it in Memory → To review.");
+                          }}>Review in Memory</button>
+                        <button className="klide-button klide-button-ghost" style={{ minHeight: 32, padding: "0 12px", color: "var(--fg-subtle)" }}
+                          onClick={() => { setLesson(""); setLessonTitle(""); setLessonOpen(false); }}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </section>
               </div>
-              <div className="sn-panel-scroll">
-                <section id="shared-panel-notes" role="tabpanel" aria-labelledby="shared-tab-notes" hidden={tab !== "notes"} className="sn-notes-panel">
-                  {seed && !seedAdded && <div className="sn-seed-card"><div className="sn-seed-heading"><Icon name="note" /><strong>An answer worth keeping</strong></div><p>Add it to your draft, then make it your own.</p><details><summary>Preview answer</summary><pre>{seed.text}</pre></details><button className="sn-button sn-secondary" type="button" disabled={!set || set.archived || busy} onClick={() => {
-                    setDraft(previous => ({ ...previous, body: `${previous.body}${previous.body.trim() ? "\n\n" : ""}From conversation ${seed.sourceConversationId}:\n${seed.text}` })); setSeedAdded(true);
-                  }}>Add answer to draft<Icon name="plus" size={14} /></button></div>}
-                  {set?.archived && <div className="sn-callout">Archived notes are kept for reference and no longer supplied to conversations.</div>}
-                  <label className="sn-writing-surface"><span className="sn-sr-only">Notes</span><textarea value={draft.body} onChange={event => setDraft(previous => ({ ...previous, body: event.target.value }))} onSelect={event => { const field = event.currentTarget; selection.current = field.value.slice(field.selectionStart, field.selectionEnd); }} disabled={busy || !set} placeholder={"What should the next conversation know?\n\nDecisions so far\nOpen questions\nWhat comes next"} /></label>
-                  <div className="sn-writing-meta"><span className={bytes > 12000 ? "sn-danger" : ""}>{bytes.toLocaleString()} / 12,000 bytes</span><span>Working notes, saved by you</span></div>
-                  {set && dirty && <details className="sn-compare"><summary>Compare saved version</summary><pre>{set.body || "No saved notes yet."}</pre></details>}
-                  <button className="sn-memory-shortcut" type="button" disabled={dirty || !set || busy} onClick={extractLesson}><span className="sn-shortcut-icon"><Icon name="memory" size={18} /></span><span><strong>Found a lasting lesson?</strong><small>Select a passage, then propose it for Project Memory.</small></span><Icon name="arrow" /></button>
-                </section>
-                <section id="shared-panel-conversations" role="tabpanel" aria-labelledby="shared-tab-conversations" hidden={tab !== "conversations"}>
-                  <div className="sn-section-intro"><h3>Keep your conversations in sync</h3><p>Linked conversations receive the saved notes on their next turn, whichever provider they use.</p></div>
-                  {dirty && <div className="sn-callout">Save or discard your note edits before changing who shares them.</div>}
-                  <div className="sn-conversation-list">{set && members.map(id => {
-                    const conversation = conversations.find(item => item.id === id);
-                    const linked = set.conversationIds.includes(id);
-                    return <label className="sn-conversation-row" key={id}><span className="sn-conversation-icon"><Icon name="people" /></span><span className="sn-conversation-copy"><strong title={id}>{id === conversationId ? "This conversation" : conversation?.title ?? "Linked conversation"}</strong><small>{conversation?.provider ?? (id === conversationId ? "Current chat" : "Saved conversation")}</small></span><input aria-label={`Share notes with ${id === conversationId ? "this conversation" : conversation?.title ?? id}`} type="checkbox" checked={linked} disabled={busy || dirty || set.archived} onChange={() => void mutate({ type: "attach", id: linked ? null : set.id, conversationId: id })} /></label>;
-                  })}</div>
-                  <div className="sn-footnote"><Icon name="note" size={14} /><p>In interactive CLI sessions, send through Klide’s composer to include notes. Direct terminal input stays direct.</p></div>
-                </section>
-                <section id="shared-panel-memory" role="tabpanel" aria-labelledby="shared-tab-memory" hidden={tab !== "memory"}>
-                  <div className="sn-section-intro"><span className="sn-feature-icon"><Icon name="memory" size={22} /></span><h3>Make a useful lesson last</h3><p>Turn a working decision into knowledge for the whole Workspace. You’ll review it before it becomes Project Memory.</p></div>
-                  <div className="sn-promotion-form"><label>Lesson title<input value={lessonTitle} maxLength={160} onChange={event => setLessonTitle(event.target.value)} placeholder="A clear, reusable takeaway" /></label><label>What to remember<textarea value={lesson} maxLength={4000} onChange={event => setLesson(event.target.value)} placeholder="Describe the lesson and include supporting file paths or test results…" /></label><div className="sn-promotion-footer"><span><Icon name="check" size={14} />Always reviewed by you</span>{hasLessonDraft && <button type="button" className="sn-button sn-ghost" onClick={() => { setLesson(""); setLessonTitle(""); }}>Discard lesson</button>}<button className="sn-button sn-primary" type="button" disabled={!set || !lessonTitle.trim() || !lesson.trim() || busy || dirty} onClick={() => {
-                    if (!set) return;
-                    const proposed = addMemoryDraft(sharedNoteLesson(set, lessonTitle, lesson), workspaceRoot, { why: `Selected by the user from foundations: ${set.title}`, evidence: set.body });
-                    setReviewDraftId(proposed?.draftId ?? null); setLesson(""); setLessonTitle(""); setReviewOpen(true);
-                  }}>Review lesson<Icon name="arrow" size={14} /></button></div></div>
-                  <button type="button" className="sn-text-button" onClick={() => { setReviewDraftId(null); setReviewOpen(true); }}>Open Project Memory<Icon name="arrow" size={14} /></button>
-                </section>
-              </div>
-              <footer className="sn-document-footer"><span className="sn-save-state"><span className={dirty ? "sn-unsaved-dot" : "sn-saved-dot"} />{busy ? "Saving…" : dirty ? "Unsaved changes" : "All changes saved"}</span><div className="shared-notes-actions"><button className="sn-button sn-ghost" type="button" disabled={busy || !dirty} onClick={() => { setDraft({ title: set?.title ?? "", body: set?.body ?? "" }); selection.current = ""; }}>Discard</button><button className="sn-button sn-primary" type="button" disabled={busy || !set || !dirty || !draft.title.trim() || bytes > 12000} onClick={() => void mutate({ type: "edit", id: selectedId, ...draft })}>Save notes<Icon name="check" size={14} /></button></div></footer>
-            </> : <div className="sn-empty-state"><span className="sn-empty-icon"><Icon name="note" size={28} /></span><h3>A shared place to pick up the thread.</h3><p>Keep decisions and open questions together, so your next conversation starts with the context it needs.</p><button type="button" className="sn-button sn-primary" disabled={!store || busy} onClick={() => setCreating(true)}><Icon name="plus" size={15} />{store?.sets.length ? "Create a foundation" : "Create your first foundation"}</button></div>}
+            ) : (
+              <EmptyDetail view={view} onCreate={startCreate} disabled={!store || busy} />
+            )}
           </div>
-        </div>
+        </main>
       </div>
     </div>
-    {reviewOpen && createPortal(<div className="shared-notes-memory-review"><LibraryModal open={reviewOpen} workspaceRoot={workspaceRoot} initialDraftId={reviewDraftId} onClose={() => { setReviewOpen(false); requestAnimationFrame(() => root.current?.focus()); }} /></div>, document.body)}
-  </>;
+  );
+}
+
+function bytes(text: string): number { return new TextEncoder().encode(text).length; }
+
+function ConversationsSection({ setId, linkedIds, conversationId, conversations, disabled, note, onToggle }: {
+  setId: string;
+  linkedIds: string[];
+  conversationId: string;
+  conversations: Conversation[];
+  disabled: boolean;
+  note: string | null;
+  onToggle: (id: string, linked: boolean) => void;
+}) {
+  const members = [...new Set([conversationId, ...linkedIds, ...conversations.map(item => item.id)])].filter(Boolean);
+  // Linked first, then the rest in the order they came.
+  const ordered = [...members.filter(id => linkedIds.includes(id)), ...members.filter(id => !linkedIds.includes(id))];
+  const groups = [
+    { label: "Receiving these notes", ids: ordered.filter(id => linkedIds.includes(id)) },
+    { label: "Not linked", ids: ordered.filter(id => !linkedIds.includes(id)) },
+  ].filter(group => group.ids.length);
+  return (
+    <section style={{ marginTop: 32 }} key={setId}>
+      <SectionLabel>Conversations</SectionLabel>
+      <p style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.55, color: "var(--fg-dim)" }}>
+        {note ?? "A linked conversation receives the saved notes on its next turn, whichever provider it uses. In an interactive CLI session, send through Klide's composer to include them."}
+      </p>
+      {members.length === 0 ? (
+        <p style={{ margin: "12px 0 0", fontSize: 12.5, color: "var(--fg-subtle)" }}>No conversations in this project yet.</p>
+      ) : (
+        <div className="sn-conversations">
+          {groups.map(group => (
+            <Fragment key={group.label}>
+              <div className="klide-cmd-heading">{group.label}</div>
+              {group.ids.map(id => {
+                const conversation = conversations.find(item => item.id === id);
+                const linked = linkedIds.includes(id);
+                const name = id === conversationId ? "This conversation" : conversation?.title || "Linked conversation";
+                return (
+                  <div className="klide-cmd-option klide-skill-option sn-conversation" key={id} data-disabled={!linked || undefined}>
+                    <div className="klide-skill-text">
+                      <span title={id}>{name}</span>
+                      <small>{conversation?.provider ?? (id === conversationId ? "Current chat" : "Saved conversation")}</small>
+                    </div>
+                    <Toggle on={linked} disabled={disabled} label={`${linked ? "Stop sharing with" : "Share with"} ${name}`} onClick={() => onToggle(id, linked)} />
+                  </div>
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CreateForm({ title, setTitle, busy, error, onCreate, onCancel }: {
+  title: string; setTitle: (t: string) => void; busy: boolean; error: string;
+  onCreate: () => void; onCancel?: () => void;
+}) {
+  return (
+    <form style={{ padding: "32px 36px", maxWidth: 720 }} onSubmit={event => { event.preventDefault(); if (title.trim() && !busy) onCreate(); }}>
+      <h2 style={{ margin: "0 0 8px", fontSize: 19, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.014em" }}>New foundation</h2>
+      <p style={{ margin: "0 0 22px", fontSize: 12.5, lineHeight: 1.6, color: "var(--fg-subtle)" }}>
+        One place for the decisions and open questions a set of conversations shares, so the next one starts with the context it needs.
+      </p>
+      <div style={{ marginBottom: 22 }}>
+        <label style={labelStyle} htmlFor="sn-new-title">Name</label>
+        <input id="sn-new-title" autoFocus value={title} maxLength={160} onChange={event => setTitle(event.target.value)} placeholder="e.g. Billing migration" style={fieldStyle} />
+      </div>
+      {error && <p role="alert" style={{ margin: "0 0 14px", fontSize: 12, color: "var(--danger)" }}>{error}</p>}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button type="submit" disabled={busy || !title.trim()} className={title.trim() ? "klide-button klide-button-primary" : "klide-button klide-button-secondary"} style={{ minHeight: 32, padding: "0 16px" }}>
+          Create foundation
+        </button>
+        {onCancel && <button type="button" onClick={onCancel} className="klide-button klide-button-ghost" style={{ minHeight: 32, padding: "0 12px", color: "var(--fg-subtle)" }}>Cancel</button>}
+      </div>
+    </form>
+  );
+}
+
+function EmptyDetail({ view, onCreate, disabled }: { view: View; onCreate: () => void; disabled: boolean }) {
+  return (
+    <div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--fg-subtle)", textAlign: "center", padding: 40 }}>
+      <div style={{ maxWidth: 320 }}>
+        <div style={{ width: 44, height: 44, borderRadius: "var(--radius-md)", background: "var(--bg-elevated)", border: "1px solid var(--border)", display: "grid", placeItems: "center", margin: "0 auto 14px", color: "var(--fg-subtle)" }}>
+          {view === "archived" ? <NavArchivedIcon /> : <NavActiveIcon />}
+        </div>
+        <div style={{ color: "var(--fg-strong)", marginBottom: 6, fontSize: 14, fontWeight: 600 }}>No foundation selected</div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.55, color: "var(--fg-subtle)", marginBottom: 16 }}>
+          Pick one from the list, or start a shared place to pick up the thread.
+        </div>
+        <button onClick={onCreate} disabled={disabled} className="klide-button klide-button-secondary" style={{ minHeight: 32, padding: "0 14px" }}>
+          <PlusIcon /> New foundation
+        </button>
+      </div>
+    </div>
+  );
 }

@@ -14,7 +14,7 @@ import {
 } from "../skillAppearance";
 import { MARK_NAMES, SkillMarkGlyph } from "./ai/skillMarks";
 import {
-  CodeIcon, EyeIcon, Highlight, NavRail, PencilIcon, PlusIcon, SearchIcon, SectionLabel, TrashIcon,
+  CodeIcon, EyeIcon, Highlight, NavRail, Toggle, PencilIcon, PlusIcon, SearchIcon, SectionLabel, TrashIcon,
   fieldStyle, labelStyle, renderMarkdown, segBtn,
 } from "./library/parts";
 import { ToolIcon } from "./ai/icons";
@@ -78,25 +78,6 @@ function NavToolsIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M14.7 6.3a4 4 0 0 1 5 5L9 22l-7-7L13.7 3.3a4 4 0 0 1 1 3z" />
     </svg>
-  );
-}
-
-function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      title={on ? "Enabled — click to disable" : "Disabled — click to enable"}
-      onClick={onClick}
-      style={{
-        flexShrink: 0, width: 30, height: 18, borderRadius: 999, padding: 0, position: "relative",
-        background: on ? "var(--accent)" : "var(--border-strong)",
-        transition: "background var(--motion-med) var(--ease-out)",
-      }}
-    >
-      <span style={{ position: "absolute", top: 2, left: on ? 14 : 2, width: 14, height: 14, borderRadius: "50%", background: "var(--control-primary-fg)", transition: "left var(--motion-med) var(--ease-out)" }} />
-    </button>
   );
 }
 
