@@ -115,13 +115,14 @@ function useFileDiffs(completion: RunCompletion, load?: (runId: string) => Promi
   return diffs;
 }
 
-/** The hunks of one file, drawn by the one diff renderer — the same rows as
- *  Git Review and the inline edit review. The box caps the height; DiffView
- *  scrolls long lines sideways inside its own card. */
+/** The hunks of one file, drawn by the one diff renderer — the same tints,
+ *  markers and word highlights as Git Review, in its compact shape: one
+ *  number gutter and wrapped lines, so a change stays in view in the column.
+ *  The card scrolls, not the diff: one scroll however many files are open. */
 function InlineDiff({ blocks }: { blocks: DiffBlock[] }) {
   return (
     <div className="klide-result-diff" role="group" aria-label="Diff">
-      <DiffView blocks={blocks} limit={Infinity} inset={false} flush />
+      <DiffView blocks={blocks} limit={Infinity} inset={false} flush compact />
     </div>
   );
 }
