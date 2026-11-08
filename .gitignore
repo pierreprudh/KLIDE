@@ -50,6 +50,7 @@ docs/*
 !docs/SCHEDULED_RUNS.md
 !docs/SOFTWARE_FACTORY.md
 !docs/shared-notes.md
+!docs/DESIGN_AGENT_PLAN.md
 
 .vscode
 
