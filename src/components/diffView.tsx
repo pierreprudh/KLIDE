@@ -1,6 +1,7 @@
 // The one diff renderer — shared by the staging pane (GitReview), the
-// commit detail pane (GitHistoryGraph) and an agent's inline edit review
-// (InlineDiffReview), so all of them read the same way.
+// commit detail pane (GitHistoryGraph), the artifact inspector, an agent's
+// inline edit review (InlineDiffReview) and a run's result card
+// (CompletionCard), so every diff in Klide reads the same way.
 //
 // Modeled on what makes GitHub / Tower / Fork diffs digestible: dual
 // line-number gutters, a separated sign column so code indentation aligns,
@@ -94,6 +95,20 @@ export function diffBlocksFromContents(oldContent: string, newContent: string, c
     for (const line of hunk.lines) if (!line.startsWith("\\")) lines.push(line);
   }
   return parseDiffBlocks(lines);
+}
+
+/** diffBlocksFromContents plus its counts — what a host needs to draw the
+ *  "+N −N" beside the diff. */
+export function diffFromContents(oldContent: string, newContent: string): { blocks: DiffBlock[]; added: number; removed: number } {
+  const blocks = diffBlocksFromContents(oldContent, newContent);
+  let added = 0;
+  let removed = 0;
+  for (const b of blocks) {
+    if (b.kind !== "line") continue;
+    if (b.tone === "add") added++;
+    else if (b.tone === "del") removed++;
+  }
+  return { blocks, added, removed };
 }
 
 /** Tower-style word-level highlighting: when a run of removed lines is
@@ -315,12 +330,15 @@ type DiffViewProps = {
   /** False when the host already gives the cards their gutter (Git Review's
    *  diff column), so they run to its edges. */
   inset?: boolean;
+  /** True when the host already spaces the diff from what sits above it
+   *  (a card in the conversation), so the first file card starts flush. */
+  flush?: boolean;
 };
 
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment, commentActionLabel, onOpenFile, inset = true }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment, commentActionLabel, onOpenFile, inset = true, flush = false }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Line-comment selection: block indices, anchor→head (⇧-click moves head).
@@ -476,7 +494,7 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
 
   return (
     <div style={{ padding: inset ? "0 16px 8px" : 0, fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
-      {cards.map((card) => {
+      {cards.map((card, cardIndex) => {
         const counts = card.path != null ? fileCounts?.get(card.path) : undefined;
         const collapsed = card.path != null && collapsedFiles.has(card.path);
         const image = card.path != null ? imageDiffs?.get(card.path) : undefined;
@@ -487,7 +505,7 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
           <section
             key={card.key}
             data-diff-path={card.path ?? undefined}
-            style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: "var(--radius-xl)", background: "var(--bg-elevated)", overflow: "hidden" }}
+            style={{ marginTop: flush && cardIndex === 0 ? 0 : 12, border: "1px solid var(--border)", borderRadius: "var(--radius-xl)", background: "var(--bg-elevated)", overflow: "hidden" }}
           >
             {card.path != null && (
               <div
