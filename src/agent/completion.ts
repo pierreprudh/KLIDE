@@ -21,6 +21,10 @@ export type RunCompletion = {
   stopped?: boolean;
   /** Existing files referenced by an older run; no creation or rollback claim. */
   references?: { path: string; bytes: number }[];
+  /** Files in `files` whose every edit the operator approved in an edit card.
+   *  The result card keeps their diffs folded — they were already read once.
+   *  An edit applied by policy (`via: "auto"`) keeps its file out of here. */
+  reviewed?: string[];
 };
 
 /** Routine replies and successful read-only work do not need a review entry. */

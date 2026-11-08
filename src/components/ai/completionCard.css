@@ -294,6 +294,9 @@
 .klide-result-stat { flex-shrink: 0; display: inline-flex; gap: 5px; font-family: var(--font-mono); font-size: 9.5px; font-variant-numeric: tabular-nums; }
 .klide-result-stat-add { color: var(--diff-add); }
 .klide-result-stat-del { color: var(--diff-remove); }
+/* A file whose edits you approved in an edit card: said in type, quietly,
+   beside its counts — its diff stays folded until you open it. */
+.klide-result-reviewed { flex-shrink: 0; font-size: 10px; color: var(--fg-subtle); }
 .klide-result-file-go { flex-shrink: 0; display: grid; place-items: center; width: 13px; color: var(--fg-dim); }
 .klide-result-change:hover .klide-result-file-go { color: var(--fg-strong); }
 /* The diff in place: DiffView draws it (Git Review's rows, compact). No

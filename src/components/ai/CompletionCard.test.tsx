@@ -221,6 +221,14 @@ describe("ResultEvidence", () => {
     expect(busy).toMatch(/klide-result-revert"[^>]*disabled/);
   });
 
+  it("marks files approved in an edit card as reviewed, in type", () => {
+    const blocks = [{ kind: "line" as const, code: "x", tone: "add" as const, oldNo: null, newNo: 1 }];
+    const diffs = new Map([["a.ts", { blocks, added: 1, removed: 0, created: false }], ["b.ts", { blocks, added: 1, removed: 0, created: false }]]);
+    const html = renderToStaticMarkup(<ResultEvidence completion={{ ...completion, files: ["a.ts", "b.ts"], reviewed: ["a.ts"] }} onDone={() => {}} diffs={diffs} />);
+    expect(html.match(/klide-result-reviewed/g)).toHaveLength(1);
+    expect(html).toContain(">reviewed</span>");
+  });
+
   // Receipts, not headlines: one collapsed stack, dimmed, and it stays dimmed
   // when opened. A failure is the exception that cancels the dimming.
   it("stacks the commands, closed and quiet", () => {

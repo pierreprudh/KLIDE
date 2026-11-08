@@ -364,7 +364,9 @@ and every later edit of the live Run auto-applies without pausing — the mid-ru
 counterpart of starting the Run with `requireDiffReview: false`, and one-way
 for the Run's life. The surface flips its Goal policy to auto-accept alongside,
 so later turns arrive already reviewing nothing. Auto-applied edits still emit
-`DiffProposed` and write checkpoints.
+`DiffProposed` and write checkpoints, and their `DiffResolved` decision carries
+`via: "auto"` — an apply without it is one a person approved. (Transcripts
+from before 2026-11-08 have no `via`; readers treat those applies as reviewed.)
 
 ## Dynamic Tool Config
 
