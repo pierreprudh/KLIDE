@@ -3491,7 +3491,8 @@ src/agent/durableMissions.ts — update both"
         // registered command nothing calls is a second, unreviewed door onto
         // the Mission writer.
         let start = lib.find("generate_handler!").expect("generate_handler! in lib.rs");
-        let end = lib[start..].find(']').expect("end of handler list") + start;
+        // The list closes with `])`; a lone `]` can be a `#[cfg(...)]` on an entry.
+        let end = lib[start..].find("])").expect("end of handler list") + start;
         let registered: Vec<&str> = lib[start..end]
             .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
             .filter_map(|token| token.strip_prefix("missions::"))

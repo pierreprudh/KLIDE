@@ -1,3 +1,5 @@
+#[cfg(debug_assertions)]
+mod design_parity;
 mod launch_readiness;
 mod llamacpp_models;
 mod llamacpp_setup;
@@ -875,6 +877,16 @@ fn smoke_test_mode() -> bool {
     std::env::var("KLIDE_SMOKE").as_deref() == Ok("1")
 }
 
+/// True in the development-only design-parity build (`--features
+/// design-parity`): the window shows synthetic fixtures, so live sessions,
+/// connectors and schedules stay off. Always false in release.
+fn design_parity_mode() -> bool {
+    #[cfg(debug_assertions)]
+    { return design_parity::enabled(); }
+    #[cfg(not(debug_assertions))]
+    { false }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Every fixed menu item, paired with the event it emits.
 ///
@@ -1052,6 +1064,20 @@ fn menu_sync_projects(
     Ok(())
 }
 
+fn app_context() -> tauri::Context<tauri::Wry> {
+    #[cfg(all(feature = "design-parity", not(debug_assertions)))]
+    compile_error!("design-parity is a development-only feature");
+    let context = tauri::generate_context!();
+    #[cfg(all(feature = "design-parity", debug_assertions))]
+    let context = {
+        let mut context = context;
+        *context.config_mut() = serde_json::from_str(include_str!("../tauri.design-parity.conf.json"))
+            .expect("valid design parity config");
+        context
+    };
+    context
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(PtyState::default())
@@ -1110,7 +1136,7 @@ pub fn run() {
             // Persistent delegate sessions: reconnect to (or start) the ptyd
             // daemon when the toggle was left on last session. Skipped during
             // the smoke boot so a release check never touches live sessions.
-            if !smoke_test_mode() {
+            if !smoke_test_mode() && !design_parity_mode() {
                 pty::init_daemon_bridge(handle.clone());
                 // And republish the coordination bridge's endpoint, so those
                 // sessions' agent tools reach this process, not the last one.
@@ -1156,10 +1182,15 @@ pub fn run() {
                 }
             }
 
-            app.set_menu(build_app_menu(handle, &[], None)?)?;
+            let menu = build_app_menu(handle, &[], None)?;
+            #[cfg(debug_assertions)]
+            if design_parity_mode() { menu.append(&design_parity::menu(handle)?)?; }
+            app.set_menu(menu)?;
 
             app.on_menu_event(move |_app_handle, event| {
                 let id = event.id().as_ref();
+                #[cfg(debug_assertions)]
+                if design_parity_mode() && design_parity::handle(_app_handle, id) { return; }
                 if let Some((_, event)) = MENU_ITEMS.iter().find(|(item, _)| *item == id) {
                     let _ = _app_handle.emit(*event, ());
                     return;
@@ -1310,6 +1341,10 @@ pub fn run() {
             klide_skill::klide_skill_set,
             connectors::connectors_add_github,
             connectors::connectors_status,
+            #[cfg(debug_assertions)]
+            agent::design_feedback::agent_prepare_design_review,
+            #[cfg(debug_assertions)]
+            agent::design_feedback::agent_start_design_review,
             agent::agent_start_run,
             agent::schedules::agent_schedule_create,
             agent::schedules::agent_schedule_update,
@@ -1389,7 +1424,7 @@ pub fn run() {
             git::project_create,
             git::project_clone
         ])
-        .build(tauri::generate_context!())
+        .build(app_context())
         .expect("error while building tauri application")
         .run(|_, event| {
             if matches!(event, tauri::RunEvent::Exit) {
@@ -1706,3 +1741,6 @@ mod plugin_registration_tests {
         }
     }
 }
+
+#[cfg(debug_assertions)]
+pub fn design_pilot_main() { agent::design_pilot::cli_main(); }

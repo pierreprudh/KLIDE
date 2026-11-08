@@ -97,3 +97,8 @@ Thumbs.db
 # Files a dogfood run produced (decks, docs, rendered pages). Never repo content.
 artifacts/
 q3-demo/
+
+.klide-design-cache/
+
+# Local only: business plan (this repo is public)
+BUSINESS.md

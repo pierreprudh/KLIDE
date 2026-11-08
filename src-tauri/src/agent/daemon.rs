@@ -144,7 +144,7 @@ impl RunHost {
         runs_dir: PathBuf,
         caller: impl AgentProviderCaller,
     ) -> Result<u64, String> {
-        self.start_admitted(request, runs_dir, caller, false)
+        self.start_admitted(request, runs_dir, caller, false, false)
     }
 
     /// A durable Schedule authorizes a standalone Run in this host for any
@@ -163,11 +163,16 @@ impl RunHost {
         route_auto(&runs_dir, &id, &mut request).await?;
         crate::local_servers::ensure_for_background(&request.provider, &request.model).await?;
         let host = self.clone();
-        crate::blocking::run(move || host.start_admitted(request, runs_dir, RealProviderCaller, true)).await
+        crate::blocking::run(move || host.start_admitted(request, runs_dir, RealProviderCaller, true, false)).await
     }
 
-    fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool) -> Result<u64, String> {
-        if !scheduled && !run_host::background_eligible(&request) {
+    #[cfg(debug_assertions)]
+    pub(crate) fn start_design_pilot(self: &Arc<Self>, request: StartRunRequest, runs_dir: PathBuf) -> Result<u64,String> {
+        self.start_admitted(request, runs_dir, RealProviderCaller, false, true)
+    }
+
+    fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool, pilot: bool) -> Result<u64, String> {
+        if !scheduled && !pilot && !run_host::background_eligible(&request) {
             return Err("Only standalone subscription conversations can run in this host".into());
         }
         let id = request.run_id.clone().ok_or("Missing conversation id")?;

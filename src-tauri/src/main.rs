@@ -2,6 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    #[cfg(debug_assertions)]
+    if std::env::args().nth(1).as_deref() == Some("design-pilot-run") {
+        klide_lib::design_pilot_main();
+        return;
+    }
     // `klide mcp coordination` serves the embedded MCP server over stdio for a
     // Delegate CLI Klide launched (mcp_server.rs). Same binary as the GUI and
     // the ptyd daemon below. Every platform: an MCP child has no PTY.

@@ -1,3 +1,7 @@
+#[cfg(debug_assertions)]
+pub(crate) mod design_pilot;
+#[cfg(debug_assertions)]
+pub(crate) mod design_feedback;
 mod approval_store;
 pub(crate) mod skill_resources;
 pub(crate) mod daemon;
@@ -2162,7 +2166,7 @@ async fn hosted_loop(
     // First, before anything can fail: from here on every way out of the loop
     // releases what the Run holds (see `RunLease`).
     let mut lease = RunLease::new(supervisor.clone(), runs_dir.clone(), id.clone());
-    let result = loop_body(
+    let work = loop_body(
         &mut lease,
         sequence.clone(),
         prior_events,
@@ -2173,8 +2177,10 @@ async fn hosted_loop(
         on_event.clone(),
         cancel,
         provider_caller,
-    )
-    .await;
+    );
+    #[cfg(debug_assertions)]
+    let work = design_pilot::scope(&id, work);
+    let result = work.await;
     if let Err(message) = &result {
         run_host::settle_backstop(supervisor.as_ref(), &runs_dir, &id, &sequence, &on_event, message);
         lease.backstopped = true;
@@ -2340,6 +2346,8 @@ async fn loop_body(
         })
     });
     let blind_photos = sight::blind_photos(&request).await;
+    #[cfg(debug_assertions)]
+    if design_pilot::active() && !blind_photos.is_empty() { return Err("Pilot requires native image inputs; Sight fallback refused".into()); }
     if !blind_photos.is_empty() {
         let eyes = sight::eyes_for(&request).await;
         if let Some(eyes) = &eyes {

@@ -2368,7 +2368,8 @@ diff --git a/f b/f
         let start = lib
             .find("generate_handler!")
             .expect("generate_handler! in lib.rs");
-        let end = lib[start..].find(']').expect("end of handler list") + start;
+        // The list closes with `])`; a lone `]` can be a `#[cfg(...)]` on an entry.
+        let end = lib[start..].find("])").expect("end of handler list") + start;
         // Match the whole git/GitHub family, not just the `git_` prefix. The
         // prefix filter had a blind spot, and the drift it was written to stop
         // had already re-formed inside it: `create_pr` and

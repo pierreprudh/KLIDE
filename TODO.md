@@ -6,12 +6,31 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Conductor follow-up — product and business line, 2026-11-05
+
+Customer confirmed: solo developers and small teams bringing their own agent
+subscriptions. See [BUSINESS.md](BUSINESS.md) for the proposed offer, migration
+acquisition plan, ordered delivery slices and pilot decision thresholds.
+
+- [x] First code slice: Before merge in expanded Git Review PRs, reusing
+  `git_pr_view` for current-head checks, review decision and conflicts. Distinguish
+  unavailable/empty evidence and show individual check states; GitHub still
+  enforces its branch policy. Snapshot refreshes when the PR is reopened.
+  Verified: 1,900 frontend tests, production build/bundle split, 12 focused Rust
+  GitHub tests, and the browser fixture layout with expanded individual checks.
+- [ ] Installed-app acceptance against a real PR: failed/pending checks,
+  requested changes, conflicts, no checks, and reopening after CI changes.
+  This is the first slice, not a complete merge-readiness contract: unresolved
+  review threads, required-check policy, local validation and todos remain open.
+- [ ] Run the repository-first Conductor switching pilot, inspect a redacted
+  export before specifying chat import, and test the proposed paid package.
+
 ## Design agent — visual feedback infrastructure, 2026-11-07
 
 Reviewed 2026-11-08: browser half verified (typecheck, 21 unit + 21 Playwright
 tests, `cargo check --features design-parity`). Findings and four decisions for
 Pierre in [the plan's Review section](docs/DESIGN_AGENT_PLAN.md#review--2026-11-08).
-The plan is on main; the code is still uncommitted in the main checkout.
+Committed 2026-11-09 with the design-agent pilot code; the review findings below are still open.
 
 - [x] Browser half of the first slice: production AiPanel fixtures for long
   conversation and empty composer, screenshot capture in two themes/two sizes,
@@ -24,7 +43,13 @@ The plan is on main; the code is still uncommitted in the main checkout.
 - [ ] Cross-run pixel identity: try deterministic Chromium raster flags first;
   if noise remains, report a declared perceptual count beside the raw one
   (`threshold: 0` today turns antialiasing into reported change).
-- [ ] Native desktop parity for the first slice. First make it launchable: one
+- [x] Record scoped native parity: 40 screenshot/AX pairs, all six scenarios in
+  both themes/sizes; detailed interactions at light 900×700. `design:parity`
+  prepares an isolated Mac test bundle. See the fixture README for launch steps.
+- [ ] Complete remaining native checks: Send dispatch, horizontal code scroll,
+  settled two-done child template, interaction replay in other configurations.
+- [ ] Simplify native configuration: try CLI config merge instead of the current
+  explicit developer configuration. Original review recommendation: one
   `design:parity` script + README section, and try `tauri dev --config` merge
   instead of the `build.rs`/`app_context()` whole-config replacement (which
   drops the deep-link plugin config and pins `version`). Browser success does
@@ -40,7 +65,17 @@ The plan is on main; the code is still uncommitted in the main checkout.
   scenarios using production controls and synthetic Run recovery/events.
   Capture command approval, expanded/rejected edits, keyboard answers,
   retry/cancel, child steps/status changes and menu selection/focus return.
-- [ ] Implement native image delivery (PR 4) and the single-writer loop (PR 5)
+- [x] Development reviewer entry: evidence/native-scope validation, image hash
+  receipts (native preflight verified from a disposable workspace), tool-free Chat
+  dispatch through the normal Run host and strict output
+  validation. Six Rust evidence/wire tests; the local live proof is recorded below.
+- [x] Live local vision canary: unpredictable color marker, strict answer, exact
+  native HTTP image hashes. Preserve failed OCR/formatting and writer answers.
+- [x] Build bounded local writer controller: isolated clone, exact file scope,
+  fresh candidate images, capture/typecheck/flow gates, native checkpoints, atomic
+  state, preserved patches, cancellation, stall and provider-attempt limits.
+- [ ] Complete a live UI iteration with native candidate verification, next-Run
+  candidate handoff and human quality judgment (remaining PR 4/5 acceptance)
   in `docs/DESIGN_AGENT_PLAN.md`; the council and blinded comparison (PR 6–8)
   wait on the decision above.
 
@@ -251,6 +286,8 @@ audit. Worker Cancel was verified live on 2026-11-01 (see above).
   evidence without treating remote paths as local. Keep destination credentials
   on that host and reuse Run host admission/control semantics. Extract the
   headless host as needed; `agent/remote.rs` currently means the local daemon.
+  Design note, words and open questions: [Remote machines](docs/REMOTE_MACHINES.md);
+  machine setup (cloud first, decided 2026-11-03): `scripts/remote-host/`.
 - [ ] Extend the unified launch readiness item above with minimal remote
   checks in the VPS slice, reusing `launch_readiness::Readiness` as the
   shape a remote host reports.
@@ -272,6 +309,19 @@ audit. Worker Cancel was verified live on 2026-11-01 (see above).
   restart/no replay and real launchd restart acceptance pass with isolated
   fixtures. Execution targets preserve the future VPS seam; remote selection
   remains disabled. See `docs/SCHEDULED_RUNS.md`.
+- [ ] Revisit DeepSeek superagent research after local stabilization and the
+  first VPS execution slice pass acceptance (added 2026-11-01). Explore observe
+  mode for proposed GitHub work, explicit scope/authority, durable trigger
+  deduplication, quiet attention handling and capacity for human follow-ups.
+  Start with one event/rule and operator-approved dispatch through the existing
+  Mission/Run path; measure usefulness, duplicates and review effort before
+  considering automatic execution. [Detailed review](docs/deepseek-superagent-review-2026-11-01.md)
+  (local research note, following this repo's docs policy). Sources:
+  [original post](https://x.com/deepseekharness/status/2116857257245987236),
+  [prototype](https://github.com/deepseek-ai/dsh-superagent-prototype),
+  [philosophy](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/000-philosophy.md),
+  [authorization](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/002-authorization.md),
+  [execution](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md).
 - [ ] Cross-machine project-context replication, after real multi-machine use:
   explicit scope, revisions, conflicts, exclusions and offline reconciliation.
   Keep working Foundations separate from reviewed Project Memory; a transfer

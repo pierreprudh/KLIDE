@@ -98,8 +98,10 @@ async fn stream_provider<S: StreamingProvider>(
     const MAX_RETRIES: u32 = 3;
     let mut attempt: u32 = 0;
     let res = loop {
-        let res = provider
-            .build_request(client)?
+        let request = provider.build_request(client)?;
+        #[cfg(debug_assertions)]
+        crate::agent::design_pilot::before_send(&request, provider.name()).await?;
+        let res = request
             .send()
             .await
             .map_err(|e| format!("Unable to reach {}: {e}", provider.name()))?;
