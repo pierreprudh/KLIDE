@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { diffBlocksFromContents, diffStatBlocks, parseDiffBlocks } from "./diffView";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DiffView, diffBlocksFromContents, diffStatBlocks, parseDiffBlocks } from "./diffView";
 
 const SAMPLE = [
   "diff --git a/src/foo.ts b/src/foo.ts",
@@ -107,5 +109,28 @@ describe("diffBlocksFromContents", () => {
   it("reads a new file as all additions", () => {
     const blocks = diffBlocksFromContents("", "a\nb\n");
     expect(blocks.filter((b) => b.kind === "line").map((b) => b.kind === "line" && b.tone)).toEqual(["add", "add"]);
+  });
+});
+
+describe("DiffView compact", () => {
+  const blocks = diffBlocksFromContents("a\nb\nc\n", "a\nB\nc\n");
+  const render = (compact: boolean) => renderToStaticMarkup(createElement(DiffView, { blocks, limit: Infinity, inset: false, flush: true, compact }));
+
+  it("keeps one number gutter and wraps code instead of scrolling sideways", () => {
+    const html = render(true);
+    expect(html).toContain("grid-template-columns:3px 28px 16px 1fr");
+    expect(html).toContain("white-space:pre-wrap");
+    expect(html).not.toContain("width:max-content");
+  });
+
+  it("leaves the two-gutter layout untouched by default", () => {
+    const html = render(false);
+    expect(html).toContain("grid-template-columns:3px 34px 34px 22px 1fr");
+    expect(html).toContain("width:max-content");
+    expect(html).not.toContain("pre-wrap");
+  });
+
+  it("starts the first card flush when the host spaces it", () => {
+    expect(render(true)).toMatch(/<section[^>]*style="margin-top:0/);
   });
 });

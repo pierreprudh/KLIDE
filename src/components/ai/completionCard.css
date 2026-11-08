@@ -296,9 +296,14 @@
 .klide-result-stat-del { color: var(--diff-remove); }
 .klide-result-file-go { flex-shrink: 0; display: grid; place-items: center; width: 13px; color: var(--fg-dim); }
 .klide-result-change:hover .klide-result-file-go { color: var(--fg-strong); }
-/* The diff in place: DiffView draws it (the same rows as Git Review); this
-   box only caps its height and fades it in. */
-.klide-result-diff { margin: 2px 0 6px 0; max-height: 320px; overflow: auto; animation: klide-result-thumb-in 200ms ease-out; }
+/* The diff in place: DiffView draws it (Git Review's rows, compact). No
+   height cap of its own — the card body is the one scroll, so several open
+   files never nest a scroll inside a scroll. */
+.klide-result-diff { margin: 2px 0 6px 0; animation: klide-result-thumb-in 200ms ease-out; }
+/* An open file's row stays at the top while its diff scrolls under it, so a
+   long multi-file result always says which file you are reading. The solid
+   base keeps lines from showing through the selection tint. */
+.klide-result-file[data-open="1"] > .klide-result-change { position: sticky; top: 0; z-index: 2; background: linear-gradient(var(--bg-selected), var(--bg-selected)), var(--bg-elevated); }
 @media (prefers-reduced-motion: reduce) { .klide-result-diff { animation: none; } }
 
 /* In the column the recap takes the Git island's row exactly: 22px, 10.5px

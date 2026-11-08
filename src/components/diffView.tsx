@@ -201,6 +201,11 @@ export function FileStatusIcon({ status }: { status: string }) {
  *  number gutter separates "where" from "what". */
 const ROW_COLUMNS = "3px 34px 34px 22px 1fr";
 const GUTTER_WIDTH = 71;
+/** Compact geometry for a narrow column (the result card): one number — the
+ *  new line's, or the old one's for a removal — and code that wraps instead
+ *  of scrolling sideways. [edge marker | № ‖ sign | code]. */
+const COMPACT_COLUMNS = "3px 28px 16px 1fr";
+const COMPACT_GUTTER_WIDTH = 47;
 
 /** One diff code row, tinted by tone, with the word-level changed span on a
  *  stronger tint. The 3px edge marker says what happened to the line — solid
@@ -211,10 +216,12 @@ const DiffCodeRow = memo(function DiffCodeRow({
   block,
   selected = false,
   onGutterClick,
+  compact = false,
 }: {
   block: DiffCodeBlock;
   selected?: boolean;
   onGutterClick?: (e: React.MouseEvent) => void;
+  compact?: boolean;
 }) {
   const toneColor = block.tone === "add" ? "var(--diff-add)" : "var(--diff-remove)";
   const bg = block.tone === "add" ? "var(--diff-add-bg)" : block.tone === "del" ? "var(--diff-remove-bg)" : "transparent";
@@ -239,7 +246,7 @@ const DiffCodeRow = memo(function DiffCodeRow({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: ROW_COLUMNS,
+        gridTemplateColumns: compact ? COMPACT_COLUMNS : ROW_COLUMNS,
         minHeight: 20,
         lineHeight: "20px",
         background: bg,
@@ -247,16 +254,24 @@ const DiffCodeRow = memo(function DiffCodeRow({
       }}
     >
       <span aria-hidden style={{ background: marker }} />
-      <span style={gutterStyle} onClick={onGutterClick} title={gutterTitle}>
-        {block.oldNo ?? ""}
-      </span>
-      <span style={{ ...gutterStyle, borderRight: "1px solid var(--border)" }} onClick={onGutterClick} title={gutterTitle}>
-        {block.newNo ?? ""}
-      </span>
+      {compact ? (
+        <span style={{ ...gutterStyle, paddingRight: 6, borderRight: "1px solid var(--border)" }} onClick={onGutterClick} title={gutterTitle}>
+          {block.newNo ?? block.oldNo ?? ""}
+        </span>
+      ) : (
+        <>
+          <span style={gutterStyle} onClick={onGutterClick} title={gutterTitle}>
+            {block.oldNo ?? ""}
+          </span>
+          <span style={{ ...gutterStyle, borderRight: "1px solid var(--border)" }} onClick={onGutterClick} title={gutterTitle}>
+            {block.newNo ?? ""}
+          </span>
+        </>
+      )}
       <span style={{ userSelect: "none", textAlign: "center", color: toneColor }}>
         {block.tone === "add" ? "+" : block.tone === "del" ? "−" : ""}
       </span>
-      <span style={{ whiteSpace: "pre", paddingRight: 16 }}>
+      <span style={compact ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere", paddingRight: 8 } : { whiteSpace: "pre", paddingRight: 16 }}>
         {hi && hi[0] < hi[1] ? (
           <>
             {code.slice(0, hi[0])}
@@ -333,12 +348,16 @@ type DiffViewProps = {
   /** True when the host already spaces the diff from what sits above it
    *  (a card in the conversation), so the first file card starts flush. */
   flush?: boolean;
+  /** A narrow column: one line-number gutter and wrapped code, so the change
+   *  stays in view without sideways scrolling. Same tints, markers and word
+   *  highlights. */
+  compact?: boolean;
 };
 
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment, commentActionLabel, onOpenFile, inset = true, flush = false }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment, commentActionLabel, onOpenFile, inset = true, flush = false, compact = false }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Line-comment selection: block indices, anchor→head (⇧-click moves head).
@@ -411,9 +430,9 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
       // A card's opening band with no context text (a new file) says nothing.
       if (rows.length === 0 && !block.text) return;
       rows.push(
-        <div key={i} style={{ display: "grid", gridTemplateColumns: ROW_COLUMNS, minHeight: 20, lineHeight: "20px", color: "var(--fg-dim)", background: "color-mix(in srgb, var(--bg-hover) 70%, transparent)", fontSize: 10.5 }}>
+        <div key={i} style={{ display: "grid", gridTemplateColumns: compact ? COMPACT_COLUMNS : ROW_COLUMNS, minHeight: 20, lineHeight: "20px", color: "var(--fg-dim)", background: "color-mix(in srgb, var(--bg-hover) 70%, transparent)", fontSize: 10.5 }}>
           <span />
-          <span style={{ gridColumn: "span 2", textAlign: "center", userSelect: "none", letterSpacing: "2px", borderRight: "1px solid var(--border)" }}>···</span>
+          <span style={{ gridColumn: compact ? "span 1" : "span 2", textAlign: "center", userSelect: "none", letterSpacing: "2px", borderRight: "1px solid var(--border)" }}>···</span>
           <span />
           <span style={{ whiteSpace: "pre", overflow: "hidden", textOverflow: "ellipsis" }}>{block.text}</span>
         </div>
@@ -427,6 +446,7 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
         block={block}
         selected={selected}
         onGutterClick={onLineComment ? gutterClick(i) : undefined}
+        compact={compact}
       />
     );
     // The composer sits directly under the selection's last row.
@@ -436,7 +456,7 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
           key="comment-composer"
           style={{
             display: "grid",
-            gridTemplateColumns: `${GUTTER_WIDTH}px minmax(220px, 620px) 1fr`,
+            gridTemplateColumns: `${compact ? COMPACT_GUTTER_WIDTH : GUTTER_WIDTH}px minmax(220px, 620px) 1fr`,
             padding: "4px 16px 6px 0",
             fontFamily: "var(--font-ui)",
           }}
@@ -544,7 +564,7 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
             {image && !collapsed && <ImageDiffView key={card.path} path={card.path!} image={image} />}
             {!image && card.rows.length > 0 && (
               <div className="klide-scroll-slim" style={{ overflowX: "auto", padding: "4px 0" }}>
-                <div style={{ width: "max-content", minWidth: "100%" }}>{card.rows}</div>
+                <div style={{ width: compact ? "auto" : "max-content", minWidth: "100%" }}>{card.rows}</div>
               </div>
             )}
           </section>
