@@ -3,10 +3,16 @@ import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// @ts-expect-error process is a nodejs global
+const designCache = process.env.KLIDE_DESIGN_CACHE_DIR;
+// @ts-expect-error process is a nodejs global
+const dependencyRoot = process.env.KLIDE_DESIGN_DEPENDENCY_ROOT, designRoot = process.cwd();
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  cacheDir: designCache,
+  resolve: { dedupe: ["react", "react-dom"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
@@ -15,6 +21,7 @@ export default defineConfig(async () => ({
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
+    fs: dependencyRoot ? { allow: [designRoot, dependencyRoot] } : undefined,
     strictPort: true,
     host: host || false,
     hmr: host
@@ -45,7 +52,7 @@ export default defineConfig(async () => ({
     // worst shape for a wrong number — it only lies on the machine you develop
     // on. `KIDE-worktrees/` siblings are outside the root and were never
     // affected.
-    exclude: [...configDefaults.exclude, "**/.claude/worktrees/**", "**/artifacts/**"],
+    exclude: [...configDefaults.exclude, "**/.claude/worktrees/**", "**/artifacts/**", "**/tests/design-feedback/**"],
   },
   build: {
     // Keep the app shell readable in production output. Monaco's workers stay

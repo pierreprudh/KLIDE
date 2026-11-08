@@ -1,0 +1,23 @@
+#cloud-config
+# Klide remote host — first boot of a rented server.
+#
+# Works with any provider that takes "user data" / "cloud config" at creation
+# (Hetzner, DigitalOcean, OVH, Scaleway…), on Ubuntu Server 24.04 LTS.
+# It only creates your user with your key; bootstrap.sh does the rest.
+#
+# Don't edit the key in by hand: README.md step 1 generates a copy with your
+# key filled in. Paste that copy into the provider's "Cloud config" field.
+
+hostname: klide-box
+
+users:
+  - name: pierre
+    groups: [sudo]
+    shell: /bin/bash
+    # Key-only box: there is no password to type, so sudo doesn't ask for one.
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __SSH_PUBLIC_KEY__
+
+package_update: true

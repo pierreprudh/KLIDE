@@ -1574,6 +1574,8 @@ pub fn execute_write_tool_preview(
     run_id: &str,
 ) -> Result<DiffProposal, ToolResult> {
     let ws = Workspace::new(root).map_err(err)?;
+    #[cfg(debug_assertions)]
+    super::design_pilot::check_write(run_id, root, call.input["path"].as_str().unwrap_or("")).map_err(err)?;
     let entry = registry()
         .into_iter()
         .find(|e| schema_has_name(&e.schema, &call.name));

@@ -11,7 +11,14 @@
     "tauri": "tauri",
     "test": "vitest run",
     "verify:bundle": "bash scripts/verify-bundle.sh",
-    "verify:distribution": "KLIDE_DISTRIBUTION=1 bash scripts/verify-bundle.sh"
+    "verify:distribution": "KLIDE_DISTRIBUTION=1 bash scripts/verify-bundle.sh",
+    "design:capture": "node scripts/design-feedback/capture.mjs",
+    "design:compare": "node scripts/design-feedback/report.mjs",
+    "design:test": "playwright test --config playwright.design.config.ts",
+    "design:typecheck": "tsc --project tsconfig.design.json --noEmit",
+    "design:parity": "node scripts/design-feedback/prepare-native.mjs",
+    "design:canary": "node scripts/design-feedback/canary.mjs",
+    "design:experiment": "node scripts/design-feedback/experiment.mjs"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "^5.2.8",
@@ -34,10 +41,14 @@
     "ssf": "^0.11.2"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.0",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "pixelmatch": "8.0.0",
+    "pngjs": "7.0.0",
     "typescript": "~5.8.3",
     "vite": "^7.3.6",
     "vitest": "^4.1.9"

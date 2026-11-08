@@ -1,3 +1,24 @@
+Update (2026-11-08, live pilot): Native image delivery passed a fresh randomized
+color canary on local Ollama `qwen3.5:9b`, with exact pre-dispatch PNG hashes.
+Earlier OCR/formatting failures and an incorrect writer transcription are retained;
+this is input-delivery proof, not model reliability or design judgment. A Node
+writer controller now isolates source, scopes file writes, captures each candidate,
+checks flows/typecheck, requires native identity clearance, and self-reviews/revises
+under three-cycle/45-minute/24-HTTP-attempt limits. It refuses automatic crash replay.
+The isolated baseline/capture smoke reaches the native checkpoint with zero model
+attempts; a complete live UI iteration and human quality decision remain open.
+See `scripts/design-feedback/EXPERIMENT.md`.
+
+Update (2026-11-08): Mac verification now records 40 screenshot/AX pairs:
+six scenarios in both themes/sizes, with detailed interaction checks at light
+900×700. Scope and remaining checks are recorded in the local native report.
+A development-only visual reviewer now validates bundle hashes and native scope,
+then uses the normal Chat Run host with image attachments. Mock-wire hash tests
+pass. This is partial PR 4: live canary, writer handoff, controller and council
+remain open. The earlier review below is retained as historical findings; the
+launcher and scoped native evidence are now available. Exact cross-run PNG
+identity remains open.
+
 # Design agent: visual feedback first, council second
 
 Status (2026-11-07): visual feedback infrastructure implemented locally for all

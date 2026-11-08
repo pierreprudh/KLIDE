@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["preview/design-agent.ts", "preview/design-feedback.tsx", "preview/design-feedback/**/*.ts", "src/**/*.d.ts"],
+  "references": []
+}

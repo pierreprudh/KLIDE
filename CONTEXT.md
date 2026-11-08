@@ -82,6 +82,27 @@ only ever on this Mac; what moves is where the Run's loop, shell and files
 are. A Conversation's Run happens on one Machine at a time.
 _Avoid_: box, host (that is the Run host, a process), environment
 
+**Remote machine**:
+A Linux computer Klide reaches over SSH — a rented server (VPS) or a spare
+PC — that runs `klide ptyd` as its Run host, keeps its own Machine logins and
+its own Remote checkout, and stays on when this Mac sleeps. Designed, not
+built: `docs/REMOTE_MACHINES.md`, setup in `scripts/remote-host/`. Today's
+`agent/remote.rs` is the local daemon, not this.
+_Avoid_: cloud, VPS (one kind of Remote machine), server, remote host
+
+**Remote checkout**:
+The copy of a repository on a Remote machine, cloned once from its Git
+remote; each Run works in its own worktree of it. Its paths are remote paths,
+never resolved on this Mac, and it sees only what was pushed — never this
+Mac's unsaved or uncommitted work.
+_Avoid_: mirror, sync, remote workspace
+
+**Machine login**:
+A credential that lives on the Machine that uses it — a CLI's subscription
+login, `gh`, an API key. A Run uses the logins of the Machine it runs on;
+Klide never copies one between Machines.
+_Avoid_: forwarded credentials, shared secrets, key sync
+
 **Harness contract**:
 The written interface of the Harness: modes, tool capabilities, permission
 rules, diff review, dynamic tools, transcript evidence, and anti-slop
