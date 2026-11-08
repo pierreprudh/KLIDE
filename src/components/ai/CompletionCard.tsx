@@ -143,8 +143,14 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   const artifacts = completionDocuments(completion);
   const checks = commandStatusSummary(completion);
   const inlinePaths = onReview ? [] : completion.files.filter((path) => (diffs?.get(path)?.blocks.length ?? 0) > 0);
-  const allOpen = inlinePaths.length > 0 && inlinePaths.every((path) => openFiles.has(path));
-  const seeChanges = () => onReview ? review() : setOpenFiles(allOpen ? new Set() : new Set(inlinePaths));
+  // Files approved one by one in an edit card were already read: "See
+  // changes" opens what nobody has looked at yet, and only falls back to
+  // everything when every file was reviewed.
+  const reviewed = new Set(completion.reviewed ?? []);
+  const unread = inlinePaths.filter((path) => !reviewed.has(path));
+  const seeTargets = unread.length > 0 ? unread : inlinePaths;
+  const allOpen = seeTargets.length > 0 && seeTargets.every((path) => openFiles.has(path));
+  const seeChanges = () => onReview ? review() : setOpenFiles(allOpen ? new Set() : new Set(seeTargets));
   return (
     <>
       <div className="klide-result-body" data-history={history ? "1" : undefined}>
@@ -161,6 +167,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
             const label = <>
               <ChangedFileLabel path={path} mark={mark} />
               <span className="klide-result-change-trail">
+                {reviewed.has(path) && <span className="klide-result-reviewed" title="You approved this edit before it was written">reviewed</span>}
                 {diff && (diff.added > 0 || diff.removed > 0) && <span className="klide-result-stat">
                   {diff.added > 0 && <span className="klide-result-stat-add">+{diff.added}</span>}
                   {diff.removed > 0 && <span className="klide-result-stat-del">−{diff.removed}</span>}

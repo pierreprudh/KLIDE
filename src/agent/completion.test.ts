@@ -17,6 +17,32 @@ function cards(messages: Msg[]) {
   return messages.flatMap((message) => message.role === "system" && message.completion ? [message.completion] : []);
 }
 
+describe("which changed files the operator already reviewed", () => {
+  const proposed = (id: string, path: string): AgentEvent => ({ type: "diff_proposed", runId: "r", proposal: { id, runId: "r", toolCallId: id, path, oldContent: "a", newContent: "b", oldHash: "a", newHash: "b", unifiedDiff: "", isCreate: false }, ts: 2 });
+  const applied = (id: string, via?: "auto"): AgentEvent => ({ type: "diff_resolved", runId: "r", proposalId: id, decision: via ? { behavior: "apply", via } : { behavior: "apply" }, ts: 2 });
+  const file = (path: string): AgentEvent => ({ ...changed, path });
+  const run = (events: AgentEvent[]) => {
+    const fold = createFold();
+    [start(), ...events, answer, done].forEach((event) => fold.apply(event));
+    return cards(foldedToMsgs(fold.rows()))[0];
+  };
+
+  it("counts a file as reviewed only when a person approved its edit", () => {
+    const card = run([proposed("p1", "a.ts"), applied("p1"), file("a.ts"), proposed("p2", "b.ts"), applied("p2", "auto"), file("b.ts")]);
+    expect(card.files).toEqual(["a.ts", "b.ts"]);
+    expect(card.reviewed).toEqual(["a.ts"]);
+  });
+
+  it("drops a reviewed file once a later edit to it was applied by policy", () => {
+    const card = run([proposed("p1", "a.ts"), applied("p1"), file("a.ts"), proposed("p2", "a.ts"), applied("p2", "auto"), file("a.ts")]);
+    expect(card.reviewed).toBeUndefined();
+  });
+
+  it("treats an older transcript's apply (no via) as reviewed", () => {
+    expect(run([proposed("p1", "a.ts"), applied("p1"), file("a.ts")]).reviewed).toEqual(["a.ts"]);
+  });
+});
+
 describe("completed run evidence", () => {
   it("surfaces a spreadsheet written by an edit tool as a document without losing change evidence", () => {
     const fold = createFold();

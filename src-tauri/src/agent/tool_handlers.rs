@@ -2248,8 +2248,10 @@ Do not propose it again — take a different approach or ask the user what they'
     // the proposed diff so the edit stays visible in the conversation, and
     // the checkpoint written below keeps it revertable — which is what makes
     // auto-accept safe. Otherwise pause for diff review.
+    // Read once: whether this edit is answered by policy rather than a person.
+    let auto_applied = permission::edits_auto_applied(ctx);
     let decision =
-        if permission::edits_auto_applied(ctx) {
+        if auto_applied {
             emit(AgentEvent::DiffProposed {
                 run_id: ctx.id.to_string(),
                 proposal: proposal.clone(),
@@ -2293,6 +2295,11 @@ Do not propose it again — take a different approach or ask the user what they'
     }
     if apply_all {
         decision_obj["scope"] = serde_json::json!("run");
+    }
+    // Nobody looked at an auto-applied edit; say so, so a reader (the result
+    // card) can tell what the operator already reviewed from what it hasn't.
+    if auto_applied {
+        decision_obj["via"] = serde_json::json!("auto");
     }
     emit(AgentEvent::DiffResolved {
         run_id: ctx.id.to_string(),

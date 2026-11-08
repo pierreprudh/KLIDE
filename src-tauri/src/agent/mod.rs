@@ -9719,7 +9719,13 @@ mod diff_gate_tests {
             cancel: &cancel,
             runs_dir: runs_dir.as_path(),
         };
-        let mut emit = |_: AgentEvent| -> Result<(), String> { Ok(()) };
+        let mut decisions: Vec<serde_json::Value> = Vec::new();
+        let mut emit = |event: AgentEvent| -> Result<(), String> {
+            if let AgentEvent::DiffResolved { decision, .. } = event {
+                decisions.push(decision);
+            }
+            Ok(())
+        };
 
         let first = create_call("c1", "a.md", "first\n");
         let (outcome, _) = tokio::join!(
@@ -9750,6 +9756,12 @@ mod diff_gate_tests {
             std::fs::read_to_string(std::path::Path::new(&root).join("b.md")).unwrap(),
             "second\n"
         );
+        // The person's answer carries no `via`; the policy's answer says so,
+        // which is how the result card tells reviewed files from the rest.
+        assert_eq!(decisions.len(), 2);
+        assert!(decisions[0].get("via").is_none(), "{}", decisions[0]);
+        assert_eq!(decisions[0]["scope"], "run");
+        assert_eq!(decisions[1]["via"], "auto", "{}", decisions[1]);
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(runs_dir);
     }

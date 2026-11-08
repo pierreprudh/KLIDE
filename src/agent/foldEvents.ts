@@ -238,6 +238,15 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
   let completed = false;
   let attemptStart = 0;
   const changedFiles = new Set<string>();
+  // Which proposal touched which file, and how each apply was answered: a
+  // person in an edit card, or policy (`via: "auto"`). A file is "reviewed"
+  // only when no edit to it was applied without being looked at.
+  const proposalPaths = new Map<string, string>();
+  const approvedFiles = new Set<string>();
+  const unreviewedFiles = new Set<string>();
+  const reviewedFiles = () => [...changedFiles].filter((path) => approvedFiles.has(path) && !unreviewedFiles.has(path));
+  // Absent rather than empty, so a run with no reviewed edit keeps its old shape.
+  const reviewedField = () => { const reviewed = reviewedFiles(); return reviewed.length ? { reviewed } : {}; };
   // Keyed by path: a command may rewrite the same deck twice in a run, and the
   // last size is the one on disk. `created` stays true once true — the run did
   // make the file, whatever it did to it afterwards.
@@ -376,6 +385,9 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       completed = false;
       attemptStart = open && !open.row.text && !open.row.toolCalls.length ? open.idx : rows.length;
       changedFiles.clear();
+      proposalPaths.clear();
+      approvedFiles.clear();
+      unreviewedFiles.clear();
       producedFiles.clear();
       commands.clear();
       completionWarnings.clear();
@@ -649,6 +661,9 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       completed = false;
       attemptStart = rows.length;
       changedFiles.clear();
+      proposalPaths.clear();
+      approvedFiles.clear();
+      unreviewedFiles.clear();
       producedFiles.clear();
       commands.clear();
       completionWarnings.clear();
@@ -716,6 +731,12 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       return { changed: [idx] };
     }
 
+    if (event.type === "diff_proposed") proposalPaths.set(event.proposal.id, event.proposal.path);
+    if (event.type === "diff_resolved" && event.decision.behavior === "apply") {
+      const path = proposalPaths.get(event.proposalId);
+      if (path) (event.decision.via === "auto" ? unreviewedFiles : approvedFiles).add(path);
+    }
+
     if (event.type === "file_changed") {
       changedFiles.add(event.path);
       return { changed: [] };
@@ -746,6 +767,7 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         completedAt: event.ts,
         outcome: outcome.slice(0, 280) + (outcome.length > 280 ? "…" : ""),
         files: [...changedFiles],
+        ...reviewedField(),
         artifacts: producedArtifacts(),
         commands: [...commands.values()].map((command) => ({ ...command })),
         warnings: [...completionWarnings],
@@ -782,6 +804,7 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
           completedAt: event.ts,
           outcome: reason.slice(0, 280) + (reason.length > 280 ? "…" : ""),
           files: [...changedFiles],
+          ...reviewedField(),
           artifacts: producedArtifacts(),
           commands: [...commands.values()].map((command) => ({ ...command })),
           warnings: [
@@ -831,6 +854,9 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       completed = false;
       attemptStart = rows.length;
       changedFiles.clear();
+      proposalPaths.clear();
+      approvedFiles.clear();
+      unreviewedFiles.clear();
       producedFiles.clear();
       commands.clear();
       completionWarnings.clear();

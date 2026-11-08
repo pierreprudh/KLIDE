@@ -211,7 +211,7 @@ export type DiffDecision =
   /** `scope: "run"` is "Validate all": apply this edit AND auto-apply every
    *  later edit of the live run (the harness remembers it on the run handle;
    *  the panel flips its rung so later turns follow). */
-  | { behavior: "apply"; scope?: "run" }
+  | { behavior: "apply"; scope?: "run"; /** Answered by policy (auto-accept), not a person. Set by the harness only. */ via?: "auto" }
   /** `note` is the user's review feedback ("request changes") — the harness
    *  folds it into the rejection tool result so the model revises toward it
    *  instead of abandoning course. */
