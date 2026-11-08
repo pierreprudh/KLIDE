@@ -204,7 +204,7 @@ describe("ResultEvidence", () => {
   it("offers Undo only while the run has checkpoints left", () => {
     const changed = { ...completion, files: ["src/app.tsx"] };
     const revert = { busy: false, onRevert: () => {} };
-    const left = new Map([["src/app.tsx", { rows: [], added: 2, removed: 0, created: false }]]);
+    const left = new Map([["src/app.tsx", { blocks: [], added: 2, removed: 0, created: false }]]);
     const html = renderToStaticMarkup(<ResultEvidence completion={changed} onDone={() => {}} revert={revert} diffs={left} />);
     expect(html).toContain("klide-result-revert");
     expect(html).toContain(">Undo</span></button>");

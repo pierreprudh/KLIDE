@@ -2,8 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { commandStatusSummary, completionDocumentCount, completionDocuments, hasCompletionReview, isCommandHistory, netFileChanges, type RunCompletion } from "../../agent/completion";
 import type { CheckpointEntry } from "../../agent/types";
-import { buildDiffRows, type DiffRow } from "../../lineDiff";
-import { DiffStat } from "../diffView";
+import { DiffStat, DiffView, diffFromContents, type DiffBlock } from "../diffView";
 import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
 import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon, UndoIcon } from "../../icons";
@@ -92,7 +91,7 @@ function Fold({ name, open, onToggle, title, label, failed, children }: {
 }
 
 /** A changed file as the card reads it: the hunk rows and the two counts. */
-type FileDiff = { rows: DiffRow[]; added: number; removed: number; created: boolean };
+type FileDiff = { blocks: DiffBlock[]; added: number; removed: number; created: boolean };
 
 /** The run's checkpoints, read once per completion and turned into one diff per
  *  file. Null while loading or when the host cannot read them; an accepted run
@@ -106,7 +105,7 @@ function useFileDiffs(completion: RunCompletion, load?: (runId: string) => Promi
       if (!live) return;
       const next = new Map<string, FileDiff>();
       for (const change of netFileChanges(entries).values()) {
-        next.set(change.path, { ...buildDiffRows(change.before, change.after), created: change.created });
+        next.set(change.path, { ...diffFromContents(change.before, change.after), created: change.created });
       }
       setDiffs(next);
     }).catch(() => {});
@@ -116,19 +115,13 @@ function useFileDiffs(completion: RunCompletion, load?: (runId: string) => Promi
   return diffs;
 }
 
-/** The hunks of one file, small enough for the column: a gutter sign, the
- *  line, and a gap where unchanged lines were folded away. */
-function InlineDiff({ rows }: { rows: DiffRow[] }) {
+/** The hunks of one file, drawn by the one diff renderer — the same rows as
+ *  Git Review and the inline edit review. The box caps the height; DiffView
+ *  scrolls long lines sideways inside its own card. */
+function InlineDiff({ blocks }: { blocks: DiffBlock[] }) {
   return (
     <div className="klide-result-diff" role="group" aria-label="Diff">
-      <div className="klide-result-diff-lines">
-      {rows.map((row, index) => row.kind === "gap"
-        ? <div key={index} className="klide-result-diff-gap">{row.hidden} unchanged</div>
-        : <div key={index} className="klide-result-diff-line" data-kind={row.kind}>
-            <span aria-hidden="true">{row.kind === "add" ? "+" : row.kind === "del" ? "−" : " "}</span>
-            <code>{row.text || " "}</code>
-          </div>)}
-      </div>
+      <DiffView blocks={blocks} limit={Infinity} inset={false} flush />
     </div>
   );
 }
@@ -148,7 +141,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   // The icon opens the document; its preview stays visible below.
   const artifacts = completionDocuments(completion);
   const checks = commandStatusSummary(completion);
-  const inlinePaths = onReview ? [] : completion.files.filter((path) => (diffs?.get(path)?.rows.length ?? 0) > 0);
+  const inlinePaths = onReview ? [] : completion.files.filter((path) => (diffs?.get(path)?.blocks.length ?? 0) > 0);
   const allOpen = inlinePaths.length > 0 && inlinePaths.every((path) => openFiles.has(path));
   const seeChanges = () => onReview ? review() : setOpenFiles(allOpen ? new Set() : new Set(inlinePaths));
   return (
@@ -161,7 +154,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               where the host has a diff viewer — goes there. */}
           <div className="klide-result-changes">{completion.files.map((path) => {
             const diff = diffs?.get(path);
-            const inline = !onReview && !!diff && diff.rows.length > 0;
+            const inline = !onReview && !!diff && diff.blocks.length > 0;
             const open = inline && openFiles.has(path);
             const mark = diff ? gitStatusMarkForLetter(diff.created ? "A" : "M") : null;
             const label = <>
@@ -184,7 +177,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
                   : inline
                     ? <button type="button" className={row} aria-expanded={open} data-active={open ? "true" : undefined} title={path} onClick={() => toggleFile(path)}>{label}</button>
                     : <div className={row} data-static="1" title={path}>{label}</div>}
-                {open && diff && <InlineDiff rows={diff.rows} />}
+                {open && diff && <InlineDiff blocks={diff.blocks} />}
               </div>
             );
           })}</div>

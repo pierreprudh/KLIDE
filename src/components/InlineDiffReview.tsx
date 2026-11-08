@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { DiffView, diffBlocksFromContents } from "./diffView";
+import { DiffView, diffFromContents } from "./diffView";
 
 export type PendingEdit = {
   path: string;
@@ -76,17 +76,10 @@ function BareAction({
  *  diff in place. Lives inline under the message that proposed the edit. */
 export function InlineDiffReview({ edit, onApply, onApplyAll, onReject, onRequestChanges, onOpenChanges }: Props) {
   // The Git panel's renderer: dual gutters, word highlights, quiet hunk bands.
-  const { blocks, added, removed } = useMemo(() => {
-    const blocks = diffBlocksFromContents(edit.oldContent, edit.newContent);
-    let added = 0;
-    let removed = 0;
-    for (const b of blocks) {
-      if (b.kind !== "line") continue;
-      if (b.tone === "add") added++;
-      else if (b.tone === "del") removed++;
-    }
-    return { blocks, added, removed };
-  }, [edit.oldContent, edit.newContent]);
+  const { blocks, added, removed } = useMemo(
+    () => diffFromContents(edit.oldContent, edit.newContent),
+    [edit.oldContent, edit.newContent]
+  );
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState("");
 
@@ -232,10 +225,8 @@ export function InlineDiffReview({ edit, onApply, onApplyAll, onReject, onReques
       )}
 
       {expanded && (
-        // DiffView opens each card with a 12px top margin; this card's own
-        // gap already spaces it, so the scroller takes the margin back.
-        <div className="klide-scroll-slim" style={{ maxHeight: 260, overflow: "auto", marginTop: -12 }}>
-          <DiffView blocks={blocks} limit={Infinity} inset={false} />
+        <div className="klide-scroll-slim" style={{ maxHeight: 260, overflow: "auto" }}>
+          <DiffView blocks={blocks} limit={Infinity} inset={false} flush />
         </div>
       )}
 
