@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { buildDiffRows as buildRows } from "../lineDiff";
+import { DiffView, diffBlocksFromContents } from "./diffView";
 
 export type PendingEdit = {
   path: string;
@@ -75,10 +75,18 @@ function BareAction({
  *  Folded by default; "open changes" expands the description + line-numbered
  *  diff in place. Lives inline under the message that proposed the edit. */
 export function InlineDiffReview({ edit, onApply, onApplyAll, onReject, onRequestChanges, onOpenChanges }: Props) {
-  const { rows, added, removed } = useMemo(
-    () => buildRows(edit.oldContent, edit.newContent),
-    [edit.oldContent, edit.newContent]
-  );
+  // The Git panel's renderer: dual gutters, word highlights, quiet hunk bands.
+  const { blocks, added, removed } = useMemo(() => {
+    const blocks = diffBlocksFromContents(edit.oldContent, edit.newContent);
+    let added = 0;
+    let removed = 0;
+    for (const b of blocks) {
+      if (b.kind !== "line") continue;
+      if (b.tone === "add") added++;
+      else if (b.tone === "del") removed++;
+    }
+    return { blocks, added, removed };
+  }, [edit.oldContent, edit.newContent]);
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState("");
 
@@ -88,11 +96,6 @@ export function InlineDiffReview({ edit, onApply, onApplyAll, onReject, onReques
     onRequestChanges(trimmed);
     setNote("");
   };
-
-  const gutter = useMemo(() => {
-    const max = rows.reduce((m, r) => (r.kind === "gap" ? m : Math.max(m, r.no)), 0);
-    return String(max).length;
-  }, [rows]);
 
   const plural = (n: number) => (n === 1 ? "" : "s");
 
@@ -229,49 +232,10 @@ export function InlineDiffReview({ edit, onApply, onApplyAll, onReject, onReques
       )}
 
       {expanded && (
-        <div
-          style={{
-            maxHeight: 260,
-            overflow: "auto",
-            borderRadius: "var(--radius-sm)",
-            border: "1px solid var(--border)",
-            background: "var(--bg)",
-            padding: "6px 0",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11.5,
-            lineHeight: 1.5,
-          }}
-        >
-          {rows.map((r, i) => {
-            if (r.kind === "gap") {
-              return (
-                <div key={i} style={{ padding: "1px 12px", color: "var(--fg-dim)", fontStyle: "italic", userSelect: "none" }}>
-                  ⋯ {r.hidden} unchanged line{plural(r.hidden)}
-                </div>
-              );
-            }
-            const bg = r.kind === "add" ? "var(--diff-add-bg)" : r.kind === "del" ? "var(--diff-remove-bg)" : "transparent";
-            const marker = r.kind === "add" ? "+" : r.kind === "del" ? "−" : " ";
-            const markerColor = r.kind === "add" ? "var(--diff-add)" : r.kind === "del" ? "var(--diff-remove)" : "var(--fg-dim)";
-            return (
-              <div key={i} style={{ display: "flex", background: bg, whiteSpace: "pre" }}>
-                <span
-                  style={{
-                    flexShrink: 0,
-                    width: `${gutter}ch`,
-                    textAlign: "right",
-                    paddingLeft: 10,
-                    color: r.kind === "context" ? "var(--fg-dim)" : markerColor,
-                    userSelect: "none",
-                  }}
-                >
-                  {r.no}
-                </span>
-                <span style={{ flexShrink: 0, width: 18, textAlign: "center", color: markerColor, userSelect: "none" }}>{marker}</span>
-                <span style={{ color: "var(--fg-strong)", paddingRight: 12 }}>{r.text || " "}</span>
-              </div>
-            );
-          })}
+        // DiffView opens each card with a 12px top margin; this card's own
+        // gap already spaces it, so the scroller takes the margin back.
+        <div className="klide-scroll-slim" style={{ maxHeight: 260, overflow: "auto", marginTop: -12 }}>
+          <DiffView blocks={blocks} limit={Infinity} inset={false} />
         </div>
       )}
 

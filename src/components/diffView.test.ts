@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffStatBlocks, parseDiffBlocks } from "./diffView";
+import { diffBlocksFromContents, diffStatBlocks, parseDiffBlocks } from "./diffView";
 
 const SAMPLE = [
   "diff --git a/src/foo.ts b/src/foo.ts",
@@ -76,5 +76,36 @@ describe("diffStatBlocks", () => {
     expect(diffStatBlocks(1, 1)).toEqual(["add", "add", "del", "del", "none"]);
     expect(diffStatBlocks(3, 0)).toEqual(["add", "add", "add", "add", "add"]);
     expect(diffStatBlocks(0, 0)).toEqual(["none", "none", "none", "none", "none"]);
+  });
+});
+
+describe("diffBlocksFromContents", () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`);
+
+  it("numbers both sides and highlights the changed word, like a git diff", () => {
+    const before = lines(20);
+    const after = [...before];
+    after[9] = "line 10 changed";
+    const blocks = diffBlocksFromContents(before.join("\n") + "\n", after.join("\n") + "\n");
+    expect(blocks[0]).toEqual({ kind: "hunk", text: "" });
+    const code = blocks.filter((b) => b.kind === "line");
+    // three lines of context either side, then the pair
+    expect(code).toHaveLength(8);
+    expect(code[3]).toMatchObject({ tone: "del", oldNo: 10, newNo: null, code: "line 10", hi: [7, 7] });
+    expect(code[4]).toMatchObject({ tone: "add", oldNo: null, newNo: 10, hi: [7, 15] });
+    expect(code[0]).toMatchObject({ tone: "ctx", oldNo: 7, newNo: 7 });
+  });
+
+  it("splits distant changes into hunks and drops the no-newline marker", () => {
+    const before = lines(30).join("\n");
+    const after = lines(30).map((l, i) => (i === 1 || i === 28 ? `${l}!` : l)).join("\n");
+    const blocks = diffBlocksFromContents(before, after);
+    expect(blocks.filter((b) => b.kind === "hunk")).toHaveLength(2);
+    expect(blocks.some((b) => b.kind === "line" && b.code.startsWith(" No newline"))).toBe(false);
+  });
+
+  it("reads a new file as all additions", () => {
+    const blocks = diffBlocksFromContents("", "a\nb\n");
+    expect(blocks.filter((b) => b.kind === "line").map((b) => b.kind === "line" && b.tone)).toEqual(["add", "add"]);
   });
 });
