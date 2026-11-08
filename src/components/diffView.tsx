@@ -1,5 +1,6 @@
-// The one diff renderer — shared by the staging pane (GitReview) and the
-// commit detail pane (GitHistoryGraph), so both read the same way.
+// The one diff renderer — shared by the staging pane (GitReview), the
+// commit detail pane (GitHistoryGraph) and an agent's inline edit review
+// (InlineDiffReview), so all of them read the same way.
 //
 // Modeled on what makes GitHub / Tower / Fork diffs digestible: dual
 // line-number gutters, a separated sign column so code indentation aligns,
@@ -16,6 +17,7 @@
 // agent. A selected line's edge marker turns accent (selection, not state).
 
 import { memo, useState, type ReactNode } from "react";
+import { structuredPatch } from "diff";
 import { ChevronIcon, OpenInEditorIcon } from "../icons";
 import { gitStatusMark } from "../gitStatusMark";
 import { FileTypeIcon } from "./fileMarks";
@@ -77,6 +79,21 @@ export function parseDiffBlocks(lines: string[]): DiffBlock[] {
   }
   markInlineChanges(blocks);
   return blocks;
+}
+
+/** Two versions of one file as DiffView blocks — the same hunks, numbering
+ *  and word highlights as a git diff, for hosts that hold contents rather
+ *  than patch text (an agent's proposed edit). No file block: the host draws
+ *  its own header. */
+export function diffBlocksFromContents(oldContent: string, newContent: string, context = 3): DiffBlock[] {
+  const patch = structuredPatch("a", "b", oldContent, newContent, "", "", { context });
+  const lines: string[] = [];
+  for (const hunk of patch.hunks) {
+    lines.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
+    // "\ No newline at end of file" is patch metadata, not a line of code.
+    for (const line of hunk.lines) if (!line.startsWith("\\")) lines.push(line);
+  }
+  return parseDiffBlocks(lines);
 }
 
 /** Tower-style word-level highlighting: when a run of removed lines is
