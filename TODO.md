@@ -6,6 +6,44 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Design agent — visual feedback infrastructure, 2026-11-07
+
+Reviewed 2026-11-08: browser half verified (typecheck, 21 unit + 21 Playwright
+tests, `cargo check --features design-parity`). Findings and four decisions for
+Pierre in [the plan's Review section](docs/DESIGN_AGENT_PLAN.md#review--2026-11-08).
+The plan is on main; the code is still uncommitted in the main checkout.
+
+- [x] Browser half of the first slice: production AiPanel fixtures for long
+  conversation and empty composer, screenshot capture in two themes/two sizes,
+  accessible snapshots, source/evidence hashes, local comparison report and
+  overflow/fold/scroll/draft checks. See `preview/design-feedback/README.md`.
+  The slice itself closes only with the desktop parity check below.
+- [ ] Pierre: decide the review's four questions — park the council (PR 6–8)
+  after PR 4, Node not Python, brief separate from the plan, audit local or
+  tracked.
+- [ ] Cross-run pixel identity: try deterministic Chromium raster flags first;
+  if noise remains, report a declared perceptual count beside the raw one
+  (`threshold: 0` today turns antialiasing into reported change).
+- [ ] Native desktop parity for the first slice. First make it launchable: one
+  `design:parity` script + README section, and try `tauri dev --config` merge
+  instead of the `build.rs`/`app_context()` whole-config replacement (which
+  drops the deep-link plugin config and pins `version`). Browser success does
+  not authorize model trials.
+- [ ] Capture from a disposable worktree: today any edit under `src`/`preview`/
+  `scripts` by a concurrent session fails the run, and every bundle copies
+  unrelated untracked files.
+- [ ] Small fixes: `data-transcript-scroller` instead of the inline-style
+  selector; one source for scenario/theme/time lists (TS, `.mjs`, Rust); move
+  `focus-contrast.test.mjs` beside `src/styles/`; drop the duplicate console
+  write in `capture.mjs`.
+- [x] Add tools/review, waiting/error, child activity and composer-menu
+  scenarios using production controls and synthetic Run recovery/events.
+  Capture command approval, expanded/rejected edits, keyboard answers,
+  retry/cancel, child steps/status changes and menu selection/focus return.
+- [ ] Implement native image delivery (PR 4) and the single-writer loop (PR 5)
+  in `docs/DESIGN_AGENT_PLAN.md`; the council and blinded comparison (PR 6–8)
+  wait on the decision above.
+
 ## Current priority — clean up local workflows before VPS
 
 Direction confirmed 2026-10-26: VPS execution is the next major capability.
