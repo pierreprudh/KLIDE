@@ -548,6 +548,7 @@ function InlineMenu({
   width = 236,
   variant = "text",
   ringRatio = 0,
+  menuClassName,
 }: {
   label: string;
   display: string;
@@ -579,6 +580,8 @@ function InlineMenu({
    *  a measured fraction. */
   variant?: "text" | "ring";
   ringRatio?: number;
+  /** An extra class on the open menu, for a picker that shapes its own card. */
+  menuClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState(false);
@@ -806,7 +809,7 @@ function InlineMenu({
           ref={menuRef}
           role="listbox"
           aria-label={label}
-          className="picker-menu menu-glass"
+          className={menuClassName ? `picker-menu menu-glass ${menuClassName}` : "picker-menu menu-glass"}
           data-leaving={presence.leaving}
           style={{
             transformOrigin: "bottom left",
@@ -2036,7 +2039,7 @@ export function FocusComposer({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 34 }}>
           {whereItRuns && (
             <div className="klide-where-it-runs">
-              <InlineMenu label="Where it runs" width={176} {...whereItRuns} />
+              <InlineMenu label="Where it runs" width={196} menuClassName="klide-where-menu" {...whereItRuns} />
             </div>
           )}
           <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
