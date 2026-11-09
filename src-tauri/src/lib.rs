@@ -1067,15 +1067,10 @@ fn menu_sync_projects(
 fn app_context() -> tauri::Context<tauri::Wry> {
     #[cfg(all(feature = "design-parity", not(debug_assertions)))]
     compile_error!("design-parity is a development-only feature");
-    let context = tauri::generate_context!();
-    #[cfg(all(feature = "design-parity", debug_assertions))]
-    let context = {
-        let mut context = context;
-        *context.config_mut() = serde_json::from_str(include_str!("../tauri.design-parity.conf.json"))
-            .expect("valid design parity config");
-        context
-    };
-    context
+    // With `design-parity`, build.rs hands codegen the parity file as
+    // TAURI_CONFIG — a merge patch over tauri.conf.json, so version, plugins
+    // and bundle stay the app's own and only the overrides change.
+    tauri::generate_context!()
 }
 
 pub fn run() {

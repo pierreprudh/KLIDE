@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // Exercise the shipped token values, not copies of the palette in the test.
-const css = readFileSync(new URL("../../src/styles/tokens.css", import.meta.url), "utf8");
+const css = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
 function declarations(block) {
   return Object.fromEntries(Array.from(block.matchAll(/(--[\w-]+):\s*([^;]+);/g), m => [m[1], m[2].trim()]));
 }
