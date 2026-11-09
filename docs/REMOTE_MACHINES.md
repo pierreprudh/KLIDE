@@ -192,8 +192,13 @@ Each step is one PR and ends with something checkable on `klide-box`.
    `/tmp/klide-1000/ptyd-*.sock`, answered a Python client's Auth + Ping
    (`0.6.11`, protocol 2 — the Mac's), spawned a shell session, served its
    scrollback through Snapshot, listed it in LiveRows, stopped it, and kept
-   running after the SSH session closed. Still owed: the same with a Claude
-   Code conversation (`chat_start`), once Claude Code is logged in on the box.
+   running after the SSH session closed. Then, with Claude Code logged in,
+   three background conversations through `chat_start` on a scratch repo: a
+   Chat turn (answered, and correctly refused to read files), a Work turn
+   (observed Read tool call, answer `# spike`, 6 s, `run_result`), and a long
+   Chat turn stopped mid-stream with `chat_control` Stop (settled in 1 s with
+   `aborted`, no `claude` process left). Transcripts are the same JSONL the
+   Mac writes. Step 0 is done.
    **Decision: build on CI.** A 3 GB box should not compile the app, and the
    Tauri-free `klide-host` binary is not needed to start — the cost of the
    whole-app build is the two runtime packages and 63 MB.
