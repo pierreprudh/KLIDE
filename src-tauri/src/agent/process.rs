@@ -55,6 +55,9 @@ pub struct SpawnSpec<'a> {
     pub command: &'a str,
     pub cwd: &'a std::path::Path,
     pub capture: Capture,
+    /// What the command may write and reach. `None` runs it with the app's
+    /// own reach, as every command did before `sandbox.rs`.
+    pub sandbox: Option<&'a super::sandbox::Sandbox>,
 }
 
 /// How a process ended.
@@ -188,7 +191,16 @@ fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>) 
     let shell = if envs.is_some() {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into())
     } else { "sh".into() };
-    let mut cmd = tokio::process::Command::new(shell);
+    // The sandbox goes around the shell, so everything the command starts
+    // inherits it — a child cannot leave a Seatbelt profile.
+    let mut cmd = match spec.sandbox.and_then(|sandbox| sandbox.wrap(&shell)) {
+        Some((program, args)) => {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.args(args);
+            cmd
+        }
+        None => tokio::process::Command::new(&shell),
+    };
     if let Some(envs) = envs {
         cmd.arg("-l").envs(envs.iter().cloned());
     } else {
@@ -454,7 +466,7 @@ mod tests {
     const HARD: Duration = Duration::from_secs(20);
 
     fn start(command: &str, capture: Capture) -> ProcessHandle {
-        spawn(SpawnSpec { command, cwd: std::path::Path::new("."), capture }).unwrap()
+        spawn(SpawnSpec { command, cwd: std::path::Path::new("."), capture, sandbox: None }).unwrap()
     }
 
     #[tokio::test]
@@ -468,6 +480,103 @@ mod tests {
         let (out, err) = handle.split_output();
         assert!(out.text.is_empty() && err.text.is_empty());
         assert_eq!((out.dropped, err.dropped), (5, 5));
+    }
+
+    /// Whether this process may apply a Seatbelt profile at all. A test run
+    /// that is itself sandboxed cannot nest another one; those runs skip the
+    /// containment tests rather than fail on the host's own restriction.
+    #[cfg(target_os = "macos")]
+    fn seatbelt_available() -> bool {
+        std::process::Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn run_sandboxed(command: &str, cwd: &std::path::Path, sandbox: &super::super::sandbox::Sandbox) -> (Exit, String) {
+        let handle = spawn(SpawnSpec { command, cwd, capture: Capture::Merged { cap: 64 * 1024 }, sandbox: Some(sandbox) }).unwrap();
+        wait(&handle, Duration::from_secs(15), &CancellationToken::new()).await;
+        (handle.finished().expect("the command ended").exit, handle.tail(64 * 1024).0)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sandbox_dirs(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!("klide-sandbox-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (inside, outside) = (base.join("workspace"), base.join("elsewhere"));
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        (inside, outside)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_sandboxed_command_writes_only_where_it_was_allowed() {
+        if !seatbelt_available() {
+            eprintln!("skipped: this process cannot apply a Seatbelt profile");
+            return;
+        }
+        let (inside, outside) = sandbox_dirs("writes");
+        let sandbox = super::super::sandbox::Sandbox { writable: vec![inside.clone()], network: true };
+        let escape = outside.join("escape.txt");
+        // The child a command starts is inside the same profile.
+        let command = format!(
+            "echo kept > kept.txt && echo quiet > /dev/null && sh -c 'echo out > \"{}\"'",
+            escape.display()
+        );
+        let (exit, output) = run_sandboxed(&command, &inside, &sandbox).await;
+        assert_eq!(std::fs::read_to_string(inside.join("kept.txt")).unwrap(), "kept\n");
+        assert!(!escape.exists(), "a write outside the allowed folder must not land");
+        assert_ne!(exit, Exit::Code(0));
+        assert!(output.contains("Operation not permitted"), "the denial is what the model reads: {output}");
+        let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn the_same_command_without_a_sandbox_is_unchanged() {
+        let (inside, outside) = sandbox_dirs("unsandboxed");
+        let target = outside.join("written.txt");
+        let handle = spawn(SpawnSpec {
+            command: &format!("echo out > \"{}\"", target.display()),
+            cwd: &inside,
+            capture: Capture::Merged { cap: 1024 },
+            sandbox: None,
+        })
+        .unwrap();
+        wait(&handle, Duration::from_secs(15), &CancellationToken::new()).await;
+        assert_eq!(handle.finished().unwrap().exit, Exit::Code(0));
+        assert!(target.exists());
+        let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn network_off_keeps_loopback_and_closes_the_rest() {
+        if !seatbelt_available() {
+            eprintln!("skipped: this process cannot apply a Seatbelt profile");
+            return;
+        }
+        let (inside, _) = sandbox_dirs("network");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let sandbox = super::super::sandbox::Sandbox { writable: vec![inside.clone()], network: false };
+        // `nc -z` only opens the connection. 192.0.2.1 is documentation
+        // address space: with the network on, the attempt would sit out its
+        // whole 8 s timer and never be refused at once — so a fast failure
+        // here is the profile, not the route.
+        let command = format!(
+            "nc -z -w 8 127.0.0.1 {port} && echo loopback-open; nc -z -w 8 192.0.2.1 80 || echo outside-closed"
+        );
+        let started = Instant::now();
+        let (_, output) = run_sandboxed(&command, &inside, &sandbox).await;
+        assert!(output.contains("loopback-open"), "{output}");
+        assert!(output.contains("outside-closed"), "{output}");
+        assert!(started.elapsed() < Duration::from_secs(5), "a denial is immediate, a route failure waits out the timer");
+        drop(listener);
+        let _ = std::fs::remove_dir_all(inside.parent().unwrap());
     }
 
     async fn wait(handle: &ProcessHandle, timeout: Duration, cancel: &CancellationToken) -> Waited {

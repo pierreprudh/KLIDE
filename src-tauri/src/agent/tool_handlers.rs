@@ -1051,7 +1051,7 @@ async fn run_approved_setup(root: &str, approved: &str, worktree: &str, branch: 
     if cancel.is_cancelled() { return Err("Cancelled before setup started.".into()); }
     let dir = std::path::Path::new(worktree);
     let process = process::spawn_setup(process::SpawnSpec {
-        command: approved, cwd: dir, capture: process::Capture::Merged { cap: 16_000 },
+        command: approved, cwd: dir, capture: process::Capture::Merged { cap: 16_000 }, sandbox: None,
     }, &envs)?;
     let result = process.wait_until(std::time::Duration::from_secs(timeout.max(1)), cancel).await;
     let (output, _) = process.tail(2_000);
