@@ -131,7 +131,7 @@ gh --version | head -n 1
 
 say "Node.js ${NODE_MAJOR} (for projects that build with npm)"
 if ! have node || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt "$NODE_MAJOR" ]; then
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo bash -
   sudo apt-get -y install nodejs
 fi
 node --version
@@ -141,6 +141,15 @@ if ! have claude && [ ! -x "$HOME/.local/bin/claude" ]; then
   curl -fsSL https://claude.ai/install.sh | bash
 fi
 "$HOME/.local/bin/claude" --version 2>/dev/null || claude --version
+# `ssh klide-box 'claude'` runs a non-interactive shell, and Ubuntu's .bashrc
+# returns before its PATH lines in that case. Put ~/.local/bin first in the
+# file so commands sent over SSH (and Klide's attach command) find claude.
+if ! head -n 3 "$HOME/.bashrc" | grep -q 'klide: PATH'; then
+  # shellcheck disable=SC2016  # written literally; expands when .bashrc runs
+  printf '%s\n%s\n' '# klide: PATH for non-interactive SSH commands' \
+    'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac' \
+    | cat - "$HOME/.bashrc" > "$HOME/.bashrc.klide" && mv "$HOME/.bashrc.klide" "$HOME/.bashrc"
+fi
 
 say "Tailscale (reach the box away from home)"
 if ! have tailscale; then
