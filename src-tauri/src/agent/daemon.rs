@@ -130,6 +130,13 @@ impl RunHost {
         run_host::answer(handle, control)
     }
 
+    /// A journal cancel request reaching a Run this host executes: trip its
+    /// token, as the app does for its own Harness Runs. `false` when this
+    /// host holds no such Run — the durable request still stands.
+    fn signal_cancel(&self, id: &str) -> bool {
+        self.with_handle(id, &mut |handle| handle.cancel.cancel())
+    }
+
     pub fn start(
         self: &Arc<Self>,
         request: StartRunRequest,
@@ -209,6 +216,7 @@ impl RunHost {
 
     fn ensure_bridge(self: &Arc<Self>) {
         let live = Arc::downgrade(self);
+        let cancels = live.clone();
         let operations = live.clone();
         let changes = live.clone();
         let permissions = live.clone();
@@ -248,7 +256,9 @@ impl RunHost {
                     }
                 }),
                 is_live: Box::new(move |id| live.upgrade().is_some_and(|h| h.is_live(id))),
-                cancel: None,
+                cancel: Some(Box::new(move |id| {
+                    cancels.upgrade().is_some_and(|h| h.signal_cancel(id))
+                })),
                 resolve_session: Box::new(|_| None),
             },
         ) {
@@ -546,6 +556,29 @@ mod tests {
         .await
         .unwrap();
         host.control("conversation", ChatControl::Stop).unwrap();
+        settled(&host).await;
+        let replay = read_events(&runs, "conversation").unwrap();
+        assert!(replay.iter().any(
+            |e| matches!(e, AgentEvent::RunError { error, .. } if error.code == error_code::ABORTED)
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_coordination_cancel_stops_a_run_this_host_executes() {
+        let (dir, request, caller) = fixture("coordination-cancel");
+        let host = RunHost::new(dir.clone(), Arc::new(|_, _, _| {}));
+        let runs = dir.join("runs");
+        host.start_with(request, runs.clone(), caller.clone())
+            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            caller.started.notified(),
+        )
+        .await
+        .unwrap();
+        assert!(!host.signal_cancel("someone-else"), "no handle, nothing signalled");
+        assert!(host.signal_cancel("conversation"));
         settled(&host).await;
         let replay = read_events(&runs, "conversation").unwrap();
         assert!(replay.iter().any(
