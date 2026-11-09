@@ -482,18 +482,6 @@ mod tests {
         assert_eq!((out.dropped, err.dropped), (5, 5));
     }
 
-    /// Whether this process may apply a Seatbelt profile at all. A test run
-    /// that is itself sandboxed cannot nest another one; those runs skip the
-    /// containment tests rather than fail on the host's own restriction.
-    #[cfg(target_os = "macos")]
-    fn seatbelt_available() -> bool {
-        std::process::Command::new("/usr/bin/sandbox-exec")
-            .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-            .output()
-            .map(|out| out.status.success())
-            .unwrap_or(false)
-    }
-
     #[cfg(target_os = "macos")]
     async fn run_sandboxed(command: &str, cwd: &std::path::Path, sandbox: &super::super::sandbox::Sandbox) -> (Exit, String) {
         let handle = spawn(SpawnSpec { command, cwd, capture: Capture::Merged { cap: 64 * 1024 }, sandbox: Some(sandbox) }).unwrap();
@@ -514,12 +502,11 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn a_sandboxed_command_writes_only_where_it_was_allowed() {
-        if !seatbelt_available() {
-            eprintln!("skipped: this process cannot apply a Seatbelt profile");
+        if !super::super::sandbox::usable_here() {
             return;
         }
         let (inside, outside) = sandbox_dirs("writes");
-        let sandbox = super::super::sandbox::Sandbox { writable: vec![inside.clone()], network: true };
+        let sandbox = super::super::sandbox::Sandbox { writable: vec![inside.clone()], network: true, ..Default::default() };
         let escape = outside.join("escape.txt");
         // The child a command starts is inside the same profile.
         let command = format!(
@@ -555,14 +542,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn network_off_keeps_loopback_and_closes_the_rest() {
-        if !seatbelt_available() {
-            eprintln!("skipped: this process cannot apply a Seatbelt profile");
+        if !super::super::sandbox::usable_here() {
             return;
         }
         let (inside, _) = sandbox_dirs("network");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let sandbox = super::super::sandbox::Sandbox { writable: vec![inside.clone()], network: false };
+        let sandbox = super::super::sandbox::Sandbox { writable: vec![inside.clone()], ..Default::default() };
         // `nc -z` only opens the connection. 192.0.2.1 is documentation
         // address space: with the network on, the attempt would sit out its
         // whole 8 s timer and never be refused at once — so a fast failure

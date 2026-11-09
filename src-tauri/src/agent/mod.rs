@@ -1549,7 +1549,7 @@ async fn run_test_after_edit(
     };
     // Stop reaches the check too. The edit itself is already applied, so the
     // result still says so — the loop settles the cancellation next.
-    let check = match run_command_capture_in(root, root, command, timeout_secs, cancel).await {
+    let check = match run_command_capture_in(root, root, command, timeout_secs, cancel, None).await {
         tools::CommandRun::Done(check) => check,
         tools::CommandRun::Cancelled => ToolResult {
             ok: false,
@@ -1587,7 +1587,7 @@ async fn run_goal_check(
     cancel: &CancellationToken,
 ) -> Option<goal::CheckOutcome> {
     let command = command.map(str::trim).filter(|c| !c.is_empty())?;
-    let result = match run_command_capture_in(root, root, command, timeout_secs, cancel).await {
+    let result = match run_command_capture_in(root, root, command, timeout_secs, cancel, None).await {
         tools::CommandRun::Done(result) => result,
         tools::CommandRun::Cancelled => ToolResult {
             ok: false,
@@ -8914,6 +8914,58 @@ mod permission_gate_tests {
             (1, 1),
             "full auto never pauses, and the transcript names the rung as the answer"
         );
+    }
+
+    /// A workspace with a git directory, and a command that writes one file
+    /// in the project and one git hook.
+    #[cfg(target_os = "macos")]
+    fn hook_planting_setup(name: &str) -> (String, &'static str) {
+        let root = temp_workspace(name);
+        std::fs::create_dir_all(std::path::Path::new(&root).join(".git/hooks")).unwrap();
+        (root, "echo made > made.txt; echo planted > .git/hooks/pre-commit")
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_command_full_auto_ran_is_contained_to_the_project() {
+        if !sandbox::usable_here() {
+            return;
+        }
+        let (root, command) = hook_planting_setup("full-auto-contained");
+        let cancel = CancellationToken::new();
+        let mut request = test_request(&root, &[]);
+        request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("contained-run", &request);
+        let runs_dir = std::env::temp_dir().join(format!("klide-contained-runs-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx { sup: &sup, id: "contained-run", request: &request, cancel: &cancel, runs_dir: runs_dir.as_path() };
+        let (_events, mut emit) = event_log();
+
+        let result = run_gate_without_prompt(&ctx, &command_call("call-1", command), &mut emit).await;
+        let root = std::path::Path::new(&root);
+        assert!(root.join("made.txt").exists(), "the project itself is writable");
+        assert!(!root.join(".git/hooks/pre-commit").exists(), "a hook would run unsandboxed at the next commit");
+        assert!(!result.ok);
+        assert!(result.content.contains("ran sandboxed"), "the model is told why: {}", result.content);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_command_approved_by_name_runs_as_it_always_did() {
+        let (root, command) = hook_planting_setup("exact-rule-uncontained");
+        let cancel = CancellationToken::new();
+        // The project allowlist names this very command: a person approved it.
+        let request = test_request(&root, &[command]);
+        let sup = FakeSupervisor::for_request("exact-run", &request);
+        let runs_dir = std::env::temp_dir().join(format!("klide-exact-runs-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx { sup: &sup, id: "exact-run", request: &request, cancel: &cancel, runs_dir: runs_dir.as_path() };
+        let (_events, mut emit) = event_log();
+
+        let result = run_gate_without_prompt(&ctx, &command_call("call-1", command), &mut emit).await;
+        assert!(result.ok, "{}", result.content);
+        assert!(std::path::Path::new(&root).join(".git/hooks/pre-commit").exists());
+        assert!(!result.content.contains("ran sandboxed"));
     }
 
     /// Full auto silences a web read too — a command could `curl` the same

@@ -132,14 +132,32 @@ pub struct ShellRead {
 /// Must be called from inside a tokio runtime: the reader and waiter tasks are
 /// spawned here and outlive the call, which is the entire point.
 pub fn spawn(run_id: &str, cwd: &str, command: &str) -> Result<ShellSnapshot, String> {
-    spawn_inner(run_id, cwd, command, false)
+    spawn_inner(run_id, cwd, command, false, None)
 }
 
 pub fn spawn_observer(run_id: &str, cwd: &str, command: &str) -> Result<ShellSnapshot, String> {
-    spawn_inner(run_id, cwd, command, true)
+    spawn_inner(run_id, cwd, command, true, None)
 }
 
-fn spawn_inner(run_id: &str, cwd: &str, command: &str, notify_on_exit: bool) -> Result<ShellSnapshot, String> {
+/// [`spawn`] or [`spawn_observer`] for a command that may be contained: the
+/// sandbox, when there is one, holds for as long as the shell runs.
+pub fn spawn_contained(
+    run_id: &str,
+    cwd: &str,
+    command: &str,
+    notify_on_exit: bool,
+    sandbox: Option<&super::sandbox::Sandbox>,
+) -> Result<ShellSnapshot, String> {
+    spawn_inner(run_id, cwd, command, notify_on_exit, sandbox)
+}
+
+fn spawn_inner(
+    run_id: &str,
+    cwd: &str,
+    command: &str,
+    notify_on_exit: bool,
+    sandbox: Option<&super::sandbox::Sandbox>,
+) -> Result<ShellSnapshot, String> {
     // Retain a small, log-free set of completed GitHub cards for navigation.
     if let Ok(mut shells) = registry().lock() {
         let mut completed: Vec<_> = shells.values().filter(|s| s.run_id == run_id && s.delivered).map(|s| (s.started_ms, s.id.clone())).collect();
@@ -156,7 +174,7 @@ fn spawn_inner(run_id: &str, cwd: &str, command: &str, notify_on_exit: bool) -> 
         command,
         cwd: std::path::Path::new(cwd),
         capture: Capture::Merged { cap: MAX_BUFFER },
-        sandbox: None,
+        sandbox,
     })?;
     let id = format!("shell_{}_{}", now_ms(), rand_suffix());
 
