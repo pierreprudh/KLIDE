@@ -1532,7 +1532,7 @@ export type FocusComposerControls = {
 
 /** The bottom-anchored task dock: context strip, textarea, and the provider /
  *  model / effort / context controls that decide how a new run is dispatched. */
-function FocusComposer({
+export function FocusComposer({
   controls,
   branch,
   onPingGit,
@@ -2035,7 +2035,7 @@ function FocusComposer({
         // it runs takes the opposite corner.
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 34 }}>
           {whereItRuns && (
-            <div className="klide-where-it-runs">
+            <div className="klide-focus-context-strip klide-where-it-runs">
               <InlineMenu label="Where it runs" width={200} {...whereItRuns} />
             </div>
           )}
