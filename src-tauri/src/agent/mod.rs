@@ -13,6 +13,7 @@ mod stream_log;
 mod artifacts;
 mod background;
 mod process;
+mod sandbox;
 pub(crate) mod command_env;
 mod observers;
 pub(crate) mod schedules;

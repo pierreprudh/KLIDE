@@ -156,6 +156,7 @@ fn spawn_inner(run_id: &str, cwd: &str, command: &str, notify_on_exit: bool) -> 
         command,
         cwd: std::path::Path::new(cwd),
         capture: Capture::Merged { cap: MAX_BUFFER },
+        sandbox: None,
     })?;
     let id = format!("shell_{}_{}", now_ms(), rand_suffix());
 

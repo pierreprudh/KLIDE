@@ -2285,6 +2285,7 @@ pub async fn run_command_capture_in(
         command,
         cwd: &cwd,
         capture: super::process::Capture::Split { cap_each: FOREGROUND_CAPTURE },
+        sandbox: None,
     }) {
         Ok(process) => process,
         Err(e) => return CommandRun::Done(err(e.replace("Failed to start command", "Failed to run command"))),
