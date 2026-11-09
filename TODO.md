@@ -791,9 +791,10 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
 - [ ] PDF drop (#266): drop a PDF in the real app (raw-body invoke + name
   header), open its card; collect kept PDFs whose attachment was removed
   before sending (no GC yet).
-- [ ] Background chats: the Delegate coordination bridge in `klide ptyd`
-  passes `cancel: None` (`agent/daemon.rs`), so `agent_cancel` from a CLI in a
-  background chat can't stop its target.
+- [x] Background chats: the Delegate coordination bridge in `klide ptyd`
+  passed `cancel: None`, so `agent_cancel` from a CLI in a background chat only
+  recorded the request. It now trips the token of a Run the background host
+  executes, as the app does (2026-11-09).
 - [ ] Focus composer drift (Sep 30 review, C5): check that skills are inlined
   on the first Focus turn like in the panel.
 
