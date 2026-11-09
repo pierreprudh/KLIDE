@@ -72,6 +72,17 @@ viewport, DPR, theme, locale and timezone. Source hashing covers the declared
 source/config paths in `evidence.mjs`, excluding generated artifacts and private
 runtime state. Evidence is local and ignored by Git.
 
+The patch, the copied untracked inputs and the "source changed during capture"
+check cover only what was **rendered**: the files the page imported (Vite's
+module graph, listed as `source.rendered`) plus the capture tooling. Another
+session editing an unrelated file neither fails the run nor rides into the
+bundle; an edit to a rendered file fails it and names the file.
+
+Scenario ids, themes, sizes and the frozen clock live once, in
+`catalog.json`, read by the fixture page, the capture scripts and the native
+parity menu. The fixture page refuses to load if `SCENARIO_STATES` and the
+catalog disagree.
+
 The capture fails on blank root, missing fonts, unknown IPC calls, page/console
 errors, external requests, document overflow, an unreachable composer or failed
 interaction assertions. Every intermediate state is captured with its own
@@ -126,16 +137,19 @@ Malformed output remains incomplete. Tests prove the production OpenAI request
 contains the exact selected PNG bytes; a live unpredictable-image canary, writer
 handoff and bounded iteration controller remain open. No paid calls run by default.
 
-## Pixel repeatability limitation
+## Pixel repeatability
 
-Each recorded still must settle to two consecutive identical paints. Across
-fresh Chromium renders, antialiased circular borders can still differ by
-1–2 RGB levels in a few pixels despite identical content and element geometry.
-The comparison viewer preserves those raw differences and reports
-`identicalBytes: false`; no pixels are masked and no tolerance is silently
-applied. Do not claim cross-run byte identity for the expanded scenario matrix.
-The browser suite verifies reset content/layout, controls and per-capture
-settling; it does not turn this renderer limitation into a design-quality score.
+Capture launches Chromium with fixed raster flags (`RASTER_ARGS` in
+`browser.mjs`: no font hinting, no LCD text, sRGB, no runtime Skia
+optimisations, no partial or GPU raster), recorded in the manifest's
+environment. With them, two captures of one revision are byte-identical
+(verified 2026-11-09: 20/20 `tools-and-review` stills, 0 changed pixels).
+
+A comparison reports two counts per still: `changedPixels` (any byte moved,
+`threshold: 0`) and `perceptualPixels` under the declared tolerance in
+`comparison.json` (pixelmatch's default colour threshold, antialiased pixels
+excluded). Both are always shown; no pixels are masked and the tolerance is
+never applied silently. Neither count is a design-quality score.
 
 The isolated Mac app has its own file-access permissions. On this machine,
 opening evidence directly under Documents stalled in the OS file-open call;

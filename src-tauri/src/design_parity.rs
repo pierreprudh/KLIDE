@@ -8,21 +8,56 @@ pub(crate) fn enabled() -> bool {
     cfg!(feature = "design-parity")
 }
 
+/// The scenario / theme / size lists the browser capture uses too — one file,
+/// so the native menu can't fall behind the fixtures.
+const CATALOG: &str = include_str!("../../preview/design-feedback/catalog.json");
+
+#[derive(serde::Deserialize)]
+struct Catalog {
+    scenarios: Vec<Entry>,
+    themes: Vec<Entry>,
+    viewports: Vec<Viewport>,
+}
+#[derive(serde::Deserialize)]
+struct Entry {
+    id: String,
+    label: String,
+}
+#[derive(serde::Deserialize)]
+struct Viewport {
+    width: u32,
+    height: u32,
+}
+
+fn catalog() -> Catalog {
+    serde_json::from_str(CATALOG).expect("valid design-feedback catalog")
+}
+
+fn menu_items() -> Vec<(String, String)> {
+    let c = catalog();
+    let mut items = vec![("review".to_string(), "Open visual reviewer".to_string())];
+    items.extend(
+        c.scenarios
+            .into_iter()
+            .map(|s| (format!("scenario:{}", s.id), s.label)),
+    );
+    items.extend(
+        c.themes
+            .into_iter()
+            .map(|t| (format!("theme:{}", t.id), t.label)),
+    );
+    items.extend(c.viewports.into_iter().map(|v| {
+        (
+            format!("size:{}x{}", v.width, v.height),
+            format!("Content {} × {}", v.width, v.height),
+        )
+    }));
+    items
+}
+
 pub(crate) fn menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     let mut menu = SubmenuBuilder::new(app, "Design parity");
-    for (id, label) in [
-        ("review", "Open visual reviewer"),
-        ("scenario:conversation-long", "Long conversation"),
-        ("scenario:compose-empty", "Empty composer"),
-        ("scenario:tools-and-review", "Tools and review"),
-        ("scenario:waiting-and-error", "Questions and recovery"),
-        ("scenario:subagent-activity", "Child activity"),
-        ("scenario:composer-menu", "Model menu"),
-        ("theme:klide-light", "Light theme"),
-        ("theme:sage-garden-dark", "Dark theme"),
-        ("size:1440x900", "Content 1440 × 900"),
-        ("size:900x700", "Content 900 × 700"),
-    ] {
+    for (id, label) in menu_items() {
         menu =
             menu.item(&MenuItemBuilder::with_id(format!("design-parity:{id}"), label).build(app)?);
     }
@@ -42,11 +77,12 @@ pub(crate) fn handle(app: &tauri::AppHandle, id: &str) -> bool {
             return Ok(());
         }
         if let Some(size) = action.strip_prefix("size:") {
-            let (width, height) = match size {
-                "1440x900" => (1440.0, 900.0),
-                "900x700" => (900.0, 700.0),
-                _ => return Err("Unknown parity size".into()),
-            };
+            let viewport = catalog()
+                .viewports
+                .into_iter()
+                .find(|v| format!("{}x{}", v.width, v.height) == size)
+                .ok_or("Unknown parity size")?;
+            let (width, height) = (f64::from(viewport.width), f64::from(viewport.height));
             window
                 .set_size(tauri::LogicalSize::new(width, height))
                 .map_err(|e| e.to_string())?;
@@ -77,4 +113,37 @@ pub(crate) fn handle(app: &tauri::AppHandle, id: &str) -> bool {
         eprintln!("KLIDE_DESIGN_PARITY_ERROR {error}");
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_covers_every_catalog_entry() {
+        let items = menu_items();
+        let c = catalog();
+        assert_eq!(
+            items.len(),
+            1 + c.scenarios.len() + c.themes.len() + c.viewports.len()
+        );
+        assert!(items.iter().any(|(id, _)| id == "scenario:result-and-diff"));
+        assert!(items.iter().any(|(id, _)| id == "size:900x700"));
+    }
+
+    /// The parity file is a patch, not a replacement: the app's version,
+    /// deep-link plugin and bundle survive, the identifier and window change.
+    #[cfg(feature = "design-parity")]
+    #[test]
+    fn parity_config_merges_over_the_app_config() {
+        let base: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let context = crate::app_context();
+        let config = context.config();
+        assert_eq!(config.identifier, "com.pierre.klide.design-parity");
+        assert_eq!(config.version.as_deref(), base["version"].as_str());
+        assert!(config.plugins.0.contains_key("deep-link"));
+        assert!(config.bundle.active);
+        assert_eq!(config.app.windows[0].width, 1440.0);
+    }
 }

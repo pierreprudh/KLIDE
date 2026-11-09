@@ -40,27 +40,27 @@ Committed 2026-11-09 with the design-agent pilot code; the review findings below
 - [ ] Pierre: decide the review's four questions — park the council (PR 6–8)
   after PR 4, Node not Python, brief separate from the plan, audit local or
   tracked.
-- [ ] Cross-run pixel identity: try deterministic Chromium raster flags first;
-  if noise remains, report a declared perceptual count beside the raw one
-  (`threshold: 0` today turns antialiasing into reported change).
+- [x] Cross-run pixel identity (2026-11-09): fixed Chromium raster flags make
+  two captures of one revision byte-identical (20/20 stills); comparisons also
+  report a declared perceptual count beside the raw one.
 - [x] Record scoped native parity: 40 screenshot/AX pairs, all six scenarios in
   both themes/sizes; detailed interactions at light 900×700. `design:parity`
   prepares an isolated Mac test bundle. See the fixture README for launch steps.
 - [ ] Complete remaining native checks: Send dispatch, horizontal code scroll,
   settled two-done child template, interaction replay in other configurations.
-- [ ] Simplify native configuration: try CLI config merge instead of the current
-  explicit developer configuration. Original review recommendation: one
-  `design:parity` script + README section, and try `tauri dev --config` merge
-  instead of the `build.rs`/`app_context()` whole-config replacement (which
-  drops the deep-link plugin config and pins `version`). Browser success does
-  not authorize model trials.
-- [ ] Capture from a disposable worktree: today any edit under `src`/`preview`/
-  `scripts` by a concurrent session fails the run, and every bundle copies
-  unrelated untracked files.
-- [ ] Small fixes: `data-transcript-scroller` instead of the inline-style
-  selector; one source for scenario/theme/time lists (TS, `.mjs`, Rust); move
-  `focus-contrast.test.mjs` beside `src/styles/`; drop the duplicate console
-  write in `capture.mjs`.
+- [x] Simplify native configuration (2026-11-09): the parity file is a merge
+  patch over `tauri.conf.json` (TAURI_CONFIG, the CLI's `--config` channel);
+  `app_context()` is stock again, version/deep-link/bundle survive — pinned by
+  `parity_config_merges_over_the_app_config`. Browser success does not
+  authorize model trials.
+- [x] Concurrent edits (2026-11-09): instead of a disposable worktree, the
+  stability check, patch and copied inputs cover only the rendered set (Vite
+  module graph + tooling). Verified: an unrelated mid-run edit completes, an
+  edit to a rendered file fails naming it.
+- [x] Small fixes (2026-11-09): `data-transcript-scroller`; one
+  `preview/design-feedback/catalog.json` for scenarios/themes/sizes/time (the
+  native menu had already dropped `result-and-diff`); contrast test moved to
+  `src/styles/`; one console write.
 - [x] Add tools/review, waiting/error, child activity and composer-menu
   scenarios using production controls and synthetic Run recovery/events.
   Capture command approval, expanded/rejected edits, keyboard answers,

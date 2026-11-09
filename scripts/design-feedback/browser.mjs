@@ -1,10 +1,14 @@
 import { expect } from '@playwright/test';
-export const THEMES = ['klide-light', 'sage-garden-dark'];
-export const VIEWPORTS = [{ width: 1440, height: 900 }, { width: 900, height: 700 }];
-export const SCENARIOS = ['conversation-long', 'compose-empty', 'tools-and-review', 'waiting-and-error', 'subagent-activity', 'composer-menu', 'result-and-diff'];
-export const FIXED_TIME = 1793952000000;
+import catalog from '../../preview/design-feedback/catalog.json' with { type: 'json' };
+export const THEMES = catalog.themes.map(t => t.id);
+export const VIEWPORTS = catalog.viewports;
+export const SCENARIOS = catalog.scenarios.map(s => s.id);
+export const FIXED_TIME = catalog.fixedTime;
+/** Chromium raster flags that remove run-to-run antialiasing variance, so two
+ * captures of one revision are byte-identical and a pixel count means change. */
+export const RASTER_ARGS = ['--font-render-hinting=none', '--disable-lcd-text', '--force-color-profile=srgb', '--disable-skia-runtime-opts', '--disable-partial-raster', '--disable-gpu-rasterization'];
 export const COMPOSER = 'textarea[data-ai-composer="true"]';
-export const SCROLLER = '[style*="overflow-anchor: none"]';
+export const SCROLLER = '[data-transcript-scroller]';
 
 export async function openScenario(page, baseURL, scenario, theme) {
   await page.clock.setFixedTime(new Date(FIXED_TIME));

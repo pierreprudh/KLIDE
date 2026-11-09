@@ -13,7 +13,7 @@ async function pair() {
   async function bundle(name, white = false, environment = { browser: 'fixture' }) {
     const dir = path.join(root, name); await mkdir(dir);
     const png = new PNG({ width: 8, height: 8 });
-    png.data.fill(white ? 255 : 0);
+    png.data.fill(white === true ? 255 : white || 0);
     for (let i = 3; i < png.data.length; i += 4) png.data[i] = 255;
     await writeFile(path.join(dir, 'view.png'), PNG.sync.write(png));
     await json(path.join(dir, 'manifest.json'), { schemaVersion: 1, status: 'complete', scenario: 'conversation-long', environment, source: { fixtureHash: 'fixture-v1', briefHash: 'brief-v1' }, captures: [{ id: 'view', png: 'view.png' }], fileHashes: await hashBundle(dir) });
@@ -30,7 +30,12 @@ describe('evidence comparison', () => {
   it('produces a pixel diff when the candidate changes', async () => {
     const { bundle, output } = await pair();
     const result = await compareBundles(await bundle('a'), await bundle('b', true), output);
-    expect(result[0]).toMatchObject({ changedPixels: 64, identicalBytes: false });
+    expect(result[0]).toMatchObject({ changedPixels: 64, perceptualPixels: 64, identicalBytes: false });
+  });
+  it('reports a sub-threshold shift as raw change but not perceptual change', async () => {
+    const { bundle, output } = await pair();
+    const result = await compareBundles(await bundle('a'), await bundle('b', 2), output);
+    expect(result[0]).toMatchObject({ changedPixels: 64, perceptualPixels: 0, identicalBytes: false });
   });
   it('refuses modified evidence', async () => {
     const { bundle, output } = await pair();

@@ -36,3 +36,36 @@ export async function hashBundle(directory, prefix = '') {
   }
   return hashes;
 }
+/** What one capture rendered: the files the page actually imported (Vite's
+ * module graph) plus the capture tooling, limited to tracked source scope.
+ * The stability check and the copied inputs read this set, not the whole tree,
+ * so a concurrent session editing an unrelated file neither fails the run nor
+ * rides into the bundle. */
+export function renderedFiles(root, server, sourceFiles) {
+  const graph = [...server.moduleGraph.fileToModulesMap.keys()].map(file => path.relative(root, file));
+  const tooling = Object.keys(sourceFiles).filter(file => file.startsWith('scripts/design-feedback/') || file === 'preview/design-feedback.html');
+  return [...new Set([...graph, ...tooling])].filter(file => file in sourceFiles).sort();
+}
+/** Files whose bytes changed since the start snapshot. */
+export async function changedSince(root, sourceFiles, files) {
+  const changed = [];
+  for (const file of files) {
+    let hash = null;
+    try { hash = sha256(await readFile(path.join(root, file))); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (hash !== sourceFiles[file]) changed.push(file);
+  }
+  return changed;
+}
+/** The patch and untracked inputs for exactly the rendered set. */
+export async function writeRenderedInputs(root, output, files) {
+  const git = args => execFileSync('git', args, { cwd: root, maxBuffer: 32 * 1024 * 1024 });
+  const patch = files.length ? git(['diff', '--binary', 'HEAD', '--', ...files]) : Buffer.alloc(0);
+  await writeFile(path.join(output, 'source.patch'), patch);
+  const untracked = files.length ? git(['ls-files', '-z', '--others', '--exclude-standard', '--', ...files]).toString().split('\0').filter(Boolean) : [];
+  for (const file of untracked) {
+    const destination = path.join(output, 'source-inputs', file);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, await readFile(path.join(root, file)));
+  }
+  return { patchHash: sha256(patch), untrackedInputs: untracked };
+}
