@@ -361,6 +361,7 @@ mod tests {
 
     /// The quoting survives two shells: run the command's remote half through
     /// `sh` the way sshd would, with `tmux` stubbed to print its argv.
+    #[cfg(unix)]
     #[test]
     fn a_task_with_quotes_reaches_the_cli_as_one_argument() {
         let inner = format!("claude {}", shell_quote("it's \"done\"; rm -rf nope"));
@@ -384,6 +385,7 @@ mod tests {
     }
 
     /// Live: `KLIDE_LIVE_MACHINE=klide-box cargo test --lib live_machine -- --ignored --nocapture`.
+    #[cfg(unix)]
     #[test]
     #[ignore]
     fn live_machine_check_and_tmux_round_trip() {
