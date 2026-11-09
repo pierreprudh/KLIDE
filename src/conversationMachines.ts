@@ -49,21 +49,63 @@ export function subscribeConversationMachines(listener: () => void): () => void 
 }
 
 // ── The start stage's choice ────────────────────────────────────────────────
-// What the Focus start composer shows before a conversation exists. Not
-// persisted: a fresh start stage opens on this Mac. App reads it once, when the
-// first message is sent, and hands it to the panel as `hostMachine`.
+// What the Focus start composer shows before a conversation exists, remembered
+// per project like the Claude and Codex apps remember their environment: open a
+// project you last ran on klide-box and the start stage is already there. App
+// reads it once, when the first message is sent, and hands it to the panel as
+// `hostMachine`.
+
+const START_KEY = "klide.startMachineByProject";
+
+function readStart(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(START_KEY) || "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter((e): e is [string, string] => typeof e[1] === "string"));
+  } catch {
+    return {};
+  }
+}
 
 let startMachine: string | null = null;
 const startListeners = new Set<() => void>();
+
+function announceStart(): void {
+  for (const listener of startListeners) listener();
+}
 
 export function startStageMachine(): string | null {
   return startMachine;
 }
 
-export function setStartStageMachine(machineId: string | null): void {
+/** The Machine this project last started on; null is this Mac. */
+export function rememberedStartMachine(workspaceRoot: string | null): string | null {
+  return workspaceRoot ? readStart()[workspaceRoot] ?? null : null;
+}
+
+/** Show `workspaceRoot`'s remembered Machine on the start stage. */
+export function restoreStartStageMachine(workspaceRoot: string | null): void {
+  const next = rememberedStartMachine(workspaceRoot);
+  if (startMachine === next) return;
+  startMachine = next;
+  announceStart();
+}
+
+/** A pick on the start stage — shown now and remembered for the project. */
+export function setStartStageMachine(machineId: string | null, workspaceRoot?: string | null): void {
+  if (workspaceRoot) {
+    const map = readStart();
+    if (machineId) map[workspaceRoot] = machineId;
+    else delete map[workspaceRoot];
+    try {
+      localStorage.setItem(START_KEY, JSON.stringify(map));
+    } catch {
+      /* storage full / unavailable */
+    }
+  }
   if (startMachine === machineId) return;
   startMachine = machineId;
-  for (const listener of startListeners) listener();
+  announceStart();
 }
 
 export function subscribeStartStageMachine(listener: () => void): () => void {
