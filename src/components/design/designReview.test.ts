@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { designTask, sortTokens, type ReviewItem } from "./designReview";
+import { designDockWidth, designTask, isInterfaceConversation, sortTokens, type ReviewItem } from "./designReview";
 
 const base = { epoch: 1, elementId: 3, component: "AiPanel › InlineCommandReview", where: "span “Run the checks.”" };
 const items: ReviewItem[] = [
@@ -36,5 +36,28 @@ describe("sortTokens", () => {
   });
   it("offers nothing for a page without tokens", () => {
     expect(sortTokens({}, rgb)).toEqual({ text: [], surface: [], sizes: [], radii: [] });
+  });
+});
+
+describe("isInterfaceConversation", () => {
+  it("is about the interface when you talk about it or the work touches rendered files", () => {
+    expect(isInterfaceConversation([{ role: "user", content: "The button spacing feels off" }])).toBe(true);
+    expect(isInterfaceConversation([{ role: "user", content: "fix it" }, { role: "assistant", content: "", toolCalls: [{ args: { path: "src/App.tsx" } }] }])).toBe(true);
+    expect(isInterfaceConversation([{ role: "assistant", content: "I changed styles/site.css." }])).toBe(true);
+  });
+  it("is not for backend or prose work", () => {
+    expect(isInterfaceConversation([{ role: "user", content: "Why does the Rust test hang?" }, { role: "assistant", content: "", toolCalls: [{ args: { path: "src-tauri/src/lib.rs" } }] }])).toBe(false);
+    expect(isInterfaceConversation([])).toBe(false);
+    // The assistant's own wording does not make a conversation about UI.
+    expect(isInterfaceConversation([{ role: "user", content: "summarise the logs" }, { role: "assistant", content: "Here is the layout of the logs" }])).toBe(false);
+  });
+});
+
+describe("designDockWidth", () => {
+  it("leaves the conversation at least 360px and never goes below a usable canvas", () => {
+    expect(designDockWidth(1440)).toBe(835);
+    expect(designDockWidth(2560)).toBe(1100);
+    expect(designDockWidth(1000)).toBe(580);
+    expect(designDockWidth(800)).toBe(440); // a small window: the conversation keeps its 360px
   });
 });

@@ -14,7 +14,7 @@ import { SelectToolIcon, CommentToolIcon, UseToolIcon, CloseIcon, SendIcon, Chec
 import { Z } from "../../zLayers";
 import { closeDesignCanvas, designCanvasCandidates, openDesignCanvas, type DesignCanvas } from "../../ipc/design";
 import { errMessage } from "../../errors";
-import { designTask, sortTokens, type Rect, type ReviewItem, type Facts, type PageTokens } from "./designReview";
+import { designDockWidth, designTask, sortTokens, type Rect, type ReviewItem, type Facts, type PageTokens } from "./designReview";
 
 type Tool = "select" | "comment" | "use";
 type Size = { id: string; label: string; w: number | null; h: number | null };
@@ -38,9 +38,12 @@ type Props = {
   onClose: () => void;
   /** Send the review into the conversation that opened Design mode. */
   onSend: (task: string) => void;
+  /** Distance from the window's right edge — the conversation decides, so the
+   *  dock opens beside it rather than over it. */
+  right?: number;
 };
 
-export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
+export function DesignMode({ workspaceRoot, open, onClose, onSend, right = 8 }: Props) {
   const [address, setAddress] = useState(() => readUrl(workspaceRoot));
   const [canvas, setCanvas] = useState<DesignCanvas | null>(null);
   const [candidates, setCandidates] = useState<string[]>([]);
@@ -59,6 +62,8 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
   const [instant, setInstant] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 });
+  const [dockWidth, setDockWidth] = useState(() => designDockWidth(window.innerWidth));
+  useEffect(() => { const r = () => setDockWidth(designDockWidth(window.innerWidth)); window.addEventListener("resize", r); return () => window.removeEventListener("resize", r); }, []);
   const frame = useRef<HTMLIFrameElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const scrollTimer = useRef(0);
@@ -113,7 +118,7 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
           setInstant(true); clearTimeout(scrollTimer.current);
           scrollTimer.current = window.setTimeout(() => setInstant(false), 140);
           break;
-        case "rects": setRects(Object.fromEntries((m.rects as { id: number; rect: Rect | null }[]).map(r => [r.id, r.rect]))); break;
+        case "rects": setHover(null); setRects(Object.fromEntries((m.rects as { id: number; rect: Rect | null }[]).map(r => [r.id, r.rect]))); break;
         case "pick":
           if (m.tool === "comment") { setDraft(m.element); setPicked(null); }
           else { setPicked(m.element); setDraft(null); }
@@ -140,7 +145,7 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
     if (!open) return;
     const k = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
-      if (e.key === "Escape") { e.preventDefault(); escape(); }
+      if (e.key === "Escape" && !(e.target as HTMLElement)?.closest?.("[role=dialog]")) { e.preventDefault(); escape(); }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "v") setTool("select");
       if (e.key === "c") setTool("comment");
@@ -154,8 +159,8 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
     const measure = () => { const r = stage.current?.getBoundingClientRect(); if (r) setStageBox({ w: r.width, h: r.height }); };
     measure(); const ro = new ResizeObserver(measure); if (stage.current) ro.observe(stage.current); return () => ro.disconnect();
   }, [open]);
-  const availW = Math.max(200, stageBox.w - 64 - (inspecting ? INSPECTOR : 0));
-  const availH = Math.max(200, stageBox.h - 64 - 120);
+  const availW = Math.max(200, stageBox.w - 32 - (inspecting ? INSPECTOR : 0));
+  const availH = Math.max(200, stageBox.h - 60 - 112 - 16);
   const pageW = size.w ?? availW, pageH = size.h ?? availH;
   const scale = size.w ? Math.min(1, availW / pageW, availH / pageH) : 1;
 
@@ -189,14 +194,16 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
   const sameBox = hover && pickedBox && hover.x === pickedBox.x && hover.y === pickedBox.y && hover.w === pickedBox.w;
 
   return createPortal(
-    <div role="dialog" aria-label="Design mode" aria-hidden={!open} style={{ position: "fixed", inset: 0, zIndex: Z.modal, background: "var(--bg-panel)", fontFamily: "var(--font-ui)", color: "var(--fg)",
-      opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none", transition: `opacity 260ms ${EASE}`, visibility: open ? "visible" : "hidden" }}>
+    <aside aria-label="Design mode" aria-hidden={!open} style={{ position: "fixed", top: 8, bottom: 8, right, width: Math.min(dockWidth, window.innerWidth - right - 8), zIndex: Z.dock,
+      background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: "var(--radius-xl)", overflow: "hidden", fontFamily: "var(--font-ui)", color: "var(--fg)",
+      transform: open ? "none" : "translateX(calc(100% + 24px))", opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none",
+      transition: `transform ${GLIDE}ms ${EASE}, opacity 260ms ${EASE}, right ${GLIDE}ms ${EASE}`, willChange: "transform" }}>
       <div ref={stage} style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
         {/* toolbar */}
-        <div className="menu-glass" style={{ position: "absolute", top: 14, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: 4, padding: 4, borderRadius: 12, zIndex: 3, maxWidth: "calc(100% - 28px)" }}>
+        <div className="menu-glass" style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: 4, padding: 4, borderRadius: 12, zIndex: 3, maxWidth: "calc(100% - 28px)" }}>
           <form onSubmit={e => { e.preventDefault(); void connect(address); }} style={{ display: "flex" }}>
             <input value={address} onChange={e => setAddress(e.target.value)} list="klide-design-candidates" spellCheck={false} aria-label="Dev server address" placeholder="localhost:5173"
-              style={{ width: 220, height: 28, padding: "0 10px", border: 0, borderRadius: 10, background: "var(--menu-row-hover)", color: "var(--fg)", font: "inherit", fontSize: "var(--fs-base)", outline: "none" }} />
+              style={{ width: "clamp(110px, 16vw, 220px)", height: 28, padding: "0 10px", border: 0, borderRadius: 10, background: "var(--menu-row-hover)", color: "var(--fg)", font: "inherit", fontSize: "var(--fs-base)", outline: "none" }} />
             <datalist id="klide-design-candidates">{candidates.map(c => <option key={c} value={c} />)}</datalist>
           </form>
           <Divider />
@@ -210,7 +217,7 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
         </div>
 
         {/* canvas */}
-        <div style={{ position: "absolute", top: 64, bottom: 120, left: 0, right: inspecting ? INSPECTOR : 0, display: "grid", placeItems: "center", transition: `right ${GLIDE}ms ${EASE}` }}>
+        <div style={{ position: "absolute", top: 60, bottom: 112, left: 0, right: inspecting ? INSPECTOR : 0, display: "grid", placeItems: "center", transition: `right ${GLIDE}ms ${EASE}` }}>
           {canvas ? (
             <div style={{ width: pageW * scale, height: pageH * scale, transition: `width ${GLIDE}ms ${EASE}, height ${GLIDE}ms ${EASE}` }}>
               <div style={{ position: "relative", width: pageW, height: pageH, transform: `scale(${scale})`, transformOrigin: "0 0", transition: `transform ${GLIDE}ms ${EASE}, width ${GLIDE}ms ${EASE}, height ${GLIDE}ms ${EASE}`, border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden", background: "var(--bg)" }}>
@@ -236,7 +243,7 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
         )}
 
         {/* inspector island */}
-        <div className="menu-glass" style={{ position: "absolute", top: 14, right: 14, bottom: 14, width: INSPECTOR - 14, borderRadius: 14, overflow: "hidden auto", zIndex: 2,
+        <div className="menu-glass" style={{ position: "absolute", top: 60, right: 10, bottom: 10, width: INSPECTOR - 14, borderRadius: 14, overflow: "hidden auto", zIndex: 2,
           opacity: picked ? 1 : 0, transform: picked ? "none" : "translateX(16px)", pointerEvents: picked ? "auto" : "none", transition: `opacity 260ms ${EASE}, transform ${GLIDE}ms ${EASE}` }}>
           <Held value={picked}>{p => <Inspector picked={p} tokens={sorted} apply={apply} close={() => setPicked(null)} />}</Held>
         </div>
@@ -246,7 +253,7 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend }: Props) {
           send={send} inspector={inspecting}
           hint={!canvas ? "Open your dev server to start" : tool === "use" ? "Using the page — V to select, C to comment" : tool === "comment" ? "Click anything to leave a comment" : "Click anything to change it"} />
       </div>
-    </div>,
+    </aside>,
     document.body,
   );
 }
@@ -261,8 +268,8 @@ function Inspector({ picked, tokens, apply, close }: { picked: Facts; tokens: Re
     <div style={{ fontSize: "var(--fs-base)" }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "14px 14px 12px" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: "var(--fg-strong)", fontWeight: 700 }}>{picked.component || picked.where.split(" ")[0]}</div>
-          <div style={{ color: "var(--fg-dim)", fontSize: "var(--fs-xs)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{picked.where}</div>
+          <div style={{ color: "var(--fg-strong)", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{picked.component || picked.where}</div>
+          {picked.component && <div style={{ color: "var(--fg-dim)", fontSize: "var(--fs-xs)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{picked.where}</div>}
         </div>
         <Soft label="Deselect · Esc" onClick={close}><CloseIcon size={14} /></Soft>
       </div>
