@@ -341,3 +341,12 @@ describe("ResultEvidence", () => {
     expect(html).toContain("<svg");
   });
 });
+
+describe("touchesInterface", () => {
+  it("offers Design mode only when an on-screen file changed", async () => {
+    const { touchesInterface } = await import("./CompletionCard");
+    expect(touchesInterface(["src/App.tsx"])).toBe(true);
+    expect(touchesInterface(["styles/site.css", "README.md"])).toBe(true);
+    expect(touchesInterface(["src-tauri/src/lib.rs", "notes.md"])).toBe(false);
+  });
+});

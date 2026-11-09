@@ -17,6 +17,7 @@ export type ShortcutId =
   | "command-palette"
   | "find-in-files"
   | "git-review"
+  | "design-mode"
   | "back-to-editor"
   | "focus-split"
   | "focus-split-close"
@@ -48,6 +49,7 @@ export const SHORTCUTS: Record<ShortcutId, Shortcut> = {
   "command-palette": { keys: ["⌘", "⇧", "P"], label: "Command palette" },
   "find-in-files": { keys: ["⌘", "⇧", "F"], label: "Find in files" },
   "git-review": { keys: ["⌘", "⇧", "G"], label: "Git review" },
+  "design-mode": { keys: ["⌘", "⇧", "D"], label: "Design mode — edit the running UI" },
   "back-to-editor": { keys: ["⌘", "N"], label: "Back to the editor" },
   // Same chord, read the same way — "the other one". Focus has no editor to
   // return to, so there it opens a second conversation beside the current one.

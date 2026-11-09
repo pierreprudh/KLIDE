@@ -137,6 +137,7 @@ import {
 } from "./worktrees";
 import { createListenerScope } from "./tauriEvents";
 import { registerSettingsOpener } from "./settingsNavigation";
+import { openDesignMode } from "./designNavigation";
 import { registerAttachmentOpener } from "./attachmentNavigation";
 import { attachmentsRoot } from "./ipc/pdf";
 import { registerConversationOpener, registerSessionReattacher } from "./conversationNavigation";
@@ -3235,6 +3236,12 @@ function App() {
         toggleOverlay("git-review");
         return;
       }
+      // Physical key, so AZERTY and QWERTY agree.
+      if (mod && e.shiftKey && e.code === "KeyD") {
+        e.preventDefault();
+        if (!openDesignMode()) notify("Open a conversation first — Design mode sends its review there.");
+        return;
+      }
       // Tab navigation
       if (mod && !e.shiftKey && e.key === "Tab" && tabs.length > 1) {
         e.preventDefault();
@@ -3342,6 +3349,7 @@ function App() {
     { id: "library-foundations", label: "Library: Foundations", action: () => { setLibrarySection("shared"); setPaletteOpen(false); } },
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { back(); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { toggleOverlay("git-review"); setPaletteOpen(false); } },
+    { id: "design-mode", label: "View: Design Mode", shortcut: "⌘⇧D", action: () => { setPaletteOpen(false); if (!openDesignMode()) notify("Open a conversation first — Design mode sends its review there."); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await createPr(workspaceRoot, "Klide changes", null); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
     { id: "worktree", label: "Agent: New Run in Worktree", action: () => { setPaletteOpen(false); void newWorktreeRun(); } },
     { id: "worktrees-view", label: "View: Worktrees", action: () => { setPaletteOpen(false); setWorktreesVisible(true); } },

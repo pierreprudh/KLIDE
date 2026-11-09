@@ -76,6 +76,7 @@ Klide/
 │   ├── shortcuts.ts             Keyboard shortcut registry (names + displayed keycaps)
 │   ├── settingsStore.ts         Declarative persisted-settings catalog + useSetting
 │   ├── settingsNavigation.ts    Registered-opener seam — a data module can request a Settings section
+│   ├── designNavigation.ts      Registered-opener seam — palette/⌘⇧D/result card open Design mode on the most recently used conversation
 │   ├── attachmentNavigation.ts  Registered-opener seam — a kept PDF's card opens the document viewer
 │   ├── conversationNavigation.ts Registered-opener seam — a toast can open a conversation (or reattach a live Delegate PTY)
 │   ├── persistedStore.ts        The one persisted-store contract (get/subscribe/mutate) under the run-data stores
@@ -139,6 +140,7 @@ Klide/
 │   │   ├── delegates.ts           delegate_catalog — the adapters' facts over the wire (src/delegates.ts is the pinned mirror)
 │   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
 │   │   ├── pdf.ts                 pdf_extract_text (raw-body bytes, name header) + attachments_root
+│   │   ├── design.ts              design_canvas_* — put a local dev server on Design mode's canvas
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
 │   │   ├── hermes.ts             Hermes settings + `harness_source_support` / `harness_source_models` / Nous login wire + `.env` override scan/align + Hermes's own setup (read, set model)
 │   ├── hooks/
@@ -154,6 +156,7 @@ Klide/
 │   │   ├── useMemoryReviewCount.ts How many Memory notes wait for review — the Library row's "3 to review"
 │   │   └── useFailedScheduleCount.ts How many schedules failed — Mission Control's row and Scheduled tab ("1 failed")
 │   ├── components/
+│   │   ├── design/              Design mode — DesignMode.tsx (canvas, inspector, comments, review bar) + designReview.ts (review → Kit task, page tokens → scales)
 │   │   ├── WorkspaceRail.tsx    The app's one sidebar — folder card, actions, conversations (Sections / Agent), one-line foot; shared by Focus + workbench
 │   │   ├── ActivityHeatmap.tsx  52-week run activity grid
 │   │   ├── AiPanel.tsx          AI chat panel host + run interaction surface
@@ -282,6 +285,7 @@ Klide/
     │   ├── main.rs               Entry point (also the `klide ptyd` daemon entry)
     │   ├── lib.rs                Command registration + thin Tauri glue, AI chat dispatch, fs ops, app menu
     │   ├── cli.rs                Login-shell binary resolution + subscription-CLI install/auth status
+    │   ├── design_canvas.rs      Design mode's canvas — loopback proxy to a local dev server that injects design_agent.js (the picker) and pipes hot reload; loopback upstreams only
     │   ├── deep_link.rs          `klide://` links — new (pre-filled, never sent) / open file:line / project; parsed + path-checked in Rust, queued until the page drains them
     │   ├── services_menu.rs      "Ask Kit" Services Quick Action — installed/removed from Settings, opens `klide://new?prompt=`
     │   ├── klide_skill.rs        The `/klide` skill — SKILL.md in ~/.claude/skills (exact, `$CLAUDE_CODE_SESSION_ID`) + ~/.agents/skills (Codex/OpenCode/omp, newest session in the folder), both opening `klide://resume`
@@ -828,6 +832,7 @@ enforce wrapper coverage for the git family.
 - [x] Links and places — a URL in an answer opens in the browser under its name, a rooted path in Finder, a file of the open project in an editor tab
 - [x] `klide://` links + Ask Kit — Raycast, Shortcuts, a terminal or the Services menu open a pre-filled conversation, a file at a line, or a project (installed app only on macOS)
 - [x] CLI sessions both ways — "follow up this conversation in Klide", said to Claude Code / Codex / OpenCode / omp, resumes it in Klide (`klide://resume` + the `/klide` skill); "open the Claude Code conv about X", said to Kit, lists and opens it (`list_cli_sessions` / `open_cli_session`)
+- [x] Design mode — `/design`, ⌘⇧D or a result card's "Open in Design": the project's running app on a canvas; edit an element live or pin a comment, and the review goes to Kit as one Work turn
 - [x] Any agent, any intelligence — a Delegate (Claude Code / Codex / OpenCode / Hermes) runs on any API, local, self-hosted or Nous Portal source through a loopback bridge that translates wires per request and never hands the CLI the key; the conversation keeps the agent it began on and wears the model's mark; OMP / Amp / Cursor / Factory and subscription-on-subscription pairs are shown as needing an adapter, never swapped silently
 
 ## Development

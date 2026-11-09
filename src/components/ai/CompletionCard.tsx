@@ -28,6 +28,9 @@ type Props = {
   /** A picture of a document Klide cannot render, when the host can make one.
    *  Resolving to null is a normal answer — some files have no preview. */
   onPreviewArtifact?: (path: string) => Promise<string | null>;
+  /** Look at the changed UI in Design mode. Offered only when the run
+   *  touched interface files (see `touchesInterface`). */
+  onOpenDesign?: () => void;
   variant?: CompletionCardVariant;
   /** Too little room for the words: the entry keeps the mark and the count,
    *  and the label it drops moves to its tooltip and accessible name. */
@@ -49,7 +52,7 @@ type Props = {
   checkpointsVersion?: number;
 };
 
-type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "loadChanges" | "revert" | "checkpointsVersion"> & {
+type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpenArtifact" | "onPreviewArtifact" | "onOpenDesign" | "loadChanges" | "revert" | "checkpointsVersion"> & {
   onDone: () => void;
   /** Diffs a host already loaded (the island reads them for its header). */
   diffs?: Map<string, FileDiff> | null;
@@ -127,7 +130,7 @@ function InlineDiff({ blocks }: { blocks: DiffBlock[] }) {
   );
 }
 
-export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onDone, loadChanges, revert, checkpointsVersion, diffs: given }: EvidenceProps) {
+export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onOpenDesign, onDone, loadChanges, revert, checkpointsVersion, diffs: given }: EvidenceProps) {
   const history = isCommandHistory(completion);
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(history && failed > 0);
@@ -247,9 +250,16 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
           onClick={seeChanges}>{onReview ? <>See changes <span aria-hidden="true">↗</span></> : allOpen ? "Hide changes" : "See changes"}</button>
         {revert && diffs && diffs.size > 0 && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
           title="Undo every file change this run made" onClick={revert.onRevert}><UndoIcon size={12} /><span className="klide-result-revert-label">{revert.busy ? "Undoing…" : "Undo"}</span></button>}
+        {onOpenDesign && touchesInterface(completion.files) && <button type="button" onClick={() => { onDone(); onOpenDesign(); }}
+          title="See the changed interface running, and review it">Open in Design</button>}
       </footer>}
     </>
   );
+}
+
+/** Files whose change shows up on screen — what makes "Open in Design" worth offering. */
+export function touchesInterface(files: string[]): boolean {
+  return files.some((f) => /\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)$/i.test(f));
 }
 
 /** Render the document preview beneath its compact open icon. */
@@ -267,7 +277,7 @@ function ArtifactThumb({ path, load }: { path: string; load?: (path: string) => 
 
 /** A quiet entry point. On the canvas the evidence opens inside the card, in
  *  the column the plan already lives in; in a transcript it opens as a sheet. */
-export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, variant = "inline", compact = false, folded = false, onUnfold, loadChanges, revert, checkpointsVersion }: Props) {
+export function CompletionCard({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onOpenDesign, variant = "inline", compact = false, folded = false, onUnfold, loadChanges, revert, checkpointsVersion }: Props) {
   const island = variant === "island";
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -368,7 +378,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
           </div>
           <div className="klide-result-island-panel" id={id}>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview} diffs={islandDiffs}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} revert={revert} onDone={() => {}} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onOpenDesign={onOpenDesign} revert={revert} onDone={() => {}} />
           </div>
         </section>
       </div>
@@ -409,7 +419,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
               <button type="button" autoFocus className="klide-result-close" aria-label={history ? "Close command history" : "Close result"} onClick={close}><CloseIcon size={18} /></button>
             </header>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview}
-              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} loadChanges={loadChanges} revert={revert} checkpointsVersion={checkpointsVersion} onDone={close} />
+              onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onOpenDesign={onOpenDesign} loadChanges={loadChanges} revert={revert} checkpointsVersion={checkpointsVersion} onDone={close} />
           </div>
         </div>,
         document.body,
