@@ -357,7 +357,7 @@ Klide/
     │       ├── spreadsheet_tools.rs Native workbook Tools — recalculated and exported before review
     │       ├── artifacts.rs       What a command left behind — the dirty set bracketed around a run_command
     │       ├── process.rs         One lifecycle for every command a Run starts — process group, bounded capture, exit from wait() with a 1 s drain, cancel-aware wait (background.rs is its registry)
-    │       ├── sandbox.rs         Containment for a command nobody read first — a macOS Seatbelt profile (writes by path, network on or loopback-only) wrapped around the shell by process.rs; no caller sets one yet
+    │       ├── sandbox.rs         Containment for a command nobody read first — a macOS Seatbelt profile (writes by path, network on or loopback-only) wrapped around the shell by process.rs. A command the full-auto rung or a wildcard rule let run gets one (project, temp, tool caches; git hooks + config closed); a command a person approved runs as before. `KLIDE_COMMAND_SANDBOX=0` turns it off
     │       ├── compaction.rs      Summary compaction — the cut, the notes, what a marker keeps (`effective_events`)
 │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
     │       ├── tool_handlers.rs   Per-capability call ceremony — permission gates, pauses, checkpoints

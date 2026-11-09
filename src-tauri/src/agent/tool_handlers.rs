@@ -1539,6 +1539,7 @@ async fn run_command_announcing_artifacts<E>(
     cwd: &str,
     command: &str,
     timeout_secs: u64,
+    sandbox: Option<&sandbox::Sandbox>,
     emit: &mut E,
 ) -> Result<ToolOutcome, String>
 where
@@ -1553,10 +1554,13 @@ where
         (Some(top), Some(dirty)) => document_versions(root, top, dirty).await,
         _ => Default::default(),
     };
-    let result = match run_command_capture_in(root, cwd, command, timeout_secs, ctx.cancel).await {
+    let mut result = match run_command_capture_in(root, cwd, command, timeout_secs, ctx.cancel, sandbox).await {
         tools::CommandRun::Done(result) => result,
         tools::CommandRun::Cancelled => return Ok(ToolOutcome::Cancelled),
     };
+    if sandbox.is_some() && !result.ok && sandbox::was_denied(&result.content) {
+        result.content.push_str(sandbox::DENIAL_NOTE);
+    }
     let (Some(top), Some(before)) = (repo, before) else {
         return Ok(ToolOutcome::Produced(result));
     };
@@ -1663,7 +1667,14 @@ fn is_race_worktree(root: &str) -> bool {
 /// No artifact bracketing here: the dirty set is read either side of a command
 /// that *finished*, and this one has not. Whatever it leaves behind is found by
 /// the commands that come after it.
-fn start_background_command(ctx: &ToolCtx<'_>, root: &str, cwd: &str, command: &str, notify: bool) -> ToolResult {
+fn start_background_command(
+    ctx: &ToolCtx<'_>,
+    root: &str,
+    cwd: &str,
+    command: &str,
+    notify: bool,
+    sandbox: Option<&sandbox::Sandbox>,
+) -> ToolResult {
     if notify && (ctx.request.parent_id.is_some() || ctx.request.mission_id.is_some()) {
         return ToolResult { ok: false, content: "A persistent observer must be started by the main conversation, not a child or Mission run.".into(), metadata: None };
     }
@@ -1685,7 +1696,7 @@ fn start_background_command(ctx: &ToolCtx<'_>, root: &str, cwd: &str, command: &
         Err(message) => return ToolResult { ok: false, content: message, metadata: None },
     };
     let cwd = cwd.as_str();
-    let started = if notify { background::spawn_observer(ctx.id, cwd, command) } else { background::spawn(ctx.id, cwd, command) };
+    let started = background::spawn_contained(ctx.id, cwd, command, notify, sandbox);
     if let Ok(shell) = &started {
         if notify { ctx.sup.watch_background(ctx.id, &shell.id, ctx.request); }
     }
@@ -1934,10 +1945,14 @@ where
             if trusted == permission::Trusted::FullAuto {
                 permission::record_full_auto(ctx, call, perm, emit)?;
             }
+            // Nobody read this one: the rung or a wildcard rule let it run.
+            // It gets the project, not the machine.
+            let exact_rule = matched_rule.as_ref().is_some_and(|rule| rule.exact);
+            let contained = sandbox::for_command(trusted, exact_rule, std::path::Path::new(root_value));
             return if background {
-                Ok(ToolOutcome::Produced(start_background_command(ctx, root_value, &cwd, &command, notify)))
+                Ok(ToolOutcome::Produced(start_background_command(ctx, root_value, &cwd, &command, notify, contained.as_ref())))
             } else {
-                run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit).await
+                run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, contained.as_ref(), emit).await
             };
         }
         permission::Precheck::AutoReject(msg) => {
@@ -1964,10 +1979,11 @@ where
 
     let result = match decision {
         permission::GateDecision::Approved { .. } if background => {
-            start_background_command(ctx, root_value, &cwd, &command, notify)
+            start_background_command(ctx, root_value, &cwd, &command, notify, None)
         }
         permission::GateDecision::Approved { .. } => {
-            return run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit)
+            // Approved on the card: the person read this command.
+            return run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, None, emit)
                 .await;
         }
         _ => ToolResult {

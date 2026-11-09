@@ -2237,7 +2237,7 @@ fn truncate_middle(body: &str, max_bytes: usize) -> String {
 /// tool tests.
 #[allow(dead_code)]
 pub async fn run_command_capture(root: &str, command: &str, timeout_secs: u64) -> ToolResult {
-    match run_command_capture_in(root, root, command, timeout_secs, &CancellationToken::new()).await {
+    match run_command_capture_in(root, root, command, timeout_secs, &CancellationToken::new(), None).await {
         CommandRun::Done(result) => result,
         // Unreachable: nobody holds this token.
         CommandRun::Cancelled => err("Command was cancelled.".to_string()),
@@ -2273,6 +2273,7 @@ pub async fn run_command_capture_in(
     command: &str,
     timeout_secs: u64,
     cancel: &CancellationToken,
+    sandbox: Option<&super::sandbox::Sandbox>,
 ) -> CommandRun {
     let cwd = match resolve_command_dir(root, cwd) {
         Ok(cwd) => cwd,
@@ -2285,7 +2286,7 @@ pub async fn run_command_capture_in(
         command,
         cwd: &cwd,
         capture: super::process::Capture::Split { cap_each: FOREGROUND_CAPTURE },
-        sandbox: None,
+        sandbox,
     }) {
         Ok(process) => process,
         Err(e) => return CommandRun::Done(err(e.replace("Failed to start command", "Failed to run command"))),
@@ -4360,7 +4361,7 @@ mod tests {
         let began = std::time::Instant::now();
         let run = tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            run_command_capture_in(&root, &root, "sleep 60", 120, &cancel),
+            run_command_capture_in(&root, &root, "sleep 60", 120, &cancel, None),
         )
         .await
         .expect("Stop must reach a running command");
@@ -4394,7 +4395,7 @@ mod tests {
         let root = command_test_root("cwd");
         let resolved = resolve_command_dir(&root, "no-such-dir").unwrap_err();
         assert!(resolved.starts_with("Cannot run command:"), "{resolved}");
-        let fg = run_command_capture_in(&root, "no-such-dir", "true", 5, &CancellationToken::new()).await;
+        let fg = run_command_capture_in(&root, "no-such-dir", "true", 5, &CancellationToken::new(), None).await;
         let CommandRun::Done(fg) = fg else { panic!("not cancelled") };
         assert_eq!(fg.content, resolved);
         assert!(resolve_command_dir(&root, "workspace").unwrap().is_dir());

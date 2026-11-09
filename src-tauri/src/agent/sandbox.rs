@@ -25,9 +25,23 @@
 //! In a profile the last matching rule wins, which is why the denials come
 //! before the exceptions.
 //!
+//! **Who gets one.** A command a person read and approved runs as it always
+//! did — they saw it. A command that ran because the full-auto rung covered
+//! it, or because a wildcard project rule matched, was read by nobody, and
+//! that is the command [`covers`] contains. An exact approval, for this run
+//! or the project, is still someone having seen that very command.
+//!
+//! **What it may write** ([`Sandbox::for_workspace`]): the project, the
+//! repository's git directory when that sits outside it (a worktree's does),
+//! temp folders, and the caches build tools keep in the home directory. Git
+//! hooks and git config are closed again — a command that could plant a hook
+//! would run unsandboxed the next time a person commits.
+//!
+//! The network stays on in this slice. Closing it needs the approval card a
+//! denial should raise, and without one an `npm install` would just fail.
+//!
 //! Pure on purpose: this file builds text and an argv, and `process.rs` is
-//! the only place that starts anything. Every caller still passes no sandbox
-//! — the policy that decides *when* a command gets one is the next slice.
+//! the only place that starts anything.
 
 // Only macOS has Seatbelt; elsewhere `wrap` answers `None` and the profile
 // builder has no caller outside its tests.
@@ -46,6 +60,8 @@ pub struct Sandbox {
     /// Folders the command may write under. Relative paths are ignored — a
     /// rule that depends on the cwd is not a rule.
     pub writable: Vec<PathBuf>,
+    /// Places inside a writable folder that stay closed all the same.
+    pub protected: Vec<PathBuf>,
     /// Whether the command may reach beyond loopback.
     pub network: bool,
 }
@@ -84,24 +100,53 @@ impl Sandbox {
             out.push(')');
         }
         out.push_str(")\n");
+        let protected = real_paths(&self.protected);
+        if !protected.is_empty() {
+            out.push_str("(deny file-write*");
+            for path in protected {
+                out.push_str("\n  (subpath ");
+                out.push_str(&quoted(&path));
+                out.push(')');
+            }
+            out.push_str(")\n");
+        }
         if !self.network {
             out.push_str(NETWORK_OFF);
         }
         out
     }
 
-    /// The writable folders as the kernel will see them: absolute, symlinks
-    /// resolved, each one once, in a stable order.
     fn real_writable(&self) -> Vec<PathBuf> {
-        let mut paths: Vec<PathBuf> = self
-            .writable
-            .iter()
-            .filter(|path| path.is_absolute())
-            .map(|path| real_path(path))
-            .collect();
-        paths.sort();
-        paths.dedup();
-        paths
+        real_paths(&self.writable)
+    }
+
+    /// The policy for a command run in `root` with nobody reading it first.
+    pub fn for_workspace(root: &Path) -> Sandbox {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        Sandbox::for_workspace_in(root, home.as_deref(), &std::env::temp_dir())
+    }
+
+    /// [`Sandbox::for_workspace`] with the home and temp folders named, so a
+    /// test can say what they are.
+    pub fn for_workspace_in(root: &Path, home: Option<&Path>, temp: &Path) -> Sandbox {
+        let mut writable = vec![root.to_path_buf(), temp.to_path_buf(), PathBuf::from("/tmp"), PathBuf::from("/var/tmp")];
+        // macOS pairs the per-user temp folder `…/T` with a cache folder
+        // `…/C`; compilers keep their module caches there.
+        if temp.file_name().is_some_and(|name| name == "T") {
+            if let Some(parent) = temp.parent() {
+                writable.push(parent.join("C"));
+            }
+        }
+        if let Some(home) = home {
+            writable.extend(TOOL_CACHES.iter().map(|dir| home.join(dir)));
+        }
+        let mut protected = Vec::new();
+        for git in git_dirs(root) {
+            protected.push(git.join("hooks"));
+            protected.push(git.join("config"));
+            writable.push(git);
+        }
+        Sandbox { writable, protected, network: true }
     }
 
     /// The program and leading arguments that run `shell` inside this
@@ -116,6 +161,104 @@ impl Sandbox {
     pub fn wrap(&self, _shell: &str) -> Option<(String, Vec<String>)> {
         None
     }
+}
+
+/// Where build tools keep what they download and compile, under the home
+/// directory. Short on purpose: each entry is a place a command may write
+/// without asking. Grown from denials seen in real use, not from a guess at
+/// every tool there is.
+const TOOL_CACHES: &[&str] = &[".cargo", ".npm", ".cache", "Library/Caches"];
+
+/// Paths as the kernel will see them: absolute, symlinks resolved, each one
+/// once, in a stable order.
+fn real_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = paths
+        .iter()
+        .filter(|path| path.is_absolute())
+        .map(|path| real_path(path))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// The git directories a command in `root` writes to: the nearest `.git`
+/// above it, and for a worktree — where `.git` is a file pointing elsewhere —
+/// the repository's shared directory as well. Read from the files git itself
+/// reads, so no process is started to find out.
+fn git_dirs(root: &Path) -> Vec<PathBuf> {
+    let Some(dot_git) = root.ancestors().map(|dir| dir.join(".git")).find(|path| path.exists()) else {
+        return Vec::new();
+    };
+    if dot_git.is_dir() {
+        return vec![dot_git];
+    }
+    let Some(git_dir) = std::fs::read_to_string(&dot_git)
+        .ok()
+        .and_then(|text| text.trim().strip_prefix("gitdir:").map(|path| path.trim().to_string()))
+        .map(|path| absolute_from(dot_git.parent().unwrap_or(root), &path))
+    else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    if let Ok(common) = std::fs::read_to_string(git_dir.join("commondir")) {
+        dirs.push(absolute_from(&git_dir, common.trim()));
+    }
+    dirs.push(git_dir);
+    dirs
+}
+
+fn absolute_from(base: &Path, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() { path.to_path_buf() } else { base.join(path) }
+}
+
+/// Whether a command that ran without a prompt is one nobody read. `exact`
+/// says whether the project rule that matched names this very command.
+pub fn covers(trusted: super::permission::Trusted, exact_rule: bool) -> bool {
+    use super::permission::Trusted;
+    match trusted {
+        Trusted::FullAuto => true,
+        Trusted::Project => !exact_rule,
+        Trusted::Run => false,
+    }
+}
+
+/// The way out while this is new: `KLIDE_COMMAND_SANDBOX=0` in the app's
+/// environment runs every command as before. A Settings switch replaces it.
+pub fn enabled() -> bool {
+    !matches!(std::env::var("KLIDE_COMMAND_SANDBOX").as_deref(), Ok("0") | Ok("off") | Ok("false"))
+}
+
+/// The sandbox for one command, or `None` when it runs as approved.
+pub fn for_command(trusted: super::permission::Trusted, exact_rule: bool, root: &Path) -> Option<Sandbox> {
+    (cfg!(target_os = "macos") && enabled() && covers(trusted, exact_rule)).then(|| Sandbox::for_workspace(root))
+}
+
+/// What the model is told when a contained command hit the wall. Without it
+/// "Operation not permitted" reads as a broken tool, and the next move is to
+/// try the same write a different way.
+pub const DENIAL_NOTE: &str = "\n\n[Klide] This command ran sandboxed because nobody approved it by hand: it can write only inside the project, temp folders and tool caches, and not to git hooks or git config. If the task needs that write, tell the user which path — do not look for another route to it.";
+
+/// Whether a contained command's output shows the sandbox refusing a write.
+pub fn was_denied(output: &str) -> bool {
+    output.contains("Operation not permitted")
+}
+
+/// Whether this process may apply a Seatbelt profile at all. A test run that
+/// is itself sandboxed cannot nest another one; those runs skip the
+/// containment tests rather than fail on the host's own restriction.
+#[cfg(all(test, target_os = "macos"))]
+pub fn usable_here() -> bool {
+    let usable = std::process::Command::new(SANDBOX_EXEC)
+        .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if !usable {
+        eprintln!("skipped: this process cannot apply a Seatbelt profile");
+    }
+    usable
 }
 
 /// A path with its symlinks resolved. A folder that does not exist yet (a
@@ -154,7 +297,7 @@ mod tests {
 
     #[test]
     fn the_profile_closes_writes_before_it_opens_any() {
-        let profile = Sandbox { writable: vec![PathBuf::from("/")], network: true }.profile();
+        let profile = Sandbox { writable: vec![PathBuf::from("/")], network: true, ..Default::default() }.profile();
         let deny = profile.find("(deny file-write*)").expect("writes are denied");
         let allow = profile.find("(allow file-write*").expect("then opened by path");
         assert!(deny < allow, "the last matching rule wins, so the denial comes first");
@@ -163,9 +306,9 @@ mod tests {
 
     #[test]
     fn network_rules_appear_only_when_the_network_is_off() {
-        let on = Sandbox { writable: vec![], network: true }.profile();
+        let on = Sandbox { network: true, ..Default::default() }.profile();
         assert!(!on.contains("network"));
-        let off = Sandbox { writable: vec![], network: false }.profile();
+        let off = Sandbox::default().profile();
         let deny = off.find("(deny network*)").expect("the network is denied");
         let loopback = off.find("(allow network-outbound (remote ip \"localhost:*\")").expect("loopback stays open");
         assert!(deny < loopback);
@@ -181,6 +324,7 @@ mod tests {
         let sandbox = Sandbox {
             writable: vec![dir.clone(), dir.join("."), PathBuf::from("relative/dir"), dir.join("not-built-yet")],
             network: true,
+            ..Default::default()
         };
         assert_eq!(sandbox.real_writable(), vec![real.clone(), real.join("not-built-yet")]);
         let profile = sandbox.profile();
@@ -193,16 +337,88 @@ mod tests {
     fn a_path_cannot_write_a_rule_of_its_own() {
         let hostile = PathBuf::from("/tmp/a\") (subpath \"/");
         assert_eq!(quoted(&hostile), r#""/tmp/a\") (subpath \"/""#);
-        let profile = Sandbox { writable: vec![hostile.clone()], network: true }.profile();
+        let profile = Sandbox { writable: vec![hostile.clone()], network: true, ..Default::default() }.profile();
         let rule = format!("\n  (subpath {})", quoted(&real_path(&hostile)));
         assert!(profile.contains(&rule), "the path is one escaped literal: {profile}");
         assert_eq!(profile.matches("\n  (subpath ").count(), 1, "and no second rule starts a line");
     }
 
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("klide-sandbox-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn only_a_command_nobody_read_is_covered() {
+        use super::super::permission::Trusted;
+        assert!(covers(Trusted::FullAuto, false));
+        assert!(covers(Trusted::FullAuto, true), "the rung, not the rule, let it run");
+        assert!(covers(Trusted::Project, false), "a wildcard rule matched a command nobody saw");
+        assert!(!covers(Trusted::Project, true), "an exact rule is this very command, approved");
+        assert!(!covers(Trusted::Run, false));
+    }
+
+    #[test]
+    fn a_plain_checkout_writes_to_the_project_temp_and_caches_only() {
+        let base = scratch("plain");
+        let (root, home, temp) = (base.join("project"), base.join("home"), base.join("tmp/T"));
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let sandbox = Sandbox::for_workspace_in(&root, Some(&home), &temp);
+        assert!(sandbox.network);
+        for dir in [root.clone(), temp.clone(), base.join("tmp/C"), home.join(".cargo"), home.join("Library/Caches"), root.join(".git")] {
+            assert!(sandbox.writable.contains(&dir), "{} should be writable", dir.display());
+        }
+        assert!(!sandbox.writable.contains(&home), "the home directory itself is not");
+        assert_eq!(sandbox.protected, vec![root.join(".git/hooks"), root.join(".git/config")]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_worktree_reaches_the_repository_it_belongs_to() {
+        let base = scratch("worktree");
+        let (repo, tree) = (base.join("repo"), base.join("trees/feature"));
+        let git_dir = repo.join(".git/worktrees/feature");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join(".git"), format!("gitdir: {}\n", git_dir.display())).unwrap();
+        std::fs::write(git_dir.join("commondir"), "../..\n").unwrap();
+        let sandbox = Sandbox::for_workspace_in(&tree, None, &base.join("tmp"));
+        let real = real_paths(&sandbox.writable);
+        assert!(real.contains(&repo.join(".git")), "a commit in a worktree writes the shared git directory");
+        assert!(!real.contains(&repo), "but not the other checkout's files");
+        assert!(real_paths(&sandbox.protected).contains(&repo.join(".git/hooks")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_folder_inside_a_repository_reaches_the_git_directory_above_it() {
+        let base = scratch("subfolder");
+        let root = base.join("repo/packages/app");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(base.join("repo/.git")).unwrap();
+        assert_eq!(git_dirs(&root), vec![base.join("repo/.git")]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn protected_places_are_denied_after_the_folders_are_opened() {
+        let sandbox = Sandbox {
+            writable: vec![PathBuf::from("/project")],
+            protected: vec![PathBuf::from("/project/.git/hooks")],
+            network: true,
+        };
+        let profile = sandbox.profile();
+        let open = profile.find("(subpath \"/project\")").unwrap();
+        let closed = profile.find("(deny file-write*\n  (subpath \"/project/.git/hooks\")").unwrap();
+        assert!(open < closed, "the last matching rule wins");
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn wrapping_puts_the_shell_behind_sandbox_exec() {
-        let sandbox = Sandbox { writable: vec![], network: false };
+        let sandbox = Sandbox::default();
         let (program, args) = sandbox.wrap("sh").unwrap();
         assert_eq!(program, "/usr/bin/sandbox-exec");
         assert_eq!(args, vec!["-p".to_string(), sandbox.profile(), "sh".to_string()]);
