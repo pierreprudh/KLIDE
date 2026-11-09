@@ -76,6 +76,21 @@ import { HandPointing } from "@phosphor-icons/react/dist/csr/HandPointing";
 import { Desktop } from "@phosphor-icons/react/dist/csr/Desktop";
 import { Laptop } from "@phosphor-icons/react/dist/csr/Laptop";
 
+/** Tailscale brand mark, from tailscale/tailscale client/web/src/assets/icons/tailscale-logo.svg. */
+export function TailscaleIcon({ size = 18, ...props }: GlyphProps) {
+  return <svg width={size} height={size} viewBox="0 0 21.5353 21.5353" fill="currentColor" aria-hidden="true" {...props}>
+    <circle cx="2.69191" cy="10.7677" r="2.69191" />
+    <circle cx="10.7676" cy="10.7677" r="2.69191" />
+    <circle cx="2.69191" cy="18.8434" r="2.69191" opacity="0.2" />
+    <circle cx="18.8433" cy="18.8434" r="2.69191" opacity="0.2" />
+    <circle cx="10.7676" cy="18.8434" r="2.69191" />
+    <circle cx="18.8433" cy="10.7677" r="2.69191" />
+    <circle cx="2.69191" cy="2.69191" r="2.69191" opacity="0.2" />
+    <circle cx="10.7676" cy="2.69191" r="2.69191" opacity="0.2" />
+    <circle cx="18.8433" cy="2.69191" r="2.69191" opacity="0.2" />
+  </svg>;
+}
+
 /** The one weight Klide draws at. Changing this line re-weights the app. */
 export const ICON_WEIGHT = "light" as const;
 

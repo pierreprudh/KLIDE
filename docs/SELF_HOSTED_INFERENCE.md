@@ -1,11 +1,26 @@
 # Connect a model on another machine
 
 Open Settings → API → Self-hosted endpoints → Add self-hosted endpoint.
-Enter a name and the OpenAI-compatible API base URL. Examples:
+The dialog offers **API URL** and **Tailscale quick setup**. Both save an ordinary
+OpenAI-compatible endpoint; Tailscale is a way to reach it, not another API format.
+
+With **API URL**, enter a name and the server's full API base URL. Examples:
 
 - HTTPS server: `https://llm.example.com/v1`
 - Private Tailscale server: `http://100.64.1.2:8000/v1`
 - Existing SSH tunnel: `http://127.0.0.1:18080/v1`
+
+With **Tailscale quick setup**:
+
+1. Connect this Mac and the inference server to the same tailnet.
+2. Make the already-running model API reachable on the server's Tailscale
+   interface; a server listening only on loopback is not directly reachable.
+3. Enter the Tailscale IP or machine name and the actual API port. The shortcut
+   builds `http://<machine>:<port>/v1` and displays it before testing or saving.
+
+The shortcut uses HTTP over Tailscale's encrypted network. For an HTTPS endpoint,
+an IPv6 literal, or a different API path, paste the full address under **API URL**.
+Klide does not install Tailscale, discover machines, or configure the server.
 
 For example, when llama.cpp is already listening on the VPS's loopback port 8081,
 start a tunnel yourself with `ssh -N -L 18080:127.0.0.1:8081 user@your-vps`.
@@ -24,6 +39,9 @@ or issue a model generation request. Models explicitly marked as embedding or
 OCR are excluded from chat defaults, using the same task interpretation as the
 existing provider picker. Unknown tasks remain available without claiming
 verified chat support. Empty chat listings are shown explicitly.
+
+**Model options** also accepts an exact default model ID. Context length is set
+on the inference server.
 
 Choose the saved endpoint as the intelligence source for a compatible harness.
 Existing native and delegate source selection remains in control: this does not
