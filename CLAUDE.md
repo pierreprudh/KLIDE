@@ -832,7 +832,7 @@ enforce wrapper coverage for the git family.
 - [x] Links and places — a URL in an answer opens in the browser under its name, a rooted path in Finder, a file of the open project in an editor tab
 - [x] `klide://` links + Ask Kit — Raycast, Shortcuts, a terminal or the Services menu open a pre-filled conversation, a file at a line, or a project (installed app only on macOS)
 - [x] CLI sessions both ways — "follow up this conversation in Klide", said to Claude Code / Codex / OpenCode / omp, resumes it in Klide (`klide://resume` + the `/klide` skill); "open the Claude Code conv about X", said to Kit, lists and opens it (`list_cli_sessions` / `open_cli_session`)
-- [x] Design mode — `/design`, ⌘⇧D or a result card's "Open in Design": the project's running app on a canvas; edit an element live or pin a comment, and the review goes to Kit as one Work turn
+- [x] Design mode — on conversations about the interface, `/design`, ⌘⇧D or a result card's "Open in Design" slides the project's running app in from the right; edit an element live or pin a comment, and the review goes to Kit as one Work turn
 - [x] Any agent, any intelligence — a Delegate (Claude Code / Codex / OpenCode / Hermes) runs on any API, local, self-hosted or Nous Portal source through a loopback bridge that translates wires per request and never hands the CLI the key; the conversation keeps the agent it began on and wears the model's mark; OMP / Amp / Cursor / Factory and subscription-on-subscription pairs are shown as needing an adapter, never swapped silently
 
 ## Development

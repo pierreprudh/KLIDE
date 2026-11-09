@@ -81,3 +81,27 @@ function resolveColor(value: string): string {
   probe.remove();
   return rgb;
 }
+
+// ── which conversations get Design mode ─────────────────────────────────────
+const UI_FILE = /[\w./-]+\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)\b/i;
+const UI_WORDS = /\b(ui|ux|design|layout|css|styles?|styling|buttons?|screens?|pages?|components?|interface|spacing|padding|margins?|colou?rs?|fonts?|typography|themes?|dark mode|light mode|responsive|navbar|sidebar|modals?|cards?|icons?|animations?|landing)\b/i;
+
+type ConversationMsg = { role: string; content?: unknown; toolCalls?: { args?: unknown }[] };
+
+/** A conversation is about the interface when you talk about it or the work
+ *  touches files that render: an on-screen word in your messages, or an
+ *  interface file in any message or tool call. Design mode is offered only
+ *  there — elsewhere it would be a canvas with nothing to say. */
+export function isInterfaceConversation(msgs: ConversationMsg[]): boolean {
+  return msgs.some(m => {
+    const text = typeof m.content === "string" ? m.content : "";
+    if (m.role === "user" && UI_WORDS.test(text)) return true;
+    if (UI_FILE.test(text)) return true;
+    return (m.toolCalls ?? []).some(c => UI_FILE.test(typeof c.args === "string" ? c.args : JSON.stringify(c.args ?? "")));
+  });
+}
+
+/** The dock's width for a window this wide: room for a page, never the whole window. */
+export function designDockWidth(windowWidth: number): number {
+  return Math.round(Math.min(1100, Math.max(560, windowWidth * 0.58), windowWidth - 360));
+}

@@ -145,6 +145,7 @@ import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MemoryIcon, M
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface, DesignMode } from "./lazySurfaces";
 import { promoteDesignOpener, registerDesignOpener } from "../designNavigation";
+import { designDockWidth, isInterfaceConversation } from "./design/designReview";
 import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, RunFailedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
@@ -1273,11 +1274,22 @@ export function AiPanel({
   // on first open and then only hidden, so an unsent review survives closing.
   const [designOpen, setDesignOpen] = useState(false);
   const [designMounted, setDesignMounted] = useState(false);
+  // Where the dock opens: at the window's right edge, or — when this
+  // conversation is itself a panel docked on the right — just left of it.
+  const [designRight, setDesignRight] = useState(8);
+  const conversationRef = useRef<HTMLElement>(null);
   const openDesignRef = useRef<() => void>(() => {});
   openDesignRef.current = () => {
     if (!workspaceRoot) { notify("Open a project first — Design mode shows its running app."); return; }
+    if (!uiConversationRef.current) { notify("Design mode is for conversations about the interface — say which screen or component you want to work on."); return; }
+    const r = conversationRef.current?.getBoundingClientRect();
+    setDesignRight(variant !== "focus" && r && r.left > window.innerWidth / 2 ? Math.round(window.innerWidth - r.left + 8) : 8);
     setDesignMounted(true); setDesignOpen(true);
   };
+  // Design mode is offered only on conversations about the interface.
+  const uiConversation = useMemo(() => isInterfaceConversation(msgs), [msgs]);
+  const uiConversationRef = useRef(uiConversation);
+  uiConversationRef.current = uiConversation;
   const [openDesign] = useState(() => () => openDesignRef.current());
   useEffect(() => registerDesignOpener(openDesign), [openDesign]);
   // The OS file picker behind the + menu's attach row — for a photo or
@@ -1826,7 +1838,7 @@ export function AiPanel({
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectMode("plan"); setInput(""); } },
     { name: "work", desc: SLASH_DESC.work, run: () => { selectMode(goalOrPlan()); setInput(""); } },
     { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
-    { name: "design", desc: "Edit the running UI directly, then send the changes to Kit", run: () => { setInput(""); setSlash(null); openDesign(); } },
+    ...(uiConversation ? [{ name: "design", desc: "Edit the running UI directly, then send the changes to Kit", run: () => { setInput(""); setSlash(null); openDesign(); } }] : []),
     { name: "mission", desc: SLASH_DESC.mission, run: () => insertSlashPrefix(MISSION_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
     { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
@@ -3487,7 +3499,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     canvasWidth,
   });
 
-  const focusInset = variant === "focus" ? column.inset : 0;
+  // The Design dock takes the right of the canvas; the conversation re-centres in what is left.
+  const focusInset = variant === "focus" ? (designOpen ? Math.max(column.inset, designDockWidth(window.innerWidth) + 16) : column.inset) : 0;
   const focusGutterLeft = `calc(max(20px, (100% - ${760 + focusInset}px) / 2))`;
   const focusGutterRight = `calc(max(20px, (100% - ${760 + focusInset}px) / 2) + ${focusInset}px)`;
   // What a *page* may take back from those gutters. A diagram sits in the
@@ -4214,7 +4227,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   return (
     <div className={`klide-btw-layout${btw?.parentId === currentId ? " has-side" : ""}${sidePanelOpen ? " is-open" : ""}`} style={btw?.parentId === currentId ? { width: "100%", height: "100%", minWidth: 0 } : { display: "contents" }}>
     {designMounted && workspaceRoot && (
-      <DesignMode workspaceRoot={workspaceRoot} open={designOpen} onClose={() => setDesignOpen(false)}
+      <DesignMode workspaceRoot={workspaceRoot} open={designOpen} right={designRight} onClose={() => setDesignOpen(false)}
         onSend={(task) => { void send({ text: task, mode: goalOrPlan() }); }} />
     )}
     {lightboxImage && createPortal(
@@ -4235,6 +4248,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     )}
     <div className="klide-btw-columns">
     <aside
+      ref={conversationRef}
       className={`shared-notes-host ${variant === "focus" ? "klide-focus-ai-surface" : "floating-panel"}`}
       aria-label="AI conversation"
       tabIndex={-1}
