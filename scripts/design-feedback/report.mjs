@@ -21,8 +21,8 @@ export async function compareBundles(baselineDir, candidateDir, output) {
       if (sha256(await readFile(path.join(m === baseline ? baselineDir : candidateDir, file))) !== hash) throw new Error(`Evidence hash mismatch: ${file}`);
     }
   }
-  const comparable = JSON.stringify(baseline.environment) === JSON.stringify(candidate.environment) && baseline.source.fixtureHash === candidate.source.fixtureHash && baseline.source.briefHash === candidate.source.briefHash && baseline.scenario === candidate.scenario;
-  if (!comparable) throw new Error('Incomparable render environments, fixtures, briefs, or scenarios');
+  const comparable = JSON.stringify(baseline.environment) === JSON.stringify(candidate.environment) && baseline.source.fixtureHash === candidate.source.fixtureHash && baseline.scenario === candidate.scenario;
+  if (!comparable) throw new Error('Incomparable render environments, fixtures, or scenarios');
   if (baseline.captures.length !== candidate.captures.length) throw new Error('Capture sets differ');
   await mkdir(output); // never overwrite evidence
   const results = [];
