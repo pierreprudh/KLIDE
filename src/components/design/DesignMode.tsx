@@ -179,8 +179,11 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend, right = 8 }: 
   const watched = useMemo(() => [...new Set([picked?.id, draft?.id, ...items.filter(i => i.kind === "comment" && !i.resolved && i.epoch === epoch).map(i => i.elementId)].filter((x): x is number => typeof x === "number"))], [picked, draft, items, epoch]);
   useEffect(() => { post({ type: "watch", ids: watched }); }, [watched, post]);
 
+  // One step back per Esc: the selection, then a comment being written, then the mode.
   function escape() {
-    setPicked(p => { if (p) return null; setDraft(d => { if (!d) onClose(); return null; }); return null; });
+    if (picked) setPicked(null);
+    else if (draft) setDraft(null);
+    else onClose();
   }
   useEffect(() => {
     if (!open) return;
