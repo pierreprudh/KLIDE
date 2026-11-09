@@ -105,3 +105,18 @@ export function isInterfaceConversation(msgs: ConversationMsg[]): boolean {
 export function designDockWidth(windowWidth: number): number {
   return Math.round(Math.min(1100, Math.max(560, windowWidth * 0.58), windowWidth - 360));
 }
+
+// ── how to run the project ──────────────────────────────────────────────────
+const RUN_SCRIPTS = ["dev", "start", "serve", "preview"];
+
+/** The dev command a project declares: its package manager (from the lockfile
+ *  beside package.json) running the first of dev / start / serve / preview. */
+export function devCommand(packageJson: string, files: string[]): string | null {
+  let scripts: Record<string, unknown>;
+  try { scripts = (JSON.parse(packageJson) as { scripts?: Record<string, unknown> }).scripts ?? {}; } catch { return null; }
+  const script = RUN_SCRIPTS.find(name => typeof scripts[name] === "string");
+  if (!script) return null;
+  const has = (f: string) => files.includes(f);
+  const pm = has("pnpm-lock.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : has("bun.lockb") || has("bun.lock") ? "bun" : "npm";
+  return pm === "yarn" ? `yarn ${script}` : `${pm} run ${script}`;
+}
