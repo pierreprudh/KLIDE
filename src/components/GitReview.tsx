@@ -769,8 +769,11 @@ function PRHero({ pr, canCheckout, canMerge, onOpen, onCheckout, onMerge }: {
 }
 
 
-function PRCard({ pr, selected, detail, detailLoading, nowMs, onSelect, onOpen, onCheckout, onMerge }: {
+function PRCard({ pr, selected, detail, detailLoading, nowMs, morphIndex, onSelect, onOpen, onCheckout, onMerge }: {
   pr: PullRequest; selected: boolean;
+  /** Set while the first load hands over from the skeleton: the card keeps
+   *  the placeholder's shell, its bars fade out and the content fades in. */
+  morphIndex?: number;
   detail: PullRequestDetails | null;
   detailLoading: boolean;
   nowMs: number;
@@ -814,7 +817,9 @@ function PRCard({ pr, selected, detail, detailLoading, nowMs, onSelect, onOpen, 
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      className={morphIndex !== undefined ? "klide-pr-morph" : undefined}
       style={{
+        ...(morphIndex !== undefined ? { position: "relative", "--morph-i": morphIndex } as React.CSSProperties : null),
         padding: selected ? 16 : "11px 12px",
         borderRadius: selected ? "var(--radius-lg)" : "var(--radius-md)",
         border: `1px solid ${border}`,
@@ -828,6 +833,11 @@ function PRCard({ pr, selected, detail, detailLoading, nowMs, onSelect, onOpen, 
         transition: "border-color 160ms var(--ease-out), background 160ms var(--ease-out), box-shadow 160ms var(--ease-out), transform 160ms var(--ease-out), padding 160ms var(--ease-out)",
       }}
     >
+      {morphIndex !== undefined && !selected && (
+        <div className="klide-pr-morph-ghost" aria-hidden>
+          <PrSkeletonBody index={morphIndex} />
+        </div>
+      )}
       {selected ? (
         // Opened: title, quiet metadata, actions, then the review and timeline.
         <>
@@ -1281,6 +1291,93 @@ function DepartingPrCard({ pr, nowMs, onDone }: { pr: PullRequest; nowMs: number
   );
 }
 
+// The PR list's first-load shape: resting PRCards drawn without data. Each
+// line sits in a box of the real card's line height, so swapping in the list
+// causes no reflow. Same for the Open and Closed tabs — one fetch fills both.
+// Mirrors `.klide-skeleton-delayed` (fade-in delay) and the longest
+// `.klide-pr-morph` stagger + duration in tokens.css.
+const PR_SKELETON_DELAY_MS = 140;
+const PR_MORPH_MS = 700;
+
+const PR_SKELETON_WIDTHS: Array<[string, string]> = [["78%", "52%"], ["61%", "44%"], ["86%", "38%"], ["54%", "47%"]];
+
+function PrSkeletonLine({ height, width, barHeight, delay, radius = 4 }: {
+  height: number; width: number | string; barHeight: number; delay: number; radius?: number;
+}) {
+  return (
+    <div style={{ height, display: "flex", alignItems: "center", minWidth: 0 }}>
+      <div
+        className="klide-skeleton"
+        style={{ width, height: barHeight, borderRadius: radius, "--shimmer-delay": `${delay}ms` } as React.CSSProperties}
+      />
+    </div>
+  );
+}
+
+/** The bars of one placeholder card — drawn in the skeleton list, and as the
+ *  fading ghost inside a real card while the first load morphs in. */
+function PrSkeletonBody({ index }: { index: number }) {
+  const [title, branch] = PR_SKELETON_WIDTHS[index % PR_SKELETON_WIDTHS.length];
+  const delay = index * 70;
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <PrSkeletonLine height={16} width={30} barHeight={9} delay={delay} />
+        <span style={{ flex: 1 }} />
+        <PrSkeletonLine height={16} width={46} barHeight={8} delay={delay} />
+      </div>
+      <div style={{ marginBottom: 3 }}>
+        <PrSkeletonLine height={18} width={title} barHeight={11} delay={delay} />
+      </div>
+      <PrSkeletonLine height={15} width={branch} barHeight={8} delay={delay} />
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10, minHeight: 24 }}>
+        <PrSkeletonLine height={24} width={26} barHeight={8} delay={delay} />
+        <PrSkeletonLine height={24} width={26} barHeight={8} delay={delay} />
+        <PrSkeletonLine height={24} width={22} barHeight={8} delay={delay} />
+        <span style={{ flex: 1 }} />
+        <PrSkeletonLine height={24} width={52} barHeight={22} delay={delay} radius={6} />
+      </div>
+    </>
+  );
+}
+
+const PR_SKELETON_CARD: React.CSSProperties = {
+  padding: "11px 12px",
+  borderRadius: "var(--radius-md)",
+  border: "1px solid var(--border)",
+  background: "color-mix(in srgb, var(--bg-elevated) 82%, transparent)",
+};
+
+function PrListSkeleton() {
+  return (
+    <div className="klide-skeleton-delayed" role="status" aria-label="Loading pull requests" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {PR_SKELETON_WIDTHS.map((_, i) => (
+        <div key={i} aria-hidden style={PR_SKELETON_CARD}>
+          <PrSkeletonBody index={i} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Placeholder cards the loaded list didn't fill — they fade out in place. */
+function PrSkeletonLeftovers({ from }: { from: number }) {
+  return (
+    <>
+      {PR_SKELETON_WIDTHS.slice(from).map((_, k) => (
+        <div
+          key={`skel-${from + k}`}
+          aria-hidden
+          className="klide-pr-morph-leave"
+          style={{ ...PR_SKELETON_CARD, "--morph-i": from + k } as React.CSSProperties}
+        >
+          <PrSkeletonBody index={from + k} />
+        </div>
+      ))}
+    </>
+  );
+}
+
 function PRFilterTabs({
   value,
   counts,
@@ -1525,6 +1622,13 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
   // from where it stood. Cleared when its exit animation ends.
   const [departingPrs, setDepartingPrs] = useState<{ pr: PullRequest; index: number }[]>([]);
   const [prsLoading, setPrsLoading] = useState(false);
+  // True for a moment after the first load lands, so the skeleton morphs
+  // into the cards instead of swapping. Cleared by a timer.
+  const [prMorph, setPrMorph] = useState(false);
+  const prsRef = useRef(prs);
+  useEffect(() => { prsRef.current = prs; });
+  const prMorphTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(prMorphTimer.current), []);
   const [prError, setPrError] = useState<string | null>(null);
   const [stashes, setStashes] = useState<GitStash[] | null>(null);
   const [selectedPr, setSelectedPr] = useState<PullRequestDetails | null>(null);
@@ -1615,8 +1719,16 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
     if (!workspaceRoot) return;
     setPrsLoading(true);
     setPrError(null);
+    const firstLoad = prsRef.current === null;
+    const startedAt = performance.now();
     try {
       const list = await gitPrList(workspaceRoot);
+      // Morph only when the skeleton actually showed (it fades in at 140ms).
+      if (firstLoad && performance.now() - startedAt >= PR_SKELETON_DELAY_MS) {
+        setPrMorph(true);
+        window.clearTimeout(prMorphTimer.current);
+        prMorphTimer.current = window.setTimeout(() => setPrMorph(false), PR_MORPH_MS);
+      }
       setPrs(list);
     } catch (e) {
       setPrError(e instanceof Error ? e.message : String(e));
@@ -2177,13 +2289,11 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
           <div style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "2px 12px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
             {/* Only the first load takes over the panel; background refreshes
                 keep the existing cards on screen so nothing flashes. */}
-            {prsLoading && !prs && !prError && (
-              <GitHubPanelState title="Loading GitHub" detail="Fetching pull requests." />
-            )}
+            {prsLoading && !prs && !prError && <PrListSkeleton />}
             {!prsLoading && !prError && prs && prs.length > 0 && visiblePrs.length === 0 && (
               <GitHubPanelState title={`No ${prFilter} pull requests`} />
             )}
-            {withDepartingPrs(visiblePrs, departingPrs).map(({ pr, departing }) =>
+            {withDepartingPrs(visiblePrs, departingPrs).map(({ pr, departing }, i) =>
               departing ? (
                 <DepartingPrCard
                   key={`departing-${pr.number}`}
@@ -2199,12 +2309,16 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
                   selected={expandedPr === pr.number}
                   detail={selectedPr?.number === pr.number ? selectedPr : null}
                   detailLoading={prDetailLoading}
+                  morphIndex={prMorph && i < PR_SKELETON_WIDTHS.length ? i : undefined}
                   onSelect={selectPr}
                   onOpen={openPrInBrowser}
                   onCheckout={checkoutPr}
                   onMerge={mergePr}
                 />
               ),
+            )}
+            {prMorph && visiblePrs.length < PR_SKELETON_WIDTHS.length && (
+              <PrSkeletonLeftovers from={visiblePrs.length} />
             )}
           </div>
         </div>

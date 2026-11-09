@@ -3245,11 +3245,60 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
+/* A skeleton that only appears if the wait lasts: a load that resolves in
+   under ~150ms never flashes placeholders. */
+.klide-skeleton-delayed {
+  animation: klide-skeleton-delayed-in var(--motion-slow) var(--ease-out) 140ms both;
+}
+
+@keyframes klide-skeleton-delayed-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Skeleton → content morph. The card shell stays put; the placeholder bars
+   (an absolutely placed ghost inside the real card) fade out while the
+   content fades in, staggered by --morph-i. Placeholders the list didn't
+   fill fade out whole. Keep PR_MORPH_MS in GitReview.tsx ≥ the last end. */
+.klide-pr-morph > :not(.klide-pr-morph-ghost) {
+  animation: klide-pr-morph-in 320ms var(--ease-out) calc(var(--morph-i, 0) * 50ms + 60ms) both;
+}
+
+.klide-pr-morph-ghost {
+  position: absolute;
+  inset: 0;
+  padding: 11px 12px;
+  pointer-events: none;
+  animation: klide-pr-morph-out 260ms var(--ease-out) calc(var(--morph-i, 0) * 50ms) both;
+}
+
+.klide-pr-morph-leave {
+  animation: klide-pr-morph-out 260ms var(--ease-out) calc(var(--morph-i, 0) * 50ms) both;
+}
+
+@keyframes klide-pr-morph-in {
+  from { opacity: 0; filter: blur(2px); }
+  to { opacity: 1; filter: none; }
+}
+
+@keyframes klide-pr-morph-out {
+  to { opacity: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .klide-skeleton::after,
   .klide-rise,
-  .klide-digit-in {
+  .klide-digit-in,
+  .klide-pr-morph > :not(.klide-pr-morph-ghost) {
     animation: none;
+  }
+  .klide-pr-morph-ghost,
+  .klide-pr-morph-leave {
+    display: none;
+  }
+  .klide-skeleton-delayed {
+    animation-delay: 0ms;
+    animation-duration: 1ms;
   }
 }
 
