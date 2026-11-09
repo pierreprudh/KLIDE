@@ -10,13 +10,14 @@ afterEach(async () => { await Promise.all(temporary.splice(0).map(p => rm(p, { r
 async function pair() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'klide-design-evidence-'));
   temporary.push(root);
-  async function bundle(name, white = false, environment = { browser: 'fixture' }) {
+  async function bundle(name, white = false, environment = { browser: 'fixture' }, nudge = false) {
     const dir = path.join(root, name); await mkdir(dir);
     const png = new PNG({ width: 8, height: 8 });
     png.data.fill(white ? 255 : 0);
     for (let i = 3; i < png.data.length; i += 4) png.data[i] = 255;
+    if (nudge) png.data[0] = 3; // a raster-noise-sized change to one channel of one pixel
     await writeFile(path.join(dir, 'view.png'), PNG.sync.write(png));
-    await json(path.join(dir, 'manifest.json'), { schemaVersion: 1, status: 'complete', scenario: 'conversation-long', environment, source: { fixtureHash: 'fixture-v1', briefHash: 'brief-v1' }, captures: [{ id: 'view', png: 'view.png' }], fileHashes: await hashBundle(dir) });
+    await json(path.join(dir, 'manifest.json'), { schemaVersion: 1, status: 'complete', scenario: 'conversation-long', environment, source: { fixtureHash: 'fixture-v1' }, captures: [{ id: 'view', png: 'view.png' }], fileHashes: await hashBundle(dir) });
     return dir;
   }
   return { root, bundle, output: path.join(root, 'comparison') };
@@ -30,7 +31,12 @@ describe('evidence comparison', () => {
   it('produces a pixel diff when the candidate changes', async () => {
     const { bundle, output } = await pair();
     const result = await compareBundles(await bundle('a'), await bundle('b', true), output);
-    expect(result[0]).toMatchObject({ changedPixels: 64, identicalBytes: false });
+    expect(result[0]).toMatchObject({ changedPixels: 64, perceptualChangedPixels: 64, identicalBytes: false });
+  });
+  it('declares raster noise in the raw count and not the perceptual one', async () => {
+    const { bundle, output } = await pair();
+    const result = await compareBundles(await bundle('a'), await bundle('b', false, undefined, true), output);
+    expect(result[0]).toMatchObject({ changedPixels: 1, perceptualChangedPixels: 0, identicalBytes: false });
   });
   it('refuses modified evidence', async () => {
     const { bundle, output } = await pair();

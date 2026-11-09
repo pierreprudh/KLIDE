@@ -1,10 +1,14 @@
 import { expect } from '@playwright/test';
-export const THEMES = ['klide-light', 'sage-garden-dark'];
-export const VIEWPORTS = [{ width: 1440, height: 900 }, { width: 900, height: 700 }];
-export const SCENARIOS = ['conversation-long', 'compose-empty', 'tools-and-review', 'waiting-and-error', 'subagent-activity', 'composer-menu', 'result-and-diff'];
-export const FIXED_TIME = 1793952000000;
+import matrix from '../../preview/design-feedback/matrix.json' with { type: 'json' };
+export const THEMES = matrix.themes.map(t => t.id);
+export const VIEWPORTS = matrix.viewports;
+export const SCENARIOS = matrix.scenarios.map(s => s.id);
+export const FIXED_TIME = matrix.fixedTime;
+// Deterministic rasterization: without these, Chromium's LCD text, font
+// hinting and GPU raster paths antialias borders differently between runs.
+export const RASTER_ARGS = ['--font-render-hinting=none', '--disable-lcd-text', '--force-color-profile=srgb', '--disable-skia-runtime-opts', '--disable-gpu', '--disable-partial-raster', '--disable-threaded-animation'];
 export const COMPOSER = 'textarea[data-ai-composer="true"]';
-export const SCROLLER = '[style*="overflow-anchor: none"]';
+export const SCROLLER = '[data-transcript-scroller]';
 
 export async function openScenario(page, baseURL, scenario, theme) {
   await page.clock.setFixedTime(new Date(FIXED_TIME));

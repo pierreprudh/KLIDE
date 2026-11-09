@@ -30,37 +30,32 @@ acquisition plan, ordered delivery slices and pilot decision thresholds.
 Reviewed 2026-11-08: browser half verified (typecheck, 21 unit + 21 Playwright
 tests, `cargo check --features design-parity`). Findings and four decisions for
 Pierre in [the plan's Review section](docs/DESIGN_AGENT_PLAN.md#review--2026-11-08).
-Committed 2026-11-09 with the design-agent pilot code; the review findings below are still open.
+Committed 2026-11-09 with the design-agent pilot code; the review findings were closed the same day.
 
 - [x] Browser half of the first slice: production AiPanel fixtures for long
   conversation and empty composer, screenshot capture in two themes/two sizes,
   accessible snapshots, source/evidence hashes, local comparison report and
   overflow/fold/scroll/draft checks. See `preview/design-feedback/README.md`.
   The slice itself closes only with the desktop parity check below.
-- [ ] Pierre: decide the review's four questions — park the council (PR 6–8)
-  after PR 4, Node not Python, brief separate from the plan, audit local or
-  tracked.
-- [ ] Cross-run pixel identity: try deterministic Chromium raster flags first;
-  if noise remains, report a declared perceptual count beside the raw one
-  (`threshold: 0` today turns antialiasing into reported change).
+- [x] Decide the review's four questions (2026-11-09, recommended answers):
+  council parked, Node, brief separate from the plan, audit local.
+- [x] Cross-run pixel identity (2026-11-09): deterministic Chromium raster
+  flags; 96 stills across all seven scenarios byte-identical over two fresh
+  captures. Comparisons also report a declared perceptual count.
 - [x] Record scoped native parity: 40 screenshot/AX pairs, all six scenarios in
   both themes/sizes; detailed interactions at light 900×700. `design:parity`
   prepares an isolated Mac test bundle. See the fixture README for launch steps.
 - [ ] Complete remaining native checks: Send dispatch, horizontal code scroll,
   settled two-done child template, interaction replay in other configurations.
-- [ ] Simplify native configuration: try CLI config merge instead of the current
-  explicit developer configuration. Original review recommendation: one
-  `design:parity` script + README section, and try `tauri dev --config` merge
-  instead of the `build.rs`/`app_context()` whole-config replacement (which
-  drops the deep-link plugin config and pins `version`). Browser success does
-  not authorize model trials.
-- [ ] Capture from a disposable worktree: today any edit under `src`/`preview`/
-  `scripts` by a concurrent session fails the run, and every bundle copies
-  unrelated untracked files.
-- [ ] Small fixes: `data-transcript-scroller` instead of the inline-style
-  selector; one source for scenario/theme/time lists (TS, `.mjs`, Rust); move
-  `focus-contrast.test.mjs` beside `src/styles/`; drop the duplicate console
-  write in `capture.mjs`.
+- [x] Simplify native configuration (2026-11-09): the parity file is an
+  overrides-only merge patch through `TAURI_CONFIG`; `app_context()` is stock,
+  version/plugins/bundle come from `tauri.conf.json`.
+- [x] Capture stability over what it read (2026-11-09): only served modules +
+  capture tooling must stay unchanged, and only those are copied into a bundle.
+- [x] Small fixes (2026-11-09): `data-transcript-scroller`; one
+  `matrix.json` for scenarios/themes/sizes/time (the native menu had drifted —
+  it lacked `result-and-diff`); `focus-contrast` test beside `src/styles/`;
+  one console write per configuration.
 - [x] Add tools/review, waiting/error, child activity and composer-menu
   scenarios using production controls and synthetic Run recovery/events.
   Capture command approval, expanded/rejected edits, keyboard answers,

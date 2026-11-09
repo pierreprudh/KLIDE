@@ -1,0 +1,20 @@
+{
+  "fixedTime": 1793952000000,
+  "scenarios": [
+    { "id": "conversation-long", "label": "Long conversation" },
+    { "id": "compose-empty", "label": "Empty composer" },
+    { "id": "tools-and-review", "label": "Tools and review" },
+    { "id": "waiting-and-error", "label": "Questions and recovery" },
+    { "id": "subagent-activity", "label": "Child activity" },
+    { "id": "composer-menu", "label": "Model menu" },
+    { "id": "result-and-diff", "label": "Result and diff" }
+  ],
+  "themes": [
+    { "id": "klide-light", "label": "Light theme" },
+    { "id": "sage-garden-dark", "label": "Dark theme" }
+  ],
+  "viewports": [
+    { "width": 1440, "height": 900 },
+    { "width": 900, "height": 700 }
+  ]
+}

@@ -1,10 +1,10 @@
 import { foldAgentEvents, foldedToMsgs } from "../../src/agent/foldEvents";
 import { scenarioEvents } from "./events";
-import type { ScenarioId } from "./scenarios";
+import { FIXED_TIME, type ScenarioId } from "./scenarios";
 import type { Conversation, Msg } from "../../src/components/ai/types";
 
 export const FIXTURE_VERSION = "2";
-export const FIXED_TIME = 1793952000000;
+export { FIXED_TIME };
 export const MODEL = "fixture-vision";
 export const WORKSPACE = "/design-fixture/klide";
 const longPath = "src/components/conversation/very-long-workspace-name/keyboard-navigation-and-accessibility/TranscriptWithRetainedToolEvidence.tsx";

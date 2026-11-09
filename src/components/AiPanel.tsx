@@ -4405,6 +4405,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 
         <div
           ref={scrollRef}
+          data-transcript-scroller=""
           onScroll={updateStickFromScroll}
           style={{ flex: 1, overflowX: "hidden", overflowY: delegateSession ? "hidden" : "auto", padding: delegateSession ? 0 : variant === "focus" ? `14px ${focusGutterRight} ${16 + focusFade + todoDockHeight}px ${focusGutterLeft}` : `10px 12px ${12 + todoDockHeight}px`, transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)", maskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, WebkitMaskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, fontSize: variant === "focus" ? 13.5 : 13, display: delegateSession ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !delegateSession && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain", overflowAnchor: "none", ["--reading-bleed" as string]: `${Math.round(readingBleed)}px` } as CSSProperties}
         >

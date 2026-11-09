@@ -40,7 +40,7 @@ async function boot() {
       if (!(SCENARIO_STATES[scenarioId] as readonly string[]).includes(state)) throw new Error(`Unknown state: ${state}`);
       await reset(state === "earlier" ? "initial" : state);
       if (state === "earlier") {
-        const scroller = document.querySelector<HTMLElement>('[style*="overflow-anchor: none"]');
+        const scroller = document.querySelector<HTMLElement>('[data-transcript-scroller]');
         if (!scroller) throw new Error("Production transcript scroller not found");
         scroller.scrollTop = 0;
         scroller.dispatchEvent(new Event("scroll"));

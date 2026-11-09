@@ -108,6 +108,13 @@ npx vite --config vite.design-parity.config.mjs
 open '/private/tmp/klide-native-check/Klide Native Check.app'
 ```
 
+`src-tauri/tauri.design-parity.conf.json` holds only overrides (name,
+identifier, loopback fixture URL, window, CSP). `build.rs` passes it as
+`TAURI_CONFIG`, the same merge patch the Tauri CLI's `--config` sets, so the
+version, plugins and bundle settings still come from `tauri.conf.json`.
+Scenario, theme and size menus are built from `matrix.json`, the file the
+browser scripts read.
+
 Quit the test app before rebuilding. The preparation command selects the
 feature-specific Cargo executable, creates an isolated temporary app bundle,
 and never replaces `/Applications/Klide.app`. The dedicated fixture server
@@ -126,16 +133,24 @@ Malformed output remains incomplete. Tests prove the production OpenAI request
 contains the exact selected PNG bytes; a live unpredictable-image canary, writer
 handoff and bounded iteration controller remain open. No paid calls run by default.
 
-## Pixel repeatability limitation
+## Pixel repeatability
 
-Each recorded still must settle to two consecutive identical paints. Across
-fresh Chromium renders, antialiased circular borders can still differ by
-1–2 RGB levels in a few pixels despite identical content and element geometry.
-The comparison viewer preserves those raw differences and reports
-`identicalBytes: false`; no pixels are masked and no tolerance is silently
-applied. Do not claim cross-run byte identity for the expanded scenario matrix.
-The browser suite verifies reset content/layout, controls and per-capture
-settling; it does not turn this renderer limitation into a design-quality score.
+Each recorded still must settle to two consecutive identical paints. Chromium
+launches with deterministic raster flags (`RASTER_ARGS` in `browser.mjs`: no
+font hinting, no LCD text, sRGB, no GPU or partial raster). Verified 2026-11-09:
+two fresh captures of all seven scenarios — 96 stills — were byte-identical.
+The comparison still reports two declared counts and masks nothing:
+`changedPixels` (every difference) and `perceptualChangedPixels` (pixelmatch
+threshold 0.1, antialiased pixels excluded). A pixel difference records change,
+not a design-quality score.
+
+## What a capture depends on
+
+A capture fails if any file it read changed while it ran — the modules Vite
+served plus the capture tooling (`captureInputs` in `evidence.mjs`), not the
+whole checkout, so another session editing unrelated files no longer breaks it.
+The bundle's `source.patch` and `source-inputs/` cover those files only. The
+full source identity (`source.files`, `treeHash`) is still recorded.
 
 The isolated Mac app has its own file-access permissions. On this machine,
 opening evidence directly under Documents stalled in the OS file-open call;

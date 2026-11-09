@@ -8,21 +8,56 @@ pub(crate) fn enabled() -> bool {
     cfg!(feature = "design-parity")
 }
 
+/// The capture matrix the browser scripts use — one file, read by both sides.
+const MATRIX: &str = include_str!("../../preview/design-feedback/matrix.json");
+
+#[derive(serde::Deserialize)]
+struct Entry {
+    id: String,
+    label: String,
+}
+#[derive(serde::Deserialize)]
+struct Viewport {
+    width: u32,
+    height: u32,
+}
+#[derive(serde::Deserialize)]
+struct Matrix {
+    scenarios: Vec<Entry>,
+    themes: Vec<Entry>,
+    viewports: Vec<Viewport>,
+}
+
+fn matrix() -> Matrix {
+    serde_json::from_str(MATRIX).expect("valid design-feedback matrix.json")
+}
+
+/// Menu ids and labels: the reviewer, then every scenario, theme and size.
+fn items() -> Vec<(String, String)> {
+    let m = matrix();
+    let mut items = vec![("review".to_string(), "Open visual reviewer".to_string())];
+    items.extend(
+        m.scenarios
+            .into_iter()
+            .map(|e| (format!("scenario:{}", e.id), e.label)),
+    );
+    items.extend(
+        m.themes
+            .into_iter()
+            .map(|e| (format!("theme:{}", e.id), e.label)),
+    );
+    items.extend(m.viewports.into_iter().map(|v| {
+        (
+            format!("size:{}x{}", v.width, v.height),
+            format!("Content {} × {}", v.width, v.height),
+        )
+    }));
+    items
+}
+
 pub(crate) fn menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     let mut menu = SubmenuBuilder::new(app, "Design parity");
-    for (id, label) in [
-        ("review", "Open visual reviewer"),
-        ("scenario:conversation-long", "Long conversation"),
-        ("scenario:compose-empty", "Empty composer"),
-        ("scenario:tools-and-review", "Tools and review"),
-        ("scenario:waiting-and-error", "Questions and recovery"),
-        ("scenario:subagent-activity", "Child activity"),
-        ("scenario:composer-menu", "Model menu"),
-        ("theme:klide-light", "Light theme"),
-        ("theme:sage-garden-dark", "Dark theme"),
-        ("size:1440x900", "Content 1440 × 900"),
-        ("size:900x700", "Content 900 × 700"),
-    ] {
+    for (id, label) in items() {
         menu =
             menu.item(&MenuItemBuilder::with_id(format!("design-parity:{id}"), label).build(app)?);
     }
@@ -42,13 +77,16 @@ pub(crate) fn handle(app: &tauri::AppHandle, id: &str) -> bool {
             return Ok(());
         }
         if let Some(size) = action.strip_prefix("size:") {
-            let (width, height) = match size {
-                "1440x900" => (1440.0, 900.0),
-                "900x700" => (900.0, 700.0),
-                _ => return Err("Unknown parity size".into()),
-            };
+            let viewport = matrix()
+                .viewports
+                .into_iter()
+                .find(|v| format!("{}x{}", v.width, v.height) == size)
+                .ok_or("Unknown parity size")?;
             window
-                .set_size(tauri::LogicalSize::new(width, height))
+                .set_size(tauri::LogicalSize::new(
+                    viewport.width as f64,
+                    viewport.height as f64,
+                ))
                 .map_err(|e| e.to_string())?;
             let _ = window.center();
             eprintln!("KLIDE_DESIGN_PARITY_SIZE {size}");
@@ -77,4 +115,19 @@ pub(crate) fn handle(app: &tauri::AppHandle, id: &str) -> bool {
         eprintln!("KLIDE_DESIGN_PARITY_ERROR {error}");
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_menu_lists_every_scenario_theme_and_size_in_the_matrix() {
+        let m = super::matrix();
+        let ids: Vec<String> = super::items().into_iter().map(|(id, _)| id).collect();
+        assert_eq!(
+            ids.len(),
+            1 + m.scenarios.len() + m.themes.len() + m.viewports.len()
+        );
+        assert!(ids.contains(&"scenario:result-and-diff".to_string()));
+        assert!(ids.contains(&"size:900x700".to_string()));
+    }
 }

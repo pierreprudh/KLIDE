@@ -6,8 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { THEMES, VIEWPORTS, SCENARIOS, openScenario, assertHealthy, exerciseScenario, captureStill } from './browser.mjs';
-import { json, sourceEvidence, hashBundle, sha256 } from './evidence.mjs';
+import { THEMES, VIEWPORTS, SCENARIOS, RASTER_ARGS, openScenario, assertHealthy, exerciseScenario, captureStill } from './browser.mjs';
+import { json, sourceEvidence, hashBundle, sha256, captureInputs, changedInputs, writeCaptureInputs } from './evidence.mjs';
 import { writeCaptureReport } from './report.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -31,11 +31,11 @@ const manifest = { schemaVersion: 1, evidenceId: randomUUID(), scenario, started
 const checks = { passed: false, captures: [], errors: [] };
 let failed;
 try {
-  manifest.source = await sourceEvidence(root, output);
+  manifest.source = await sourceEvidence(root);
   server = await createServer({ root, cacheDir: path.join(root, '.klide-design-cache/capture'), optimizeDeps: { entries: [path.join(root, 'preview/design-feedback.html')], include: ['@tauri-apps/api/mocks'] }, resolve: { dedupe: ['react', 'react-dom'] }, configFile: path.join(root, 'vite.config.ts'), server: { fs: { allow: [root, await realpath(path.join(root, 'node_modules'))] }, host: '127.0.0.1', port, strictPort: true, open: false, hmr: false, watch: { ignored: ['**/src-tauri/**', '**/artifacts/**', `${output}/**`] } }, clearScreen: false });
   await server.listen();
-  browser = await chromium.launch();
-  manifest.environment = { browser: 'chromium', browserVersion: browser.version(), playwrightVersion: JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(path.join(root,'node_modules/playwright/package.json'), 'utf8'))).version, platform: os.platform(), release: os.release(), arch: os.arch(), locale: 'en-US', timezone: 'Europe/Paris', deviceScaleFactor: 1, colorScheme: 'light', reducedMotion: 'reduce', captureToolHash: sha256(JSON.stringify(Object.entries(manifest.source.files).filter(([file]) => file.startsWith('scripts/design-feedback/') || file === 'playwright.design.config.ts' || file === 'package-lock.json'))), viewports: VIEWPORTS, themes: THEMES };
+  browser = await chromium.launch({ args: RASTER_ARGS });
+  manifest.environment = { browser: 'chromium', browserVersion: browser.version(), playwrightVersion: JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(path.join(root,'node_modules/playwright/package.json'), 'utf8'))).version, platform: os.platform(), release: os.release(), arch: os.arch(), locale: 'en-US', timezone: 'Europe/Paris', deviceScaleFactor: 1, colorScheme: 'light', reducedMotion: 'reduce', rasterArgs: RASTER_ARGS, captureToolHash: sha256(JSON.stringify(Object.entries(manifest.source.files).filter(([file]) => file.startsWith('scripts/design-feedback/') || file === 'playwright.design.config.ts' || file === 'package-lock.json'))), viewports: VIEWPORTS, themes: THEMES };
   for (const theme of THEMES) for (const viewport of VIEWPORTS) {
     if (interrupted) throw new Error('Capture cancelled');
     const context = await browser.newContext({ viewport, deviceScaleFactor: 1, locale: 'en-US', timezoneId: 'Europe/Paris', colorScheme: 'light', reducedMotion: 'reduce', serviceWorkers: 'block' });
@@ -68,7 +68,6 @@ try {
       });
     });
     const finalFacts = await assertHealthy(page);
-    await json(path.join(output, `${id}-console.json`), { errors, consoleErrors, blockedRequests });
     if (errors.length || consoleErrors.length || blockedRequests.length) throw new Error(`Page or network errors in ${id}: ${JSON.stringify({ errors, consoleErrors, blockedRequests })}`);
     checks.captures.push({ id, facts, finalFacts, interactions, accessibilityViolations });
     } finally {
@@ -76,7 +75,11 @@ try {
       await context.close();
     }
   }
-  if ((await sourceEvidence(root)).treeHash !== manifest.source.treeHash) throw new Error('Source changed during capture; create a new bundle from one revision');
+  const inputs = captureInputs(root, server.moduleGraph.fileToModulesMap.keys(), manifest.source);
+  const changed = changedInputs(inputs, manifest.source, await sourceEvidence(root));
+  if (changed.length) throw new Error(`Captured inputs changed during capture (${changed.slice(0, 5).join(', ')}); create a new bundle from one revision`);
+  manifest.source.captureInputs = inputs;
+  Object.assign(manifest.source, await writeCaptureInputs(root, output, inputs, manifest.source));
   checks.passed = true; manifest.status = 'complete';
 } catch (error) {
   failed = error; checks.errors.push(String(error));

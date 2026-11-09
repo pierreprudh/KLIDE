@@ -1,11 +1,8 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Klide Design Parity",
-  "version": "0.6.11",
   "identifier": "com.pierre.klide.design-parity",
   "build": {
-    "devUrl": "http://127.0.0.1:1465/preview/design-feedback.html?desktop=1&scenario=tools-and-review&theme=klide-light",
-    "frontendDist": "../dist"
+    "devUrl": "http://127.0.0.1:1465/preview/design-feedback.html?desktop=1&scenario=tools-and-review&theme=klide-light"
   },
   "app": {
     "windows": [{ "label": "main", "title": "Klide — Design parity", "titleBarStyle": "Overlay", "hiddenTitle": false, "width": 1440, "height": 900, "minWidth": 900, "minHeight": 640, "visible": false, "dragDropEnabled": false }],

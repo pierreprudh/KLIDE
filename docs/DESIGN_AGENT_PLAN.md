@@ -421,7 +421,21 @@ findings below are what stands between it and a slice worth committing.
    ignored `artifacts/`. By the docs policy it stays local; if it stays
    tracked, strip the path and the dead link.
 
-### Findings to fix before committing
+### Decisions taken — 2026-11-09
+
+Pierre asked to finish the slice; the recommended answers were taken. Each is
+cheap to reverse.
+
+1. **Council parked.** PR 6–8 wait until real single-writer use shows the
+   self-review is the weak link. PR 4 + PR 5 (one writer, bounded loop) is the
+   finish line for this plan.
+2. **Node.** The controller, canary and handoff are `.mjs`; no Python.
+3. **Brief separate.** A capture no longer hashes this plan: `briefHash` is gone
+   from capture evidence and from bundle comparability. The brief lives in each
+   trial's config and is frozen there as `briefSha256`.
+4. **Audit stays local.** `docs/KLIDE_DESIGN_AUDIT_2026-11-06.md` is git-ignored.
+
+### Findings to fix before committing (all fixed 2026-11-09)
 
 | # | Finding | Proposed fix |
 | --- | --- | --- |
