@@ -10731,20 +10731,10 @@ input.klide-rail-search:focus-visible {
 .klide-where-it-runs > button:focus-visible { outline: 2px solid var(--focus-ring); }
 /* The remembered machine didn't answer its last check — say so before Send. */
 .klide-where-it-runs > button[data-warn] { color: var(--warning); }
-.klide-where-menu { width: 300px; overflow: hidden; transform-origin: bottom left; }
-.klide-where-head {
-  padding: 10px 12px 9px; border-bottom: 1px solid var(--panel-border);
-  background: color-mix(in srgb, var(--panel-highlight) 30%, transparent);
-}
-.klide-where-title { font-size: 12px; font-weight: 600; color: var(--fg-strong); }
-.klide-where-sub { font-size: 10px; color: var(--fg-dim); margin-top: 1px; }
-.klide-where-eyebrow {
-  padding: 9px 9px 3px; font-size: 9.5px; font-weight: 600; letter-spacing: .07em;
-  text-transform: uppercase; color: var(--fg-dim);
-}
+.klide-where-menu { min-width: 190px; padding: 4px; overflow: hidden; transform-origin: bottom left; }
 .klide-where-row {
-  display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box;
-  padding: 7px 9px; border-radius: var(--radius-sm); cursor: pointer; color: var(--fg-strong);
+  display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
+  height: 30px; padding: 0 9px; border-radius: var(--radius-sm); cursor: pointer; color: var(--fg-strong);
   transition: background var(--motion-fast) var(--ease-out);
 }
 .klide-where-row:hover { background: var(--menu-row-hover); }
@@ -10752,18 +10742,8 @@ input.klide-rail-search:focus-visible {
 .klide-where-row[aria-disabled="true"] { cursor: default; }
 .klide-where-row[aria-disabled="true"]:hover { background: transparent; }
 .klide-where-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-.klide-where-icon { width: 20px; display: grid; place-items: center; color: var(--fg-subtle); }
-.klide-where-row-title { display: block; font-size: 12px; color: var(--fg-strong); }
+.klide-where-icon { display: grid; place-items: center; color: var(--fg-subtle); }
+.klide-where-row-title { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .klide-where-row-title[data-dimmed] { color: var(--fg-subtle); }
-.klide-where-caption {
-  display: block; margin-top: 1px; font-size: 10.5px; line-height: 1.4; color: var(--fg-dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.klide-where-caption[data-tone="warn"] { color: var(--warning); }
-.klide-where-fix {
-  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; margin-top: 3px;
-  max-width: 100%; font: 11px var(--font-mono); color: var(--fg-subtle);
-  transition: color var(--motion-fast) var(--ease-out);
-}
-.klide-where-fix span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.klide-where-fix:hover { color: var(--fg-strong); }
+.klide-where-note { font-size: 11px; color: var(--fg-dim); }
+.klide-where-check { display: flex; color: var(--accent); }
