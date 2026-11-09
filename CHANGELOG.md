@@ -497,10 +497,11 @@ a background command gets the permission card's disclosure, since an
 allowlist rule only admits foreground commands and full auto records the
 request (0ae2eb3); a reaped process group is only signalled once a probe says
 it still exists (03e6f97); and a wake turn writes `RunStarted`, so an
-unsettled earlier turn is marked interrupted (4ecd4d2). Three are still open
-and tracked in TODO.md: the 1 Hz observer poll per mounted panel, a failed
-follow-up that still toasts success, and observer guidance in Chat and Plan
-prompts that have no `run_command`. The other three were never written down.
+unsettled earlier turn is marked interrupted (4ecd4d2). The last three were
+fixed 2026-10-26/28 (see TODO.md): the observer list polls only while an
+observer runs or a follow-up waits, a failed follow-up toasts an error, and
+the observer guidance in Chat and Plan prompts is explicitly conditional. The
+other three were never written down.
 
 ## v0.6.4 — Workers, Connectors, Visuals (2026-09-20)
 
