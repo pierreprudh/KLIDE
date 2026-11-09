@@ -10718,6 +10718,7 @@ input.klide-rail-search:focus-visible {
   }
 }
 
-/* "Where it runs" — Focus's InlineMenu over the composer's left edge
-   (components/WhereItRuns.tsx); this only places it in the corner. */
-.klide-where-it-runs { margin-right: auto; display: flex; align-self: center; margin-left: 4px; }
+/* "Where it runs" — Focus's InlineMenu in the branch tab's twin, rising from
+   the composer's top-left corner (components/WhereItRuns.tsx). Mirrors the
+   strip's 15px corner inset; the menu's own trigger supplies the padding. */
+.klide-focus-context-strip.klide-where-it-runs { margin-right: auto; margin-left: 15px; padding: 0 10px 1px; }

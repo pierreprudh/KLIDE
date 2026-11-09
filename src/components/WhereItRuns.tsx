@@ -123,6 +123,7 @@ export function useWhereItRuns({
         const fix = blocked.fix;
         pushToast(`${machineLabel(target)}: ${blocked.why}`, {
           tone: "warn",
+          duration: 8000,
           action: fix ? { label: "Copy fix", run: () => void navigator.clipboard?.writeText(fix) } : undefined,
         });
         return;
