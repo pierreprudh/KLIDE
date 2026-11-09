@@ -183,6 +183,20 @@ Each step is one PR and ends with something checkable on `klide-box`.
    conversation through it with a throwaway client. Decides how the Linux
    binary gets built (on the box, CI, or a Tauri-free `klide-host` binary —
    see below). No app changes.
+
+   **Result, 2026-11-09 — the ptyd half passed.** `.github/workflows/linux-host.yml`
+   (manual) built `klide` on ubuntu-latest in ~9 min (63 MB, release); the
+   box got it with `gh run download` and needed only the runtime libraries
+   (`libwebkit2gtk-4.1-0`, `libgtk-3-0t64`; `ldd` resolves everything). `klide
+   ptyd --data-dir …` started from an SSH session, bound
+   `/tmp/klide-1000/ptyd-*.sock`, answered a Python client's Auth + Ping
+   (`0.6.11`, protocol 2 — the Mac's), spawned a shell session, served its
+   scrollback through Snapshot, listed it in LiveRows, stopped it, and kept
+   running after the SSH session closed. Still owed: the same with a Claude
+   Code conversation (`chat_start`), once Claude Code is logged in on the box.
+   **Decision: build on CI.** A 3 GB box should not compile the app, and the
+   Tauri-free `klide-host` binary is not needed to start — the cost of the
+   whole-app build is the two runtime packages and 63 MB.
 1. **Rename** `agent/remote.rs` (Q7). Pure rename, tests unchanged.
 2. **One Remote machine + readiness.** `~/.klide/machines.json` holds one SSH
    alias; a Rust check over `ssh -o BatchMode=yes` reports the Q5 facts as

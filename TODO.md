@@ -291,8 +291,10 @@ audit. Worker Cancel was verified live on 2026-11-01 (see above).
   machine setup: `scripts/remote-host/`. The first host is a local Ubuntu
   26.04 VM reached over Tailscale (2026-11-09), not a rented server; the
   bootstrap ran. Still owed on the box: `gh auth login` + `gh auth setup-git`,
-  git identity, Claude Code login. Plan step 0 decides the Linux `ptyd` build:
-  on the box / in CI, or a Tauri-free `klide-host` binary without WebKitGTK.
+  Claude Code login. Plan step 0 (2026-11-09): the CI-built binary
+  (`linux-host.yml`) runs `klide ptyd` on the box — auth, ping, a shell
+  session's spawn/snapshot/stop, survives SSH disconnect. Build on CI, decided.
+  Owed: one Claude Code conversation through it once logged in.
 - [ ] Extend the unified launch readiness item above with minimal remote
   checks in the VPS slice, reusing `launch_readiness::Readiness` as the
   shape a remote host reports.
@@ -795,8 +797,9 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
   passed `cancel: None`, so `agent_cancel` from a CLI in a background chat only
   recorded the request. It now trips the token of a Run the background host
   executes, as the app does (2026-11-09).
-- [ ] Focus composer drift (Sep 30 review, C5): check that skills are inlined
-  on the first Focus turn like in the panel.
+- [x] Focus composer drift (Sep 30 review, C5): skills reach the first Focus
+  turn — since 0e3826c Rust injects the requested skill's instructions from
+  every Run request, and Focus sends through the same AiPanel (2026-11-09).
 
 ## Focus delegate turns (shipped 2026-08-26, one gap parked)
 
