@@ -37,11 +37,12 @@ Committed 2026-11-09 with the design-agent pilot code; the review findings below
   accessible snapshots, source/evidence hashes, local comparison report and
   overflow/fold/scroll/draft checks. See `preview/design-feedback/README.md`.
   The slice itself closes only with the desktop parity check below.
-- [ ] Pierre: decide the review's four questions — park the council (PR 6–8)
-  after PR 4, Node not Python, brief separate from the plan, audit local or
-  tracked.
+- [x] Decide the review's four questions (2026-11-09, recommended answers):
+  council parked, Node, brief separate from the plan (captures no longer hash
+  it), audit local.
 - [x] Cross-run pixel identity (2026-11-09): fixed Chromium raster flags make
-  two captures of one revision byte-identical (20/20 stills); comparisons also
+  two captures of one revision byte-identical (20/20 stills; the full matrix,
+  96 stills over all seven scenarios, re-verified 2026-11-09); comparisons also
   report a declared perceptual count beside the raw one.
 - [x] Record scoped native parity: 40 screenshot/AX pairs, all six scenarios in
   both themes/sizes; detailed interactions at light 900×700. `design:parity`

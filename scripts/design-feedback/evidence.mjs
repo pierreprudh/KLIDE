@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const json = (file, value) => writeFile(file, JSON.stringify(value, null, 2) + '\n');
-const SOURCE_PATHS = ['src', 'src-tauri/src', 'src-tauri/Cargo.toml', 'src-tauri/build.rs', 'src-tauri/tauri.design-parity.conf.json', 'vite.design-parity.config.mjs', 'schemas', 'preview', 'scripts', 'tests', 'package.json', 'package-lock.json', 'vite.config.ts', 'playwright.design.config.ts', 'tsconfig.design.json', 'tsconfig.json', 'Design.md', 'docs/DESIGN_AGENT_PLAN.md'];
+const SOURCE_PATHS = ['src', 'src-tauri/src', 'src-tauri/Cargo.toml', 'src-tauri/build.rs', 'src-tauri/tauri.design-parity.conf.json', 'vite.design-parity.config.mjs', 'schemas', 'preview', 'scripts', 'tests', 'package.json', 'package-lock.json', 'vite.config.ts', 'playwright.design.config.ts', 'tsconfig.design.json', 'tsconfig.json', 'Design.md'];
 export async function sourceEvidence(root, output) {
   const git = args => execFileSync('git', args, { cwd: root, maxBuffer: 32 * 1024 * 1024 });
   const list = git(['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...SOURCE_PATHS]).toString().split('\0').filter(Boolean);
@@ -25,7 +25,7 @@ export async function sourceEvidence(root, output) {
   const fixtureFiles = Object.entries(hashes).filter(([file]) => file.startsWith('preview/design-feedback'));
   return { commit: git(['rev-parse', 'HEAD']).toString().trim(), treeHash: sha256(JSON.stringify(hashes)), files: hashes,
     patchHash: sha256(patch), untrackedInputs: untracked, fixtureHash: sha256(JSON.stringify(fixtureFiles)),
-    briefHash: hashes['docs/DESIGN_AGENT_PLAN.md'] ?? null, scope: SOURCE_PATHS };
+    scope: SOURCE_PATHS }; // the brief belongs to a trial (its config's briefSha256), not to a capture
 }
 export async function hashBundle(directory, prefix = '') {
   const hashes = {};

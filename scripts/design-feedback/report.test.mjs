@@ -16,7 +16,7 @@ async function pair() {
     png.data.fill(white === true ? 255 : white || 0);
     for (let i = 3; i < png.data.length; i += 4) png.data[i] = 255;
     await writeFile(path.join(dir, 'view.png'), PNG.sync.write(png));
-    await json(path.join(dir, 'manifest.json'), { schemaVersion: 1, status: 'complete', scenario: 'conversation-long', environment, source: { fixtureHash: 'fixture-v1', briefHash: 'brief-v1' }, captures: [{ id: 'view', png: 'view.png' }], fileHashes: await hashBundle(dir) });
+    await json(path.join(dir, 'manifest.json'), { schemaVersion: 1, status: 'complete', scenario: 'conversation-long', environment, source: { fixtureHash: 'fixture-v1' }, captures: [{ id: 'view', png: 'view.png' }], fileHashes: await hashBundle(dir) });
     return dir;
   }
   return { root, bundle, output: path.join(root, 'comparison') };
