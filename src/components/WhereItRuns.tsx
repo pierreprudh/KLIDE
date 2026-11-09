@@ -88,16 +88,12 @@ export function useWhereItRuns({
   if (machines.length === 0) return null;
   const chosen = machines.find((m) => m.id === machine);
 
-  const blockedReason = (m: Machine): { why: string; fix?: string; offline: boolean } | null => {
+  const blockedReason = (m: Machine): { why: string; fix?: string } | null => {
     const check = machineStatusCheck(m.id, workspaceRoot);
-    if (check?.state === "failed") return { why: check.error, offline: true };
+    if (check?.state === "failed") return { why: check.error };
     const status = lastKnownStatus(check);
     if (!status || status.ready) return null;
-    return {
-      why: status.caption,
-      fix: status.facts.find((f) => f.fix && f.tone !== "ok" && f.tone !== "quiet")?.fix,
-      offline: status.facts[0]?.label === "Reached" && status.facts[0]?.tone === "bad",
-    };
+    return { why: status.caption, fix: status.facts.find((f) => f.fix && f.tone !== "ok" && f.tone !== "quiet")?.fix };
   };
 
   return {
@@ -105,17 +101,13 @@ export function useWhereItRuns({
     leading: chosen ? <MachineIcon size={13} /> : <ThisMacIcon size={13} />,
     options: [
       { label: "This Mac", value: THIS_MAC, icon: <ThisMacIcon size={14} /> },
-      ...machines.map((m) => {
-        const blocked = blockedReason(m);
-        // One quiet word when it can't be picked; the why comes as a toast.
-        const word = blocked ? (blocked.offline ? "offline" : "not ready") : null;
-        return {
-          label: word ? `${machineLabel(m)} · ${word}` : machineLabel(m),
-          value: m.id,
-          icon: <MachineIcon size={14} />,
-          dimmed: blocked !== null,
-        };
-      }),
+      // A machine that can't be picked is only dimmed; the why comes as a toast.
+      ...machines.map((m) => ({
+        label: machineLabel(m),
+        value: m.id,
+        icon: <MachineIcon size={14} />,
+        dimmed: blockedReason(m) !== null,
+      })),
     ],
     selected: chosen ? chosen.id : THIS_MAC,
     onSelect: (value) => {
