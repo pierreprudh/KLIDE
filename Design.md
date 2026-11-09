@@ -67,7 +67,6 @@ colors:
   # Accent (soft sage — chosen to avoid the AI-blue convention)
   accent:         "#5A7B4C"   # Primary interactive accent
   accent-soft:    "rgba(90, 123, 76, 0.12)"   # Subtle accent tint
-  focus-ring:     "#5A7B4C"   # Solid keyboard outline; never use accent-soft for focus.
   accent-hover:   "#6B8E5A"   # Accent on hover (slightly brighter). Every theme must set this:
                               # one that only sets `accent` inherits this sage and flashes green on hover.
                               # Themes without a hand-tuned value derive it — color-mix(accent 88%, fg-strong).
@@ -94,13 +93,9 @@ colors:
   #   --border-strong → charcoal-40
   #   --accent        → accent
   #   --accent-soft   → accent-soft
-  #   --focus-ring    → focus-ring (theme-specific, at least 3:1 on adjacent UI surfaces)
 
   # Readable secondary information: sidebar timestamps and enabled, unselected
   # Mission Control tabs use --fg-subtle (4.5:1 on page/elevated surfaces).
-  # Focus overrides: sage-garden #52695A; sage-garden-dark #8FAA97;
-  # cursor-dark #8EA2FF; vscode-dark #57A9DF; github-light #0969DA;
-  # cerulean #167A9E; solarized-dark #D4A42C.
 
 typography:
   font-ui:   '"Atkinson Hyperlegible", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", Inter, system-ui, sans-serif'
