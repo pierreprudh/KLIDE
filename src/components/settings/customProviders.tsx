@@ -25,7 +25,9 @@ import {
 } from "../../customCli";
 import { GhostButton, IconButton, LinkButton, Panel, PencilIcon, Row, StatusText, TrashIcon } from "./controls";
 import type { KeyStatus } from "./apiKeys";
-import { SelfHostedConnectionTest } from "./selfHostedConnectionTest";
+import { SelfHostedEndpointDialog } from "./selfHostedEndpointDialog";
+import { TailscaleIcon } from "../../icons";
+import { isTailscaleEndpoint } from "./tailscaleEndpoint";
 
 /** The words a non-chat model's row ends on. */
 const TASK_WORD: Record<string, string> = { embedding: "Embedding", ocr: "OCR" };
@@ -71,8 +73,8 @@ function EndpointModelName({ model, tone }: { model: string; tone: string }) {
 }
 
 // Self-hosted (custom) OpenAI-compatible endpoints. Config (label, base URL,
-// default model) persists to the Rust store; the bearer token rides the same
-// keychain path as the built-in keys. Adding one here makes it appear in the
+// default model) persists to the Rust store; optional token references resolve
+// in Rust from the environment. Adding one here makes it appear in the
 // AI panel's provider dropdown under "Self-hosted".
 // One self-hosted endpoint: a click-to-expand row. Expanding fetches the
 // live model list (which doubles as a connection + auth test) and the key
@@ -157,13 +159,15 @@ export function CustomEndpointRow({
           }
         }}
         className="klide-settings-row"
-        style={{ cursor: "pointer" }}
+        style={{ cursor: "pointer", minHeight: 72, padding: "16px 0", gap: 16, borderBottom: "none" }}
       >
-        <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ minWidth: 0, display: "grid", gridTemplateColumns: "16px 32px minmax(0, 1fr)", alignItems: "center", gap: 10 }}>
           <span
             style={{
               display: "grid",
               placeItems: "center",
+              width: 16,
+              height: 32,
               color: "var(--fg-dim)",
               transform: open ? "rotate(0deg)" : "rotate(-90deg)",
               transition: "transform 120ms ease",
@@ -172,18 +176,22 @@ export function CustomEndpointRow({
           >
             <ChevronDown />
           </span>
-          <span style={{ display: "grid", placeItems: "center", color: "var(--fg-subtle)", flexShrink: 0 }}>
+          <span style={{ display: "grid", placeItems: "center", width: 32, height: 32, color: "var(--fg-subtle)" }}>
             <ProviderLogo id={endpoint.id as ProviderId} size={24} />
           </span>
-          <div style={{ minWidth: 0 }}>
-            <div className="klide-row-title">{endpoint.label}</div>
-            <div className="klide-row-description">
-              {host}
-              {endpoint.defaultModel ? ` · ${endpoint.defaultModel}` : ""}
+          <div style={{ minWidth: 0, display: "grid", gap: 4 }}>
+            <div className="klide-row-title" style={{ margin: 0, lineHeight: "20px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{endpoint.label}</div>
+            <div className="klide-row-description" style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, margin: 0, lineHeight: "20px" }}>
+              {isTailscaleEndpoint(endpoint.baseUrl) && (
+                <span title="Tailscale" aria-label="Tailscale" style={{ display: "grid", placeItems: "center", width: 16, height: 20, flexShrink: 0 }}>
+                  <TailscaleIcon size={14} />
+                </span>
+              )}
+              <span title={host} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{host}</span>
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
           <IconButton title="Edit endpoint" onClick={onEdit}>
             <PencilIcon />
           </IconButton>
@@ -198,7 +206,7 @@ export function CustomEndpointRow({
           short wave behind it. */}
       <div className="klide-reveal" data-open={open ? "true" : "false"} aria-hidden={!open}>
         <div className="klide-reveal-clip">
-        <div style={{ padding: "0 18px 14px 40px", display: "grid", gap: 10 }}>
+        <div style={{ padding: "0 0 16px 68px", display: "grid", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {loading ? (
               <StatusText tone="idle">Checking…</StatusText>
@@ -356,11 +364,11 @@ export function CustomEndpointsBlock({
   useEffect(() => {
     if (!formOpen) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") resetForm();
+      if (e.key === "Escape" && !busy) resetForm();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [formOpen]);
+  }, [formOpen, busy]);
 
   async function save() {
     if (busy || !label.trim() || !baseUrl.trim()) return;
@@ -447,7 +455,7 @@ export function CustomEndpointsBlock({
   return (
     <>
       <p className="klide-row-description" style={{ marginBottom: 12 }}>
-        Use a model server on your VPS, another computer, or this machine. Your agent and workspace stay on this computer.
+        Connect an OpenAI-compatible API on this Mac, another computer, or a VPS. Only inference goes to the server; your agent and workspace stay here.
       </p>
       {endpoints.length > 0 && (
         <Panel>
@@ -484,123 +492,24 @@ export function CustomEndpointsBlock({
         + Add self-hosted endpoint
       </button>
 
-      {/* The add/edit form is a centered modal, not an inline panel row —
-          a focused surface for entering URL + token, dimming the list. */}
-      {formOpen &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={editingId ? "Edit endpoint" : "Add self-hosted endpoint"}
-            onClick={resetForm}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: Z.modalRaised,
-              display: "grid",
-              placeItems: "center",
-              background: "rgba(0,0,0,0.30)",
-              backdropFilter: "blur(3px)",
-            }}
-          >
-            <div
-              className="floating-panel"
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                width: "min(440px, calc(100vw - 80px))",
-                borderRadius: "var(--radius-lg)",
-                display: "grid",
-                gap: 10,
-                padding: "20px 22px",
-              }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg-strong)" }}>
-                {editingId ? "Edit endpoint" : "Add self-hosted endpoint"}
-              </div>
-              {/* The name is free to change at any time: it's the display
-                  label only. The id is minted from the name on add and then
-                  frozen, so a rename can't orphan the endpoint's token or the
-                  conversations already pinned to it. */}
-              <input
-                value={label}
-                placeholder="Name (e.g. My Gateway)"
-                onChange={(e) => setLabel(e.target.value)}
-                aria-label="Endpoint name"
-                className="klide-field"
-                autoFocus
-                style={{ height: 34, padding: "0 12px" }}
-              />
-              {editingId && (
-                <div style={{ marginTop: -4, fontSize: 11, color: "var(--fg-subtle)" }}>
-                  Renaming updates the name everywhere; <code>{editingId}</code> stays this
-                  endpoint's id.
-                </div>
-              )}
-              <input
-                value={baseUrl}
-                placeholder="Base URL (https://llm.example.com/v1)"
-                onChange={(e) => setBaseUrl(e.target.value)}
-                aria-label="Base URL"
-                className="klide-field"
-                autoComplete="off"
-                style={{ height: 34, padding: "0 12px" }}
-              />
-              <input
-                value={defaultModel}
-                placeholder="Default model (optional, e.g. devstral-small-2:24b)"
-                onChange={(e) => setDefaultModel(e.target.value)}
-                aria-label="Default model"
-                className="klide-field"
-                autoComplete="off"
-                style={{ height: 34, padding: "0 12px" }}
-              />
-              <SelfHostedConnectionTest provider={{
-                id: editingId ?? customIdFromLabel(label), label: label.trim() || "Self-hosted",
-                baseUrl: baseUrl.trim(), defaultModel,
-                tokenRef: token.trim() || editingEndpoint?.tokenRef,
-              }} onSelectModel={setDefaultModel} />
-              <input
-                // A `${VAR}` reference is non-secret config, so it's shown
-                // plainly — there's no token to mask (self-hosted endpoints
-                // never store a literal token in the app).
-                type="text"
-                value={token}
-                placeholder={editingId ? "Token reference ${VAR} (blank = keep current)" : "Token reference, e.g. ${DEV_TOKEN} (optional)"}
-                onChange={(e) => setToken(e.target.value)}
-                aria-label="Bearer token reference"
-                className="klide-field"
-                autoComplete="off"
-                spellCheck={false}
-                style={{ height: 34, padding: "0 12px" }}
-              />
-              <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--fg-subtle)" }}>
-                Use the server's API base URL, for example <code>https://llm.example.com/v1</code>,
-                a private Tailscale address, or <code>http://127.0.0.1:18080/v1</code> through your SSH tunnel.
-                <br />
-                The bearer token is a reference like <code>{"${DEV_TOKEN}"}</code> —
-                put the value in your project's <code>.env</code>{" "}
-                (<code>DEV_TOKEN=…</code>), or in <code>~/.klide/.env</code> as a global
-                fallback. Klide stores only the reference, never the token, so there's
-                no keychain prompt; keep the <code>.env</code> gitignored.
-                <br />
-                Requests use the OpenAI wire format. The per-model context window in
-                Inference settings does not apply here — for a self-hosted Ollama
-                endpoint, set the context length server-side (e.g. <code>num_ctx</code>{" "}
-                in a Modelfile), or the model's default is used.
-              </div>
-              {error && (
-                <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>
-              )}
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <GhostButton onClick={resetForm}>Cancel</GhostButton>
-                <LinkButton onClick={() => void save()}>
-                  {busy ? "…" : editingId ? "Update" : "Add endpoint"}
-                </LinkButton>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
+      {formOpen && (
+        <SelfHostedEndpointDialog
+          provider={{
+            id: editingId ?? customIdFromLabel(label), label,
+            baseUrl: baseUrl.trim(), defaultModel,
+            tokenRef: token.trim() || editingEndpoint?.tokenRef,
+          }}
+          editing={editingId !== null}
+          busy={busy}
+          error={error}
+          onNameChange={setLabel}
+          onUrlChange={setBaseUrl}
+          onTokenChange={setToken}
+          onModelChange={setDefaultModel}
+          onCancel={resetForm}
+          onSave={() => void save()}
+        />
+      )}
     </>
   );
 }
