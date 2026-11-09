@@ -346,6 +346,43 @@ Three kinds skip review because the
 receiver invited them: the operator's own messages, a Run's message to itself,
 and a reply to something the receiver asked.
 
+## Command Containment
+
+Permission decides whether a command runs. Containment decides what a running
+command can reach, for the commands nobody read (`agent/sandbox.rs`, macOS
+only).
+
+| How the command came to run | Contained |
+|---|---|
+| The full-auto rung covered it | Yes |
+| A wildcard project rule matched | Yes |
+| An exact project rule names it | No |
+| Approved for this run, or on the card | No |
+
+A contained command starts behind `/usr/bin/sandbox-exec` with a generated
+Seatbelt profile; everything it starts inherits the profile.
+
+- **Reads** are open. Secrets are kept out of the command's environment by
+  `command_env.rs`, and credential files always ask.
+- **Writes** are limited to the project, the repository's git directory (a
+  worktree's sits outside it), temp folders, and `~/.cargo`, `~/.npm`,
+  `~/.cache`, `~/Library/Caches`. Git hooks and git config are closed again
+  inside that: a planted hook would run unsandboxed at the next commit.
+- **Network** is on. Seatbelt cannot filter by host, so the profile can only
+  offer all or loopback; closing it waits for an approval card on denial.
+
+A refused write returns the command's output plus a note naming the sandbox,
+so the model reports the path instead of trying another route.
+
+The choice is stored in `~/.klide/sandbox.json` and read in Rust at each
+command: the background host and child runs see the same answer, and a run
+request has no field that could ask for less. A missing or damaged file means
+on. `KLIDE_COMMAND_SANDBOX=0` in the app's environment turns it off for a
+session. The loop's own checks (test-after-edit, `/goal` checks) are commands
+the person configured and are not contained.
+
+Linux and Windows run every command as before.
+
 ## Diff Review
 
 Write-capability Tools never write immediately. They create a `DiffProposal`.

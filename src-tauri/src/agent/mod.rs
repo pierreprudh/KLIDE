@@ -14,6 +14,14 @@ mod artifacts;
 mod background;
 mod process;
 mod sandbox;
+pub use sandbox::Status as CommandSandboxStatus;
+/// The Settings row's two commands, kept behind the module that owns the file.
+pub fn command_sandbox_status() -> CommandSandboxStatus {
+    sandbox::status()
+}
+pub fn command_sandbox_set(enabled: bool) -> Result<CommandSandboxStatus, String> {
+    sandbox::set_enabled(enabled)
+}
 pub(crate) mod command_env;
 mod observers;
 pub(crate) mod schedules;

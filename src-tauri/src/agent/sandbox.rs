@@ -224,10 +224,67 @@ pub fn covers(trusted: super::permission::Trusted, exact_rule: bool) -> bool {
     }
 }
 
-/// The way out while this is new: `KLIDE_COMMAND_SANDBOX=0` in the app's
-/// environment runs every command as before. A Settings switch replaces it.
+/// Whether the person has left containment on. Two switches, either one
+/// turns it off: the one in Settings (kept in `~/.klide/sandbox.json`, a file
+/// rather than a field on the run request, so the background host and every
+/// child run read the same answer and no request can ask for less), and
+/// `KLIDE_COMMAND_SANDBOX=0` in the app's environment for a session that
+/// cannot reach Settings.
 pub fn enabled() -> bool {
-    !matches!(std::env::var("KLIDE_COMMAND_SANDBOX").as_deref(), Ok("0") | Ok("off") | Ok("false"))
+    if matches!(std::env::var("KLIDE_COMMAND_SANDBOX").as_deref(), Ok("0") | Ok("off") | Ok("false")) {
+        return false;
+    }
+    // Tests decide for themselves; they never read the developer's setting.
+    cfg!(test) || settings_path().map(|path| stored_at(&path)).unwrap_or(true)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Stored {
+    commands: bool,
+}
+
+fn settings_path() -> Option<PathBuf> {
+    crate::cli::home_dir_path().map(|home| home.join(".klide/sandbox.json"))
+}
+
+/// The stored choice. No file means on, and so does a file that cannot be
+/// read: a damaged setting must not be the thing that removes the wall.
+fn stored_at(path: &Path) -> bool {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Stored>(&bytes).ok())
+        .map(|stored| stored.commands)
+        .unwrap_or(true)
+}
+
+fn store_at(path: &Path, commands: bool) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Create the Klide settings folder: {e}"))?;
+    }
+    let bytes = serde_json::to_vec_pretty(&Stored { commands }).map_err(|e| e.to_string())?;
+    crate::durable::write_atomic(path, &bytes)
+}
+
+/// What Settings shows: whether this platform can contain a command at all,
+/// and whether the person has it on.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    pub supported: bool,
+    pub enabled: bool,
+}
+
+pub fn status() -> Status {
+    Status {
+        supported: cfg!(target_os = "macos"),
+        enabled: settings_path().map(|path| stored_at(&path)).unwrap_or(true),
+    }
+}
+
+pub fn set_enabled(commands: bool) -> Result<Status, String> {
+    let path = settings_path().ok_or("Cannot locate the Klide settings directory.")?;
+    store_at(&path, commands)?;
+    Ok(status())
 }
 
 /// The sandbox for one command, or `None` when it runs as approved.
@@ -348,6 +405,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn the_stored_choice_defaults_to_on_and_survives_a_damaged_file() {
+        let path = scratch("setting").join("nested/sandbox.json");
+        assert!(stored_at(&path), "no file: on");
+        store_at(&path, false).unwrap();
+        assert!(!stored_at(&path));
+        store_at(&path, true).unwrap();
+        assert!(stored_at(&path));
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(stored_at(&path), "a damaged setting must not remove the wall");
     }
 
     #[test]
