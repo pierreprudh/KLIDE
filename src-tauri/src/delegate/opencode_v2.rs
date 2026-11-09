@@ -809,7 +809,7 @@ mod tests {
                 rusqlite::params![
                     id.as_str().unwrap(),
                     kind.as_str().unwrap(),
-                    seq,
+                    seq as i64,
                     data.to_string()
                 ],
             )

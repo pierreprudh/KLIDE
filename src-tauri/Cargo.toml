@@ -50,7 +50,7 @@ tokio-util = "0.7"
 # `opencode session list` only returns a text table with no timestamps. The
 # `bundled` feature ships its own libsqlite3 so the user doesn't need a
 # separate system install.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Post-edit syntax verification for Rust files: `syn::parse_file` gives a fast,
 # in-process parse with no toolchain spawn. JSON is checked via serde_json.
