@@ -5360,6 +5360,13 @@ button:focus-visible .menu-leadout {
   background: var(--menu-row-hover);
 }
 
+/* The fill is the folder menu's focus mark, so no outline on top of it —
+   the global button ring is !important, hence this one. */
+.klide-rail-folder-row:focus-visible,
+.klide-rail-folder-action:focus-visible {
+  outline: none !important;
+}
+
 .klide-rail-folder-row[aria-checked="true"] {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
