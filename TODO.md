@@ -288,7 +288,11 @@ audit. Worker Cancel was verified live on 2026-11-01 (see above).
   on that host and reuse Run host admission/control semantics. Extract the
   headless host as needed; `agent/remote.rs` currently means the local daemon.
   Design note, words and open questions: [Remote machines](docs/REMOTE_MACHINES.md);
-  machine setup (cloud first, decided 2026-11-03): `scripts/remote-host/`.
+  machine setup: `scripts/remote-host/`. The first host is a local Ubuntu
+  26.04 VM reached over Tailscale (2026-11-09), not a rented server; the
+  bootstrap ran. Still owed on the box: `gh auth login` + `gh auth setup-git`,
+  git identity, Claude Code login. Plan step 0 decides the Linux `ptyd` build:
+  on the box / in CI, or a Tauri-free `klide-host` binary without WebKitGTK.
 - [ ] Extend the unified launch readiness item above with minimal remote
   checks in the VPS slice, reusing `launch_readiness::Readiness` as the
   shape a remote host reports.
@@ -779,6 +783,19 @@ fit guard, adaptive thinking on current Claude models (dogfooded ✓).
 - [x] Show delegate PTY launch/live/error state in the terminal header.
 - [x] Make Mission Control useful as a read-only transcript/log inspector.
 - [x] Shelve `gemini-cli` — dead stubs removed.
+- [ ] Design mode (#474/#475) in the real app: open it on a project's dev
+  server, change a token and pin a comment, Send, and confirm Kit's edits
+  arrive as diff cards and hot reload repaints the canvas.
+- [ ] CLI versions (#115): click Update in the real app once per CLI (it really
+  installs) and confirm the version on the Settings row changes.
+- [ ] PDF drop (#266): drop a PDF in the real app (raw-body invoke + name
+  header), open its card; collect kept PDFs whose attachment was removed
+  before sending (no GC yet).
+- [ ] Background chats: the Delegate coordination bridge in `klide ptyd`
+  passes `cancel: None` (`agent/daemon.rs`), so `agent_cancel` from a CLI in a
+  background chat can't stop its target.
+- [ ] Focus composer drift (Sep 30 review, C5): check that skills are inlined
+  on the first Focus turn like in the panel.
 
 ## Focus delegate turns (shipped 2026-08-26, one gap parked)
 
