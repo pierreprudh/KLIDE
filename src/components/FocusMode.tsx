@@ -2035,8 +2035,8 @@ export function FocusComposer({
         // it runs takes the opposite corner.
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 34 }}>
           {whereItRuns && (
-            <div className="klide-focus-context-strip klide-where-it-runs">
-              <InlineMenu label="Where it runs" width={200} {...whereItRuns} />
+            <div className="klide-where-it-runs">
+              <InlineMenu label="Where it runs" width={176} {...whereItRuns} />
             </div>
           )}
           <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
