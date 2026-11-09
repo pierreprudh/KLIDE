@@ -55,6 +55,7 @@ export function DelegateTerminalSurface({
   model,
   effort,
   task,
+  machineId = null,
   attachOnly = false,
   readOnly = false,
 }: {
@@ -78,6 +79,8 @@ export function DelegateTerminalSurface({
    *  for Klide handoff so a fresh delegate session opens with the original
    *  user message already sent. */
   task?: string | null;
+  /** A Remote machine to run on (Claude Code in tmux over SSH); null is this Mac. */
+  machineId?: string | null;
   /** Read persisted/live output without ensuring the session exists. Mission
    * review uses this so opening a settled attempt can never respawn it. */
   attachOnly?: boolean;
@@ -121,6 +124,7 @@ export function DelegateTerminalSurface({
             model: model ?? null,
             effort: effort ?? null,
             task: task ?? null,
+            machineId,
           },
       onReady: syncSize,
       onError: (err) => {
@@ -154,7 +158,7 @@ export function DelegateTerminalSurface({
       resize.disconnect();
       term.dispose();
     };
-  }, [attachOnly, model, parentRunId, provider, providerId, readOnly, resumeSessionId, sessionId, task, workspaceRoot]);
+  }, [attachOnly, machineId, model, parentRunId, provider, providerId, readOnly, resumeSessionId, sessionId, task, workspaceRoot]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "color-mix(in srgb, var(--terminal-bg) 94%, var(--bg))" }}>

@@ -141,7 +141,7 @@ import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } fr
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
+import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MachineIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface, DesignMode } from "./lazySurfaces";
 import { promoteDesignOpener, registerDesignOpener } from "../designNavigation";
@@ -250,6 +250,8 @@ import {
 import { Z } from "../zLayers";
 import { notify } from "../toast";
 import { delegateSessionId, stopDelegatePty, writeDelegatePty } from "../ipc/delegatePty";
+import { conversationMachine, setConversationMachine, subscribeConversationMachines } from "../conversationMachines";
+import { REMOTE_PROVIDER } from "../ipc/machines";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
 import { SETTINGS, useSetting } from "../settingsStore";
 
@@ -505,6 +507,11 @@ type Props = {
    *  Starts a fresh conversation first if the restored session already has
    *  messages (the hero composer always means "new chat"). */
   initialMessage?: string | null;
+  /** The Remote machine the Focus start stage chose for that first message
+   *  (`src/ipc/machines.ts`). Set, the new conversation is placed there and
+   *  opens Claude Code on the machine in its terminal instead of a headless
+   *  turn. Null or absent: this Mac. */
+  hostMachine?: string | null;
   /** Photos/documents staged beside that first message on the Focus start
    *  stage. They ride the same handoff so the opening turn carries what was
    *  dropped there — the panel doesn't re-read them from anywhere. */
@@ -771,6 +778,7 @@ export function AiPanel({
   initialStartFresh,
   onInitialConsumed,
   initialMessage,
+  hostMachine,
   initialAttachments,
   initialMode,
   onInitialMessageConsumed,
@@ -1435,7 +1443,13 @@ export function AiPanel({
   // (`delegate/chat.rs`, `claude -p --output-format text`) and its answer is
   // rendered as an ordinary Klide message.
   const providerDelegatesWork = isDelegateProvider(provider);
-  const delegateSession = providerDelegatesWork && variant !== "focus";
+  // Where this conversation runs (`conversationMachines.ts`). A conversation
+  // on a Remote machine is its CLI's terminal everywhere — Focus included —
+  // because the CLI runs over there in tmux, not as a headless local turn.
+  const [, setMachineTick] = useState(0);
+  useEffect(() => subscribeConversationMachines(() => setMachineTick((t) => t + 1)), []);
+  const remoteMachine = provider === REMOTE_PROVIDER ? conversationMachine(currentId) : null;
+  const delegateSession = providerDelegatesWork && (variant !== "focus" || remoteMachine !== null);
   const isLocalProvider = isManagedLocalProvider(provider);
   // A panel handed an explicit conversation — a Mission Control reattach, a
   // race-watch column — holds that thread from its first frame, but nothing
@@ -2808,6 +2822,16 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (pendingHeroSend === null) return;
     const turn = pendingHeroSend;
     setPendingHeroSend(null);
+    // A first message for a Remote machine: place the new conversation there
+    // and let the terminal open Claude Code on it with the message as its task.
+    // The user line is kept so the conversation is saved and named like any other.
+    const session = conversationSessionRef.current;
+    if (hostMachine && session.provider === REMOTE_PROVIDER && turn.text.trim()) {
+      setConversationMachine(session.conversationId, hostMachine);
+      handoffSpawnRef.current = { conversationId: session.conversationId, resumeSessionId: null, task: turn.text };
+      setMsgs([{ role: "user", content: turn.text }]);
+      return;
+    }
     void send({ text: turn.text, attachments: turn.attachments, mode: turn.mode });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingHeroSend]);
@@ -4465,6 +4489,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             // published it (`reflectionLevel` is already filtered to the set).
             effort={switchModelForProvider(provider) === model ? reflectionLevel ?? null : null}
             task={handoffSpawn?.task ?? null}
+            machineId={remoteMachine}
           />
         ) : (
           <>
@@ -5833,6 +5858,15 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
         </div>
         <div className="klide-ai-conversation-status">
+          {remoteMachine && (
+            <span
+              className="klide-ai-machine-label"
+              title={`Runs on ${remoteMachine} in tmux — keeps going when this Mac sleeps. Reopening this conversation reattaches.`}
+            >
+              <MachineIcon size={12} />
+              {remoteMachine}
+            </span>
+          )}
           {worktreeName ? (
             <div
               className="klide-ai-worktree-label"

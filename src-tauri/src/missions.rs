@@ -1844,6 +1844,7 @@ async fn dispatch_task_for(
             Some(task_id.to_string()),
             Some(true),
             mission_root,
+            None,
         ),
     };
     if let Err(error) = result {

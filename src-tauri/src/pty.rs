@@ -1033,8 +1033,16 @@ pub fn delegate_pty_spawn(
     mission_task_id: Option<String>,
     one_shot: Option<bool>,
     mission_root: Option<String>,
+    machine_id: Option<String>,
 ) -> Result<(), String> {
     let cwd = crate::pty_spawn::validated_cwd(workspace_root)?;
+    let machine = match machine_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => Some(
+            crate::machines::get(id)
+                .ok_or_else(|| format!("No machine named {id} in ~/.klide/machines.json"))?,
+        ),
+        None => None,
+    };
 
     // Record parent → child mapping so Mission Control can build the tree
     if let Some(parent_id) = parent_run_id.as_ref() {
@@ -1056,7 +1064,7 @@ pub fn delegate_pty_spawn(
     // CLIs (no adapter) have no hook installer but still get the URL, so a
     // user-authored wrapper can post its own status.
     let adapter = delegate::lookup(&provider);
-    if let Some(adapter) = adapter {
+    if let (Some(adapter), None) = (adapter, machine.as_ref()) {
         if let Err(e) = adapter.ensure_status_hooks(&delegate::ProcessEnv) {
             eprintln!("status hooks for {provider}: {e}");
         }
@@ -1068,7 +1076,7 @@ pub fn delegate_pty_spawn(
     // CLI Klide's MCP server. Warn-only, like the status hooks — a Delegate
     // that cannot be wired still runs, it just has no `agent_*` tools.
     let mcp = match (adapter, cwd.as_deref()) {
-        (Some(adapter), Some(root)) => wire_coordination(
+        (Some(adapter), Some(root)) if machine.is_none() => wire_coordination(
             &app,
             adapter,
             &session_id,
@@ -1113,6 +1121,7 @@ pub fn delegate_pty_spawn(
         },
         coord_secret_sha256,
         mcp,
+        machine,
     })?;
 
     let hosts = spawn_order(

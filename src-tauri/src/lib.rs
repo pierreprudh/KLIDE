@@ -29,6 +29,7 @@ mod conversation_store;
 mod connector_pool;
 mod coordination_bridge;
 mod custom_cli;
+mod machines;
 mod custom_providers;
 mod self_hosted_probe;
 mod delegate;
@@ -1309,6 +1310,8 @@ pub fn run() {
             self_hosted_probe::custom_provider_probe,
             custom_provider_remove,
             custom_cli_list,
+            machines::machines_list,
+            machines::machine_check,
             custom_cli_upsert,
             custom_cli_remove,
             accounts_list,

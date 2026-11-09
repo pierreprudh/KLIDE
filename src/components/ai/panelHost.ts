@@ -199,6 +199,8 @@ export type AiPanelRenderOptions = {
   variant?: "focus";
   /** Focus hero composer hands its first message through this. */
   initialMessage?: string | null;
+  /** The Remote machine the Focus start stage chose (`conversationMachines.ts`). */
+  hostMachine?: string | null;
   /** Photos/documents staged on that first message. They travel beside the
    *  text rather than inside it, so the first turn carries what was dropped
    *  on the start stage. */

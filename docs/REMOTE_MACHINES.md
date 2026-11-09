@@ -146,6 +146,34 @@ autostart. 3.2 GB is enough for Claude Code, tight for Rust builds.
 7. **Naming** — rename `agent/remote.rs` (it means the local daemon) before
    "remote" starts meaning another computer.
 
+## Built first: the picker on tmux (2026-11-09)
+
+Before any of the plan below, the picker shipped on a backend with no Klide
+code on the machine: Claude Code in tmux over SSH.
+
+- `~/.klide/machines.json` lists the Remote machines (`id`, `sshHost`,
+  optional `checkouts` from a local workspace to its Remote checkout; default
+  `~/code/<folder name>`). `src-tauri/src/machines.rs` owns the store, the
+  readiness check (one SSH round trip: reached, tmux, Claude Code + login, gh,
+  checkout · branch · clean) and the spawn command.
+- **Where it runs** (`components/WhereItRuns.tsx`) sits over the Focus start
+  composer's left edge only when a machine is configured. Picking a Remote
+  machine switches the agent to Claude Code; a machine that isn't ready is
+  dimmed with the command that fixes it.
+- The first message places the conversation on the machine
+  (`conversationMachines.ts`, fixed from then on). Such a conversation is the
+  CLI's terminal in Focus too. Its PTY runs
+  `ssh -t <host> 'tmux new-session -A -s klide-<convoId> -c <checkout> claude …'`,
+  so quitting Klide or sleeping the Mac leaves Claude Code running, and
+  reopening the conversation attaches to the same session. A quiet machine
+  label sits at the right of the status row.
+- What does not cross: status hooks, coordination MCP, routed intelligence
+  sources and Missions are refused or skipped on a Remote machine; review is
+  `git fetch <machine-remote>` then Git Review.
+
+Steps 0–6 replace the terminal with Klide's own Run on the machine; the
+picker and the per-conversation placement stay.
+
 ## Plan for the first slice
 
 Each step is one PR and ends with something checkable on `klide-box`.
@@ -170,7 +198,8 @@ Each step is one PR and ends with something checkable on `klide-box`.
    replays; Stop works after reattach.
 6. **Review remote results.** File and diff requests over the wire; Merge /
    Discard on the box; validation evidence shown in Klide.
-7. **Choose the Machine in the UI** (Q6, designed — build to the prototype).
+7. **Choose the Machine in the UI** (Q6) — built first, on tmux (above); this
+   step moves it onto the Run host.
 
 Out of the first slice: other CLIs, Harness Runs on API models, Missions,
 transfer between machines, phone, several machines.
