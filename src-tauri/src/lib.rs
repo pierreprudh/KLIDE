@@ -236,6 +236,17 @@ async fn provider_keys_remove(provider: String, id: String) -> Result<provider_k
     blocking::run(move || provider_keys::remove(&provider, &id)).await
 }
 
+/// Whether auto-approved commands are contained, for the Settings row.
+#[tauri::command]
+async fn command_sandbox_status() -> Result<agent::CommandSandboxStatus, String> {
+    blocking::run(|| Ok(agent::command_sandbox_status())).await
+}
+
+#[tauri::command]
+async fn command_sandbox_set(enabled: bool) -> Result<agent::CommandSandboxStatus, String> {
+    blocking::run(move || agent::command_sandbox_set(enabled)).await
+}
+
 #[tauri::command]
 async fn hermes_read_settings() -> Result<Option<hermes_settings::HermesSettings>, String> {
     blocking::run(hermes_settings::read).await
@@ -1267,6 +1278,8 @@ pub fn run() {
             models::ai_provider_credits,
             models::ai_provider_model_meta,
             ai_subscription_status,
+            command_sandbox_status,
+            command_sandbox_set,
             hermes_read_settings,
             hermes_source_support,
             harness_source_support,

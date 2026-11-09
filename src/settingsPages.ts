@@ -47,6 +47,7 @@ const SEARCH_PAGES: Record<string, string> = {
   "Max parallel tools": "ai-execution",
   "Max turns": "ai-execution",
   "Command timeout": "ai-execution",
+  "Sandbox unreviewed commands": "ai-execution",
   "Test after edit": "ai-execution",
   "Tool overrides": "ai-harness",
   "System prompts": "ai-prompts",

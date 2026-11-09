@@ -80,6 +80,7 @@ import { DELEGATES, type DelegateId } from "../delegates";
 import { CliVersionsBlock } from "./settings/cliVersions";
 import { StatsSection } from "./settings/stats";
 import { StorageSection } from "./settings/storage";
+import { CommandSandboxRow } from "./settings/commandSandbox";
 import {
   ArchiveIcon,
   ArrowLeftIcon,
@@ -1736,6 +1737,7 @@ export function SettingsPanel({
                       />
                     }
                   />
+                  <CommandSandboxRow />
                   <Row
                     title="Test after edit"
                     description="Optional test command to run after an accepted file change."
