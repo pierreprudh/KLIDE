@@ -3,21 +3,22 @@
 //
 // Before the first message: the Machine's name alone (`This Mac ▾` /
 // `klide-box ▾`), a menu of This Mac and the Remote machines from
-// ~/.klide/machines.json. Each Remote machine is checked over SSH when the menu
-// opens; one that isn't ready is dimmed, says why, and offers the command that
+// ~/.klide/machines.json. It behaves like the environment switch in the Claude
+// and Codex apps: it opens instantly, each project remembers where it last
+// started, and nothing waits on a check before you can pick. Readiness is
+// fetched in the background (`machineStatus.ts`) when the start stage appears;
+// only a machine whose last check failed is dimmed, with the command that
 // fixes it. Picking a Remote machine puts the conversation on Claude Code —
 // the one CLI the first slice runs there. With no machine configured the
 // picker draws nothing at all.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { MachineIcon, ThisMacIcon, CheckIcon, CopyIcon } from "../icons";
-import { machineCheck, machineLabel, machinesList, REMOTE_PROVIDER, type Machine, type MachineStatus } from "../ipc/machines";
-import { setStartStageMachine, startStageMachine, subscribeStartStageMachine } from "../conversationMachines";
+import { machineLabel, machinesList, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
+import { restoreStartStageMachine, setStartStageMachine, startStageMachine, subscribeStartStageMachine } from "../conversationMachines";
+import { lastKnownStatus, machineStatusCheck, machineStatusVersion, refreshMachineStatus, subscribeMachineStatus } from "../machineStatus";
 import { Z } from "../zLayers";
-import { errMessage } from "../errors";
-
-type Check = { state: "checking" } | { state: "done"; status: MachineStatus } | { state: "failed"; error: string };
 
 export function useStartStageMachine(): string | null {
   return useSyncExternalStore(subscribeStartStageMachine, startStageMachine, startStageMachine);
@@ -34,7 +35,7 @@ export function WhereItRuns({
 }) {
   const machine = useStartStageMachine();
   const [machines, setMachines] = useState<Machine[]>([]);
-  const [checks, setChecks] = useState<Record<string, Check>>({});
+  useSyncExternalStore(subscribeMachineStatus, machineStatusVersion, machineStatusVersion);
   const menu = usePortalMenu<{ left: number; bottom: number }>({
     computePos: (r) => ({ left: Math.max(8, Math.round(r.left) - 4), bottom: Math.round(window.innerHeight - r.top + 8) }),
     closeOnOutsideClick: true,
@@ -46,33 +47,47 @@ export function WhereItRuns({
     return () => { live = false; };
   }, []);
 
-  // A Remote machine runs Claude Code only; another agent puts it back here.
+  // Each project opens on the Machine it last started on. A remembered Remote
+  // machine brings its agent with it — it only runs Claude Code.
+  const providerRef = useRef(provider);
+  providerRef.current = provider;
+  const onProviderChangeRef = useRef(onProviderChange);
+  onProviderChangeRef.current = onProviderChange;
   useEffect(() => {
-    if (machine && provider !== REMOTE_PROVIDER) setStartStageMachine(null);
-  }, [machine, provider]);
+    restoreStartStageMachine(workspaceRoot);
+    if (startStageMachine() && providerRef.current !== REMOTE_PROVIDER) onProviderChangeRef.current(REMOTE_PROVIDER);
+  }, [workspaceRoot]);
+
+  // Choosing another agent while on a Remote machine is choosing this Mac —
+  // only a *change* away from Claude Code counts, not a mismatch mid-restore.
+  const prevProvider = useRef(provider);
+  useEffect(() => {
+    const was = prevProvider.current;
+    prevProvider.current = provider;
+    if (was === REMOTE_PROVIDER && provider !== REMOTE_PROVIDER && startStageMachine()) {
+      setStartStageMachine(null, workspaceRoot);
+    }
+  }, [provider, workspaceRoot]);
+
   // A machine that left the store is no longer a choice.
   useEffect(() => {
-    if (machine && machines.length > 0 && !machines.some((m) => m.id === machine)) setStartStageMachine(null);
-  }, [machine, machines]);
+    if (machine && machines.length > 0 && !machines.some((m) => m.id === machine)) setStartStageMachine(null, workspaceRoot);
+  }, [machine, machines, workspaceRoot]);
 
-  // Check each machine when the menu opens — one SSH round trip each.
+  // Readiness ahead of time: when the start stage appears, and again when the
+  // menu opens (a fresh answer is reused, so this costs nothing twice).
   useEffect(() => {
-    if (!menu.open) return;
-    let live = true;
-    for (const m of machines) {
-      setChecks((c) => ({ ...c, [m.id]: { state: "checking" } }));
-      machineCheck(m.id, workspaceRoot)
-        .then((status) => { if (live) setChecks((c) => ({ ...c, [m.id]: { state: "done", status } })); })
-        .catch((e) => { if (live) setChecks((c) => ({ ...c, [m.id]: { state: "failed", error: errMessage(e) } })); });
-    }
-    return () => { live = false; };
-  }, [menu.open, machines, workspaceRoot]);
+    for (const m of machines) refreshMachineStatus(m.id, workspaceRoot);
+  }, [machines, workspaceRoot, menu.open]);
 
   if (machines.length === 0) return null;
   const chosen = machines.find((m) => m.id === machine);
 
+  const chosenStatus = chosen ? lastKnownStatus(machineStatusCheck(chosen.id, workspaceRoot)) : null;
+  const chosenUnready = !!chosenStatus && !chosenStatus.ready;
+
   const pick = (id: string | null) => {
-    setStartStageMachine(id);
+    setStartStageMachine(id, workspaceRoot);
     if (id && provider !== REMOTE_PROVIDER) onProviderChange(REMOTE_PROVIDER);
     menu.close();
   };
@@ -85,7 +100,8 @@ export function WhereItRuns({
         aria-haspopup="listbox"
         aria-expanded={menu.open}
         aria-label="Where it runs"
-        title="Where it runs"
+        title={chosen ? `Runs on ${machineLabel(chosen)}${chosenStatus ? ` — ${chosenStatus.caption}` : ""}` : "Where it runs"}
+        data-warn={chosenUnready || undefined}
         onClick={() => (menu.open ? menu.close() : menu.openMenu())}
       >
         {chosen ? <MachineIcon size={13} /> : <ThisMacIcon size={13} />}
@@ -117,27 +133,28 @@ export function WhereItRuns({
             />
             <div className="klide-where-eyebrow">Remote machines</div>
             {machines.map((m) => {
-              const check = checks[m.id];
-              const status = check?.state === "done" ? check.status : null;
-              const ready = !!status?.ready;
-              const fix = status?.facts.find((f) => f.fix && f.tone !== "ok" && f.tone !== "quiet")?.fix;
+              const check = machineStatusCheck(m.id, workspaceRoot);
+              const status = lastKnownStatus(check);
+              // Only a check that came back saying no blocks the pick; an
+              // unanswered one never makes you wait.
+              const blocked = check?.state === "failed" || (status !== null && !status.ready);
+              const fix = blocked ? status?.facts.find((f) => f.fix && f.tone !== "ok" && f.tone !== "quiet")?.fix : undefined;
               const caption =
-                !check || check.state === "checking" ? "Checking…"
-                : check.state === "failed" ? check.error
-                : ready ? `Claude Code · ${status!.caption}`
-                : status!.caption;
+                check?.state === "failed" ? check.error
+                : status ? (status.ready ? `Claude Code · ${status.caption}` : status.caption)
+                : "Claude Code · checking…";
               return (
                 <Row
                   key={m.id}
                   icon={<MachineIcon size={15} />}
                   title={machineLabel(m)}
                   caption={caption}
-                  captionTone={check?.state === "failed" || (status && !ready) ? "warn" : undefined}
+                  captionTone={blocked ? "warn" : undefined}
                   detail={status?.checkout ?? undefined}
-                  fix={ready ? undefined : fix}
-                  dimmed={!ready}
+                  fix={fix}
+                  dimmed={blocked}
                   selected={machine === m.id}
-                  onClick={() => ready && pick(m.id)}
+                  onClick={() => !blocked && pick(m.id)}
                 />
               );
             })}

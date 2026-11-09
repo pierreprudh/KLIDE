@@ -159,7 +159,11 @@ code on the machine: Claude Code in tmux over SSH.
 - **Where it runs** (`components/WhereItRuns.tsx`) sits over the Focus start
   composer's left edge only when a machine is configured. Picking a Remote
   machine switches the agent to Claude Code; a machine that isn't ready is
-  dimmed with the command that fixes it.
+  dimmed with the command that fixes it. It behaves like the Claude / Codex
+  apps' environment switch: readiness is fetched in the background when the
+  start stage appears (`machineStatus.ts`), the menu opens instantly, nothing
+  waits on a check before a pick, and each project remembers the Machine it
+  last started on.
 - The first message places the conversation on the machine
   (`conversationMachines.ts`, fixed from then on). Such a conversation is the
   CLI's terminal in Focus too. Its PTY runs

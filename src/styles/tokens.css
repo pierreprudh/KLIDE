@@ -10729,6 +10729,8 @@ input.klide-rail-search:focus-visible {
 .klide-where-it-runs > button:hover,
 .klide-where-it-runs > button[aria-expanded="true"] { color: var(--fg-strong); }
 .klide-where-it-runs > button:focus-visible { outline: 2px solid var(--focus-ring); }
+/* The remembered machine didn't answer its last check — say so before Send. */
+.klide-where-it-runs > button[data-warn] { color: var(--warning); }
 .klide-where-menu { width: 300px; overflow: hidden; transform-origin: bottom left; }
 .klide-where-head {
   padding: 10px 12px 9px; border-bottom: 1px solid var(--panel-border);
