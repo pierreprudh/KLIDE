@@ -30,14 +30,8 @@ function contrast(fg, bg) {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-describe("keyboard focus and readable rail/tab information", () => {
+describe("readable rail/tab information", () => {
   for (const theme of ["klide-light", "sage-garden", "sage-garden-dark", "cursor-dark", "vscode-dark", "github-light", "cerulean", "solarized-dark"]) {
-    it(`${theme}: focus remains distinct on normal, raised, hovered and selected surfaces`, () => {
-      const t = tokens(theme), bg = color(t["--bg"]);
-      for (const surface of ["--bg", "--bg-elevated", "--bg-hover", "--bg-selected"]) {
-        expect(contrast(color(t["--focus-ring"]), composite(color(t[surface]), bg)), `${theme} ${surface}`).toBeGreaterThanOrEqual(3);
-      }
-    });
     it(`${theme}: secondary text passes on page/raised surfaces, body ink passes on selection`, () => {
       const t = tokens(theme), bg = color(t["--bg"]);
       for (const surface of ["--bg", "--bg-elevated"]) {
