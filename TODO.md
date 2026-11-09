@@ -294,7 +294,8 @@ audit. Worker Cancel was verified live on 2026-11-01 (see above).
   Claude Code login. Plan step 0 (2026-11-09): the CI-built binary
   (`linux-host.yml`) runs `klide ptyd` on the box — auth, ping, a shell
   session's spawn/snapshot/stop, survives SSH disconnect. Build on CI, decided.
-  Owed: one Claude Code conversation through it once logged in.
+  Claude Code background conversations (Chat, Work, Stop mid-stream) ran
+  through it the same day — step 0 done; next is step 1, the rename.
 - [ ] Extend the unified launch readiness item above with minimal remote
   checks in the VPS slice, reusing `launch_readiness::Readiness` as the
   shape a remote host reports.
