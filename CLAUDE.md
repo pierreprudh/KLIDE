@@ -95,6 +95,7 @@ Klide/
 │   ├── focusHistory.ts          Rail order memory — agent groups hold their place while rows follow recency
 │   ├── railSelection.ts         Which rail row is 'you are here' — the click wins until the panel binding knows it
 │   ├── pinnedConversations.ts   Rail pins — a persisted id list, pinned rows lead their provider group
+│   ├── conversationMachines.ts  Where a conversation runs — this Mac or a Remote machine id, fixed at the first message; plus the start stage's choice
 │   ├── railDestinations.tsx     Foot-of-rail destinations shared by both rails
 │   ├── modelIdentity.tsx        Model → display name + logo (modelBrand.tsx: maker mark + link)
 │   ├── favModels.ts             Shared starred-model list
@@ -115,6 +116,7 @@ Klide/
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
 │   ├── ipc/deepLink.ts          `klide://` link actions + drain (servicesMenu.ts: the Ask Kit toggle, klideSkill.ts: the /klide skill toggle)
 │   ├── ipc/connectors.ts        connectors_* wire — the MCP servers Klide connects to (store, discover, probe, GitHub preset, pool status)
+│   ├── ipc/machines.ts          machines_list / machine_check — Remote machines from ~/.klide/machines.json and their readiness facts
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
 │   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
 │   ├── gitGraph.ts              Lane layout for the commit graph (gitTypes.ts: wire types)
@@ -158,6 +160,7 @@ Klide/
 │   ├── components/
 │   │   ├── design/              Design mode — DesignMode.tsx (canvas, inspector, comments, review bar) + designReview.ts (review → Kit task, page tokens → scales)
 │   │   ├── WorkspaceRail.tsx    The app's one sidebar — folder card, actions, conversations (Sections / Agent), one-line foot; shared by Focus + workbench
+│   │   ├── WhereItRuns.tsx      "Where it runs" over the Focus start composer — This Mac or a Remote machine (Claude Code in tmux over SSH)
 │   │   ├── ActivityHeatmap.tsx  52-week run activity grid
 │   │   ├── AiPanel.tsx          AI chat panel host + run interaction surface
 │   │   ├── AnchoredWorkbench.tsx Anchored layout shell — sidebar, tabs, editor, terminal, AI panels
@@ -300,6 +303,7 @@ Klide/
     │   ├── claude_nous_bridge.rs Nous Portal via `hermes proxy start --provider nous` + the env a routed Claude Code gets (base URL, loopback token, model vars, thinking off)
     │   ├── hermes_settings.rs    Hermes's configured default source (~/.klide/hermes.json), the `hermes-source:` selection, source support
     │   ├── custom_cli.rs         User-defined CLI agents via command templates
+    │   ├── machines.rs           Remote machines — ~/.klide/machines.json, Remote checkout mapping, SSH readiness probe, the `ssh -t … tmux new-session -A` spawn command
     │   ├── models.rs             Model discovery — list models; reads the Codex manifest + OpenAI-wire `/models` listings
     │   ├── model_capabilities.rs The one answer to what a model can do — window, tools, vision, reasoning levels, price class, maker; one order, one memo
     │   ├── pricing.rs            Hand-curated per-model list prices (the price class is the Provider's call)

@@ -106,6 +106,8 @@ export type DelegateSpawnArgs = {
   effort?: string | null;
   task?: string | null;
   oneShot?: boolean;
+  /** A Remote machine id (`src/ipc/machines.ts`); absent runs on this Mac. */
+  machineId?: string | null;
 };
 
 /**
@@ -134,6 +136,7 @@ export function spawnDelegatePty(sessionId: string, args: DelegateSpawnArgs): Pr
     model: args.model ?? null,
     effort: args.effort ?? null,
     task: args.task ?? null,
+    machineId: args.machineId ?? null,
     ...(args.oneShot === undefined ? {} : { oneShot: args.oneShot }),
   });
 }

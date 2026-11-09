@@ -73,6 +73,8 @@ import { WarningCircle } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import { X } from "@phosphor-icons/react/dist/csr/X";
 import { Cursor } from "@phosphor-icons/react/dist/csr/Cursor";
 import { HandPointing } from "@phosphor-icons/react/dist/csr/HandPointing";
+import { HardDrives } from "@phosphor-icons/react/dist/csr/HardDrives";
+import { Laptop } from "@phosphor-icons/react/dist/csr/Laptop";
 
 /** The one weight Klide draws at. Changing this line re-weights the app. */
 export const ICON_WEIGHT = "light" as const;
@@ -93,6 +95,18 @@ export function Icon({
   ...rest
 }: GlyphProps & { as: PhosphorGlyph }) {
   return <Glyph size={size} weight={ICON_WEIGHT} aria-hidden="true" {...rest} />;
+}
+
+/* ---------------------------------------------------------------- machines */
+
+/** A Remote machine — where a conversation can run besides this Mac. */
+export function MachineIcon(p: GlyphProps) {
+  return <Icon as={HardDrives} {...p} />;
+}
+
+/** This Mac, as a place a conversation runs. */
+export function ThisMacIcon(p: GlyphProps) {
+  return <Icon as={Laptop} {...p} />;
 }
 
 /* ------------------------------------------------------- rail destinations */

@@ -57,6 +57,9 @@ pub struct SpawnRequest {
     /// so a restarted app can check a surviving child without ever storing
     /// the secret itself.
     pub coord_secret_sha256: Option<String>,
+    /// The Remote machine this session runs on, looked up by the caller;
+    /// `None` is this Mac. See [`crate::machines`].
+    pub machine: Option<crate::machines::Machine>,
 }
 
 /// The one cwd rule for a Delegate spawn: an empty root means "no cwd", and a
@@ -90,6 +93,9 @@ pub fn validated_cwd(workspace_root: Option<String>) -> Result<Option<String>, S
 ///   "an adapter matched" — each host resolves the detector from the same
 ///   registry at spawn.
 pub fn spawn_spec_for(mut req: SpawnRequest) -> Result<SpawnSpec, String> {
+    if let Some(machine) = req.machine.take() {
+        return remote_spawn_spec(req, machine);
+    }
     if !req.one_shot {
         if let Some(model) = req.model.as_mut() {
             *model = crate::harness_source::with_effort(model, req.effort.as_deref())?;
@@ -207,6 +213,48 @@ pub fn spawn_spec_for(mut req: SpawnRequest) -> Result<SpawnSpec, String> {
     })
 }
 
+/// A session on a Remote machine: the same adapter command, run on the machine
+/// inside the conversation's tmux session (`machines::remote_spawn_command`).
+///
+/// What stays on this Mac does not cross: no status-hook URL and no
+/// coordination MCP wiring (both point at loopback here), no routed
+/// intelligence source (its bridge is a loopback too), no Mission linkage.
+/// Session-id detection is off — the CLI's transcripts live on the machine,
+/// and reattaching is tmux's job, not `--resume`'s.
+fn remote_spawn_spec(req: SpawnRequest, machine: crate::machines::Machine) -> Result<SpawnSpec, String> {
+    if req.provider != crate::machines::REMOTE_PROVIDER {
+        return Err(format!("{} runs only Claude Code for now.", machine.label()));
+    }
+    if req.one_shot || req.mission_id.is_some() || req.mission_task_id.is_some() {
+        return Err("Mission attempts don't run on Remote machines yet.".into());
+    }
+    if crate::harness_source::selection(req.model.as_deref().unwrap_or(""))?.is_some() {
+        return Err(format!("On {}, Claude Code runs on its own login — pick one of its own models.", machine.label()));
+    }
+    let workspace_root = req
+        .cwd
+        .clone()
+        .ok_or_else(|| "A Remote machine needs an open project to find its checkout.".to_string())?;
+    let adapter = delegate::lookup(&req.provider).ok_or("Claude Code adapter missing")?;
+    // No resume flag: the tmux session is the continuation.
+    let inner = adapter.spawn_command(req.task.as_deref(), req.model.as_deref(), None, req.effort.as_deref());
+    let env = adapter.spawn_env(req.model.as_deref(), req.effort.as_deref())?;
+    let command = crate::machines::remote_spawn_command(&machine, &workspace_root, &req.session_id, &inner, &env);
+    Ok(SpawnSpec {
+        session_id: req.session_id,
+        provider: req.provider,
+        cwd: req.cwd,
+        command,
+        env: Vec::new(),
+        task: req.task,
+        model: req.model,
+        resume_session_id: None,
+        mission_link: None,
+        detect_session_id: false,
+        coord_secret_sha256: None,
+    })
+}
+
 /// Restore routed variables after a login shell has loaded its profile. The
 /// shell command contains references, never the resolved credentials.
 pub fn restore_source_env(command: &str, env: &[(String, String)]) -> String {
@@ -240,7 +288,54 @@ mod tests {
             custom_cli: None,
             mcp: None,
             coord_secret_sha256: None,
+            machine: None,
         }
+    }
+
+    fn klide_box() -> crate::machines::Machine {
+        crate::machines::Machine {
+            id: "klide-box".into(),
+            label: None,
+            ssh_host: "klide-box".into(),
+            checkouts: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_remote_claude_code_session_runs_in_tmux_over_ssh_without_local_wiring() {
+        let mut req = request("claude-code");
+        req.cwd = Some("/Users/me/src/app".into());
+        req.task = Some("fix the build".into());
+        req.resume_session_id = Some("old-session".into());
+        req.hook_url = Some("http://127.0.0.1:9/hook".into());
+        req.machine = Some(klide_box());
+        let spec = spawn_spec_for(req).unwrap();
+        assert!(spec.command.starts_with("ssh -t "), "{}", spec.command);
+        assert!(spec.command.contains("tmux new-session -A -s"), "{}", spec.command);
+        assert!(spec.command.contains("klide-convo-1"), "{}", spec.command);
+        assert!(!spec.command.contains("--resume"), "tmux is the continuation: {}", spec.command);
+        assert!(spec.env.is_empty(), "local env never crosses ssh");
+        assert!(!spec.detect_session_id);
+        assert_eq!(spec.resume_session_id, None);
+    }
+
+    #[test]
+    fn a_remote_machine_refuses_what_it_cannot_run() {
+        let mut other = request("codex");
+        other.cwd = Some("/Users/me/src/app".into());
+        other.machine = Some(klide_box());
+        assert!(spawn_spec_for(other).is_err());
+
+        let mut no_project = request("claude-code");
+        no_project.machine = Some(klide_box());
+        assert!(spawn_spec_for(no_project).is_err());
+
+        let mut mission = request("claude-code");
+        mission.cwd = Some("/Users/me/src/app".into());
+        mission.one_shot = true;
+        mission.task = Some("t".into());
+        mission.machine = Some(klide_box());
+        assert!(spawn_spec_for(mission).is_err());
     }
 
     fn spec() -> delegate::McpServerSpec {

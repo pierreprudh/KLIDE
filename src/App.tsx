@@ -1,3 +1,4 @@
+import { startStageMachine } from "./conversationMachines";
 import { registerGitOpener, type GitDestination } from "./gitNavigation";
 import {
   Fragment,
@@ -241,6 +242,8 @@ function App() {
   }, [overlay]);
   const [focusConvoError, setFocusConvoError] = useState<{ title: string } | null>(null);
   const [focusInitialMessage, setFocusInitialMessage] = useState<string | null>(null);
+  // The Machine the start stage chose for that message (WhereItRuns); null is this Mac.
+  const [focusInitialMachine, setFocusInitialMachine] = useState<string | null>(null);
   // Photos/documents staged on the start stage, travelling with that first
   // message. Cleared by the same consume callback, so a second task never
   // inherits the first one's attachments.
@@ -1764,6 +1767,7 @@ function App() {
         onResumeConsumed={() => consumeResume(panelId)}
         variant={opts?.variant}
         initialMessage={opts?.initialMessage ?? null}
+        hostMachine={opts?.hostMachine ?? null}
         initialAttachments={opts?.initialAttachments ?? null}
         initialMode={opts?.initialMode ?? null}
         onNewChat={opts?.onNewChat}
@@ -2219,6 +2223,7 @@ function App() {
           key,
           variant: opts?.aiVariant,
           initialMessage: opts?.aiVariant === "focus" ? focusInitialMessage : null,
+          hostMachine: opts?.aiVariant === "focus" ? focusInitialMachine : null,
           initialAttachments:
             opts?.aiVariant === "focus" ? focusInitialAttachments : null,
           initialMode: opts?.aiVariant === "focus" ? focusInitialMode : null,
@@ -3744,6 +3749,7 @@ function App() {
                     setAiPanelProvider(primaryPanelId, focusShownProvider);
                     updateAiPanelModel(primaryPanelId, focusShownModel);
                     setFocusInitialMessage(text);
+                    setFocusInitialMachine(startStageMachine());
                     setFocusInitialAttachments(attachments);
                     setFocusInitialMode(opts?.mode ?? null);
                     setFocusChatActive(true);

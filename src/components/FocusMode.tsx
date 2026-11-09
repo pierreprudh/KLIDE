@@ -1,3 +1,5 @@
+import { WhereItRuns } from "./WhereItRuns";
+import { useHasMachines } from "../hooks/useHasMachines";
 import { composerDraftKey, useComposerDraft } from "./ai/composerDraft";
 import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
 import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from "../hooks/useLlamaSetupMode";
@@ -2022,15 +2024,20 @@ function FocusComposer({
   }
 
   const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
+  const hasMachines = useHasMachines();
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
   return (
     <div className="klide-focus-composer-dock">
-      {((branch && onPingGit) || artifactOutput) && (
+      {((branch && onPingGit) || artifactOutput || hasMachines) && (
         // The chosen output stands beside the branch tab, not inside it: the
-        // tab carries the one git fact, the output is this turn's own.
+        // tab carries the one git fact, the output is this turn's own. Where
+        // it runs takes the opposite corner.
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 34 }}>
+          <div style={{ marginRight: "auto", display: "flex" }}>
+            <WhereItRuns workspaceRoot={workspaceRoot} provider={provider} onProviderChange={(p) => onProviderChange(p as ProviderId)} />
+          </div>
           <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
           {branch && onPingGit && (
             <div className="klide-focus-context-strip" role="group" aria-label="Task context">
