@@ -71,6 +71,8 @@ import { User } from "@phosphor-icons/react/dist/csr/User";
 import { Warning } from "@phosphor-icons/react/dist/csr/Warning";
 import { WarningCircle } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import { X } from "@phosphor-icons/react/dist/csr/X";
+import { Cursor } from "@phosphor-icons/react/dist/csr/Cursor";
+import { HandPointing } from "@phosphor-icons/react/dist/csr/HandPointing";
 
 /** The one weight Klide draws at. Changing this line re-weights the app. */
 export const ICON_WEIGHT = "light" as const;
@@ -384,6 +386,11 @@ export function ReplayIcon(p: GlyphProps) { return <Icon as={ArrowCounterClockwi
 
 /** Take back what was done — a run's file changes. */
 export function UndoIcon(p: GlyphProps) { return <Icon as={ArrowUUpLeft} {...p} />; }
+
+/** Design mode's three tools: change an element, comment on it, use the page. */
+export function SelectToolIcon(p: GlyphProps) { return <Icon as={Cursor} {...p} />; }
+export function CommentToolIcon(p: GlyphProps) { return <Icon as={ChatTeardrop} {...p} />; }
+export function UseToolIcon(p: GlyphProps) { return <Icon as={HandPointing} {...p} />; }
 
 /** Trace playback and recorded waiting time. */
 export function PlayIcon(p: GlyphProps) { return <Icon as={Play} {...p} />; }

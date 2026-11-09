@@ -64,3 +64,9 @@ export function DelegateConsole(props: ComponentProps<typeof DelegateConsoleImpl
     </Suspense>
   );
 }
+
+const DesignModeImpl = lazy(() => import("./design/DesignMode").then((m) => ({ default: m.DesignMode })));
+/** Design mode — loaded the first time a conversation opens it. */
+export function DesignMode(props: ComponentProps<typeof DesignModeImpl>) {
+  return <Suspense fallback={null}><DesignModeImpl {...props} /></Suspense>;
+}

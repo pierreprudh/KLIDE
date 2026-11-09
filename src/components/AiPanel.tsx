@@ -143,7 +143,8 @@ import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
-import { DelegateTerminalSurface } from "./lazySurfaces";
+import { DelegateTerminalSurface, DesignMode } from "./lazySurfaces";
+import { promoteDesignOpener, registerDesignOpener } from "../designNavigation";
 import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, RunFailedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { VisualIsland } from "./ai/VisualIsland";
@@ -1268,6 +1269,17 @@ export function AiPanel({
   const [fileDragOver, setFileDragOver] = useState(false);
   // A conversation image opened full-size (data URI), or null when closed.
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  // Design mode belongs to this conversation: its review is sent here. Mounted
+  // on first open and then only hidden, so an unsent review survives closing.
+  const [designOpen, setDesignOpen] = useState(false);
+  const [designMounted, setDesignMounted] = useState(false);
+  const openDesignRef = useRef<() => void>(() => {});
+  openDesignRef.current = () => {
+    if (!workspaceRoot) { notify("Open a project first — Design mode shows its running app."); return; }
+    setDesignMounted(true); setDesignOpen(true);
+  };
+  const [openDesign] = useState(() => () => openDesignRef.current());
+  useEffect(() => registerDesignOpener(openDesign), [openDesign]);
   // The OS file picker behind the + menu's attach row — for a photo or
   // document that isn't in the workspace, so it can't be reached with `@`.
   const filePickerRef = useRef<HTMLInputElement>(null);
@@ -1814,6 +1826,7 @@ export function AiPanel({
     { name: "plan", desc: SLASH_DESC.plan, run: () => { selectMode("plan"); setInput(""); } },
     { name: "work", desc: SLASH_DESC.work, run: () => { selectMode(goalOrPlan()); setInput(""); } },
     { name: "goal", desc: SLASH_DESC.goal, run: () => insertSlashPrefix(GOAL_PREFIX) },
+    { name: "design", desc: "Edit the running UI directly, then send the changes to Kit", run: () => { setInput(""); setSlash(null); openDesign(); } },
     { name: "mission", desc: SLASH_DESC.mission, run: () => insertSlashPrefix(MISSION_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
     { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
@@ -4200,6 +4213,10 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   return (
     <div className={`klide-btw-layout${btw?.parentId === currentId ? " has-side" : ""}${sidePanelOpen ? " is-open" : ""}`} style={btw?.parentId === currentId ? { width: "100%", height: "100%", minWidth: 0 } : { display: "contents" }}>
+    {designMounted && workspaceRoot && (
+      <DesignMode workspaceRoot={workspaceRoot} open={designOpen} onClose={() => setDesignOpen(false)}
+        onSend={(task) => { void send({ text: task, mode: goalOrPlan() }); }} />
+    )}
     {lightboxImage && createPortal(
       <div
         role="dialog"
@@ -4222,6 +4239,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       aria-label="AI conversation"
       tabIndex={-1}
       onPointerDownCapture={(e) => {
+        promoteDesignOpener(openDesign);
         if (!delegateSession && e.target instanceof Element && !e.target.closest("button, a, input, textarea, select, summary, [tabindex='0'], [contenteditable='true']")) {
           e.currentTarget.focus({ preventScroll: true });
         }
@@ -4508,7 +4526,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             // under the plan it came from (see the column below). A row per
             // finished turn down the transcript would say it many times.
             if (variant === "focus") return null;
-            return <CompletionCard key={i} completion={completion} disabled={streaming}
+            return <CompletionCard key={i} completion={completion} disabled={streaming} onOpenDesign={workspaceRoot ? openDesign : undefined}
               compact={canvasWidth > 0 && canvasWidth < 300}
               onReview={onReviewChanges ? (path) => onReviewChanges({ runId: completion.runId, title: "Run changes", path }) : undefined}
               onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: completion.runId, path, documents: documentSet(completion) }) : undefined}
@@ -5190,6 +5208,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           {latestCompletion && (
             <CompletionCard
               variant="island"
+              onOpenDesign={workspaceRoot ? openDesign : undefined}
               folded={column.planFolded}
               onUnfold={() => setSidePanelHidden(false)}
               completion={latestCompletion}

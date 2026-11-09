@@ -1,3 +1,4 @@
+mod design_canvas;
 #[cfg(debug_assertions)]
 mod design_parity;
 mod launch_readiness;
@@ -1235,6 +1236,9 @@ pub fn run() {
             reveal_entry,
             conversation_store::conversations_load,
             conversation_store::conversations_write,
+            design_canvas::design_canvas_open,
+            design_canvas::design_canvas_close,
+            design_canvas::design_canvas_candidates,
             storage::app_storage_dirs,
             storage::app_storage_conversations,
             storage::app_storage_delete_conversation,
