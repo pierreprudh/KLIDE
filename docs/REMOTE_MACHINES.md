@@ -156,11 +156,12 @@ code on the machine: Claude Code in tmux over SSH.
   `~/code/<folder name>`). `src-tauri/src/machines.rs` owns the store, the
   readiness check (one SSH round trip: reached, tmux, Claude Code + login, gh,
   checkout · branch · clean) and the spawn command.
-- **Where it runs** (`components/WhereItRuns.tsx`) sits over the Focus start
+- **Where it runs** (`components/WhereItRuns.tsx`, a hook feeding InlineMenu) sits over the Focus start
   composer's left edge only when a machine is configured. Picking a Remote
-  machine switches the agent to Claude Code. The menu is only names (This
-  Mac, then each machine); one that isn't ready is dimmed with one word
-  ("offline"), the reason and fix in its tooltip. It behaves like the Claude / Codex
+  machine switches the agent to Claude Code. The menu is Focus's own InlineMenu
+  (the agent picker's dropdown): This Mac, then each machine, the chosen row
+  highlighted. One that isn't ready is dimmed; picking it raises a toast with
+  the reason and a Copy fix action instead of choosing it. It behaves like the Claude / Codex
   apps' environment switch: readiness is fetched in the background when the
   start stage appears (`machineStatus.ts`), the menu opens instantly, nothing
   waits on a check before a pick, and each project remembers the Machine it

@@ -160,7 +160,7 @@ Klide/
 │   ├── components/
 │   │   ├── design/              Design mode — DesignMode.tsx (canvas, inspector, comments, review bar) + designReview.ts (review → Kit task, page tokens → scales)
 │   │   ├── WorkspaceRail.tsx    The app's one sidebar — folder card, actions, conversations (Sections / Agent), one-line foot; shared by Focus + workbench
-│   │   ├── WhereItRuns.tsx      "Where it runs" over the Focus start composer — This Mac or a Remote machine (Claude Code in tmux over SSH)
+│   │   ├── WhereItRuns.tsx      "Where it runs" — the logic behind Focus's InlineMenu over the start composer: This Mac or a Remote machine (Claude Code in tmux over SSH)
 │   │   ├── ActivityHeatmap.tsx  52-week run activity grid
 │   │   ├── AiPanel.tsx          AI chat panel host + run interaction surface
 │   │   ├── AnchoredWorkbench.tsx Anchored layout shell — sidebar, tabs, editor, terminal, AI panels

@@ -10718,32 +10718,6 @@ input.klide-rail-search:focus-visible {
   }
 }
 
-/* "Where it runs" — the Machine picker over the Focus composer's left edge
-   (components/WhereItRuns.tsx). No tab, no container: the Machine's name. */
-.klide-where-it-runs { align-self: center; margin-left: 10px; }
-.klide-where-it-runs > button {
-  all: unset; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px;
-  border-radius: var(--radius-sm); font-size: 12.5px; color: var(--fg-subtle); cursor: pointer;
-  transition: color var(--motion-fast) var(--ease-out);
-}
-.klide-where-it-runs > button:hover,
-.klide-where-it-runs > button[aria-expanded="true"] { color: var(--fg-strong); }
-.klide-where-it-runs > button:focus-visible { outline: 2px solid var(--focus-ring); }
-/* The remembered machine didn't answer its last check — say so before Send. */
-.klide-where-it-runs > button[data-warn] { color: var(--warning); }
-.klide-where-menu { min-width: 190px; padding: 4px; overflow: hidden; transform-origin: bottom left; }
-.klide-where-row {
-  display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
-  height: 30px; padding: 0 9px; border-radius: var(--radius-sm); cursor: pointer; color: var(--fg-strong);
-  transition: background var(--motion-fast) var(--ease-out);
-}
-.klide-where-row:hover { background: var(--menu-row-hover); }
-.klide-where-row[aria-selected="true"] { background: var(--menu-row-active); }
-.klide-where-row[aria-disabled="true"] { cursor: default; }
-.klide-where-row[aria-disabled="true"]:hover { background: transparent; }
-.klide-where-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-.klide-where-icon { display: grid; place-items: center; color: var(--fg-subtle); }
-.klide-where-row-title { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.klide-where-row-title[data-dimmed] { color: var(--fg-subtle); }
-.klide-where-note { font-size: 11px; color: var(--fg-dim); }
-.klide-where-check { display: flex; color: var(--accent); }
+/* "Where it runs" — Focus's InlineMenu over the composer's left edge
+   (components/WhereItRuns.tsx); this only places it in the corner. */
+.klide-where-it-runs { margin-right: auto; display: flex; align-self: center; margin-left: 4px; }
