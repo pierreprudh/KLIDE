@@ -73,7 +73,7 @@ import { WarningCircle } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import { X } from "@phosphor-icons/react/dist/csr/X";
 import { Cursor } from "@phosphor-icons/react/dist/csr/Cursor";
 import { HandPointing } from "@phosphor-icons/react/dist/csr/HandPointing";
-import { HardDrives } from "@phosphor-icons/react/dist/csr/HardDrives";
+import { Desktop } from "@phosphor-icons/react/dist/csr/Desktop";
 import { Laptop } from "@phosphor-icons/react/dist/csr/Laptop";
 
 /** The one weight Klide draws at. Changing this line re-weights the app. */
@@ -99,9 +99,9 @@ export function Icon({
 
 /* ---------------------------------------------------------------- machines */
 
-/** A Remote machine — where a conversation can run besides this Mac. */
+/** A Remote machine — another computer a conversation can run on. */
 export function MachineIcon(p: GlyphProps) {
-  return <Icon as={HardDrives} {...p} />;
+  return <Icon as={Desktop} {...p} />;
 }
 
 /** This Mac, as a place a conversation runs. */
