@@ -1,0 +1,39 @@
+# Remote machines, plan step 0 (docs/REMOTE_MACHINES.md): build the `klide`
+# binary on an Ubuntu runner so a Linux box can run `klide ptyd` without a
+# Rust toolchain or WebKitGTK headers of its own. The box still needs the
+# runtime libraries (libwebkit2gtk-4.1-0, libgtk-3-0t64): ptyd starts before
+# Tauri, but the dynamic linker loads them at launch. Manual, not per push.
+name: Linux host binary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+      - name: Tauri system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libssl-dev \
+            libxdo-dev pkg-config
+      # ptyd needs no frontend; the window half is never opened on the box.
+      - run: mkdir -p dist
+      - run: cargo build --release --bin klide --manifest-path src-tauri/Cargo.toml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: klide-linux-x86_64
+          path: src-tauri/target/release/klide
+          retention-days: 7
