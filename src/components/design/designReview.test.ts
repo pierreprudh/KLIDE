@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { designDockWidth, designTask, isInterfaceConversation, sortTokens, type ReviewItem } from "./designReview";
+import { designDockWidth, designTask, devCommand, isInterfaceConversation, sortTokens, type ReviewItem } from "./designReview";
 
 const base = { epoch: 1, elementId: 3, component: "AiPanel › InlineCommandReview", where: "span “Run the checks.”" };
 const items: ReviewItem[] = [
@@ -59,5 +59,18 @@ describe("designDockWidth", () => {
     expect(designDockWidth(2560)).toBe(1100);
     expect(designDockWidth(1000)).toBe(580);
     expect(designDockWidth(800)).toBe(440); // a small window: the conversation keeps its 360px
+  });
+});
+
+describe("devCommand", () => {
+  it("runs the project's dev script with the package manager its lockfile names", () => {
+    expect(devCommand(JSON.stringify({ scripts: { build: "vite build", dev: "vite" } }), ["package-lock.json"])).toBe("npm run dev");
+    expect(devCommand(JSON.stringify({ scripts: { start: "next start" } }), ["pnpm-lock.yaml"])).toBe("pnpm run start");
+    expect(devCommand(JSON.stringify({ scripts: { dev: "astro dev" } }), ["yarn.lock"])).toBe("yarn dev");
+    expect(devCommand(JSON.stringify({ scripts: { dev: "vite" } }), ["bun.lock"])).toBe("bun run dev");
+  });
+  it("offers nothing without a runnable script", () => {
+    expect(devCommand(JSON.stringify({ scripts: { build: "tsc" } }), [])).toBeNull();
+    expect(devCommand("not json", [])).toBeNull();
   });
 });

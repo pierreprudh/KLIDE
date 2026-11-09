@@ -1239,6 +1239,9 @@ pub fn run() {
             design_canvas::design_canvas_open,
             design_canvas::design_canvas_close,
             design_canvas::design_canvas_candidates,
+            design_canvas::design_dev_run,
+            design_canvas::design_dev_status,
+            design_canvas::design_dev_stop,
             storage::app_storage_dirs,
             storage::app_storage_conversations,
             storage::app_storage_delete_conversation,
@@ -1431,6 +1434,7 @@ pub fn run() {
                 connector_pool::shutdown();
                 model_source_bridge::shutdown();
                 claude_nous_bridge::shutdown();
+                design_canvas::stop_dev();
             }
         });
 }

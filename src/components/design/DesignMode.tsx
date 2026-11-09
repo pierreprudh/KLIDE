@@ -12,9 +12,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { SelectToolIcon, CommentToolIcon, UseToolIcon, CloseIcon, SendIcon, CheckIcon, UndoIcon, ChevronIcon } from "../../icons";
 import { Z } from "../../zLayers";
-import { closeDesignCanvas, designCanvasCandidates, openDesignCanvas, type DesignCanvas } from "../../ipc/design";
+import { closeDesignCanvas, designCanvasCandidates, devServerStatus, openDesignCanvas, runDevServer, stopDevServer, type DesignCanvas } from "../../ipc/design";
+import { listWorkspaceDir, readWorkspaceTextFile } from "../../workspaceFs";
 import { errMessage } from "../../errors";
-import { designDockWidth, designTask, sortTokens, type Rect, type ReviewItem, type Facts, type PageTokens } from "./designReview";
+import { designDockWidth, designTask, devCommand, sortTokens, type Rect, type ReviewItem, type Facts, type PageTokens } from "./designReview";
 
 type Tool = "select" | "comment" | "use";
 type Size = { id: string; label: string; w: number | null; h: number | null };
@@ -49,6 +50,10 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend, right = 8 }: 
   const [candidates, setCandidates] = useState<string[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  // The project's own dev command, and the server Design mode started with it.
+  const [runCommand, setRunCommand] = useState<string | null>(null);
+  const [server, setServer] = useState<"idle" | "starting" | "running">("idle");
+  const [serverLog, setServerLog] = useState("");
   const [tool, setTool] = useState<Tool>("select");
   const [size, setSize] = useState<Size>(SIZES[0]);
   const [hover, setHover] = useState<Rect | null>(null);
@@ -92,14 +97,50 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend, right = 8 }: 
     if (!open || tried.current) return;
     tried.current = true;
     void (async () => {
-      const found = await designCanvasCandidates().catch(() => [] as string[]);
-      setCandidates(found);
+      const [found, command] = await Promise.all([
+        designCanvasCandidates().catch(() => [] as string[]),
+        Promise.all([readWorkspaceTextFile(workspaceRoot, "package.json"), listWorkspaceDir(workspaceRoot, workspaceRoot)])
+          .then(([pkg, entries]) => devCommand(pkg, entries.map(e => e.name)))
+          .catch(() => null),
+      ]);
+      setCandidates(found); setRunCommand(command);
       const remembered = readUrl(workspaceRoot);
       if (remembered) void connect(remembered);
       else if (found.length === 1) void connect(found[0]);
     })();
   }, [open, connect, workspaceRoot]);
-  useEffect(() => () => { void closeDesignCanvas().catch(() => {}); }, []);
+  const ownsServer = useRef(false);
+  useEffect(() => () => {
+    void closeDesignCanvas().catch(() => {});
+    if (ownsServer.current) void stopDevServer().catch(() => {});
+  }, []);
+
+  // Run the project: start its dev script, wait for the address it prints, open it.
+  const runApp = useCallback(async () => {
+    if (!runCommand) return;
+    setProblem(null); setServer("starting"); setServerLog("");
+    try { await runDevServer(workspaceRoot, runCommand); ownsServer.current = true; }
+    catch (e) { setServer("idle"); setProblem(errMessage(e)); return; }
+    const started = Date.now();
+    const poll = async (): Promise<void> => {
+      const status = await devServerStatus().catch(() => null);
+      if (!status) return;
+      setServerLog(status.tail.trim().split("\n").slice(-1)[0] ?? "");
+      if (!status.running) {
+        setServer("idle"); ownsServer.current = false;
+        setProblem(`${runCommand} stopped${status.exitCode !== null ? ` (exit ${status.exitCode})` : ""}: ${status.tail.trim().split("\n").slice(-3).join(" · ")}`);
+        return;
+      }
+      if (status.url) { setServer("running"); await connect(status.url); return; }
+      if (Date.now() - started > 90_000) { setServer("running"); setProblem("The server is running but hasn't printed an address — type it above."); return; }
+      setTimeout(() => void poll(), 600);
+    };
+    void poll();
+  }, [runCommand, workspaceRoot, connect]);
+  const stopApp = useCallback(async () => {
+    await stopDevServer().catch(() => {});
+    ownsServer.current = false; setServer("idle"); setCanvas(null); setShown(false);
+  }, []);
 
   // Messages from the picker inside the page.
   useEffect(() => {
@@ -212,6 +253,7 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend, right = 8 }: 
           <Soft label="Use the page · U" on={tool === "use"} onClick={() => setTool("use")}><UseToolIcon size={16} /></Soft>
           <Divider />
           {SIZES.map(s => <Soft key={s.id} label={s.w ? `${s.w} × ${s.h}` : "Fill the canvas"} on={size.id === s.id} onClick={() => setSize(s)} wide>{s.label}</Soft>)}
+          {server !== "idle" && <><Divider /><Soft wide label={`Stop ${runCommand ?? "the dev server"}`} onClick={() => void stopApp()}>Stop</Soft></>}
           <Divider />
           <Soft label="Close · Esc" onClick={onClose}><CloseIcon size={15} /></Soft>
         </div>
@@ -232,7 +274,8 @@ export function DesignMode({ workspaceRoot, open, onClose, onSend, right = 8 }: 
               </div>
             </div>
           ) : (
-            <Empty connecting={connecting} problem={problem} candidates={candidates} onPick={c => void connect(c)} />
+            <Empty connecting={connecting} problem={problem} candidates={candidates} onPick={c => void connect(c)}
+              runCommand={runCommand} server={server} serverLog={serverLog} onRun={() => void runApp()} />
           )}
         </div>
 
@@ -361,11 +404,22 @@ function ReviewBar({ items, epoch, open, setOpen, undo, resolve, send, hint, ins
   );
 }
 
-function Empty({ connecting, problem, candidates, onPick }: { connecting: boolean; problem: string | null; candidates: string[]; onPick: (url: string) => void }) {
+function Empty({ connecting, problem, candidates, onPick, runCommand, server, serverLog, onRun }: {
+  connecting: boolean; problem: string | null; candidates: string[]; onPick: (url: string) => void;
+  runCommand: string | null; server: "idle" | "starting" | "running"; serverLog: string; onRun: () => void;
+}) {
+  const starting = server === "starting";
   return (
-    <div style={{ maxWidth: 380, textAlign: "center", color: "var(--fg-muted)", lineHeight: 1.5, animation: `klide-design-in 260ms ${EASE}` }}>
-      <div style={{ color: "var(--fg-strong)", fontSize: "var(--fs-md)", fontWeight: 700, marginBottom: 6 }}>{connecting ? "Opening…" : "Open your running app"}</div>
-      {problem ? <div style={{ color: "var(--danger)" }}>{problem}</div> : <div>Start the project's dev server, then type its address above — or pick one that's already running.</div>}
+    <div style={{ maxWidth: 400, textAlign: "center", color: "var(--fg-muted)", lineHeight: 1.5, animation: `klide-design-in 260ms ${EASE}` }}>
+      <div style={{ color: "var(--fg-strong)", fontSize: "var(--fs-md)", fontWeight: 700, marginBottom: 6 }}>{connecting ? "Opening…" : starting ? "Starting your app…" : "Open your running app"}</div>
+      {problem ? <div style={{ color: "var(--danger)", overflowWrap: "anywhere" }}>{problem}</div>
+        : starting ? <div style={{ fontFamily: "var(--font-mono)", fontSize: "var(--fs-xs)", minHeight: 18, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{serverLog || runCommand}</div>
+        : <div>{runCommand ? "Run it from here, or type the address of a server that's already running." : "Start the project's dev server, then type its address above."}</div>}
+      {runCommand && server === "idle" && !connecting && (
+        <button onClick={onRun} style={{ ...plain, marginTop: 14, display: "inline-flex", alignItems: "center", gap: 8, padding: "7px 14px", borderRadius: 10, background: "var(--control-primary-bg)", color: "var(--control-primary-fg)" }}>
+          Run <code style={{ fontFamily: "var(--font-mono)", fontSize: "var(--fs-xs)", opacity: 0.85 }}>{runCommand}</code>
+        </button>
+      )}
       {candidates.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 4, marginTop: 12 }}>
           {candidates.map(c => <Soft key={c} wide onClick={() => onPick(c)}>{c.replace(/^http:\/\//, "").replace(/\/$/, "")}</Soft>)}

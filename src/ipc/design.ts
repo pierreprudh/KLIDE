@@ -21,3 +21,19 @@ export const closeDesignCanvas = () => invoke<void>("design_canvas_close");
 
 /** Dev-server addresses answering on the usual ports right now. */
 export const designCanvasCandidates = () => invoke<string[]>("design_canvas_candidates");
+
+/** The project's dev server as Design mode started it. */
+export type DevServerStatus = {
+  running: boolean;
+  command: string | null;
+  /** The first local address the server printed. */
+  url: string | null;
+  /** The end of its output. */
+  tail: string;
+  exitCode: number | null;
+};
+
+/** Start `command` (the project's dev script) in the project folder. */
+export const runDevServer = (workspace: string, command: string) => invoke<void>("design_dev_run", { workspace, command });
+export const devServerStatus = () => invoke<DevServerStatus>("design_dev_status");
+export const stopDevServer = () => invoke<void>("design_dev_stop");
