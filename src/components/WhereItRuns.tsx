@@ -6,15 +6,15 @@
 // ~/.klide/machines.json. It behaves like the environment switch in the Claude
 // and Codex apps: it opens instantly, each project remembers where it last
 // started, and nothing waits on a check before you can pick. Readiness is
-// fetched in the background (`machineStatus.ts`) when the start stage appears;
-// only a machine whose last check failed is dimmed, with the command that
-// fixes it. Picking a Remote machine puts the conversation on Claude Code —
+// fetched in the background (`machineStatus.ts`) when the start stage appears.
+// The menu is only names: a machine whose last check failed is dimmed with one
+// word ("offline"), and the reason plus its fix sit in the tooltip. Picking a Remote machine puts the conversation on Claude Code —
 // the one CLI the first slice runs there. With no machine configured the
 // picker draws nothing at all.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { usePortalMenu } from "../hooks/usePortalMenu";
-import { MachineIcon, ThisMacIcon, CheckIcon, CopyIcon } from "../icons";
+import { MachineIcon, ThisMacIcon, CheckIcon } from "../icons";
 import { machineLabel, machinesList, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
 import { restoreStartStageMachine, setStartStageMachine, startStageMachine, subscribeStartStageMachine } from "../conversationMachines";
 import { lastKnownStatus, machineStatusCheck, machineStatusVersion, refreshMachineStatus, subscribeMachineStatus } from "../machineStatus";
@@ -119,46 +119,29 @@ export function WhereItRuns({
           className="picker-menu menu-glass klide-where-menu"
           style={{ position: "fixed", left: menu.pos.left, bottom: menu.pos.bottom, zIndex: Z.popover }}
         >
-          <div className="klide-where-head">
-            <div className="klide-where-title">Where it runs</div>
-            <div className="klide-where-sub">This conversation's agent, shell and files</div>
-          </div>
-          <div style={{ padding: 5 }}>
-            <Row
-              icon={<ThisMacIcon size={15} />}
-              title="This Mac"
-              caption="Runs here, in the project you have open"
-              selected={!machine}
-              onClick={() => pick(null)}
-            />
-            <div className="klide-where-eyebrow">Remote machines</div>
-            {machines.map((m) => {
-              const check = machineStatusCheck(m.id, workspaceRoot);
-              const status = lastKnownStatus(check);
-              // Only a check that came back saying no blocks the pick; an
-              // unanswered one never makes you wait.
-              const blocked = check?.state === "failed" || (status !== null && !status.ready);
-              const fix = blocked ? status?.facts.find((f) => f.fix && f.tone !== "ok" && f.tone !== "quiet")?.fix : undefined;
-              const caption =
-                check?.state === "failed" ? check.error
-                : status ? (status.ready ? `Claude Code · ${status.caption}` : status.caption)
-                : "Claude Code · checking…";
-              return (
-                <Row
-                  key={m.id}
-                  icon={<MachineIcon size={15} />}
-                  title={machineLabel(m)}
-                  caption={caption}
-                  captionTone={blocked ? "warn" : undefined}
-                  detail={status?.checkout ?? undefined}
-                  fix={fix}
-                  dimmed={blocked}
-                  selected={machine === m.id}
-                  onClick={() => !blocked && pick(m.id)}
-                />
-              );
-            })}
-          </div>
+          <Row icon={<ThisMacIcon size={15} />} title="This Mac" selected={!machine} onClick={() => pick(null)} />
+          {machines.map((m) => {
+            const check = machineStatusCheck(m.id, workspaceRoot);
+            const status = lastKnownStatus(check);
+            // Only a check that came back saying no blocks the pick; an
+            // unanswered one never makes you wait. The why stays in the
+            // tooltip — the menu itself is just the names.
+            const blocked = check?.state === "failed" || (status !== null && !status.ready);
+            const why = check?.state === "failed" ? check.error : status?.caption;
+            const fix = blocked ? status?.facts.find((f) => f.fix && f.tone !== "ok" && f.tone !== "quiet")?.fix : undefined;
+            return (
+              <Row
+                key={m.id}
+                icon={<MachineIcon size={15} />}
+                title={machineLabel(m)}
+                note={blocked ? (status?.facts[0]?.tone === "bad" || check?.state === "failed" ? "offline" : "not ready") : undefined}
+                hint={blocked ? [why, fix].filter(Boolean).join("\n") : undefined}
+                dimmed={blocked}
+                selected={machine === m.id}
+                onClick={() => !blocked && pick(m.id)}
+              />
+            );
+          })}
         </div>,
         document.body,
       )}
@@ -169,58 +152,37 @@ export function WhereItRuns({
 function Row({
   icon,
   title,
-  caption,
-  captionTone,
-  detail,
-  fix,
+  note,
+  hint,
   selected,
   dimmed,
   onClick,
 }: {
   icon: React.ReactNode;
   title: string;
-  caption: string;
-  captionTone?: "warn";
-  detail?: string;
-  fix?: string;
+  /** One quiet word on the right — "offline" — when it can't be picked. */
+  note?: string;
+  /** The reason and the fix, on hover. */
+  hint?: string;
   selected?: boolean;
   dimmed?: boolean;
   onClick: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
   return (
     <div
       role="option"
       aria-selected={selected}
       aria-disabled={dimmed || undefined}
       tabIndex={dimmed ? -1 : 0}
+      title={hint}
       className="klide-where-row"
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
     >
       <span className="klide-where-icon" style={{ opacity: dimmed ? 0.45 : 1 }}>{icon}</span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span className="klide-where-row-title" data-dimmed={dimmed || undefined}>{title}</span>
-        <span className="klide-where-caption" data-tone={captionTone}>{caption}</span>
-        {detail && !fix && <span className="klide-where-caption">{detail}</span>}
-        {fix && (
-          <button
-            type="button"
-            className="klide-where-fix"
-            title="Copy the command that fixes it"
-            onClick={(e) => {
-              e.stopPropagation();
-              void navigator.clipboard?.writeText(fix);
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1200);
-            }}
-          >
-            <span>{fix}</span>
-            {copied ? <CheckIcon size={11} /> : <CopyIcon size={11} />}
-          </button>
-        )}
-      </span>
-      {selected && <span style={{ color: "var(--accent)", display: "flex" }}><CheckIcon size={13} /></span>}
+      <span className="klide-where-row-title" data-dimmed={dimmed || undefined}>{title}</span>
+      {note && <span className="klide-where-note">{note}</span>}
+      {selected && <span className="klide-where-check"><CheckIcon size={13} /></span>}
     </div>
   );
 }
