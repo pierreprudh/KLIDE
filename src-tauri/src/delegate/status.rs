@@ -169,6 +169,19 @@ pub fn start_hook_server(statuses: StatusMap, on_change: OnChange) -> Result<Hoo
     let thread_token = token.clone();
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
+            // Before a byte of the body: a caller without the token, or one
+            // that declares more than a hook ever sends, is not read. tiny_http
+            // would otherwise drain the declared length into one allocation.
+            let known = request.url().split('?').next().unwrap_or("").trim_matches('/').split('/').nth(1) == Some(thread_token.as_str());
+            if request.body_length().is_some_and(|len| len > 64 * 1024) {
+                let stream = request.upgrade("klide-abandoned", tiny_http::Response::empty(413));
+                std::mem::forget(stream);
+                continue;
+            }
+            if !known {
+                let _ = request.respond(tiny_http::Response::empty(403));
+                continue;
+            }
             let method = request.method().to_string();
             // The body is the CLI's own event JSON (Claude pipes stdin through
             // curl; the Codex shim forwards its JSON argv value). Capped read:

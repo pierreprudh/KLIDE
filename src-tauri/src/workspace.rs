@@ -184,7 +184,11 @@ impl Workspace {
         }
         let candidate = self.root.join(rel);
         let mut ancestor = candidate.clone();
-        while !ancestor.exists() {
+        // `symlink_metadata`, not `exists()`: a link whose target is missing
+        // does not "exist", and walking past it would hand back a path the
+        // write then follows out of the workspace. Seen as the link it is,
+        // it fails to resolve below.
+        while ancestor.symlink_metadata().is_err() {
             match ancestor.parent() {
                 Some(p) => ancestor = p.to_path_buf(),
                 None => return Err(format!("Path \"{user_path}\" is outside the workspace")),
@@ -305,6 +309,26 @@ Open it locally yourself if needed; do not send its contents to a model.",
         Ok(())
     }
 
+    /// The write half of the agent policy: nothing under a `.git` folder.
+    /// `.git/config` and `.git/hooks` name programs git runs by itself — on
+    /// the next status poll, the next commit — so an edit there is a command
+    /// that never met the command gate. A run changes a repository through
+    /// git, where it is asked.
+    fn guard_write(&self, path: &Path, access: Access) -> Result<(), String> {
+        self.guard(path, access)?;
+        let relative = path.strip_prefix(&self.root).unwrap_or(path);
+        let in_git = relative
+            .components()
+            .any(|c| c.as_os_str().to_str().is_some_and(|name| name.eq_ignore_ascii_case(".git")));
+        if access == Access::Agent && in_git {
+            return Err(format!(
+                "{} is inside the repository's .git folder; a run can't write there. Use git commands instead.",
+                self.display(path)
+            ));
+        }
+        Ok(())
+    }
+
     fn max_read_bytes(access: Access) -> u64 {
         match access {
             Access::User => USER_MAX_READ_BYTES,
@@ -345,7 +369,7 @@ Open it locally yourself if needed; do not send its contents to a model.",
     /// Write text to a resolved path with the tier's guard and byte cap
     /// applied, creating parent folders as needed.
     pub fn write_text(&self, path: &Path, contents: &str, access: Access) -> Result<(), String> {
-        self.guard(path, access)?;
+        self.guard_write(path, access)?;
         let max = Self::max_write_bytes(access);
         if contents.len() as u64 > max {
             return Err(format!(
@@ -366,7 +390,7 @@ Open it locally yourself if needed; do not send its contents to a model.",
     /// symlink_metadata so deleting a symlink removes the link, never what it
     /// points to.
     pub fn remove(&self, path: &Path, access: Access) -> Result<(), String> {
-        self.guard(path, access)?;
+        self.guard_write(path, access)?;
         let meta =
             std::fs::symlink_metadata(path).map_err(|e| format!("Unable to read entry: {e}"))?;
         if meta.is_dir() {
@@ -577,6 +601,36 @@ mod tests {
         let refused = ws.write_text(&target, &big, Access::Agent).unwrap_err();
         assert!(refused.contains("too large"), "got: {refused}");
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn an_agent_cannot_write_or_delete_inside_the_git_folder() {
+        let (dir, ws) = temp_workspace("git-folder");
+        let root = dir.canonicalize().unwrap();
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/config"), "[core]\n").unwrap();
+        for rel in [".git/config", ".git/hooks/pre-commit", "vendor/lib/.GIT/config"] {
+            let refused = ws.write_text(&root.join(rel), "x", Access::Agent).unwrap_err();
+            assert!(refused.contains(".git folder"), "{rel}: {refused}");
+        }
+        assert!(ws.remove(&root.join(".git/config"), Access::Agent).is_err());
+        assert_eq!(std::fs::read_to_string(root.join(".git/config")).unwrap(), "[core]\n");
+        ws.write_text(&root.join(".gitignore"), "target\n", Access::Agent).unwrap();
+        ws.write_text(&root.join(".git/config"), "[user]\n", Access::User).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_path_through_a_dangling_link_is_refused() {
+        let (dir, ws) = temp_workspace("dangling-link");
+        let root = dir.canonicalize().unwrap();
+        let outside = root.parent().unwrap().join(format!("{}-outside.txt", root.file_name().unwrap().to_string_lossy()));
+        let _ = std::fs::remove_file(&outside);
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        assert!(ws.resolve_new("link").is_err(), "the write would follow the link out of the workspace");
+        assert!(ws.resolve_new("link/child.txt").is_err());
+        assert!(ws.resolve_new("fresh/child.txt").is_ok());
+        assert!(!outside.exists());
     }
 
     #[test]
