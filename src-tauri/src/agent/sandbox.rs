@@ -675,11 +675,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn wrapping_puts_the_shell_behind_sandbox_exec() {
         let sandbox = Sandbox::default();
         let (program, args) = sandbox.wrap("sh").unwrap();
         assert_eq!(program, "/usr/bin/sandbox-exec");
         assert_eq!(args, vec!["-p".to_string(), sandbox.profile(), "sh".to_string()]);
+    }
+
+    /// Seatbelt is macOS-only: elsewhere a command runs unwrapped.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn wrapping_is_a_no_op_off_macos() {
+        assert!(Sandbox::default().wrap("sh").is_none());
     }
 }
