@@ -67,6 +67,15 @@ pub struct Sandbox {
     pub writable: Vec<PathBuf>,
     /// Places inside a writable folder that stay closed all the same.
     pub protected: Vec<PathBuf>,
+    /// Folders that stay open inside but may not themselves be renamed or
+    /// removed. A git directory is one: with only `hooks` and `config` closed
+    /// by path, moving `.git` aside, writing a hook and moving it back would
+    /// leave a command to run outside the sandbox at the next commit.
+    pub pinned: Vec<PathBuf>,
+    /// Folders whose unix sockets a contained command may not connect to, nor
+    /// write in. Klide's own PTY daemon listens in one, and a request to it
+    /// starts a shell with no sandbox at all.
+    pub sockets: Vec<PathBuf>,
     /// Whether the command may reach beyond loopback.
     pub network: bool,
 }
@@ -105,11 +114,17 @@ impl Sandbox {
             out.push(')');
         }
         out.push_str(")\n");
-        let protected = real_paths(&self.protected);
-        if !protected.is_empty() {
+        let closed: Vec<PathBuf> = self.protected.iter().chain(&self.sockets).cloned().collect();
+        let (protected, pinned) = (real_paths(&closed), real_paths(&self.pinned));
+        if !protected.is_empty() || !pinned.is_empty() {
             out.push_str("(deny file-write*");
             for path in protected {
                 out.push_str("\n  (subpath ");
+                out.push_str(&quoted(&path));
+                out.push(')');
+            }
+            for path in pinned {
+                out.push_str("\n  (literal ");
                 out.push_str(&quoted(&path));
                 out.push(')');
             }
@@ -117,6 +132,13 @@ impl Sandbox {
         }
         if !self.network {
             out.push_str(NETWORK_OFF);
+        }
+        // After the network rules, and with the network open too: the last
+        // matching rule wins, and a local socket is not "the network".
+        for path in real_paths(&self.sockets) {
+            out.push_str("(deny network-outbound (remote unix-socket (subpath ");
+            out.push_str(&quoted(&path));
+            out.push_str(")))\n");
         }
         out
     }
@@ -128,7 +150,11 @@ impl Sandbox {
     /// The policy for a command run in `root` with nobody reading it first.
     pub fn for_workspace(root: &Path) -> Sandbox {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        Sandbox::for_workspace_in(root, home.as_deref(), &std::env::temp_dir())
+        #[allow(unused_mut)]
+        let mut sandbox = Sandbox::for_workspace_in(root, home.as_deref(), &std::env::temp_dir());
+        #[cfg(unix)]
+        sandbox.sockets.push(crate::pty_daemon::socket_dir());
+        sandbox
     }
 
     /// [`Sandbox::for_workspace`] with the home and temp folders named, so a
@@ -142,16 +168,18 @@ impl Sandbox {
                 writable.push(parent.join("C"));
             }
         }
+        let (mut protected, mut pinned) = (Vec::new(), Vec::new());
         if let Some(home) = home {
             writable.extend(TOOL_CACHES.iter().map(|dir| home.join(dir)));
+            protected.extend(CACHE_EXECUTABLES.iter().map(|path| home.join(path)));
         }
-        let mut protected = Vec::new();
         for git in git_dirs(root) {
             protected.push(git.join("hooks"));
             protected.push(git.join("config"));
+            pinned.push(git.clone());
             writable.push(git);
         }
-        Sandbox { writable, protected, network: false }
+        Sandbox { writable, protected, pinned, sockets: Vec::new(), network: false }
     }
 
     /// The program and leading arguments that run `shell` inside this
@@ -173,6 +201,12 @@ impl Sandbox {
 /// without asking. Grown from denials seen in real use, not from a guess at
 /// every tool there is.
 const TOOL_CACHES: &[&str] = &[".cargo", ".npm", ".cache", "Library/Caches"];
+
+/// What sits inside those caches and runs later, outside any sandbox: the
+/// binaries `~/.cargo/bin` puts on the PATH, the file a login shell sources,
+/// and cargo's own configuration (which names the compiler it starts).
+/// Installing a tool is a write somebody approves.
+const CACHE_EXECUTABLES: &[&str] = &[".cargo/bin", ".cargo/env", ".cargo/config.toml", ".cargo/config"];
 
 /// Paths as the kernel will see them: absolute, symlinks resolved, each one
 /// once, in a stable order.
@@ -553,7 +587,11 @@ mod tests {
             assert!(sandbox.writable.contains(&dir), "{} should be writable", dir.display());
         }
         assert!(!sandbox.writable.contains(&home), "the home directory itself is not");
-        assert_eq!(sandbox.protected, vec![root.join(".git/hooks"), root.join(".git/config")]);
+        assert_eq!(
+            sandbox.protected,
+            vec![home.join(".cargo/bin"), home.join(".cargo/env"), home.join(".cargo/config.toml"), home.join(".cargo/config"), root.join(".git/hooks"), root.join(".git/config")]
+        );
+        assert_eq!(sandbox.pinned, vec![root.join(".git")], "the git directory cannot be moved aside");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -589,15 +627,54 @@ mod tests {
         let sandbox = Sandbox {
             writable: vec![PathBuf::from("/project")],
             protected: vec![PathBuf::from("/project/.git/hooks")],
+            pinned: vec![PathBuf::from("/project/.git")],
+            sockets: vec![PathBuf::from("/sockets/klide-501")],
             network: true,
         };
         let profile = sandbox.profile();
         let open = profile.find("(subpath \"/project\")").unwrap();
         let closed = profile.find("(deny file-write*\n  (subpath \"/project/.git/hooks\")").unwrap();
         assert!(open < closed, "the last matching rule wins");
+        assert!(profile.contains("(literal \"/project/.git\")"), "the folder itself is pinned, its contents stay open");
+        assert!(profile.contains("(subpath \"/sockets/klide-501\")\n"), "nothing is written beside the daemon's socket");
+        assert!(
+            profile.ends_with("(deny network-outbound (remote unix-socket (subpath \"/sockets/klide-501\")))\n"),
+            "and the socket is closed with the network open too"
+        );
     }
 
     #[cfg(target_os = "macos")]
+    /// The real kernel, not the profile text: the git directory cannot be
+    /// moved aside to reach its hooks, and git still commits inside it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_contained_command_cannot_move_the_git_directory_aside() {
+        let base = scratch("pinned").canonicalize().unwrap();
+        let root = base.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let sh = |script: &str, sandbox: Option<&Sandbox>| {
+            let mut cmd = match sandbox.and_then(|s| s.wrap("sh")) {
+                Some((program, args)) => {
+                    let mut cmd = std::process::Command::new(program);
+                    cmd.args(args);
+                    cmd
+                }
+                None => std::process::Command::new("sh"),
+            };
+            cmd.args(["-c", script]).current_dir(&root).output().unwrap().status.success()
+        };
+        assert!(sh("git init -q", None));
+        let sandbox = Sandbox::for_workspace_in(&root, None, &base.join("tmp"));
+        assert!(!sh("mv .git .gx", Some(&sandbox)), "the rename is the bypass");
+        assert!(root.join(".git").is_dir());
+        assert!(!sh("echo x > .git/hooks/pre-commit", Some(&sandbox)));
+        assert!(
+            sh("echo hi > a.txt && git add a.txt && git -c user.name=t -c user.email=t@klide.local commit -qm one", Some(&sandbox)),
+            "ordinary git work still goes through"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn wrapping_puts_the_shell_behind_sandbox_exec() {
         let sandbox = Sandbox::default();

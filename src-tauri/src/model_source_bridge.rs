@@ -276,6 +276,14 @@ fn start(
                                 && h.value.as_str().strip_prefix("Bearer ") == Some(&token))
                     });
                 if !authorized {
+                    // Answering drains the body the caller declared, into one
+                    // allocation of that size, on this accept thread. A
+                    // stranger's large claim is left unread instead.
+                    if request.body_length().is_some_and(|len| len > UNAUTHORIZED_BODY_MAX) {
+                        let stream = request.upgrade("klide-abandoned", tiny_http::Response::empty(401));
+                        std::mem::forget(stream);
+                        continue;
+                    }
                     error(request, 401, "Invalid source bridge credential.");
                     continue;
                 }
@@ -286,6 +294,10 @@ fn start(
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+/// The most an unauthenticated caller may make this bridge read before it
+/// hangs up. No real client is refused: a routed CLI always carries the token.
+const UNAUTHORIZED_BODY_MAX: usize = 64 * 1024;
+
 fn normalize_system_messages(input: &mut Value) -> Result<(), String> {
     let messages = input["messages"]
         .as_array_mut()

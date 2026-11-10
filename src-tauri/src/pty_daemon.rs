@@ -61,12 +61,17 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
+    socket_dir().join(format!("ptyd-{hash:016x}.sock"))
+}
+
+/// The per-user folder every daemon socket lives in. The command sandbox
+/// closes it: a contained command that could connect here could ask for a
+/// shell that is not contained.
+pub fn socket_dir() -> PathBuf {
     let uid = std::fs::metadata(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
         .map(|m| std::os::unix::fs::MetadataExt::uid(&m))
         .unwrap_or(0);
-    std::env::temp_dir()
-        .join(format!("klide-{uid}"))
-        .join(format!("ptyd-{hash:016x}.sock"))
+    std::env::temp_dir().join(format!("klide-{uid}"))
 }
 
 /// The shared secret a client must present as its first request line. Lives
