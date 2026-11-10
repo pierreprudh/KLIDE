@@ -20,7 +20,7 @@ document.documentElement.dataset.theme = params.get("theme") ?? "klide-light";
 const noop = () => {};
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+  <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg-elevated)" }}>
     <WelcomeScreen
       recentFolders={["/Users/you/Documents/klide", "/Users/you/code/notes", "/Users/you/code/site"]}
       onOpenFolder={noop}
