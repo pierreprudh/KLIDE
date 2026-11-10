@@ -186,6 +186,7 @@ export function FloatingPanel({
   return (
     <div
       ref={panelRef}
+      className="klide-floating-panel"
       onMouseDown={onFocus}
       style={{
         position: "absolute",
