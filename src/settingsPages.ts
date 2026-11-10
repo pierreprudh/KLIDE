@@ -48,6 +48,7 @@ const SEARCH_PAGES: Record<string, string> = {
   "Max turns": "ai-execution",
   "Command timeout": "ai-execution",
   "Sandbox unreviewed commands": "ai-execution",
+  "Network in sandboxed commands": "ai-execution",
   "Test after edit": "ai-execution",
   "Tool overrides": "ai-harness",
   "System prompts": "ai-prompts",

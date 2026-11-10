@@ -37,8 +37,13 @@
 //! hooks and git config are closed again — a command that could plant a hook
 //! would run unsandboxed the next time a person commits.
 //!
-//! The network stays on in this slice. Closing it needs the approval card a
-//! denial should raise, and without one an `npm install` would just fail.
+//! **The network** is closed for a contained command unless the person
+//! opened it in Settings. Loopback stays, so a local proxy is still a way
+//! out — the wall is against a command reaching the internet by itself, not
+//! against one this machine already forwards for.
+//!
+//! **The way out** is asked for by name: `run_command` with `unsandboxed:
+//! true`, which is always put to the person.
 //!
 //! Pure on purpose: this file builds text and an argv, and `process.rs` is
 //! the only place that starts anything.
@@ -146,7 +151,7 @@ impl Sandbox {
             protected.push(git.join("config"));
             writable.push(git);
         }
-        Sandbox { writable, protected, network: true }
+        Sandbox { writable, protected, network: false }
     }
 
     /// The program and leading arguments that run `shell` inside this
@@ -235,56 +240,85 @@ pub fn enabled() -> bool {
         return false;
     }
     // Tests decide for themselves; they never read the developer's setting.
-    cfg!(test) || settings_path().map(|path| stored_at(&path)).unwrap_or(true)
+    cfg!(test) || stored().commands
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+/// The stored choices. `network` is whether a contained command may reach
+/// beyond loopback; it is absent from files written before it existed, and
+/// absent means closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct Stored {
     commands: bool,
+    #[serde(default)]
+    network: bool,
+}
+
+impl Default for Stored {
+    fn default() -> Self {
+        Stored { commands: true, network: false }
+    }
 }
 
 fn settings_path() -> Option<PathBuf> {
     crate::cli::home_dir_path().map(|home| home.join(".klide/sandbox.json"))
 }
 
-/// The stored choice. No file means on, and so does a file that cannot be
-/// read: a damaged setting must not be the thing that removes the wall.
-fn stored_at(path: &Path) -> bool {
+fn stored() -> Stored {
+    settings_path().map(|path| stored_at(&path)).unwrap_or_default()
+}
+
+/// The stored choices. No file means contained with the network closed, and
+/// so does a file that cannot be read: a damaged setting must not be the
+/// thing that removes the wall.
+fn stored_at(path: &Path) -> Stored {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Stored>(&bytes).ok())
-        .map(|stored| stored.commands)
-        .unwrap_or(true)
+        .unwrap_or_default()
 }
 
-fn store_at(path: &Path, commands: bool) -> Result<(), String> {
+fn store_at(path: &Path, stored: Stored) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Create the Klide settings folder: {e}"))?;
     }
-    let bytes = serde_json::to_vec_pretty(&Stored { commands }).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(&stored).map_err(|e| e.to_string())?;
     crate::durable::write_atomic(path, &bytes)
 }
 
 /// What Settings shows: whether this platform can contain a command at all,
-/// and whether the person has it on.
+/// whether the person has it on, and whether contained commands keep the
+/// network.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub supported: bool,
     pub enabled: bool,
+    pub network: bool,
 }
 
 pub fn status() -> Status {
-    Status {
-        supported: cfg!(target_os = "macos"),
-        enabled: settings_path().map(|path| stored_at(&path)).unwrap_or(true),
-    }
+    let stored = stored();
+    Status { supported: cfg!(target_os = "macos"), enabled: stored.commands, network: stored.network }
 }
 
-pub fn set_enabled(commands: bool) -> Result<Status, String> {
+/// Change either choice; the one left out keeps its value.
+pub fn set(commands: Option<bool>, network: Option<bool>) -> Result<Status, String> {
     let path = settings_path().ok_or("Cannot locate the Klide settings directory.")?;
-    store_at(&path, commands)?;
+    let mut stored = stored_at(&path);
+    if let Some(commands) = commands {
+        stored.commands = commands;
+    }
+    if let Some(network) = network {
+        stored.network = network;
+    }
+    store_at(&path, stored)?;
     Ok(status())
+}
+
+/// Whether a contained command keeps the network. Closed unless the person
+/// opened it; tests always get the default.
+fn network_open() -> bool {
+    !cfg!(test) && stored().network
 }
 
 /// Whether commands are being contained here at all: a platform that has a
@@ -295,7 +329,7 @@ pub fn active() -> bool {
 
 /// The sandbox for one command, or `None` when it runs as approved.
 pub fn for_command(trusted: super::permission::Trusted, exact_rule: bool, root: &Path) -> Option<Sandbox> {
-    (active() && covers(trusted, exact_rule)).then(|| Sandbox::for_workspace(root))
+    (active() && covers(trusted, exact_rule)).then(|| Sandbox { network: network_open(), ..Sandbox::for_workspace(root) })
 }
 
 /// Whether a command that asked to leave the sandbox has to be put to the
@@ -306,20 +340,53 @@ pub fn must_ask(unsandboxed: bool, trusted: super::permission::Trusted, exact_ru
 }
 
 /// What the approval card says about a command asking to leave the sandbox.
-pub const ESCALATION_REASON: &str = " The agent asks to run this outside the sandbox, after a sandboxed attempt was refused: it could then write anywhere your account can. Full auto and wildcard rules don't cover this; it always asks.";
+pub const ESCALATION_REASON: &str = " The agent asks to run this outside the sandbox, after a sandboxed attempt was refused: it could then write anywhere your account can and use the network. Full auto and wildcard rules don't cover this; it always asks.";
 
 /// Added to the line that reports a contained background command started —
 /// its refusals arrive later, in output nobody is waiting on.
-pub const BACKGROUND_NOTE: &str = " It runs sandboxed: it can write only inside the project, temp folders and tool caches. If its output shows a refused write the task needs, start it again with unsandboxed: true.";
+pub const BACKGROUND_NOTE: &str = " It runs sandboxed: it can write only inside the project, temp folders and tool caches, and may have no network. If its output shows a refusal the task cannot do without, start it again with unsandboxed: true.";
 
 /// What the model is told when a contained command hit the wall. Without it
 /// "Operation not permitted" reads as a broken tool, and the next move is to
-/// try the same write a different way.
-pub const DENIAL_NOTE: &str = "\n\n[Klide] This command ran sandboxed because nobody approved it by hand: it can write only inside the project, temp folders and tool caches, and not to git hooks or git config. If the task needs the refused write, run the same command again with unsandboxed: true — the user will be asked to approve it. Do not look for another route to that path.";
+/// try the same thing a different way.
+const WRITE_NOTE: &str = "\n\n[Klide] This command ran sandboxed because nobody approved it by hand: it can write only inside the project, temp folders and tool caches, and not to git hooks or git config. If the task needs the refused write, run the same command again with unsandboxed: true — the user will be asked to approve it. Do not look for another route to that path.";
 
-/// Whether a contained command's output shows the sandbox refusing a write.
-pub fn was_denied(output: &str) -> bool {
-    output.contains("Operation not permitted")
+const NETWORK_NOTE: &str = "\n\n[Klide] This command ran sandboxed because nobody approved it by hand, and sandboxed commands have no network beyond this machine. If the task needs the network, run the same command again with unsandboxed: true — the user will be asked to approve it. Do not look for another route out.";
+
+/// The note for a failed contained command, when its output shows the
+/// sandbox was the reason. A refused write and a refused connection both
+/// print "Operation not permitted"; a closed name service prints whatever
+/// the tool says when a host does not resolve.
+pub fn denial_note(sandbox: &Sandbox, output: &str) -> Option<&'static str> {
+    if !sandbox.network && looks_offline(output) {
+        Some(NETWORK_NOTE)
+    } else if output.contains("Operation not permitted") {
+        Some(WRITE_NOTE)
+    } else {
+        None
+    }
+}
+
+/// How tools report a host that would not resolve or a network that is not
+/// there. Matched without case; a miss costs a note, never a wrong result.
+const OFFLINE_SIGNS: &[&str] = &[
+    "could not resolve host",
+    "could not resolve hostname",
+    "couldn't resolve host",
+    "enotfound",
+    "eai_again",
+    "getaddrinfo",
+    "name or service not known",
+    "nodename nor servname",
+    "temporary failure in name resolution",
+    "failed to lookup address",
+    "dns error",
+    "network is unreachable",
+];
+
+fn looks_offline(output: &str) -> bool {
+    let lower = output.to_lowercase();
+    OFFLINE_SIGNS.iter().any(|sign| lower.contains(sign))
 }
 
 /// Whether this process may apply a Seatbelt profile at all. A test run that
@@ -428,15 +495,28 @@ mod tests {
     }
 
     #[test]
-    fn the_stored_choice_defaults_to_on_and_survives_a_damaged_file() {
+    fn the_stored_choices_default_to_contained_and_offline_and_survive_a_damaged_file() {
         let path = scratch("setting").join("nested/sandbox.json");
-        assert!(stored_at(&path), "no file: on");
-        store_at(&path, false).unwrap();
-        assert!(!stored_at(&path));
-        store_at(&path, true).unwrap();
-        assert!(stored_at(&path));
+        assert_eq!(stored_at(&path), Stored { commands: true, network: false }, "no file");
+        store_at(&path, Stored { commands: false, network: true }).unwrap();
+        assert_eq!(stored_at(&path), Stored { commands: false, network: true });
+        // A file from before the network choice existed.
+        std::fs::write(&path, br#"{ "commands": true }"#).unwrap();
+        assert_eq!(stored_at(&path), Stored { commands: true, network: false }, "absent means closed");
         std::fs::write(&path, b"{ not json").unwrap();
-        assert!(stored_at(&path), "a damaged setting must not remove the wall");
+        assert_eq!(stored_at(&path), Stored::default(), "a damaged setting must not remove the wall");
+    }
+
+    #[test]
+    fn the_note_names_what_the_sandbox_refused() {
+        let offline = Sandbox::default();
+        let online = Sandbox { network: true, ..Default::default() };
+        let dns = "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com";
+        assert_eq!(denial_note(&offline, dns), Some(NETWORK_NOTE));
+        assert_eq!(denial_note(&online, dns), None, "with the network open, a bad hostname is just a bad hostname");
+        assert_eq!(denial_note(&offline, "npm error code ENOTFOUND"), Some(NETWORK_NOTE));
+        assert_eq!(denial_note(&online, "sh: /etc/hosts: Operation not permitted"), Some(WRITE_NOTE));
+        assert_eq!(denial_note(&offline, "1 test failed"), None, "an ordinary failure gets no note");
     }
 
     #[test]
@@ -468,7 +548,7 @@ mod tests {
         let (root, home, temp) = (base.join("project"), base.join("home"), base.join("tmp/T"));
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let sandbox = Sandbox::for_workspace_in(&root, Some(&home), &temp);
-        assert!(sandbox.network);
+        assert!(!sandbox.network, "closed until the policy opens it");
         for dir in [root.clone(), temp.clone(), base.join("tmp/C"), home.join(".cargo"), home.join("Library/Caches"), root.join(".git")] {
             assert!(sandbox.writable.contains(&dir), "{} should be writable", dir.display());
         }

@@ -243,8 +243,8 @@ async fn command_sandbox_status() -> Result<agent::CommandSandboxStatus, String>
 }
 
 #[tauri::command]
-async fn command_sandbox_set(enabled: bool) -> Result<agent::CommandSandboxStatus, String> {
-    blocking::run(move || agent::command_sandbox_set(enabled)).await
+async fn command_sandbox_set(enabled: Option<bool>, network: Option<bool>) -> Result<agent::CommandSandboxStatus, String> {
+    blocking::run(move || agent::command_sandbox_set(enabled, network)).await
 }
 
 #[tauri::command]

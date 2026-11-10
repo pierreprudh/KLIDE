@@ -1558,8 +1558,8 @@ where
         tools::CommandRun::Done(result) => result,
         tools::CommandRun::Cancelled => return Ok(ToolOutcome::Cancelled),
     };
-    if sandbox.is_some() && !result.ok && sandbox::was_denied(&result.content) {
-        result.content.push_str(sandbox::DENIAL_NOTE);
+    if let Some(note) = sandbox.filter(|_| !result.ok).and_then(|sandbox| sandbox::denial_note(sandbox, &result.content)) {
+        result.content.push_str(note);
     }
     let (Some(top), Some(before)) = (repo, before) else {
         return Ok(ToolOutcome::Produced(result));
