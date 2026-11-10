@@ -19,8 +19,8 @@ pub use sandbox::Status as CommandSandboxStatus;
 pub fn command_sandbox_status() -> CommandSandboxStatus {
     sandbox::status()
 }
-pub fn command_sandbox_set(enabled: bool) -> Result<CommandSandboxStatus, String> {
-    sandbox::set_enabled(enabled)
+pub fn command_sandbox_set(enabled: Option<bool>, network: Option<bool>) -> Result<CommandSandboxStatus, String> {
+    sandbox::set(enabled, network)
 }
 pub(crate) mod command_env;
 mod observers;

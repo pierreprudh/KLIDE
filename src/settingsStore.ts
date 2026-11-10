@@ -476,6 +476,7 @@ export const SETTINGS = {
       { label: "Max turns", section: "ai", keywords: "max turns loop limit iterations" },
       { label: "Command timeout", section: "ai", keywords: "command timeout shell run seconds" },
       { label: "Sandbox unreviewed commands", section: "ai", keywords: "sandbox full auto contain shell command write disk security" },
+      { label: "Network in sandboxed commands", section: "ai", keywords: "sandbox network internet offline install push download full auto" },
       { label: "Test after edit", section: "ai", keywords: "test verify after edit syntax check command" },
       { label: "Auto-draft memory on run done", section: "ai", keywords: "memory draft auto note handoff summarize pending review" },
       { label: "Eyes model (OCR)", section: "ai", keywords: "eyes ocr vision image photo screenshot read text describe blind model" },

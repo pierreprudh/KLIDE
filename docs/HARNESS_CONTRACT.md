@@ -369,18 +369,21 @@ Seatbelt profile; everything it starts inherits the profile.
   worktree's sits outside it), temp folders, and `~/.cargo`, `~/.npm`,
   `~/.cache`, `~/Library/Caches`. Git hooks and git config are closed again
   inside that: a planted hook would run unsandboxed at the next commit.
-- **Network** is on. Seatbelt cannot filter by host, so the profile can only
-  offer all or loopback; closing it waits for an approval card on denial.
+- **Network** is closed beyond this machine unless the person opens it in
+  Settings. Seatbelt cannot filter by host, so the choice is all or loopback;
+  the per-host allowlist keeps governing `web_fetch` and connectors. Name
+  lookups are closed with it. Loopback and local sockets stay open, so a proxy
+  already listening on this machine is still a way out.
 
-A refused write returns the command's output plus a note naming the sandbox
-and the way out: `run_command` with `unsandboxed: true`. That request is put
+A refused write, or a failure that reads like a closed network, returns the
+command's output plus a note naming the sandbox and the way out: `run_command` with `unsandboxed: true`. That request is put
 to the person whenever the command would otherwise have run contained — the
 full-auto rung and wildcard rules let a command run, they never let it out —
 and the card says what is being asked. Approved, it runs as any approved
 command does. Nothing is re-run automatically: a refused command may already
 have done half its work, so the model decides whether to ask.
 
-The choice is stored in `~/.klide/sandbox.json` and read in Rust at each
+Both choices are stored in `~/.klide/sandbox.json` and read in Rust at each
 command: the background host and child runs see the same answer, and a run
 request has no field that could ask for less. A missing or damaged file means
 on. `KLIDE_COMMAND_SANDBOX=0` in the app's environment turns it off for a
