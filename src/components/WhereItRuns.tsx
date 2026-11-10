@@ -13,7 +13,7 @@
 // the one CLI the first slice runs there.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { MachineIcon, ThisMacIcon } from "../icons";
-import { machineLabel, machinesList, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
+import { machineLabel, machinesList, subscribeMachines, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
 import { restoreStartStageMachine, setStartStageMachine, startStageMachine, subscribeStartStageMachine } from "../conversationMachines";
 import { lastKnownStatus, machineStatusCheck, machineStatusVersion, refreshMachineStatus, subscribeMachineStatus } from "../machineStatus";
 import { pushToast } from "../toast";
@@ -45,12 +45,15 @@ export function useWhereItRuns({
 }): WhereItRunsMenu | null {
   const machine = useStartStageMachine();
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [loaded, setLoaded] = useState(false);
   useSyncExternalStore(subscribeMachineStatus, machineStatusVersion, machineStatusVersion);
 
   useEffect(() => {
     let live = true;
-    machinesList().then((list) => { if (live) setMachines(list); }).catch(() => {});
-    return () => { live = false; };
+    const reload = () => { void machinesList().then((list) => { if (live) { setMachines(list); setLoaded(true); } }).catch(() => {}); };
+    reload();
+    const unsubscribe = subscribeMachines(reload);
+    return () => { live = false; unsubscribe(); };
   }, []);
 
   // Each project opens on the Machine it last started on. A remembered Remote
@@ -77,8 +80,8 @@ export function useWhereItRuns({
 
   // A machine that left the store is no longer a choice.
   useEffect(() => {
-    if (machine && machines.length > 0 && !machines.some((m) => m.id === machine)) setStartStageMachine(null, workspaceRoot);
-  }, [machine, machines, workspaceRoot]);
+    if (loaded && machine && !machines.some((m) => m.id === machine)) setStartStageMachine(null, workspaceRoot);
+  }, [loaded, machine, machines, workspaceRoot]);
 
   // Readiness ahead of time, so the menu never waits on SSH.
   useEffect(() => {

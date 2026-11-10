@@ -1,11 +1,13 @@
 :root {
-  /* Surfaces — bone cream foundation. See DESIGN.md for the full spec. */
-  --bg:           #f7f4ed;
-  --bg-elevated:  #fcfbf8;
+  /* Surfaces — cool light-grey chrome and white content. See Design.md. */
+  --bg:           #F5F6F7;
+  /* Settings uses the same neutral chrome as the rest of the app. */
+  --settings-sidebar-bg: var(--bg);
+  --bg-elevated:  #FFFFFF;
   /* The code editor's own surface — mirrors Monaco's editor.background in
      theme.ts, so chrome that must merge into the editor (the active tab)
      matches it exactly. */
-  --editor-bg:    #FCFBF8;
+  --editor-bg:    #FFFFFF;
   /* The editor tab strip: one step off the editor's surface — darker on
      light themes, lighter on dark — so the active tab (--editor-bg) reads
      as cut out of it. Resolves per theme through --fg-strong/--editor-bg. */
@@ -27,7 +29,7 @@
   --fg-dim:       rgba(28, 28, 28, 0.4);
 
   /* Lines — hairline borders replace drop-shadows for containment */
-  --border:        #eceae4;
+  --border:        #E4E7EB;
   --border-strong: rgba(28, 28, 28, 0.4);
 
   /* Accent — soft sage green. Deliberately not blue. */
@@ -37,7 +39,7 @@
 
   /* Controls */
   --control-primary-bg: #1c1c1c;
-  --control-primary-fg: #fcfbf8;
+  --control-primary-fg: #FFFFFF;
 
   /* Focus ring (for accessibility on inputs/interactive elements) */
   --focus-ring:   rgba(90, 123, 76, 0.32);
@@ -75,7 +77,7 @@
   --chart-7: color-mix(in srgb, var(--accent) 20%, var(--bg));
 
   /* Context-window breakdown — one soft hue per kind of token, so the bar's
-     segments can be told apart at 7px. Pastel mid-tones that read on bone
+     segments can be told apart at 7px. Pastel mid-tones that read on white
      and on the dark surfaces alike. The context popover only. */
   --ctx-messages: #A9BCEB;  /* periwinkle */
   --ctx-tools:    #7DBF95;  /* green      */
@@ -106,10 +108,10 @@
   --code-comment: rgba(28, 28, 28, 0.4);
 
   /* Terminal — same family as the canvas, slightly cooler for contrast */
-  --terminal-bg:      #f5f2e9;
+  --terminal-bg:      #FFFFFF;
   --terminal-fg:      #1c1c1c;
   --terminal-muted:   #5f5f5d;
-  --terminal-border:  #eceae4;
+  --terminal-border:  #E4E7EB;
   --terminal-hover:   rgba(28, 28, 28, 0.04);
   --terminal-cursor:  #1c1c1c;
 
@@ -124,17 +126,9 @@
     0 10px 34px rgba(28, 28, 28, 0.055),
     0 32px 90px rgba(28, 28, 28, 0.040);
 
-  /* The composer family. The chatbox sits a step off the canvas — the same
-     frost as a panel, warmed by a few percent of the theme's accent — and
-     every tool that opens out of it (provider, model, effort, context, attach)
-     is cut from the same surface, so the cluster reads as one instrument
-     instead of four popovers that happen to be near each other.
-
-     Derived from --panel-glass / --panel-border / --accent rather than written
-     per theme: these are declared on the same element the [data-theme] blocks
-     write to, so each theme's own accent and surface feed the mix and all five
-     stay in step for free. 5% is a temperature shift, not a sage moment — the
-     accent still belongs to whatever is actually active. */
+  /* One composer family for the chatbox and its menus. Dark themes retain
+     their existing accent mix; light themes override these below with neutral
+     surfaces. Shared tokens keep the composer and its popovers in step. */
   --composer-glass:   color-mix(in srgb, var(--panel-glass) 95%, var(--accent));
   --composer-border:  color-mix(in srgb, var(--panel-border) 88%, var(--accent));
   /* The family surface with the pointer on it. Mixing toward --fg lifts it in
@@ -222,14 +216,29 @@
   --rail-name-write: 800ms;
 }
 
-/* Sage Garden — Klide Light with the temperature corrected. Same bone-cream
-   identity, but the ink turns blue-charcoal (#1A1F2E) and the sage drops two
-   steps of chroma (#7C9082), so the accent recedes into chrome instead of
-   reading as olive. Cool ink + cool neutrals on warm paper is the tension the
-   flat-cream original is missing. Everything derived (chart ramp, composer
-   family, git lanes 2-8, syntax) follows from --accent / --bg / --fg for free. */
+/* Light-theme composers stay neutral; accents belong to interactive states. */
+:root:not([data-theme]),
+:root[data-theme="klide-light"],
+:root[data-theme="sage-garden"],
+:root[data-theme="github-light"],
+:root[data-theme="cerulean"] {
+  --composer-glass: var(--panel-glass);
+  --composer-border: var(--panel-border);
+}
+
+/* Light-theme content is white, with light-grey navigation chrome. */
+:root:not([data-theme]) :is(.klide-focus-main, .klide-focus-ai-surface),
+:root:is([data-theme="klide-light"], [data-theme="sage-garden"], [data-theme="github-light"], [data-theme="cerulean"]) :is(.klide-focus-main, .klide-focus-ai-surface) {
+  background: var(--bg-elevated);
+}
+:root:not([data-theme]) .klide-focus-rail,
+:root:is([data-theme="klide-light"], [data-theme="sage-garden"], [data-theme="github-light"], [data-theme="cerulean"]) .klide-focus-rail {
+  background: var(--bg);
+}
+
+/* Sage Garden shares the grey/white surfaces, with cool ink and muted sage. */
 :root[data-theme="sage-garden"] {
-  --bg:           #F8F7F3;
+  --bg:           #F5F6F7;
   --bg-elevated:  #FFFFFF;
   --editor-bg:    #FFFFFF;
   --bg-hover:     rgba(26, 31, 46, 0.045);
@@ -241,7 +250,7 @@
   --fg-muted:     #5C6472;
   --fg-dim:       rgba(26, 31, 46, 0.40);
 
-  --border:        #E8E6E1;
+  --border:        #E4E7EB;
   --border-strong: rgba(26, 31, 46, 0.34);
 
   --accent:       #7C9082;
@@ -266,10 +275,10 @@
 
   --code-comment: rgba(26, 31, 46, 0.42);
 
-  --terminal-bg:      #F4F3EE;
+  --terminal-bg:      #FFFFFF;
   --terminal-fg:      #1A1F2E;
   --terminal-muted:   #5C6472;
-  --terminal-border:  #E8E6E1;
+  --terminal-border:  #E4E7EB;
   --terminal-hover:   rgba(26, 31, 46, 0.045);
   --terminal-cursor:  #1A1F2E;
 
@@ -283,16 +292,9 @@
   --shadow-raised: 0 1px 2px rgba(26, 31, 46, 0.08);
 }
 
-/* Sage Garden Dark — the same correction Midnight never got. Midnight inherited
-   Cursor's blue-violet accent, so Klide reads sage in light and Cursor in dark;
-   here the accent is the brand sage lifted to carry on a dark surface (#8FAA97),
-   and every derived surface (chart ramp, git lane 1, composer warmth, focus
-   rings, switches) follows it back on-brand for free.
-   Midnight is also warm-on-warm — #C8C6BE text on #11110F. This keeps the
-   near-black warm, because that is the bone-cream identity inverted, and cools
-   the text instead: the same warm-ground / cool-light tension as the light
-   theme, read in the other direction. */
+/* Sage Garden Dark retains its near-black surfaces and lifted sage accent. */
 :root[data-theme="sage-garden-dark"] {
+  --settings-sidebar-bg: var(--bg);
   --bg:           #131512;
   --bg-elevated:  #191C18;
   --editor-bg:    #131512;
@@ -350,6 +352,7 @@
 
 :root[data-theme="cursor-dark"],
 :root[data-theme="dark"] {
+  --settings-sidebar-bg: var(--bg);
   --bg:           #11110F;
   --bg-elevated:  #171715;
   --editor-bg:    #11110F;
@@ -403,6 +406,7 @@
 }
 
 :root[data-theme="vscode-dark"] {
+  --settings-sidebar-bg: var(--bg);
   --bg:           #1E1E1E;
   --bg-elevated:  #252526;
   --editor-bg:    #1E1E1E;
@@ -454,8 +458,8 @@
 }
 
 :root[data-theme="github-light"] {
-  --bg:           #FFFFFF;
-  --bg-elevated:  #F6F8FA;
+  --bg:           #F5F6F7;
+  --bg-elevated:  #FFFFFF;
   --editor-bg:    #FFFFFF;
   --bg-hover:     #EAEEF2;
   --bg-selected:  #DDF4FF;
@@ -476,7 +480,7 @@
   --control-primary-bg: #1F2328;
   --control-primary-fg: #FFFFFF;
 
-  --terminal-bg:      #F6F8FA;
+  --terminal-bg:      #FFFFFF;
   --terminal-fg:      #24292F;
   --terminal-muted:   #6E7781;
   --terminal-border:  #D8DEE4;
@@ -492,17 +496,11 @@
     0 28px 80px rgba(31, 35, 40, 0.045);
 }
 
-/* Cerulean — Codex's arrangement with one blue (#2596BE): a white canvas, a
-   warm-neutral grey rail, near-black ink a touch warm, and the accent reserved for what
-   is highlighted — the selected row, selection, focus, the cursor. Nothing
-   else is tinted: the greys lean a hair warm (never blue-grey), and the composer
-   family is plain white on a hairline instead of taking the usual 5% accent
-   warmth. Hover deepens (#1E80A3) because #2596BE is ~3.3:1 on white.
-   Lane 2 turns sage because the default muted blue would twin the accent. */
+/* Cerulean shares the grey/white surfaces, with blue for active states. */
 :root[data-theme="cerulean"] {
-  --bg:           #FFFEFC;
-  --bg-elevated:  #F7F6F2;
-  --editor-bg:    #FFFEFC;
+  --bg:           #F5F6F7;
+  --bg-elevated:  #FFFFFF;
+  --editor-bg:    #FFFFFF;
   --bg-hover:     rgba(28, 27, 24, 0.045);
   --bg-selected:  rgba(37, 150, 190, 0.12);
 
@@ -512,7 +510,7 @@
   --fg-muted:     #6B6963;
   --fg-dim:       rgba(28, 27, 24, 0.40);
 
-  --border:        #EAE8E2;
+  --border:        #E4E7EB;
   --border-strong: rgba(28, 27, 24, 0.22);
 
   --accent:       #2596BE;
@@ -520,7 +518,7 @@
   --accent-hover: #1E80A3;
 
   --control-primary-bg: #1C1B18;
-  --control-primary-fg: #FFFEFC;
+  --control-primary-fg: #FFFFFF;
   --focus-ring:   rgba(37, 150, 190, 0.32);
 
   --success:      #3E8A66;
@@ -539,14 +537,14 @@
 
   --code-comment: rgba(28, 27, 24, 0.42);
 
-  --terminal-bg:      #F7F6F2;
+  --terminal-bg:      #FFFFFF;
   --terminal-fg:      #1C1B18;
   --terminal-muted:   #6B6963;
-  --terminal-border:  #EAE8E2;
+  --terminal-border:  #E4E7EB;
   --terminal-hover:   rgba(28, 27, 24, 0.045);
   --terminal-cursor:  #2596BE;
 
-  --panel-glass:      color-mix(in srgb, #FFFEFC 88%, transparent);
+  --panel-glass:      color-mix(in srgb, #FFFFFF 88%, transparent);
   --panel-border:     color-mix(in srgb, var(--border) 90%, transparent);
   --panel-highlight:  rgba(255, 255, 255, 0.9);
   --panel-shadow:
@@ -556,9 +554,9 @@
   --shadow-raised: 0 1px 2px rgba(28, 27, 24, 0.08);
 
   /* The chatbox and everything that opens out of it: white, no accent mix. */
-  --composer-glass:       #FFFEFC;
-  --composer-border:      #E6E3DC;
-  --composer-glass-hover: #FBFAF6;
+  --composer-glass:       #FFFFFF;
+  --composer-border:      #E4E7EB;
+  --composer-glass-hover: #F5F6F7;
 }
 
 /* The one place the rail shows blue: the row you are on. */
@@ -572,6 +570,7 @@
 }
 
 :root[data-theme="solarized-dark"] {
+  --settings-sidebar-bg: var(--bg);
   --bg:           #002B36;
   --bg-elevated:  #073642;
   --editor-bg:    #002B36;
@@ -1034,14 +1033,7 @@ textarea.klide-diff-comment-input:focus-visible {
   transition: background var(--motion-fast) var(--ease-out);
 }
 
-/* Quiet, open sections: the controls carry their own boundaries. */
-.klide-settings-content .klide-surface {
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  overflow: visible;
-}
+/* Rounded Settings panels are defined in settings/settings.css. */
 .klide-settings-row:last-child {
   border-bottom: none;
 }
@@ -1304,22 +1296,6 @@ textarea.klide-diff-comment-input:focus-visible {
   color: var(--fg-dim);
   cursor: pointer;
 }
-.klide-settings-help-button svg,
-.klide-settings-chevron svg {
-  width: 14px;
-  height: 14px;
-}
-.klide-settings-help-button svg {
-  transition: transform 180ms var(--ease-out);
-}
-.klide-settings-help-button[aria-expanded="true"] svg {
-  transform: rotate(90deg);
-}
-@media (prefers-reduced-motion: reduce) {
-  .klide-settings-help-button svg {
-    transition: none;
-  }
-}
 .klide-settings-help-button:hover,
 .klide-settings-help-button[aria-expanded="true"] {
   color: var(--fg-strong);
@@ -1372,16 +1348,6 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-settings-nav-item[data-active="false"]:hover {
   background: var(--bg-hover);
 }
-.klide-settings-chevron {
-  display: inline-flex;
-  align-items: center;
-  width: 14px;
-  height: 14px;
-  transition: transform 300ms var(--ease-out);
-}
-.klide-settings-nav-item[aria-expanded="true"] .klide-settings-chevron {
-  transform: rotate(90deg);
-}
 /* Also `.klide-reveal`: the same opening for any row whose detail unfolds
    beneath it (a self-hosted endpoint's models). */
 .klide-settings-subpages-reveal,
@@ -1409,7 +1375,6 @@ textarea.klide-diff-comment-input:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .klide-settings-nav-item,
   .klide-settings-nav-item::before,
-  .klide-settings-chevron,
   .klide-settings-subpages-reveal[data-open],
   .klide-reveal[data-open] {
     transition: none;
@@ -1768,7 +1733,7 @@ textarea.klide-diff-comment-input:focus-visible {
   --w-placeholder-bg: rgba(255, 255, 255, 0.02);
   /* Gutter follows the active theme's own elevated surface — in every theme,
      light OR dark — so the welcome never drifts from the rest of the app
-     (VS Code Dark #252526, Solarized #073642, Klide Light #fcfbf8, …). Colour
+     (VS Code Dark #252526, Solarized #073642, Klide Light #FFFFFF, …). Colour
      lives inside the framed film card; the gutter is the calm backdrop it
      floats on, and the near-black card always stays the darkest element. */
   background: var(--bg-elevated);
@@ -1801,9 +1766,8 @@ textarea.klide-diff-comment-input:focus-visible {
   /* Core brand sage on the off-white — no need to lighten here. */
   --w-ring:        rgba(90, 123, 76, 0.30);
   --w-ring-solid:  rgba(90, 123, 76, 0.55);
-  /* Gutter is inherited from the base rule (var(--bg-elevated)) — in light
-     themes that resolves to the calm off-white (#fcfbf8 / #F6F8FA), the
-     competitor idiom rather than flat cream or clinical pure white. */
+  /* Gutter is inherited from the base rule (var(--bg-elevated)) — white content in light
+     themes, with the light-grey chrome providing separation. */
 }
 
 /* Two-pane split: content column on the left, framed film card on the
@@ -3712,7 +3676,7 @@ button:focus-visible .menu-leadout {
 
    So Klide's visuals get the same shape. The neutrals come from Klide's own
    tokens, which are already theme-correct; the chroma is Claude Code's set,
-   which is chosen to read on bone and on near-black alike. `visualHtml.ts`
+   which is chosen to read on white and on near-black alike. `visualHtml.ts`
    maps whatever a model writes — a guessed token name, a hardcoded hex — onto
    these, so every color in a drawing comes from one palette and one ground. */
 .klide-viz {
@@ -3752,7 +3716,7 @@ button:focus-visible .menu-leadout {
      caption lands on — the surface, a raised box, and a 16% chroma tint. */
   --viz-ink-dim:    color-mix(in srgb, var(--fg-strong) 70%, var(--viz-surface));
 
-  /* Semantics — Claude Code's light-theme values, which clear 4.5:1 on bone.
+  /* Semantics — Claude Code's light-theme values, which clear 4.5:1 on white.
      The accent is deepened from their professional blue, which does not. */
   --viz-accent:     #3f6f9f;
   --viz-success:    #2c7a39;
@@ -3760,7 +3724,7 @@ button:focus-visible .menu-leadout {
   --viz-danger:     #ab2b3f;
 
   /* Categorical — eight hues for telling N things apart, never a verdict.
-     Claude Code's set, with the two that fall under 3:1 on bone deepened. */
+     Claude Code's set, with the two that fall under 3:1 on white deepened. */
   --viz-1: #dc2626;
   --viz-2: #d97757;
   --viz-3: #8a6410;
@@ -4849,7 +4813,7 @@ button:focus-visible .menu-leadout {
 /* The chat-first main screen: a quiet project/thread rail, a calm start stage,
    and a persistent task composer. The structure deliberately sits between a
    thread-first command centre and an artifact-first agent workspace while
-   keeping Klide's warm bone/sage identity. */
+   keeping Klide's neutral surfaces and sage accent. */
 
 .klide-focus-shell {
   position: relative;
@@ -9870,7 +9834,7 @@ input.klide-rail-search:focus-visible {
    (beautifului.dev): a numbered section head with a one-line note, a dashed
    rule between sections, and — the idea worth stealing — a single highlight
    that *glides* between rows rather than each row lighting up on its own.
-   Everything inside it is Klide's: bone surfaces, sage, Atkinson, hairlines.
+   Everything inside it is Klide's: neutral surfaces, sage, Atkinson, hairlines.
 
    A ledger, not a stack of cards. State is carried by type colour, and the
    verbs stay out of the way until a row is hovered or focused. */

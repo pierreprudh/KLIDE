@@ -1,0 +1,92 @@
+/* Klide's rounded Settings language. Source of truth: CONTEXT.md. */
+.klide-settings-content {
+  --settings-panel-radius: 20px;
+  --settings-control-radius: 12px;
+  container: settings / inline-size;
+  background: var(--bg-panel);
+}
+.klide-settings-content .klide-settings-section { margin-bottom: 36px; }
+.klide-settings-content .klide-surface.klide-settings-group,
+.klide-settings-group {
+  border: 1px solid var(--border);
+  border-radius: var(--settings-panel-radius, 20px);
+  background: var(--bg-panel);
+  box-shadow: 0 2px 5px rgb(0 0 0 / 3%);
+  padding-inline: 24px;
+  overflow: visible;
+}
+.klide-settings-group + .klide-settings-group { margin-top: 16px; }
+.klide-settings-group .klide-settings-row {
+  min-height: 84px;
+  padding-block: 24px;
+  gap: 24px;
+  border-bottom-color: var(--border);
+}
+.klide-settings-group .klide-settings-row:last-child { border-bottom: none; }
+.klide-settings-content .klide-settings-heading { margin-bottom: 18px; }
+.klide-settings-content :is(.klide-button, .klide-field, .klide-settings-model-choice, .klide-paper),
+.klide-settings-group :is(.klide-button, .klide-field, .klide-settings-model-choice) {
+  border-radius: var(--settings-control-radius, 12px);
+}
+.klide-settings-content :is(.klide-button, .klide-field) { min-height: 36px; }
+/* Dropdowns use a subtle chevron; full arrows are reserved for navigation. */
+.klide-settings-content select.klide-field,
+.klide-settings-group select.klide-field {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23777777' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-size: 14px 14px;
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+.klide-settings-content .klide-settings-help-button,
+.klide-settings-group .klide-settings-help-button {
+  width: auto;
+  height: auto;
+  padding: 3px 8px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+.klide-settings-content .klide-settings-help-button:hover { background: var(--bg-hover); }
+.klide-settings-detail-label { color: var(--fg-subtle); font-size: 11px; margin-right: 8px; }
+/* Keep native details keyboard behavior, with a text-only affordance. */
+.klide-settings-content summary,
+.klide-settings-group summary { list-style: none; cursor: pointer; }
+.klide-settings-content summary::-webkit-details-marker,
+.klide-settings-group summary::-webkit-details-marker { display: none; }
+.klide-settings-content summary::marker,
+.klide-settings-group summary::marker { content: ""; }
+.klide-settings-content .klide-llama-details > summary,
+.klide-settings-group .klide-llama-details > summary {
+  display: inline-flex;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-panel);
+}
+.klide-settings-content .klide-llama-details[open] > summary { background: var(--bg-hover); color: var(--fg-strong); }
+.klide-settings-content summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+/* Bespoke pages share the same panel surface without nesting new cards. */
+.klide-settings-content .storage-conversations {
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-panel);
+  box-shadow: 0 2px 5px rgb(0 0 0 / 3%);
+}
+.klide-settings-content .klide-primitive-section { border-bottom: none; padding-bottom: 0; margin-bottom: 36px; }
+.klide-settings-content .klide-connector-row { padding: 22px 0; }
+.klide-settings-content .klide-connector-offer { border-radius: 16px; }
+@container settings (max-width: 580px) {
+  .klide-settings-group .klide-settings-row,
+  .klide-settings-group .klide-settings-row[data-control-layout="wide"] { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .klide-settings-group .klide-settings-row-control { justify-self: start; justify-content: flex-start; max-width: 100%; }
+  .klide-settings-content .klide-surface.klide-settings-group,
+  .klide-settings-content .storage-conversations { padding-inline: 18px; }
+}
+
+.klide-settings-content :is(.klide-llama-card, .klide-settings-theme-preview) {
+  border-radius: var(--settings-control-radius, 12px);
+}

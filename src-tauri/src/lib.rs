@@ -1324,6 +1324,8 @@ pub fn run() {
             custom_provider_remove,
             custom_cli_list,
             machines::machines_list,
+            machines::machine_save,
+            machines::machine_remove,
             machines::machine_check,
             custom_cli_upsert,
             custom_cli_remove,

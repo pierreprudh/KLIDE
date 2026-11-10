@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { readLlamaSetupInfo } from "../../ipc/aiProviders";
 import { readLocalModelCatalog } from "../../ipc/localModelCatalog";
-import { ChevronDown } from "../ai/icons";
 import { Row } from "./controls";
 import { resolveCatalogHardware, THIS_COMPUTER, type CatalogMachine, type LocalModelCatalog } from "./localModelCatalog";
 
@@ -34,7 +33,7 @@ export function LocalModelCatalogBrowser({ machine: detectedMachine }: { machine
   return <details className="klide-llama-details klide-local-catalog" onToggle={(e) => {
     if (e.currentTarget.open && !catalog && !busy && !error) void load();
   }}>
-    <summary><span aria-hidden="true"><ChevronDown /></span>Community benchmarks</summary>
+    <summary>Community benchmarks</summary>
     <div>
       <p className="klide-llama-hint">Measured configurations from the Local AI registry. These are separate from Klide’s estimated model suggestions.</p>
       {busy && <p className="klide-llama-hint" role="status">Checking community benchmarks…</p>}

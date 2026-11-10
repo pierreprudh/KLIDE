@@ -246,3 +246,22 @@ decided by the spike:
 See `scripts/remote-host/README.md`: make a key, create the server with
 `cloud-init.yaml` (or install Ubuntu on a PC), run `bootstrap.sh`, log in, then
 close public SSH with `bootstrap.sh --tailscale-only`.
+
+## Managing machines in Settings
+
+Settings › Machines manages the SSH machines in `~/.klide/machines.json`.
+Add a stable machine ID, an optional display name, and an SSH alias or
+`user@hostname`. Configure keys, ports and other SSH options in `~/.ssh/config`;
+connect from Terminal once to accept the machine's host key. Cloud servers and
+self-hosted Linux computers use the same SSH connection.
+
+For the open Workspace, the editor can set its Remote checkout path; leaving
+it blank uses `~/code/<workspace name>`. Other Workspace mappings are preserved.
+The repository must already be cloned on the Remote machine. Readiness checks
+show SSH, CLI, login and checkout facts, with commands to copy when setup is
+needed. The currently supported remote Delegate is Claude Code.
+
+Saved changes refresh the “Where it runs” picker. Removing a Machine only
+removes its local configuration: remote files and running sessions stay there.
+Re-adding its original ID reconnects existing Conversations. Saves are atomic;
+an unreadable configuration is reported and cannot be silently overwritten.

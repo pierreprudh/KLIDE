@@ -72,10 +72,11 @@ import { API_KEY_PROVIDERS, ApiKeyIntro, ApiKeyRow, ProviderBalanceBlock } from 
 import { notify } from "../toast";
 import { playSound } from "../sound";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
+import { MachinesSection } from "./settings/machines";
 import { ConnectorsSection } from "./settings/connectors";
 import { GatewayBlock } from "./settings/gateway";
 import { LocalServerRow } from "./settings/localServers";
-import { AccountControl, GitHubAccountRow } from "./settings/accounts";
+import { SubscriptionAccounts } from "./settings/subscriptionAccounts";
 import { DELEGATES, type DelegateId } from "../delegates";
 import { CliVersionsBlock } from "./settings/cliVersions";
 import { StatsSection } from "./settings/stats";
@@ -86,7 +87,6 @@ import {
   ArrowLeftIcon,
   BarChartIcon,
   CloudIcon,
-  ChevronRightIcon,
   CodeIcon,
   GearIcon,
   GridIcon,
@@ -218,6 +218,7 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "ai", label: "AI Assistant", icon: <SparkIcon /> },
   { id: "local-ai", label: "Local AI", icon: <ServerIcon /> },
   { id: "api", label: "API", icon: <KeyIcon /> },
+  { id: "machines", label: "Machines", icon: <ServerIcon /> },
   { id: "connectors", label: "Connectors", icon: <PlugIcon /> },
   { id: "subscription", label: "Subscription", icon: <CloudIcon /> },
   { id: "editor", label: "Editor", icon: <CodeIcon /> },
@@ -235,6 +236,7 @@ const SECTION_SUBTITLES: Record<SectionId, string> = {
   ai: "How the assistant edits files, runs tools, and reasons.",
   "local-ai": "Run models on-device with Ollama and MLX — no key needed.",
   api: "Hosted provider keys, the opencodex gateway, and self-hosted endpoints.",
+  machines: "Manage cloud and self-hosted Linux machines over SSH.",
   connectors: "MCP servers Klide connects to — import the ones your other tools already use.",
   subscription: "Connect Claude Code, Codex, OpenCode, and Oh My Pi CLI logins — plus your ollama.com account.",
   editor: "Monaco editor preferences — font, gutter, and wrapping.",
@@ -253,6 +255,7 @@ const SECTION_SUBTITLES: Record<SectionId, string> = {
 // toggles, key managers, whole panes — stay in the hand list below.
 type SettingIndexEntry = { label: string; section: SectionId; keywords: string };
 const panelOnlyIndex: SettingIndexEntry[] = [
+  { label: "Machines", section: "machines", keywords: "cloud self-hosted remote ssh server vps checkout connection readiness" },
   { label: "Ask Kit from any app", section: "general", keywords: "services menu right click selection ask kit quick action raycast shortcuts deep link klide:// url scheme" },
   { label: "Panel visibility", section: "general", keywords: "explorer sidebar terminal ai panel show hide toggle" },
   { label: "Panel sizes", section: "layout", keywords: "layout width height size resize panel" },
@@ -766,7 +769,7 @@ export function SettingsPanel({
         minHeight: 0,
         display: "grid",
         gridTemplateColumns: "248px minmax(0, 1fr)",
-        background: "var(--bg-elevated)",
+        background: "var(--bg-panel)",
       }}
     >
       <aside
@@ -775,7 +778,7 @@ export function SettingsPanel({
         data-tauri-drag-region
         style={{
           borderRight: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
-          background: "var(--bg)",
+          background: "var(--settings-sidebar-bg)",
           padding: "calc(16px + var(--titlebar-h)) 10px 16px",
           display: "flex",
           flexDirection: "column",
@@ -833,7 +836,7 @@ export function SettingsPanel({
               padding: "0 26px 0 30px",
               borderRadius: 9,
               border: "1px solid var(--border)",
-              background: "var(--bg)",
+              background: "var(--bg-panel)",
               color: "var(--fg-strong)",
               fontSize: 12.5,
               outline: "none",
@@ -956,7 +959,6 @@ export function SettingsPanel({
                   {section.icon}
                 </span>
                 <span style={{ flex: 1, textAlign: "left" }}>{section.label}</span>
-                {SETTINGS_PAGES[section.id] && <span aria-hidden="true" className="klide-settings-chevron"><ChevronRightIcon /></span>}
               </button>
               {SETTINGS_PAGES[section.id] && (
                 <div id={`settings-subpages-${section.id}`}
@@ -2118,6 +2120,10 @@ export function SettingsPanel({
               </Section>
           </Section>
 
+          <Section id="machines" active={activeSection} mounted={visitedSections.has("machines")}>
+            <MachinesSection workspaceRoot={workspaceRoot} />
+          </Section>
+
           <Section
             id="connectors"
             active={activeSection}
@@ -2132,58 +2138,13 @@ export function SettingsPanel({
             ) : (
               <>
               <Section id="subscription-accounts" active={activePage} mounted={visitedPages.has("subscription-accounts")}>
-              <SettingBlock title="Connections & Accounts">
-                <Panel>
-                  {/* GitHub first: it's the identity the whole app wears —
-                      avatar, PR author, push credentials. */}
-                  <GitHubAccountRow />
-                  {subscriptionProviderEntries.map((provider) => {
-                    const status = subscriptionStatuses[provider.id];
-                    return (
-                      <Row
-                        key={provider.id}
-                        title={provider.title}
-                        description={status?.detail || provider.description}
-                        control={
-                          provider.accounts ? (
-                            <AccountControl
-                              provider={provider.id}
-                              title={provider.title}
-                              connected={!!status?.connected}
-                            />
-                          ) : (
-                            <StatusText tone={status?.connected ? "ok" : "idle"}>
-                              {status?.connected ? "Ready" : "Not installed"}
-                            </StatusText>
-                          )
-                        }
-                        leading={<ProviderLogo id={provider.id as ProviderId} size={28} />}
-                      />
-                    );
-                  })}
-                  <Row
-                    title="Ollama"
-                    description={
-                      ollamaAccount?.detail ??
-                      "Sign in to ollama.com for cloud models and model pushes."
-                    }
-                    control={
-                      <StatusText
-                        tone={
-                          ollamaAccount?.signedIn ? "ok" : ollamaAccount?.running ? "warn" : "idle"
-                        }
-                      >
-                        {ollamaAccount?.signedIn
-                          ? ollamaAccount.name ?? "Signed in"
-                          : ollamaAccount?.running
-                          ? "Not signed in"
-                          : "Server offline"}
-                      </StatusText>
-                    }
-                    leading={<ProviderLogo id={"ollama" as ProviderId} size={28} />}
-                  />
-                </Panel>
-              </SettingBlock>
+              <SubscriptionAccounts
+                providers={subscriptionProviderEntries}
+                statuses={subscriptionStatuses}
+                ollamaAccount={ollamaAccount}
+                refreshing={connectionLoading}
+                onRefresh={() => void refreshSubscriptionConnections()}
+              />
               </Section>
               <Section id="subscription-setup" active={activePage} mounted={visitedPages.has("subscription-setup")}>
               <SettingBlock title="Documentation">

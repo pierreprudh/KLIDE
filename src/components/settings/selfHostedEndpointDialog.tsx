@@ -74,7 +74,7 @@ export function SelfHostedEndpointDialog({
           if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
           else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
         }}
-        style={{ width: "min(480px, calc(100vw - 32px))", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxSizing: "border-box", borderRadius: "var(--radius-lg)", padding: 24, display: "grid", gap: 14 }}
+        style={{ width: "min(480px, calc(100vw - 32px))", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxSizing: "border-box", borderRadius: "var(--settings-panel-radius, 20px)", padding: 24, display: "grid", gap: 14 }}
       >
         <div>
           <div id="self-hosted-dialog-title" style={{ fontSize: 16, fontWeight: 700, color: "var(--fg-strong)" }}>

@@ -4,7 +4,7 @@ import {
   selectLlamaModel, startLocalProvider, stopLocalProvider, readLocalProviderDetails, readLocalSetupProgress, type LlamaSetupInfo, type LocalSetupProgress,
 } from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
-import { ChevronDown, ProviderLogo } from "../ai/icons";
+import { ProviderLogo } from "../ai/icons";
 import "./llamaServerSetup.css";
 import { LlamaModelCards } from "./llamaModelCards";
 import { LocalModelCatalogBrowser } from "./localModelCatalogBrowser";
@@ -104,7 +104,7 @@ export function LlamaServerSetup() {
       {fits === false && <div className="klide-llama-hint">This model may exceed your memory budget. Choose a smaller one for smoother use.</div>}
       {info.memoryBudgetGb == null && <div className="klide-llama-hint">RAM could not be detected. Start with a small model.</div>}
       <details className="klide-llama-details">
-        <summary><span aria-hidden="true"><ChevronDown /></span>About this recommendation</summary>
+        <summary>About this recommendation</summary>
         <div>
           {info.machine.cpuCores} CPU cores · {info.machine.acceleration}.
           {info.memoryBudgetGb != null && ` Estimated model budget: ${info.memoryBudgetGb.toFixed(1)} GB, with room left for other apps.`}

@@ -11,7 +11,7 @@
 //! the exact command a spawn runs, and the readiness check. It never copies a
 //! login or a key to the machine — Machine logins stay on the machine.
 //!
-//! Store shape (hand-written for now; Settings › Machines reads it):
+//! Store shape (managed by Settings › Machines):
 //! ```json
 //! { "machines": [ { "id": "klide-box", "sshHost": "klide-box",
 //!     "checkouts": { "/Users/me/src/app": "~/code/app" } } ] }
@@ -67,6 +67,73 @@ struct Store {
 
 fn store_path() -> Option<PathBuf> {
     crate::cli::home_dir_path().map(|home| home.join(".klide").join("machines.json"))
+}
+
+// Serialize read/modify/write operations so simultaneous Settings saves retain
+// unrelated machines. A malformed store must never be replaced with an empty one.
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn read_store(path: &Path) -> Result<Store, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("Could not read machines: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
+        Err(e) => Err(format!("Could not read machines: {e}")),
+    }
+}
+
+fn validate_machine(machine: &Machine) -> Result<(), String> {
+    if machine.id.is_empty() || !machine.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Machine ID must contain only letters, numbers, hyphens or underscores".into());
+    }
+    let host = &machine.ssh_host;
+    if host.is_empty() || host.starts_with('-') || !host.chars().all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c)) {
+        return Err("Enter an SSH alias or user@hostname (configure ports and keys in ~/.ssh/config)".into());
+    }
+    for (root, path) in &machine.checkouts {
+        if !root.starts_with('/') || !(path.starts_with('/') || path.starts_with("~/")) || path.contains(['\n', '\r', '\0']) {
+            return Err("Checkout mappings need an absolute workspace path and an absolute or ~/ remote path".into());
+        }
+    }
+    Ok(())
+}
+
+fn update_store(path: &Path, change: impl FnOnce(&mut Store) -> Result<(), String>) -> Result<Vec<Machine>, String> {
+    let _guard = STORE_LOCK.lock().map_err(|_| "Machine store lock unavailable")?;
+    let mut store = read_store(path)?;
+    change(&mut store)?;
+    std::fs::create_dir_all(path.parent().ok_or("Missing machine store directory")?).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())?;
+    crate::durable::write_atomic(path, &bytes)?;
+    Ok(store.machines)
+}
+
+#[tauri::command]
+pub async fn machine_save(machine: Machine, creating: bool) -> Result<Vec<Machine>, String> {
+    crate::blocking::run(move || {
+        validate_machine(&machine)?;
+        let path = store_path().ok_or("Home directory unavailable")?;
+        update_store(&path, |store| {
+            let existing = store.machines.iter().position(|m| m.id == machine.id);
+            match (existing, creating) {
+                (Some(_), true) => return Err("A machine with this ID already exists".into()),
+                (Some(index), false) => store.machines[index] = machine,
+                (None, true) => store.machines.push(machine),
+                (None, false) => return Err("Machine was removed; reload Settings before saving".into()),
+            }
+            Ok(())
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn machine_remove(id: String) -> Result<Vec<Machine>, String> {
+    crate::blocking::run(move || {
+        let path = store_path().ok_or("Home directory unavailable")?;
+        update_store(&path, |store| {
+            store.machines.retain(|m| m.id != id);
+            Ok(())
+        })
+    }).await
 }
 
 pub fn list() -> Vec<Machine> {
@@ -317,8 +384,11 @@ fn origin_repo(workspace_root: &str) -> Option<String> {
 /* -------------------------------------------------------------- commands */
 
 #[tauri::command]
-pub async fn machines_list() -> Vec<Machine> {
-    crate::blocking::run_infallible(list).await
+pub async fn machines_list() -> Result<Vec<Machine>, String> {
+    crate::blocking::run(|| {
+        let path = store_path().ok_or("Home directory unavailable")?;
+        Ok(read_store(&path)?.machines)
+    }).await
 }
 
 /// Readiness of one machine for one workspace — an SSH round trip, so the
@@ -343,6 +413,41 @@ mod tests {
             ssh_host: "klide-box".into(),
             checkouts: BTreeMap::from([("/Users/me/src/app".into(), "/srv/app".into())]),
         }
+    }
+
+    #[test]
+    fn machine_settings_reject_ssh_options_and_invalid_checkout_paths() {
+        let mut machine = box_machine();
+        assert!(validate_machine(&machine).is_ok());
+        for host in ["-oProxyCommand=evil", "my host", "host;exit", ""] {
+            machine.ssh_host = host.into();
+            assert!(validate_machine(&machine).is_err(), "{host}");
+        }
+        machine.ssh_host = "user@192.0.2.1".into();
+        assert!(validate_machine(&machine).is_ok());
+        machine.checkouts.insert("/Users/me/src/app".into(), "relative/path".into());
+        assert!(validate_machine(&machine).is_err());
+    }
+
+    #[test]
+    fn settings_updates_preserve_other_machines_and_refuse_corrupt_stores() {
+        let directory = std::env::temp_dir().join(format!("klide-machine-settings-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let path = directory.join("machines.json");
+        let first = box_machine();
+        update_store(&path, |store| { store.machines.push(first.clone()); Ok(()) }).unwrap();
+        let mut second = first.clone();
+        second.id = "second".into();
+        update_store(&path, |store| { store.machines.push(second); Ok(()) }).unwrap();
+        let stored = read_store(&path).unwrap();
+        assert_eq!(stored.machines.len(), 2);
+        assert_eq!(stored.machines[0], first);
+        update_store(&path, |store| { store.machines.retain(|m| m.id != "second"); Ok(()) }).unwrap();
+        assert_eq!(read_store(&path).unwrap().machines, vec![first]);
+        std::fs::write(&path, b"invalid json").unwrap();
+        assert!(update_store(&path, |_| Ok(())).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"invalid json");
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

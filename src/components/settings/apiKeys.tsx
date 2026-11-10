@@ -759,8 +759,6 @@ export function ProviderBalanceBlock() {
 
   const hostedIds = API_KEY_PROVIDERS.map((p) => p.id);
   const selProvider = selected ? API_KEY_PROVIDERS.find((p) => p.id === selected) ?? null : null;
-  const selIndex = selected ? ordered.findIndex((p) => p.id === selected) : -1;
-  const caretFrac = selIndex >= 0 && ordered.length ? (selIndex + 0.5) / ordered.length : null;
 
   // Global chart: hosted-provider runs, stacked by provider (brand colours).
   const globalRuns = useMemo(
@@ -821,7 +819,7 @@ export function ProviderBalanceBlock() {
           ))}
         </div>
 
-        {/* Caret + chart card */}
+        {/* Provider selector and chart */}
         <div
           style={{
             position: "relative",
@@ -866,23 +864,6 @@ export function ProviderBalanceBlock() {
             </div>
           ) : (
           <>
-          {caretFrac != null && (
-            <span
-              aria-hidden
-              style={{
-                position: "absolute",
-                top: -6,
-                left: `${caretFrac * 100}%`,
-                transform: "translateX(-50%) rotate(45deg)",
-                width: 10,
-                height: 10,
-                background: "var(--bg-elevated)",
-                borderLeft: "1px solid color-mix(in srgb, var(--border-strong) 72%, transparent)",
-                borderTop: "1px solid color-mix(in srgb, var(--border-strong) 72%, transparent)",
-              }}
-            />
-          )}
-
           {/* Header */}
           <div
             style={{

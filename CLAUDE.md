@@ -20,12 +20,29 @@ Pierre is new to building desktop apps and is learning Rust as he goes. Frame te
 |---|---|
 | Keep the familiar IDE structural layout (sidebar rail, tabs, editor, status bar, panel) | Strip out structural elements to "simplify" |
 | Quiet light/dark palettes with shared app + terminal tokens | Saturated accent colors, gradients, drop shadows |
-| Generous whitespace, thin 1px borders, no heavy dividers | Boxes, frames, busy chrome |
+| Generous whitespace, rounded groups, thin borders and subtle panel shadows | Heavy frames, dividers or shadows |
 | Restrained type — Atkinson Hyperlegible for UI, Monaspace for code | Multiple display fonts, decorative weights |
 | Subtle, considered motion (fades, no bounces) | Springy animations |
 | Icons only when they earn their place | Icon-for-every-button maximalism |
 
 If a UI element doesn't serve clarity, it doesn't ship.
+
+### App-wide palette and shape
+
+Use **very light cool grey #F5F6F7 for chrome, rails and sidebars** and
+**white #FFFFFF for content, editor, terminal and panel surfaces** throughout
+all light themes. No beige, cream, parchment or warm off-white UI backgrounds.
+Use the shared tokens in `src/styles/tokens.css`, and keep Monaco colours,
+terminal colours, viewer surfaces and theme swatches in sync with them. Dark
+themes keep their dark surfaces; user content, artwork and service logos retain
+their own colours.
+
+Group related settings in rounded panels (20px corners), with generous row
+spacing, fine dividers and rounded controls (12px). Use subtle chevrons for
+functional dropdowns or expandable groups; use full arrows for directional
+navigation. Omit decorative trailing icons and browser triangle markers.
+`CONTEXT.md` and `Design.md` document these approved guidelines.
+
 
 ## Stack
 

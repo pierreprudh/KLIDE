@@ -1,49 +1,49 @@
 ---
 version: alpha
 name: Klide
-description: A warm, parchment-toned design system anchored on a bone cream canvas (#f7f4ed) and Atkinson Hyperlegible (UI) + Monaspace Neon (code). The neutral scale is derived from a single charcoal hex (#1c1c1c) modulated at opacity stops — every tonal shade is technically the same hue, just more or less transparent. Borders replace drop-shadows as the primary containment mechanism. The accent is a soft sage green (#5A7B4C) — not blue, on purpose.
+description: "A light-grey and white design system: #F5F6F7 chrome, #FFFFFF content, charcoal text and a quiet sage accent. Atkinson Hyperlegible for UI and Monaspace Neon for code. Rounded groups, generous spacing and soft borders define the interface. No beige or cream UI surfaces."
 
 seo:
-  title: "Klide Design System — Bone (#f7f4ed) + Charcoal (#1c1c1c) + Sage (#5A7B4C)"
-  metaDescription: "Klide's design system as a DESIGN.md file. Bone cream canvas, opacity-based charcoal grays, soft sage accent. For React, Tauri, and AI tools."
+  title: "Klide Design System — Light Grey + White + Charcoal + Sage"
+  metaDescription: "Klide uses light-grey chrome, white content, rounded panels and a quiet sage accent throughout the app."
   highlights:
-    - "Bone cream canvas (#f7f4ed) — a deliberate warm cream, not white, not beige; the foundation of every surface"
+    - "Light-grey chrome (#F5F6F7) and white content (#FFFFFF) throughout all light themes; no beige or cream UI backgrounds"
     - "Soft sage green accent (#5A7B4C) — quiet, organic, distinct from the AI-tool-default blue"
     - "Opacity-driven grays — every tonal shade derives from #1c1c1c at 4%, 40%, 82%, 83% transparency"
-    - "Borders, not drop-shadows, for containment — 1px #1c1c1c@4% hairlines define cards; the system caps at one inset shadow on dark CTAs"
-    - "Restrained 4-tier radius scale (4, 6, 8, 12) — no 9999px pills except for icon toggles"
+    - "Soft cool-grey borders, subtle panel shadows and fine row dividers"
+    - "Rounded grouped panels (20px) and controls (12px); pill-shaped switches"
   tags:
     - "AI & LLM Platforms"
     - "Developer Tools & IDEs"
-  lastUpdated: "2026-06-04"
+  lastUpdated: "2026-11-10"
   author:
     name: "Pierre Prudhomme"
   opening: |
-    Klide's design system is built on warmth through restraint. The page floor is a bone cream (#f7f4ed) — not white, not beige, a deliberate hand-selected tone that immediately separates the product from the cold-dark conventions of most editor-style apps. Text is near-black charcoal (#1c1c1c) rather than pure black. Atkinson Hyperlegible carries the UI warmth — a humanist typeface designed for readability, with open apertures and organic curves that contrast with the geometric sans-serifs most AI tools default to. Monaspace Neon carries the code surface.
+    Klide uses a cool light-grey (#F5F6F7) foundation for chrome, rails and sidebars, with white (#FFFFFF) content, editor, terminal and panel surfaces. The palette applies across all light themes, including menus, welcome screens, viewers and Settings. Beige, cream, parchment and warm off-white UI backgrounds are not part of the design system. Dark themes keep their own dark surfaces; user content, artwork, service logos, syntax and status colours keep their meaning.
 
-    This page packages the full system into a single DESIGN.md file. Inside: a cream-and-charcoal palette where every gray is the same hex (#1c1c1c) at different opacity stops, a 6-step type scale running on Atkinson Hyperlegible (UI) and Monaspace Neon (code), a 4-tier radius scale from 4px micro to 12px card, and a component inventory covering buttons, cards, inputs, navigation, AI chat, and tool cards. The format follows the Google Labs DESIGN.md spec — machine-readable tokens alongside human prose.
+    Near-black charcoal carries text, Atkinson Hyperlegible carries the UI, and Monaspace Neon carries code. A quiet sage accent identifies interactive states. Related settings sit in rounded groups with 20px corners, 12px controls, generous row spacing, fine dividers and subtle shadows. Use chevrons when they clarify dropdowns or expandable content; reserve full arrows for directional navigation.
 
-    To change the system: edit this file, then mirror the changes in `src/styles/tokens.css`. Every CSS variable in `tokens.css` has a counterpart in this file, so changes propagate together.
+    To change the system, update this file and the implementation in `src/styles/tokens.css`, `src/theme.ts` and any native editor or terminal palette. `CONTEXT.md` and `CLAUDE.md` carry the same approved guidelines.
   related:
     - href: "src/styles/tokens.css"
       title: "The implementation"
       description: "All tokens below are realised as CSS custom properties in tokens.css. Each variable name appears in the Keys column so you can grep the codebase for the exact token."
     - href: "src/theme.ts"
       title: "Theme registry"
-      description: "Theme metadata (name, description, isDark, swatches) and the per-theme overrides. The bone light theme is the default; the other themes layer on top of the same token names."
+      description: "Theme metadata (name, description, isDark, swatches) and the per-theme overrides. Klide Light is the default; the other themes layer on top of the same token names."
   questions:
     - id: "primary-color"
       title: "What is Klide's primary brand color?"
-      answer: "Klide's accent is a soft sage green (#5A7B4C) — quiet, organic, and distinct from the blue every AI tool defaults to. The brand's primary surface is a bone cream (#f7f4ed) that acts as both page background and card surface, paired with a near-black charcoal (#1c1c1c) for text and dark CTA fills. The only chromatic moment is the sage accent for interactive states."
+      answer: "Klide uses light-grey chrome (#F5F6F7), white content (#FFFFFF), charcoal text and a soft sage accent (#5A7B4C). Accents identify interaction and semantic information; backgrounds stay neutral."
     - id: "typography"
       title: "What typography does Klide use?"
       answer: "Klide runs Atkinson Hyperlegible for the UI surface and Monaspace Neon for code. Atkinson is a humanist sans-serif designed by the Braille Institute for low-vision readers — generous x-height, open apertures, slightly rounded terminals. The type scale runs 12px (xs) → 24px (xxl) in 5 steps. There is no display weight: emphasis is carried by color and size, not by weight variation."
     - id: "opacity-grays"
       title: "Why does Klide derive grays from opacity instead of hex values?"
-      answer: "Every gray in the system is the same charcoal (#1c1c1c) rendered at varying transparency levels — 0.04, 0.4, 0.82, 0.83. This creates a tonal coherence that's nearly impossible to achieve with arbitrary hex values, because every shade shares the exact same hue. Subtle hover backgrounds, body copy, and interactive borders all sit on the same warm tonal axis."
+      answer: "The foundation uses cool light grey (#F5F6F7), white (#FFFFFF) and cool-grey borders (#E4E7EB). Charcoal opacity stops provide coherent hover fills and text hierarchies without beige or cream tints."
     - id: "shape-language"
       title: "What is Klide's shape language?"
-      answer: "Four radius tiers: 4px micro for tiny interactive elements (pills, toggles), 6px standard for buttons and inputs, 8px comfortable for compact cards, and 12px for standard cards. No 16px containers and no 9999px pills in the core system — those are reserved for specific contexts (footer surfaces and icon toggles). Cards rely on 1px borders instead of drop-shadows for containment."
+      answer: "Related settings use 20px rounded groups and 12px rounded controls, with generous spacing, fine dividers and subtle shadows. Compact utility elements can use the smaller radius tokens. Switches stay pill-shaped. Chevrons are functional dropdown or disclosure affordances; full arrows convey directional navigation."
     - id: "use-in-project"
       title: "Can I use this DESIGN.md to drive changes in the app?"
       answer: "Yes — this file is the source of truth. To change a color, spacing value, or radius, edit the value here AND in `src/styles/tokens.css`. The tokens.css file is the actual implementation; this file is the human-readable spec. Every variable has a Key in the tokens table below so you can grep for it."
@@ -53,10 +53,10 @@ seo:
 # ─────────────────────────────────────────────────────────────────────────────
 
 colors:
-  # Foundation
-  bone:        "#f7f4ed"   # Page surface, card surface — the warm cream
-  bone-light:  "#fcfbf8"   # Off-white, dark CTA text, subtle highlights
-  bone-border: "#eceae4"   # Card borders, dividers, image outlines
+  # Foundation — shared across the app's light themes
+  chrome:  "#F5F6F7"   # Rails, sidebars and app chrome (--bg)
+  surface: "#FFFFFF"   # Content, editor, terminal and panels
+  border:  "#E4E7EB"   # Cool-neutral dividers and outlines
   # Tonal axis (every gray is the same charcoal at different transparency)
   charcoal:        "#1c1c1c"   # Primary text, headings, dark CTA fills
   charcoal-83:     "rgba(28, 28, 28, 0.83)"   # Strong secondary text
@@ -81,15 +81,15 @@ colors:
 
   # Keys that components import today (kept as aliases so the refactor
   # doesn't have to touch every component at once):
-  #   --bg            → bone
-  #   --bg-elevated   → bone-border
+  #   --bg            → chrome
+  #   --bg-elevated   → surface
   #   --bg-hover      → charcoal-4
   #   --bg-selected   → accent-soft
   #   --fg-strong     → charcoal
   #   --fg            → charcoal-82
   #   --fg-subtle     → muted
   #   --fg-dim        → decorative/disabled tint; meaningful secondary text uses --fg-subtle
-  #   --border        → bone-border
+  #   --border        → border
   #   --border-strong → charcoal-40
   #   --accent        → accent
   #   --accent-soft   → accent-soft
@@ -115,7 +115,9 @@ rounded:
   comfortable: 8px   # Compact cards, dividers
   card:        12px  # Standard cards, image containers
   container:   16px  # Footer sections, large panels (rare)
-  full:        9999px  # Reserved for icon toggles only
+  settings-panel:   20px  # Rounded settings groups
+  settings-control: 12px  # Settings buttons, inputs and selects
+  full:        9999px  # Pill-shaped switches and icon toggles
 
 spacing:
   xs:   8px
@@ -153,7 +155,7 @@ elevation:
 components:
   button-primary:
     backgroundColor: "{colors.charcoal}"
-    textColor: "{colors.bone-light}"
+    textColor: "{colors.surface}"
     typography: "{typography.fs-lg}"
     rounded: "{rounded.standard}"
     padding: 8px 16px
@@ -165,40 +167,40 @@ components:
     rounded: "{rounded.standard}"
     padding: 8px 16px
     border: "1px solid {colors.charcoal-40}"
-  button-cream:
-    backgroundColor: "{colors.bone}"
+  button-secondary:
+    backgroundColor: "{colors.chrome}"
     textColor: "{colors.charcoal}"
     typography: "{typography.fs-lg}"
     rounded: "{rounded.standard}"
     padding: 8px 16px
   button-pill-icon:
-    backgroundColor: "{colors.bone}"
+    backgroundColor: "{colors.chrome}"
     textColor: "{colors.charcoal}"
     rounded: "{rounded.full}"
     shadow: "{elevation.inset}"
     opacity: 0.85
   card:
-    backgroundColor: "{colors.bone}"
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.charcoal}"
     typography: "{typography.fs-lg}"
     rounded: "{rounded.card}"
-    border: "1px solid {colors.bone-border}"
+    border: "1px solid {colors.border}"
   card-featured:
-    backgroundColor: "{colors.bone}"
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.charcoal}"
     rounded: "{rounded.container}"
-    border: "1px solid {colors.bone-border}"
+    border: "1px solid {colors.border}"
   card-compact:
-    backgroundColor: "{colors.bone}"
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.charcoal}"
     rounded: "{rounded.comfortable}"
-    border: "1px solid {colors.bone-border}"
+    border: "1px solid {colors.border}"
   text-input:
-    backgroundColor: "{colors.bone-light}"
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.charcoal}"
     typography: "{typography.fs-base}"
     rounded: "{rounded.standard}"
-    border: "1px solid {colors.bone-border}"
+    border: "1px solid {colors.border}"
     placeholderColor: "{colors.muted}"
     focusRing: "0 0 0 3px {colors.accent-soft}"
   nav-link:
@@ -210,41 +212,41 @@ components:
     typography: "{typography.fs-base}"
     textDecoration: underline
   ai-chat-input:
-    backgroundColor: "{colors.bone-light}"
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.charcoal}"
     typography: "{typography.fs-base}"
     rounded: "{rounded.card}"
-    border: "1px solid {colors.bone-border}"
+    border: "1px solid {colors.border}"
   tool-card:
-    backgroundColor: "{colors.bone}"
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.charcoal}"
     typography: "{typography.fs-base}"
     rounded: "{rounded.comfortable}"
-    border: "1px solid {colors.bone-border}"
+    border: "1px solid {colors.border}"
   thinking-card:
-    backgroundColor: "color-mix(in srgb, {colors.bone} 70%, transparent)"
+    backgroundColor: "color-mix(in srgb, {colors.chrome} 70%, transparent)"
     textColor: "{colors.muted}"
     typography: "{typography.fs-xs}"
     rounded: "{rounded.comfortable}"
-    border: "1px solid {colors.bone-border}"
+    border: "1px solid {colors.border}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# THEMES — the light "Klide Light" theme is the default; it carries the bone
-# palette described above. Other themes layer on top of the same token names.
+# THEMES — Klide Light is the default; light variants share the grey/white
+# foundation described above. Other themes layer on top of the same token names.
 # To add a theme, add it here AND in src/theme.ts.
 # ─────────────────────────────────────────────────────────────────────────────
 
 themes:
   - id: klide-light
     name: "Klide Light"
-    description: "Warm parchment cream with a soft sage accent. The default Klide identity — quiet, organic, distinct from AI-blue."
+    description: "Light-grey chrome, white content and a soft sage accent."
     isDark: false
-    swatches: ["#f7f4ed", "#fcfbf8", "#5A7B4C", "#1c1c1c"]
+    swatches: ["#F5F6F7", "#FFFFFF", "#5A7B4C", "#1c1c1c"]
   - id: sage-garden
     name: "Sage Garden"
     description: "Klide Light with cool ink and a greyer sage — one shade crisper."
     isDark: false
-    swatches: ["#F8F7F3", "#FFFFFF", "#7C9082", "#1A1F2E"]
+    swatches: ["#F5F6F7", "#FFFFFF", "#7C9082", "#1A1F2E"]
   - id: sage-garden-dark
     name: "Sage Garden Dark"
     description: "Warm near-black under cool light, with the accent back on sage."
@@ -264,12 +266,12 @@ themes:
     name: "GitHub Light"
     description: "Clean white workspace with crisp blue UI states."
     isDark: false
-    swatches: ["#FFFFFF", "#F6F8FA", "#0969DA", "#24292F"]
+    swatches: ["#F5F6F7", "#FFFFFF", "#0969DA", "#24292F"]
   - id: cerulean
     name: "Cerulean"
-    description: "Codex's arrangement with one blue. White canvas (#FFFEFC), warm-neutral grey sidebar (#F7F6F2), near-black ink a touch warm (#1C1B18). #2596BE appears only on what is highlighted — the active rail row, selection, focus ring, cursor. The composer family is plain white on a hairline, no accent mix. Hover deepens (#1E80A3) because #2596BE is ~3.3:1 on white. Git lane 2 turns sage so it can't twin the accent."
+    description: "Light-grey chrome and white content, with blue reserved for highlighted states. Shared neutral surfaces across the app."
     isDark: false
-    swatches: ["#FFFEFC", "#F7F6F2", "#2596BE", "#1C1B18"]
+    swatches: ["#F5F6F7", "#FFFFFF", "#2596BE", "#1C1B18"]
   - id: solarized-dark
     name: "Solarized Dark"
     description: "Muted blue-green terminal energy for long sessions."
@@ -281,11 +283,11 @@ themes:
 # ─────────────────────────────────────────────────────────────────────────────
 
 principles:
-  - "Bone over white. Cream is the foundation — #f7f4ed, not #FFFFFF. The warmth is the point."
+  - "Light grey and white throughout. Chrome is #F5F6F7; content is #FFFFFF. No beige, cream, parchment or warm off-white UI backgrounds."
   - "Sage over blue. The accent is a soft sage green (#5A7B4C) — every AI tool defaults to blue; we don't."
   - "Charcoal over black. Text is #1c1c1c, not #000. The slight off-black reads as organic, not digital."
   - "Opacity grays over hex grays. Every gray is the same charcoal at a different transparency. Tonal coherence is automatic."
-  - "Borders over shadows. 1px #1c1c1c@4% hairlines define cards. The system caps at one inset shadow on dark CTAs."
+  - "Soft borders and subtle shadows contain rounded groups. Keep dividers fine and spacing generous."
   - "Atkinson over Inter. Humanist, not geometric. Open apertures. Rounded terminals. Built for reading."
   - "Monaspace over JetBrains. Code gets a different typeface. Same warmth, but mechanical."
   - "No display weight. Atkinson Hyperlegible is single-weight. Emphasis is color and size, not weight."
@@ -296,7 +298,7 @@ principles:
 
 known_gaps:
   - "Form input error states — focus ring is documented, but validation error styles are not."
-  - "Decorative gradients — hero, footer, and onboarding use subtle warm gradients; stops are described qualitatively, not numerically."
+  - "Decorative gradients — any chrome gradients must stay neutral grey/white in light themes; artwork retains its own palette."
   - "Chart tokens — --chart-1..7 ship in tokens.css but are not documented here."
   - "Context-window tokens (--ctx-messages, --ctx-tools, --ctx-system, --ctx-skills, --ctx-rules, --ctx-lens, --ctx-draft, --ctx-reply) are a sanctioned hue exception, like the git lanes: one soft pastel per kind of token so the 7px breakdown bar's segments can be told apart. Hovering a segment or row lights that kind and drops the others to low opacity. The context popover only — never UI chrome."
   - "Diff tokens are the one deliberate exception to the brand palette: classic code-review green/red (GitHub's #1A7F37 / #CF222E light, #3FB950 / #F85149 dark) so a diff reads the same as in every editor. --diff-add / --diff-remove colour signs, counts and edge markers; --diff-*-bg tints a changed line and --diff-*-word its changed span, both translucent so they sit on any surface."

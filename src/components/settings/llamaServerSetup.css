@@ -55,16 +55,6 @@
   content: "";
 }
 
-.klide-llama-details summary > span {
-  display: inline-flex;
-  transform: rotate(-90deg);
-  transition: transform var(--motion-fast) var(--ease-out);
-}
-
-.klide-llama-details[open] summary > span {
-  transform: rotate(0deg);
-}
-
 .klide-llama-details summary:hover {
   color: var(--fg-strong);
 }

@@ -24,6 +24,44 @@ selection capabilities; Amp chooses its own models. This is partial progress
 toward the principle, not a universal compatibility matrix or live verification
 of every combination.
 
+## Klide UI guidelines
+
+Settings use rounded, grouped panels, following the Machines page and the
+rounded settings reference approved by the user. This is the default Klide
+visual language for new UI and future revisions of existing UI.
+
+- Apply the light-grey and white palette across the whole app: chrome, rails
+  and sidebars use #F5F6F7 (`--bg`); content, editors, terminals and panels use
+  #FFFFFF (`--bg-elevated`, `--editor-bg`, `--terminal-bg`, `--bg-panel`). Use
+  cool neutral borders. No beige, cream, parchment or warm off-white UI
+  backgrounds, including theme variants, popovers, welcome screens and viewers.
+  Keep accents for interaction and semantic information. Preserve the dark
+  themes and colours belonging to user content, artwork or service logos.
+- Group related settings in one panel with a 20px corner radius, a theme-aware
+  panel background, a soft border and a subtle shadow. Separate rows with fine
+  dividers. Keep section headings outside the panel.
+- Give rows generous spacing (about 24px vertically and horizontally). Put the
+  setting name and a muted description on the left, and its control on the
+  right. Stack controls below the description when space is limited.
+- Use rounded controls (12px corners), readable labels, and restrained status
+  colours. Keep toggles pill-shaped. Reuse the shared Settings Panel/Row
+  primitives and design tokens instead of styling each page independently.
+- Use subtle chevron icons where they clarify a dropdown, submenu, or
+  expandable group. They are functional affordances, not decoration: do not
+  append them to every row or use the browser's filled triangle markers.
+  Text controls such as Details, Hide details, Show or Hide are also suitable.
+  Use full arrow icons for directional navigation or external destinations,
+  rather than as substitutes for dropdown chevrons.
+- Preserve keyboard access, visible focus, accessible control names and
+  expanded state. Apply the same layout in light and dark themes.
+- Show service logos where they help identify a connection (for example,
+  Tailscale in the VPN section), with clear sections for distinct concerns.
+
+The shared implementation is `src/components/settings/controls.tsx` and
+`src/components/settings/settings.css`; Machines uses the same panel and
+control radii. These guidelines take precedence over older comments describing
+flat, borderless Settings sections or a blanket ban on chevrons.
+
 ## Language
 
 ### Workspace

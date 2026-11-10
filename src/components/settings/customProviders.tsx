@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { listProviderModelMetadata, listProviderModels, modelChats, readProviderKeyStatus } from "../../ipc/aiProviders";
 import { Z } from "../../zLayers";
 import { resolveModelLogo } from "../../modelIdentity";
-import { ChevronDown, ProviderLogo } from "../ai/icons";
+import { ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import {
   customIdFromLabel,
@@ -159,23 +159,10 @@ export function CustomEndpointRow({
           }
         }}
         className="klide-settings-row"
-        style={{ cursor: "pointer", minHeight: 72, padding: "16px 0", gap: 16, borderBottom: "none" }}
+        aria-expanded={open}
+        style={{ cursor: "pointer", minHeight: 84, padding: "24px 0", gap: 16, borderBottom: "none" }}
       >
-        <div style={{ minWidth: 0, display: "grid", gridTemplateColumns: "16px 32px minmax(0, 1fr)", alignItems: "center", gap: 10 }}>
-          <span
-            style={{
-              display: "grid",
-              placeItems: "center",
-              width: 16,
-              height: 32,
-              color: "var(--fg-dim)",
-              transform: open ? "rotate(0deg)" : "rotate(-90deg)",
-              transition: "transform 120ms ease",
-              flexShrink: 0,
-            }}
-          >
-            <ChevronDown />
-          </span>
+        <div style={{ minWidth: 0, display: "grid", gridTemplateColumns: "32px minmax(0, 1fr)", alignItems: "center", gap: 10 }}>
           <span style={{ display: "grid", placeItems: "center", width: 32, height: 32, color: "var(--fg-subtle)" }}>
             <ProviderLogo id={endpoint.id as ProviderId} size={24} />
           </span>
@@ -192,6 +179,7 @@ export function CustomEndpointRow({
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
+          <span className="klide-settings-detail-label">{open ? "Hide details" : "Details"}</span>
           <IconButton title="Edit endpoint" onClick={onEdit}>
             <PencilIcon />
           </IconButton>
@@ -804,9 +792,7 @@ export function CliAgentDialog({
           }}
         >
           <span>Options</span>
-          <span style={{ display: "grid", placeItems: "center", transform: showOptions ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 120ms ease" }}>
-            <ChevronDown />
-          </span>
+          <span>{showOptions ? "Hide" : "Show"}</span>
         </button>
 
         {showOptions && (

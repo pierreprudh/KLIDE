@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDown, KlideMark } from "../ai/icons";
+import { CheckIcon, KlideMark } from "../ai/icons";
 import { HuggingFaceLogo, LiquidAiLogo, LlamaLogo, MistralLogo, QwenLogo } from "../../modelBrand";
 import type { LlamaSetupInfo } from "../../ipc/aiProviders";
 import { useId } from "react";
@@ -51,11 +51,11 @@ export function LlamaModelCards({ info, value, disabled, onChange }: Props) {
     </div>
     {suggested.length === 0 && <p className="klide-llama-hint">No provider release fits the estimated budget. You can use a self-hosted endpoint or explore the larger models below.</p>}
     {larger.length > 0 && <details className="klide-llama-details klide-llama-larger" open={larger.some((m) => m.id === value) || undefined}>
-      <summary><span aria-hidden="true"><ChevronDown /></span>Models needing more memory ({larger.length})</summary>
+      <summary>Models needing more memory ({larger.length})</summary>
       <div className="klide-llama-card-grid">{larger.map(card)}</div>
     </details>}
     {other.length > 0 && <details className="klide-llama-details klide-llama-larger" open={other.some((m) => m.id === value) || undefined}>
-      <summary><span aria-hidden="true"><ChevronDown /></span>Klide and previously selected models ({other.length})</summary>
+      <summary>Klide and previously selected models ({other.length})</summary>
       <div className="klide-llama-card-grid">{other.map(card)}</div>
     </details>}
   </fieldset>;
