@@ -34,9 +34,12 @@ function App() {
     <>
       <InlineCommandReview
         hotkeys
-        command="git remote -v"
+        command="cat .agents/todos/mvybo-plan.md"
         detail="The agent wants to run a shell command in the workspace."
-        pattern="git *"
+        pattern="cat *"
+        onApproveForRun={say("approved for run")}
+        onApproveForProject={say("approved for project")}
+        onApprovePattern={say("approved pattern")}
         onReject={say("denied")}
         onApproveOnce={say("ran once")}
         onApproveForRun={say("approved for run")}
@@ -86,6 +89,7 @@ function App() {
       <div style={{ fontSize: 12, color: "var(--fg-subtle)" }}>last action: <b style={{ color: "var(--fg-strong)" }}>{said}</b></div>
       <Stage width={820} label="Focus column">{cards}</Stage>
       <Stage width={380} label="Workbench panel">{cards}</Stage>
+      <Stage width={290} label="Narrow panel">{cards}</Stage>
     </div>
   );
 }
