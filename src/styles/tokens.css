@@ -10723,10 +10723,15 @@ input.klide-rail-search:focus-visible {
    branch tab's 15px corner inset. */
 .klide-where-it-runs { margin-right: auto; margin-left: 15px; display: flex; align-self: center; }
 /* Its menu: a rounder, roomier card than the composer's other pickers — two
-   or three places, each given room. Rows are inline-styled by InlineMenu,
-   hence the scoped overrides. */
-.klide-where-menu { border-radius: 14px; }
-.klide-where-menu .menu-scroll { padding: 6px !important; }
-.klide-where-menu [role="option"] { padding: 9px 11px !important; border-radius: 9px !important; }
-.klide-where-menu [role="option"] > div { gap: 9px !important; }
-.klide-where-menu [role="option"] span { font-size: 12.5px !important; }
+   or three places, each given room. On the Design.md scales: the card at the
+   12px card radius, rows at 8px, labels at --fs-base, and the chosen row
+   marked by its fill alone (emphasis by color, never weight). */
+.klide-where-menu {
+  border-radius: var(--radius-xl);
+  --inline-menu-pad: 6px;
+  --inline-menu-row-pad: 9px 11px;
+  --inline-menu-row-radius: var(--radius-lg);
+  --inline-menu-gap: 9px;
+  --inline-menu-label-size: var(--fs-base);
+  --inline-menu-active-weight: 400;
+}
