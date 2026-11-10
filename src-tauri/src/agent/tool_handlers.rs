@@ -1977,13 +1977,21 @@ where
         &decision,
     );
 
+    // Approved on the card: the person read this command, and it runs as
+    // approved. A card the rung answered is the other case — flipping to full
+    // auto while it was up is choosing a policy, not approving this command.
+    let contained = match &decision {
+        permission::GateDecision::Approved { by_rung: true, .. } => {
+            sandbox::for_command(permission::Trusted::FullAuto, false, std::path::Path::new(root_value))
+        }
+        _ => None,
+    };
     let result = match decision {
         permission::GateDecision::Approved { .. } if background => {
-            start_background_command(ctx, root_value, &cwd, &command, notify, None)
+            start_background_command(ctx, root_value, &cwd, &command, notify, contained.as_ref())
         }
         permission::GateDecision::Approved { .. } => {
-            // Approved on the card: the person read this command.
-            return run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, None, emit)
+            return run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, contained.as_ref(), emit)
                 .await;
         }
         _ => ToolResult {

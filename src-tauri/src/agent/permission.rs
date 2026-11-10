@@ -443,6 +443,10 @@ pub enum GateDecision {
         /// On a worker dispatch: the card's "Full auto" — start the worker on
         /// the full-auto rung. Meaningless to every other gate.
         worker_full_auto: bool,
+        /// The card was up and the rung answered it — the person flipped to
+        /// full auto instead of approving. They chose a policy, not this
+        /// command, so it is contained like any other the rung lets run.
+        by_rung: bool,
     },
     Rejected,
     /// The user cancelled the whole run while the prompt was up.
@@ -646,6 +650,7 @@ where
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             worker_full_auto: decision_val.get("workerFullAuto").and_then(|v| v.as_bool()).unwrap_or(false),
+            by_rung: decision_val.get("via").and_then(|v| v.as_str()) == Some("full_auto"),
         }
     } else {
         GateDecision::Rejected
