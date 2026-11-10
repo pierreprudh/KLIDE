@@ -41,6 +41,8 @@ Group related settings in rounded panels (20px corners), with generous row
 spacing, fine dividers and rounded controls (12px). Use subtle chevrons for
 functional dropdowns or expandable groups; use full arrows for directional
 navigation. Omit decorative trailing icons and browser triangle markers.
+Page titles stand alone by default; subtitles are optional and must add useful
+context. Put guidance beside the control it explains.
 `CONTEXT.md` and `Design.md` document these approved guidelines.
 
 

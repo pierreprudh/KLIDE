@@ -227,24 +227,6 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "storage", label: "Storage", icon: <ArchiveIcon /> },
 ];
 
-// One orienting line per section, shown under the page title. Keeps each pane
-// self-explanatory the way Linear / Vercel settings do, without a help click.
-const SECTION_SUBTITLES: Record<SectionId, string> = {
-  general: "Startup, files, tabs, and workbench-wide defaults.",
-  appearance: "Theme, how Klide follows your system light/dark setting, and how a conversation is laid out.",
-  layout: "Panel sizes and saved workbench layout presets.",
-  ai: "How the assistant edits files, runs tools, and reasons.",
-  "local-ai": "Run models on-device with Ollama and MLX — no key needed.",
-  api: "Hosted provider keys, the opencodex gateway, and self-hosted endpoints.",
-  machines: "Manage cloud and self-hosted Linux machines over SSH.",
-  connectors: "MCP servers Klide connects to — import the ones your other tools already use.",
-  subscription: "Connect Claude Code, Codex, OpenCode, and Oh My Pi CLI logins — plus your ollama.com account.",
-  editor: "Monaco editor preferences — font, gutter, and wrapping.",
-  terminal: "The built-in shell's appearance and behaviour.",
-  stats: "Token usage and cost across your agent runs.",
-  storage: "Manage saved conversations, disk usage, the local cache and your transcript folder.",
-};
-
 // Searchable index for the "Look for a setting" box. Each entry points at the
 // section that holds it; typing surfaces the matching entries so you can jump
 // straight there instead of hunting through tabs.
@@ -1020,7 +1002,6 @@ export function SettingsPanel({
               <h1 tabIndex={-1}>
                 {SETTINGS_PAGES[activeSection]?.find((page) => page.id === activePage)?.label ?? sectionTitle}
               </h1>
-              <p>{SECTION_SUBTITLES[activeSection]}</p>
             </div>
           </header>
 

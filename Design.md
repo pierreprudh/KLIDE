@@ -283,6 +283,7 @@ themes:
 # ─────────────────────────────────────────────────────────────────────────────
 
 principles:
+  - "Page titles stand alone by default. Use subtitles only for useful additional context; place specific explanations beside the controls they clarify."
   - "Light grey and white throughout. Chrome is #F5F6F7; content is #FFFFFF. No beige, cream, parchment or warm off-white UI backgrounds."
   - "Sage over blue. The accent is a soft sage green (#5A7B4C) — every AI tool defaults to blue; we don't."
   - "Charcoal over black. Text is #1c1c1c, not #000. The slight off-black reads as organic, not digital."
