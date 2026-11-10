@@ -4383,7 +4383,7 @@ button:focus-visible .menu-leadout {
   flex: 1 1 0;
   min-height: 0;
   overflow: auto;
-  padding: 4px 6px 8px;
+  padding: 4px 8px 8px;
 }
 
 .klide-explorer-tree > ul {
@@ -4442,7 +4442,11 @@ button:focus-visible .menu-leadout {
   position: relative; /* paints its fills above the tree's indent guides */
   display: grid;
   align-items: center;
-  border-radius: var(--radius-sm);
+  /* Same language as the Where-it-runs menu: rounder rows, neutral grey
+     fills — never the theme accent, so selection reads as a lift. */
+  --file-row-hover: color-mix(in srgb, var(--fg) 5%, transparent);
+  --file-row-selected: color-mix(in srgb, var(--fg) 10%, transparent);
+  border-radius: var(--radius-lg);
   color: var(--fg);
   cursor: pointer;
   user-select: none;
@@ -4453,13 +4457,13 @@ button:focus-visible .menu-leadout {
 }
 
 .klide-file-row:hover {
-  background: var(--bg-hover);
+  background: var(--file-row-hover);
 }
 
 /* After :hover on purpose — equal specificity, so a hovered selected row
    keeps the selected fill. */
 .klide-file-row[data-active="true"] {
-  background: var(--bg-selected);
+  background: var(--file-row-selected);
   color: var(--fg-strong);
 }
 
@@ -4530,7 +4534,7 @@ button:focus-visible .menu-leadout {
   /* Reserved so the inline-rename state can show a border without reflow. */
   border: 1px solid transparent;
   gap: 4px;
-  height: 23px;
+  height: 26px;
   padding: 0 8px 0 0;
   font-size: 12.5px;
 }

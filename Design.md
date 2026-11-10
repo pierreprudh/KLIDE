@@ -288,6 +288,7 @@ principles:
   - "Charcoal over black. Text is #1c1c1c, not #000. The slight off-black reads as organic, not digital."
   - "Opacity grays over hex grays. Every gray is the same charcoal at a different transparency. Tonal coherence is automatic."
   - "Soft borders and subtle shadows contain rounded groups. Keep dividers fine and spacing generous."
+  - "Selection is a grey lift, not a colour. Picked rows in lists and menus (Explorer, Git Review files, Where it runs) fill with the text colour at ~10% and hover at ~5%, on 8px corners — never the accent."
   - "Atkinson over Inter. Humanist, not geometric. Open apertures. Rounded terminals. Built for reading."
   - "Monaspace over JetBrains. Code gets a different typeface. Same warmth, but mechanical."
   - "No display weight. Atkinson Hyperlegible is single-weight. Emphasis is color and size, not weight."
