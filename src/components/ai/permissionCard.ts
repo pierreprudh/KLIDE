@@ -1,7 +1,8 @@
 // PERMISSION CARD — one permission request → the card a conversation draws.
 //
 // The Harness pauses and emits a request — a shell command, a network target,
-// a message from another agent, a worker dispatch, a connector tool — and the
+// a message from another agent, a worker dispatch, a connector tool, a
+// project's hooks file — and the
 // user answers before it runs. The request's `input` is the one genuinely
 // open field on the wire (the command gate sends {command, cwd, externalPaths,
 // matchedAllowRule}, a network capability sends whatever it declared), so
@@ -13,7 +14,19 @@ import type { PermissionRequest, ProviderId } from "../../agent/types";
 import type { CommandInterpreter } from "../InlineCommandReview";
 import { peerName, type PeerIndex } from "./coordinationPeers";
 
-export type PermissionCardKind = "command" | "network" | "message" | "worker" | "connector";
+export type PermissionCardKind = "command" | "network" | "message" | "worker" | "connector" | "hooks";
+
+type ProjectHook = { on?: string; tools?: string[]; command?: string };
+
+const HOOK_MOMENT: Record<string, string> = { pre_tool: "before", post_tool: "after", run_settled: "when the run ends" };
+
+/** One hook as a line a person can read before allowing it:
+ *  `before run_command › ./guard.sh`. */
+export function hookLine(hook: ProjectHook): string {
+  const moment = HOOK_MOMENT[hook.on ?? ""] ?? hook.on ?? "hook";
+  const tools = hook.on === "run_settled" ? "" : ` ${hook.tools?.length ? hook.tools.join(", ") : "every tool"}`;
+  return `${moment}${tools} › ${hook.command ?? ""}`;
+}
 
 export type PermissionCard = {
   runId: string;
@@ -51,7 +64,7 @@ const NO_PEERS: PeerIndex = new Map();
 export function permissionCard(runId: string, req: PermissionRequest, peerIndex: PeerIndex = NO_PEERS): PermissionCard {
   // Everything but `input` is typed, and the Rust
   // `frontend_mirror_matches_agent_wire` test keeps it that way.
-  const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; interpreter?: CommandInterpreter | null; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
+  const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; interpreter?: CommandInterpreter | null; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string; hooks?: ProjectHook[] };
   const isCommand = !!input.command;
   // An incoming-message gate carries the sender and the text; the card shows
   // the text where the command would be and names the peer as the chat does.
@@ -63,7 +76,11 @@ export function permissionCard(runId: string, req: PermissionRequest, peerIndex:
   // A connector tool shows its mark and the tool it would run — the card's
   // command line is `add_issue_comment`, not a network target.
   const isConnector = !isCommand && !isMessage && !isWorker && !!input.connector && !!input.tool;
+  // A project's hooks file carries every command it would run; the card
+  // lists them all, one to a line, since allowing it allows each of them.
+  const isHooks = !isCommand && !isMessage && !isWorker && !isConnector && Array.isArray(input.hooks);
   const command = input.command
+    ?? (isHooks ? input.hooks!.map(hookLine).join("\n") : undefined)
     ?? (isMessage ? input.body ?? "" : undefined)
     ?? (isWorker ? input.task ?? "" : undefined)
     ?? (isConnector ? input.tool : undefined)
@@ -72,7 +89,7 @@ export function permissionCard(runId: string, req: PermissionRequest, peerIndex:
     runId,
     requestId: req.id,
     toolName: req.toolName ?? "permission",
-    kind: isCommand ? "command" : isMessage ? "message" : isWorker ? "worker" : isConnector ? "connector" : "network",
+    kind: isCommand ? "command" : isMessage ? "message" : isWorker ? "worker" : isConnector ? "connector" : isHooks ? "hooks" : "network",
     connector: isConnector ? input.connector : undefined,
     command,
     peer: isMessage ? peerName(input.fromRunId!, peerIndex)

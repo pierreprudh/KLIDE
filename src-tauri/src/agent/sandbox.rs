@@ -191,7 +191,7 @@ fn real_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
 /// above it, and for a worktree — where `.git` is a file pointing elsewhere —
 /// the repository's shared directory as well. Read from the files git itself
 /// reads, so no process is started to find out.
-fn git_dirs(root: &Path) -> Vec<PathBuf> {
+pub(super) fn git_dirs(root: &Path) -> Vec<PathBuf> {
     let Some(dot_git) = root.ancestors().map(|dir| dir.join(".git")).find(|path| path.exists()) else {
         return Vec::new();
     };

@@ -9,7 +9,7 @@ import { parseScriptCommand, type ScriptCommand } from "./scriptCommand";
 
 type Props = {
   command: string;
-  kind?: "command" | "network" | "message" | "worker" | "connector";
+  kind?: "command" | "network" | "message" | "worker" | "connector" | "hooks";
   /** For a connector tool: the connector id, for its mark. `peer` holds its
    *  label, said in words only when the mark alone wouldn't name it. */
   connector?: string;
@@ -366,9 +366,12 @@ export function InlineCommandReview({
             color: "var(--fg-strong)",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            // A hooks card allows every command it lists, so each gets its
+            // own line in full; every other card is one line.
+            whiteSpace: kind === "hooks" ? "pre-wrap" : "nowrap",
+            overflowWrap: kind === "hooks" ? "anywhere" : undefined,
           }}
-          title={script ? undefined : command}
+          title={script || kind === "hooks" ? undefined : command}
         >
           {kind === "command" && !script && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>› </span>}
           {kind === "connector" && connector && (

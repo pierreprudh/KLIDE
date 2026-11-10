@@ -178,16 +178,22 @@ pub struct ProcessHandle {
 /// The caller has already put the command through the permission gate — this
 /// starts a process and asks nothing. Must be called inside a tokio runtime.
 pub fn spawn(spec: SpawnSpec<'_>) -> Result<ProcessHandle, String> {
-    spawn_with_setup_env(spec, None)
+    spawn_with_setup_env(spec, None, &[])
+}
+
+/// A command in the Run's usual environment plus a few values of the
+/// caller's — how a project hook learns which tool call it is about.
+pub(super) fn spawn_with_env(spec: SpawnSpec<'_>, extra: &[(String, String)]) -> Result<ProcessHandle, String> {
+    spawn_with_setup_env(spec, None, extra)
 }
 
 /// Approved worktree setup keeps its login shell and recipe environment,
 /// while sharing command cancellation, process-group cleanup and bounded logs.
 pub(super) fn spawn_setup(spec: SpawnSpec<'_>, envs: &[(String, String)]) -> Result<ProcessHandle, String> {
-    spawn_with_setup_env(spec, Some(envs))
+    spawn_with_setup_env(spec, Some(envs), &[])
 }
 
-fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>) -> Result<ProcessHandle, String> {
+fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>, extra: &[(String, String)]) -> Result<ProcessHandle, String> {
     let shell = if envs.is_some() {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into())
     } else { "sh".into() };
@@ -206,6 +212,7 @@ fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>) 
     } else {
         cmd.env_clear().envs(super::command_env::env_for(spec.cwd));
     }
+    cmd.envs(extra.iter().cloned());
     #[cfg(unix)]
     cmd.process_group(0);
     let mut child = cmd

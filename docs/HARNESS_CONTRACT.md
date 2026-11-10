@@ -392,6 +392,59 @@ the person configured and are not contained.
 
 Linux and Windows run every command as before.
 
+## Project Hooks
+
+A project can run commands of its own around a Run's tool calls. They are
+listed in `.klide/hooks.json` (`agent/hooks.rs`):
+
+```json
+{ "hooks": [
+  { "on": "pre_tool",  "tools": ["run_command"], "command": "./scripts/guard.sh" },
+  { "on": "post_tool", "tools": ["edit_file", "write_*"], "command": "npm run lint", "timeout": 60 },
+  { "on": "run_settled", "command": "./scripts/notify.sh" }
+] }
+```
+
+| `on` | When | What its exit means |
+|---|---|---|
+| `pre_tool` | Before a matching call, ahead of that call's own permission card | Non-zero refuses the call; the hook's output is the Tool result |
+| `post_tool` | After a matching call | Non-zero appends the hook's output to the result; the result's `ok` is unchanged |
+| `run_settled` | Once, after a top-level Run ends (not a subagent); nothing waits for it | Nothing reads it |
+
+`tools` matches Tool names with `*` and `?`; left out, the hook is for every
+Tool. `timeout` is in seconds (default 30, at most 300). An unknown field or
+event makes the whole file invalid: no hook runs and the model is told once,
+so a typo never becomes a hook that silently fires on nothing, or everything.
+
+The call reaches the hook as environment variables, never as text in the
+command: `KLIDE_HOOK_EVENT`, `KLIDE_RUN_ID`, `KLIDE_TOOL_NAME`,
+`KLIDE_TOOL_PATH` and `KLIDE_TOOL_COMMAND` (when the input has a `path` or a
+`command`), `KLIDE_TOOL_INPUT` (the input as JSON, left out above 32 KB),
+`KLIDE_TOOL_OK` (`1`/`0`, `post_tool` only) and `KLIDE_RUN_STATUS`
+(`run_settled` only). Hooks start in the project root with the same
+environment as `run_command`.
+
+**Trust.** The file is inside the project, so the agent can write it and a
+cloned repository can bring one. Nothing in it runs until a person allows that
+exact text:
+
+- The approval is the sha256 of the file, kept in app data under
+  `approvals/hooks/`, one record per repository (a worktree shares its
+  project's). Any change to the file asks again.
+- The card goes up at the Run's first tool call and lists every command. No
+  rung answers it: full auto lets the agent's commands run, it does not decide
+  what the project runs on its own.
+- Only a conversation is asked. A Mission attempt or a subagent that meets
+  unapproved hooks runs without them. A declined file is not asked about
+  again until the app restarts or the file changes.
+- Every hook runs in the command sandbox above (when it is on), exactly like
+  a command the full-auto rung let run. A script a hook names is as writable
+  by the agent as the hooks file is; containment is what bounds that, so a
+  hook has no `unsandboxed` option.
+
+While a project has a `pre_tool` hook, a turn's read-only calls are not
+started in parallel ahead of the loop.
+
 ## Diff Review
 
 Write-capability Tools never write immediately. They create a `DiffProposal`.
