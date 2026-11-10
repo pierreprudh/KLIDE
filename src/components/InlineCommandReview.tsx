@@ -338,9 +338,11 @@ export function InlineCommandReview({
         margin: "0 16px 8px",
         display: "flex",
         alignItems: "center",
-        flexWrap: script ? "wrap" : undefined,
+        // In a narrow panel the actions drop under the command instead of
+        // squeezing it to nothing (they never shrink; the command did).
+        flexWrap: "wrap",
         gap: 8,
-        rowGap: script ? 6 : undefined,
+        rowGap: 6,
         padding: "7px 10px",
         borderRadius: 10,
         border: "1px solid var(--border)",
@@ -351,7 +353,7 @@ export function InlineCommandReview({
     >
       <span
         style={{
-          flex: 1,
+          flex: "1 1 160px",
           minWidth: 0,
           display: "grid",
           gap: 2,
@@ -423,7 +425,7 @@ export function InlineCommandReview({
           </span>
         )}
       </span>
-      <span style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ flexShrink: 0, marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
         {onApproveForRun && (
           <BareAction label={approveRunLabel} tone="neutral" onClick={onApproveForRun}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
