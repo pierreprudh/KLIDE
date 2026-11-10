@@ -871,7 +871,10 @@ function InlineMenu({
             </div>
           </div>
           )}
-          <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 5 }}>
+          {/* Row geometry reads --inline-menu-* custom properties, so a picker
+              that shapes its own card (`menuClassName`) restyles its rows in
+              CSS, on the token scale, without overriding inline styles. */}
+          <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "var(--inline-menu-pad, 5px)" }}>
             {renderStacks((o, idx) => {
               if (o.heading) {
                 const folded = collapsed.has(o.label);
@@ -934,9 +937,9 @@ function InlineMenu({
                   style={{
                     display: "block",
                     width: "100%",
-                    padding: "7px 9px",
+                    padding: "var(--inline-menu-row-pad, 7px 9px)",
                     border: "none",
-                    borderRadius: "var(--radius-sm)",
+                    borderRadius: "var(--inline-menu-row-radius, var(--radius-sm))",
                     background: active
                       ? "var(--menu-row-active)"
                       : focused
@@ -948,7 +951,7 @@ function InlineMenu({
                     transition: "background var(--motion-fast) var(--ease-out)",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--inline-menu-gap, 6px)" }}>
                     {hasIcons && (
                       <span
                         style={{
@@ -972,8 +975,8 @@ function InlineMenu({
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
-                        fontSize: 12,
-                        fontWeight: active ? 550 : 500,
+                        fontSize: "var(--inline-menu-label-size, 12px)",
+                        fontWeight: active ? "var(--inline-menu-active-weight, 550)" : 500,
                         fontFamily: mono ? "var(--font-mono)" : "inherit",
                         opacity: o.dimmed ? 0.45 : 1,
                         transition: "opacity var(--motion-fast) var(--ease-out)",
