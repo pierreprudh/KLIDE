@@ -1700,6 +1700,7 @@ fn start_background_command(
     if let Ok(shell) = &started {
         if notify { ctx.sup.watch_background(ctx.id, &shell.id, ctx.request); }
     }
+    let contained_note = if sandbox.is_some() { sandbox::BACKGROUND_NOTE } else { "" };
     match started {
         Ok(shell) => ToolResult {
             ok: true,
@@ -1710,7 +1711,7 @@ fn start_background_command(
                  Read what it has printed with read_command_output(shellId: \"{}\"), and stop it \
                  with kill_command when you are done — do not wait on it in a tight loop.",
                 shell.id, shell.id
-            ) },
+            ) } + contained_note,
             metadata: Some(serde_json::json!({ "shell": shell })),
         },
         Err(message) => ToolResult { ok: false, content: message, metadata: None },
@@ -1842,6 +1843,11 @@ where
         return Ok(ToolOutcome::Produced(ToolResult { ok: false, content: "notifyOnExit requires background: true.".into(), metadata: None }));
     }
 
+    // A request to leave the sandbox. Only the builtin offers it, and it only
+    // means something where a command would otherwise be contained.
+    let unsandboxed = call.name == tools::RUN_COMMAND_TOOL
+        && call.input.get("unsandboxed").and_then(|v| v.as_bool()).unwrap_or(false);
+
     let shape = match (background, notify) {
         (false, _) => permission::CommandShape::Foreground,
         (true, false) => permission::CommandShape::Background,
@@ -1939,15 +1945,26 @@ where
         options,
     };
 
-    match permission::precheck(ctx, permission::Capability::Command, &approval_key, project_ok) {
+    let exact_rule = matched_rule.as_ref().is_some_and(|rule| rule.exact);
+    let precheck = permission::precheck(ctx, permission::Capability::Command, &approval_key, project_ok);
+    // Leaving the sandbox is put to the person whenever the command would
+    // otherwise have run contained — said on the card they are about to read.
+    let escalating = matches!(&precheck, permission::Precheck::Ask if unsandboxed && sandbox::active())
+        || matches!(&precheck, permission::Precheck::Execute(trusted) if sandbox::must_ask(unsandboxed, *trusted, exact_rule));
+    let mut perm = perm;
+    if escalating {
+        perm.reason.push_str(sandbox::ESCALATION_REASON);
+        perm.input["unsandboxed"] = serde_json::Value::Bool(true);
+    }
+    match precheck {
         permission::Precheck::Execute(permission::Trusted::FullAuto) if credential => {}
+        permission::Precheck::Execute(_) if escalating => {}
         permission::Precheck::Execute(trusted) => {
             if trusted == permission::Trusted::FullAuto {
                 permission::record_full_auto(ctx, call, perm, emit)?;
             }
             // Nobody read this one: the rung or a wildcard rule let it run.
             // It gets the project, not the machine.
-            let exact_rule = matched_rule.as_ref().is_some_and(|rule| rule.exact);
             let contained = sandbox::for_command(trusted, exact_rule, std::path::Path::new(root_value));
             return if background {
                 Ok(ToolOutcome::Produced(start_background_command(ctx, root_value, &cwd, &command, notify, contained.as_ref())))

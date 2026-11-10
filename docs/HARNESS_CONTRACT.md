@@ -372,8 +372,13 @@ Seatbelt profile; everything it starts inherits the profile.
 - **Network** is on. Seatbelt cannot filter by host, so the profile can only
   offer all or loopback; closing it waits for an approval card on denial.
 
-A refused write returns the command's output plus a note naming the sandbox,
-so the model reports the path instead of trying another route.
+A refused write returns the command's output plus a note naming the sandbox
+and the way out: `run_command` with `unsandboxed: true`. That request is put
+to the person whenever the command would otherwise have run contained — the
+full-auto rung and wildcard rules let a command run, they never let it out —
+and the card says what is being asked. Approved, it runs as any approved
+command does. Nothing is re-run automatically: a refused command may already
+have done half its work, so the model decides whether to ask.
 
 The choice is stored in `~/.klide/sandbox.json` and read in Rust at each
 command: the background host and child runs see the same answer, and a run
