@@ -4428,6 +4428,9 @@ button:focus-visible .menu-leadout {
 .klide-explorer-tree:focus-within ul ul::before {
   opacity: 1;
 }
+.klide-explorer-tree ul ul[data-single="true"]::before {
+  display: none;
+}
 
 /* Tree rows. The grid is: [chevron] [icon] [name] [decoration]. 16px
    chevron column, 16px icon column, name takes the rest and

@@ -12,11 +12,12 @@ const ROOT = "/Users/pierre/Documents/Private/pixel-art-editor";
 const d = (name: string) => ({ name, isDirectory: true });
 const f = (name: string) => ({ name, isDirectory: false });
 const TREE: Record<string, unknown[]> = {
-  [ROOT]: [d("public"), d("src"), f(".gitignore"), f("index.html"), f("package.json"), f("README.md"), f("tsconfig.json"), f("vite.config.ts")],
+  [ROOT]: [d("public"), d("docs"), d("src"), f(".gitignore"), f("index.html"), f("package.json"), f("README.md"), f("tsconfig.json"), f("vite.config.ts")],
   [`${ROOT}/src`]: [d("components"), f("App.tsx"), f("canvas.ts"), f("main.tsx"), f("palette.ts"), f("styles.css")],
+  [`${ROOT}/docs`]: [f("notes.md")],
   [`${ROOT}/src/components`]: [f("Canvas.tsx"), f("Palette.tsx"), f("Toolbar.tsx")],
 };
-localStorage.setItem(`klide-expanded-folders:${ROOT}`, JSON.stringify([`${ROOT}/src`, `${ROOT}/src/components`]));
+localStorage.setItem(`klide-expanded-folders:${ROOT}`, JSON.stringify([`${ROOT}/docs`, `${ROOT}/src`, `${ROOT}/src/components`]));
 
 (window as any).__TAURI_INTERNALS__ = {
   transformCallback: () => 0,
