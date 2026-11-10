@@ -39,6 +39,8 @@ import { Check } from "@phosphor-icons/react/dist/csr/Check";
 import { CheckCircle } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ArrowsOut } from "@phosphor-icons/react/dist/csr/ArrowsOut";
 import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
+import { ArrowRight } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { ArrowDown } from "@phosphor-icons/react/dist/csr/ArrowDown";
 import { ArrowUp } from "@phosphor-icons/react/dist/csr/ArrowUp";
 import { StackSimple } from "@phosphor-icons/react/dist/csr/StackSimple";
 import { BookmarkSimple } from "@phosphor-icons/react/dist/csr/BookmarkSimple";
@@ -425,3 +427,8 @@ export function UseToolIcon(p: GlyphProps) { return <Icon as={HandPointing} {...
 export function PlayIcon(p: GlyphProps) { return <Icon as={Play} {...p} />; }
 export function PauseIcon(p: GlyphProps) { return <Icon as={Pause} {...p} />; }
 export function ClockIcon(p: GlyphProps) { return <Icon as={Clock} {...p} />; }
+
+/** A full arrow for directional actions. Dropdowns use ChevronIcon. */
+export function ArrowDownIcon(p: GlyphProps) { return <Icon as={ArrowDown} {...p} />; }
+
+export function ArrowRightIcon(p: GlyphProps) { return <Icon as={ArrowRight} {...p} />; }

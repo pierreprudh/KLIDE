@@ -41,3 +41,21 @@ export function machineCheck(id: string, workspaceRoot: string | null): Promise<
 export function machineLabel(machine: Pick<Machine, "id" | "label">): string {
   return machine.label?.trim() || machine.id;
 }
+
+const listeners = new Set<() => void>();
+export function subscribeMachines(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+export async function machineSave(machine: Machine, creating: boolean): Promise<Machine[]> {
+  const machines = await invoke<Machine[]>("machine_save", { machine, creating });
+  for (const listener of listeners) listener();
+  return machines;
+}
+
+export async function machineRemove(id: string): Promise<Machine[]> {
+  const machines = await invoke<Machine[]>("machine_remove", { id });
+  for (const listener of listeners) listener();
+  return machines;
+}

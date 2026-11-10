@@ -1,6 +1,6 @@
 // OrchestratorConsole — the real v0.5 tier-board console, built from the
 // prototype's winning "crew board" variant and grounded in Design.md:
-//   · bone canvas + charcoal-opacity grays + hairline borders (no drop-shadow)
+//   · grey/white canvas + charcoal-opacity grays + hairline borders (no drop-shadow)
 //   · ONE chromatic moment — sage (--accent) marks LIVE work; amber/brick are
 //     the existing status signals. Tiers read by LABEL + a monochrome strength
 //     meter, never by an off-brand hue (no teal/blue/purple).

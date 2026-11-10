@@ -1,3 +1,4 @@
+import { ChevronIcon, ArrowRightIcon } from "../../icons";
 import { delegateLabel, type DelegateId } from "../../delegates";
 import { isFavModel, toggleFavModel, subscribeFavModels } from "../../favModels";
 import { ModelPickerHeader, MODEL_FILTER_STYLE, MODEL_ROW_STYLE, StarIcon } from "./ModelPickerChrome";
@@ -162,7 +163,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
       onMouseLeave={(e) => { if (!menu.open) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; } }}
       onClick={() => { if (menu.open) menu.close(); else { setCategory(null); setSource(null); menu.openMenu(); } }}>
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: fluid ? "left" : "right" }}>{(current?.model ?? (model || placeholder || "default")).split("/").pop()}</span>
-      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ position: "absolute", right: 2, color: "var(--fg-dim)", transform: menu.open ? "rotate(180deg)" : "none" }}><path d="M6 9l6 6 6-6" /></svg>
+      <ChevronIcon size={12} style={{ position: "absolute", right: 2, color: "var(--fg-dim)", transform: menu.open ? "rotate(180deg)" : "none" }} />
     </button>
     {menu.open && menu.pos && createPortal(<div ref={menu.menuRef}
       style={{ position: "fixed", ...menu.pos, width: 200, zIndex: Z.popover }}
@@ -196,12 +197,12 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === OWN} data-own className="provider-category-row"
           style={{ ...style, background: category === OWN ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showOwn(e.currentTarget)} onClick={(e) => showOwn(e.currentTarget, true)}>
-          {harnessName} <span style={{ float: "right" }} aria-hidden>›</span>
+          {harnessName} <ArrowRightIcon size={14} style={{ float: "right" }} />
         </button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showCategory(name, e.currentTarget)} onClick={(e) => showCategory(name, e.currentTarget)}>
-          {name} <span style={{ float: "right" }} aria-hidden>›</span>
+          {name} <ArrowRightIcon size={14} style={{ float: "right" }} />
         </button>)}
         </div>
       </div>
@@ -214,9 +215,9 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showSource(p.id, e.currentTarget)} onClick={(e) => showSource(p.id, e.currentTarget, true)}>
           <ProviderLogo id={p.id === NOUS_SOURCE ? "hermes" : p.id as ProviderId} size={16} />
-          <span style={{ flex: 1 }}>{p.name}</span>{support[p.id]?.supported ? <span aria-hidden>›</span> : <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
+          <span style={{ flex: 1 }}>{p.name}</span>{support[p.id]?.supported ? <ArrowRightIcon size={14} /> : <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
         </button>)}
-        {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint ↗</button>}
+        {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint</button>}
         </div>
       </div>}
       {(source || category === OWN) && sourcePos && <div role="menu" data-menu-panel data-level="models" className="popover-enter menu-glass"

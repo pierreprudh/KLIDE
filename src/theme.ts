@@ -20,16 +20,16 @@ export const THEMES: ThemeMeta[] = [
   {
     id: "klide-light",
     name: "Klide Light",
-    description: "Warm, quiet, and low-contrast for daylight work.",
+    description: "Light grey chrome, white content, and a quiet sage accent.",
     isDark: false,
-    swatches: ["#f7f4ed", "#fcfbf8", "#5A7B4C", "#1c1c1c"],
+    swatches: ["#F5F6F7", "#FFFFFF", "#5A7B4C", "#1c1c1c"],
   },
   {
     id: "sage-garden",
     name: "Sage Garden",
     description: "Klide Light with cool ink and a greyer sage — one shade crisper.",
     isDark: false,
-    swatches: ["#F8F7F3", "#FFFFFF", "#7C9082", "#1A1F2E"],
+    swatches: ["#F5F6F7", "#FFFFFF", "#7C9082", "#1A1F2E"],
   },
   {
     id: "sage-garden-dark",
@@ -57,14 +57,14 @@ export const THEMES: ThemeMeta[] = [
     name: "GitHub Light",
     description: "Clean white workspace with crisp blue UI states.",
     isDark: false,
-    swatches: ["#FFFFFF", "#F6F8FA", "#0969DA", "#24292F"],
+    swatches: ["#F5F6F7", "#FFFFFF", "#0969DA", "#24292F"],
   },
   {
     id: "cerulean",
     name: "Cerulean",
     description: "White canvas, grey sidebar, blue only where something is highlighted.",
     isDark: false,
-    swatches: ["#FFFEFC", "#F7F6F2", "#2596BE", "#1C1B18"],
+    swatches: ["#F5F6F7", "#FFFFFF", "#2596BE", "#1C1B18"],
   },
   {
     id: "solarized-dark",
@@ -104,11 +104,10 @@ export type TerminalAnsi = {
 };
 
 const TERMINAL_ANSI: Record<ThemeId, TerminalAnsi> = {
-  // Muted + warm to match Klide Light's "quiet, low-contrast" brief — earthy
-  // brick/olive/denim rather than primary red/green/blue, so program output
-  // sits calmly on the cream surface instead of fighting it.
+  // Muted ANSI colours keep program output readable on the white terminal.
+  // Chrome and backgrounds come from tokens.css; semantic colours stay distinct.
   "klide-light": {
-    selectionBackground: "#E2E0D8",
+    selectionBackground: "#E4E7EB",
     black: "#403E3A",
     red: "#A8514A",
     green: "#6A7B45",
@@ -359,17 +358,17 @@ export function defineKlideMonacoThemes(monaco: MonacoLike) {
       inherit: true,
       rules: sharedRules,
       colors: {
-        "editor.background": "#fcfbf8",
+        "editor.background": "#FFFFFF",
         "editor.foreground": "#555552",
         "editorLineNumber.foreground": "#A1A19B",
         "editorLineNumber.activeForeground": "#555552",
         "editorCursor.foreground": "#5A7B4C",
         "editor.selectionBackground": "#D4D9CA",
-        "editor.inactiveSelectionBackground": "#E4E5D9",
-        "editor.lineHighlightBackground": "#F4F4F2",
-        "editorGutter.background": "#fcfbf8",
-        "editorIndentGuide.background1": "#E8E7E3",
-        "editorIndentGuide.activeBackground1": "#D9D8D2",
+        "editor.inactiveSelectionBackground": "#E9ECEF",
+        "editor.lineHighlightBackground": "#F5F6F7",
+        "editorGutter.background": "#FFFFFF",
+        "editorIndentGuide.background1": "#E4E7EB",
+        "editorIndentGuide.activeBackground1": "#CDD2D8",
       },
     },
     "sage-garden": {
@@ -392,9 +391,9 @@ export function defineKlideMonacoThemes(monaco: MonacoLike) {
         "editorCursor.foreground": "#7C9082",
         "editor.selectionBackground": "#D2DAD3",
         "editor.inactiveSelectionBackground": "#E3E7E2",
-        "editor.lineHighlightBackground": "#F5F5F3",
+        "editor.lineHighlightBackground": "#F5F6F7",
         "editorGutter.background": "#FFFFFF",
-        "editorIndentGuide.background1": "#E8E6E1",
+        "editorIndentGuide.background1": "#E4E7EB",
         "editorIndentGuide.activeBackground1": "#D5D8D6",
       },
     },
@@ -515,17 +514,17 @@ export function defineKlideMonacoThemes(monaco: MonacoLike) {
         { token: "variable", foreground: "2A2A2F" },
       ],
       colors: {
-        "editor.background": "#FFFEFC",
+        "editor.background": "#FFFFFF",
         "editor.foreground": "#2D2C28",
         "editorLineNumber.foreground": "#AAA8A1",
         "editorLineNumber.activeForeground": "#2D2C28",
         "editorCursor.foreground": "#2596BE",
         "editor.selectionBackground": "#CDE6F1",
         "editor.inactiveSelectionBackground": "#E3F0F6",
-        "editor.lineHighlightBackground": "#F9F8F4",
-        "editorGutter.background": "#FFFEFC",
-        "editorIndentGuide.background1": "#ECEAE4",
-        "editorIndentGuide.activeBackground1": "#D8D5CE",
+        "editor.lineHighlightBackground": "#F5F6F7",
+        "editorGutter.background": "#FFFFFF",
+        "editorIndentGuide.background1": "#E4E7EB",
+        "editorIndentGuide.activeBackground1": "#CDD2D8",
       },
     },
     "solarized-dark": {

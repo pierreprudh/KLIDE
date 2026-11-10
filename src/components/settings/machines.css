@@ -1,0 +1,61 @@
+.klide-machines { color: var(--fg); }
+.klide-machine-intro { margin: -6px 0 20px; color: var(--fg-subtle); font-size: 13px; line-height: 1.65; }
+.klide-machine-list, .klide-machine-options, .klide-machine-vpn, .klide-machine-form { border: 1px solid var(--border); border-radius: var(--settings-panel-radius, 20px); background: var(--bg-panel); box-shadow: 0 2px 5px rgb(0 0 0 / 3%); }
+.klide-machine-list { overflow: hidden; }
+.klide-machines .klide-settings-section { margin-bottom: 36px; }
+.klide-machines .klide-settings-heading { margin-bottom: 18px; font-size: 18px; }
+.klide-machines .klide-button { border-radius: var(--settings-control-radius, 12px); min-height: 36px; padding-inline: 14px; }
+.klide-machine-row-actions { display: flex; gap: 8px; align-items: center; }
+.klide-machine-entry { border-top: 1px solid var(--border); }
+.klide-machine-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(0, auto) auto; align-items: center; gap: 16px; padding: 24px 26px; }
+.klide-machine-local { grid-template-columns: 32px minmax(0, 1fr) auto; }
+.klide-machine-glyph { display: flex; align-items: center; justify-content: center; color: var(--fg-subtle); }
+.klide-machine-name { min-width: 0; }
+.klide-machines h3 { margin: 0; font-size: 15px; font-weight: 500; color: var(--fg-strong); line-height: 1.5; }
+.klide-machine-name > code, .klide-machine-name > span { display: block; font-size: 12px; color: var(--fg-subtle); margin-top: 5px; overflow-wrap: anywhere; }
+.klide-machine-name > code { font-family: var(--font-mono); }
+.klide-machine-state { font-size: 11px; text-align: right; max-width: 230px; line-height: 1.5; overflow-wrap: anywhere; }
+.klide-machines [data-tone="ok"] { color: var(--success); }
+.klide-machines [data-tone="warn"] { color: var(--warning); }
+.klide-machines [data-tone="bad"] { color: var(--danger); }
+.klide-machines [data-tone="quiet"] { color: var(--fg-subtle); }
+.klide-machine-details { padding: 0 26px 24px 74px; font-size: 12px; }
+.klide-machine-details-body { margin-top: 0; padding-top: 16px; border-top: 1px solid var(--border); }
+.klide-machine-detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; color: var(--fg-subtle); }
+.klide-machine-fact { display: grid; grid-template-columns: minmax(100px, .6fr) minmax(0, 1fr); gap: 10px; padding: 8px 0; overflow-wrap: anywhere; }
+.klide-machine-fact > :first-child { color: var(--fg-subtle); }
+.klide-machine-fix { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg); }
+.klide-machine-fix code { min-width: 0; font: 11px var(--font-mono); overflow-wrap: anywhere; }
+.klide-machine-remove { margin-top: 12px; }
+.klide-machine-confirm { padding: 16px; margin-top: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.7; }
+.klide-machine-actions { display: flex; gap: 8px; margin-top: 12px; }
+.klide-machine-message { padding: 0 22px 12px; color: var(--fg-subtle); font-size: 12px; }
+.klide-machine-footnote { margin: 12px 0 0; color: var(--fg-subtle); font-size: 11px; line-height: 1.65; }
+.klide-machine-options { overflow: hidden; }
+.klide-machine-option { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 26px; }
+.klide-machine-option + .klide-machine-option { border-top: 1px solid var(--border); }
+.klide-machine-option-icon { color: var(--fg-subtle); display: flex; justify-content: center; }
+.klide-machine-option-icon svg { width: 26px; height: 26px; }
+.klide-machine-option-copy { min-width: 0; }
+.klide-machine-option p, .klide-machine-vpn p { color: var(--fg-subtle); font-size: 13px; line-height: 1.7; margin: 7px 0 0; max-width: 58ch; }
+.klide-machine-vpn { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 28px 26px; }
+.klide-machine-tailscale { color: var(--fg-strong); display: flex; align-items: center; justify-content: center; }
+.klide-machine-vpn p { margin-bottom: 0; }
+.klide-machine-form { display: grid; gap: 18px; padding: 26px; font-size: 12px; }
+.klide-machine-form label { min-width: 0; line-height: 1.7; overflow-wrap: anywhere; }
+.klide-machine-form input { border-radius: var(--settings-control-radius, 12px); min-height: 40px; margin-top: 6px; box-sizing: border-box; }
+.klide-machine-form label > span { color: var(--fg-subtle); font-size: 11px; }
+.klide-machine-form-context { display: flex; gap: 10px; align-items: center; font-weight: 600; font-size: 14px; color: var(--fg-strong); padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.klide-machine-hint { margin: 0; color: var(--fg-subtle); line-height: 1.7; }
+@media (max-width: 700px) {
+  .klide-machine-row { padding: 16px; gap: 10px; grid-template-columns: 26px minmax(0, 1fr) auto; }
+  .klide-machine-row > .klide-machine-state { grid-column: 2; grid-row: 2; text-align: left; max-width: none; }
+  .klide-machine-local > .klide-machine-state { grid-column: 3; grid-row: 1; }
+  .klide-machine-row > .klide-machine-row-actions { grid-column: 3; grid-row: 1 / 3; }
+  .klide-machine-details { padding: 0 16px 16px 52px; }
+  .klide-machine-row-actions { flex-wrap: wrap; justify-content: flex-end; max-width: 110px; }
+  .klide-machine-vpn { grid-template-columns: 40px minmax(0, 1fr); padding: 20px 16px; gap: 16px; }
+  .klide-machine-vpn > button { grid-column: 2; justify-self: start; }
+  .klide-machine-option { padding: 24px 18px; grid-template-columns: 32px minmax(0, 1fr); gap: 14px; }
+  .klide-machine-option > button { grid-column: 2; justify-self: start; }
+}

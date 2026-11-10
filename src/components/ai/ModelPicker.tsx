@@ -1,3 +1,4 @@
+import { ChevronIcon } from "../../icons";
 import { ModelPickerHeader, MODEL_FILTER_STYLE, StarIcon } from "./ModelPickerChrome";
 import { isDelegateId } from "../../delegates";
 import { HarnessModelPicker } from "./HarnessModelPicker";
@@ -428,7 +429,7 @@ function StandardModelPicker({
             <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}>{placeholder}</span>
           )}
         </span>
-        <Chevron rotated={open} />
+        <DropdownChevron rotated={open} />
       </button>
       {open && menuPos && createPortal(
         <div
@@ -779,28 +780,10 @@ function SectionLabel({ children }: { children: string }) {
 }
 
 
-function Chevron({ rotated }: { rotated: boolean }) {
-  return (
-    <svg
-      width="9"
-      height="9"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        right: 3,
-        flexShrink: 0,
-        color: "var(--fg-dim)",
-        transform: rotated ? "rotate(180deg)" : "none",
-        transition: "transform var(--motion-fast) var(--ease-out)",
-      }}
-    >
-      <path d="M6 9l6 6 6-6" />
-    </svg>
-  );
+function DropdownChevron({ rotated }: { rotated: boolean }) {
+  return <ChevronIcon size={12} style={{
+    position: "absolute", right: 3, flexShrink: 0, color: "var(--fg-dim)",
+    transform: rotated ? "rotate(180deg)" : "none",
+    transition: "transform var(--motion-fast) var(--ease-out)",
+  }} />;
 }

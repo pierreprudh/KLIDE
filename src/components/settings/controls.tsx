@@ -5,7 +5,7 @@
 // Extracted from SettingsPanel.tsx; purely presentational.
 
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ChevronRightIcon } from "./icons";
+import "./settings.css";
 import type { ThemeId } from "../../theme";
 import { SIZE_OPTIONS, type RegionSize } from "../../layouts";
 
@@ -76,7 +76,7 @@ export function SettingBlock({
 }
 
 export function Panel({ children }: { children: ReactNode }) {
-  return <div className="klide-surface">{children}</div>;
+  return <div className="klide-surface klide-settings-group">{children}</div>;
 }
 
 export function Row({
@@ -124,7 +124,7 @@ export function Row({
                 aria-label={`Learn more about ${title}`} title={`More about ${title}`}
                 aria-expanded={helpOpen} aria-controls={helpId}
                 onClick={() => setHelpOpen((open) => !open)}>
-                <ChevronRightIcon />
+                {helpOpen ? "Hide" : "Details"}
               </button>
             )}
           </div>
@@ -612,13 +612,16 @@ export function SizePicker({
 export function GhostButton({
   children,
   onClick,
+  disabled = false,
 }: {
   children: ReactNode;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       className="klide-button klide-button-ghost"
       style={{

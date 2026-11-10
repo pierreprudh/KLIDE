@@ -22,8 +22,8 @@
 .klide-sheet-formula > span:first-child { width: 76px; text-align: center; font-family: var(--font-mono); color: var(--fg-strong); flex-shrink: 0; border-right: 1px solid var(--border); }
 .klide-sheet-formula > span:nth-child(2) { width: 38px; text-align: center; color: var(--fg-subtle); font-style: italic; }
 .klide-sheet-formula input { flex: 1; min-width: 0; border: 0; padding: 9px 12px 9px 0; background: transparent; color: var(--fg-strong); font: 12px var(--font-mono); }
-.klide-sheet-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; background: #fcfbf8; }
-.klide-sheet-grid { position: relative; font-size: 12px; font-variant-numeric: tabular-nums; color: #202522; --border: #e8e9e3; --bg: #f3f3ee; --bg-elevated: #fcfbf8; --fg-subtle: #656a63; --accent: #5a7b4c; }
+.klide-sheet-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--bg-elevated); }
+.klide-sheet-grid { position: relative; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--fg-strong); }
 .klide-sheet-column-head { display: grid; height: 30px; position: sticky; top: 0; z-index: 3; }
 .klide-sheet-column-head > span, .klide-sheet-row > [role="rowheader"] { display: flex; align-items: center; justify-content: center; background: var(--bg); color: var(--fg-subtle); font-size: 10px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .klide-sheet-column-head > span:first-child, .klide-sheet-row > [role="rowheader"] { position: sticky; left: 0; z-index: 2; }

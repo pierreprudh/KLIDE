@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Z } from "../../zLayers";
-import { ChevronDown } from "../ai/icons";
+import { ChevronIcon } from "../../icons";
 import { LinkButton } from "./controls";
 
 // Account snapshots (mirrors `accounts::Account*` serde camelCase output).
@@ -192,7 +192,7 @@ export function AccountControl({
     width: "100%",
     textAlign: "left",
     padding: "7px 10px",
-    borderRadius: "var(--radius-sm)",
+    borderRadius: "var(--settings-control-radius, 12px)",
     border: "none",
     background: "transparent",
     color: "var(--fg)",
@@ -246,6 +246,7 @@ export function AccountControl({
       {swapControl}
       <button
         ref={btnRef}
+        aria-expanded={open}
         type="button"
         onClick={() => (open ? closeMenu() : openMenu())}
         disabled={busy !== null || saving || (!connected && accounts.length === 0)}
@@ -273,7 +274,7 @@ export function AccountControl({
         >
           {triggerLabel}
         </span>
-        <ChevronDown />
+        <ChevronIcon size={14} open={open} />
       </button>
 
       {open && rect &&
@@ -289,7 +290,7 @@ export function AccountControl({
                 zIndex: Z.contextMenu + 1,
                 width: menuWidth,
                 padding: 6,
-                borderRadius: "var(--radius-md)",
+                borderRadius: "var(--settings-panel-radius, 20px)",
                 boxShadow: "var(--panel-shadow)",
                 display: "flex",
                 flexDirection: "column",
