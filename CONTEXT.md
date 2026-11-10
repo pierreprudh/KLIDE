@@ -40,6 +40,9 @@ visual language for new UI and future revisions of existing UI.
 - Group related settings in one panel with a 20px corner radius, a theme-aware
   panel background, a soft border and a subtle shadow. Separate rows with fine
   dividers. Keep section headings outside the panel.
+- Let page titles stand alone by default. Add a subtitle only when it gives
+  useful context beyond the title; avoid automatic title-and-subtitle templates.
+  Keep explanations beside the specific controls they clarify.
 - Give rows generous spacing (about 24px vertically and horizontally). Put the
   setting name and a muted description on the left, and its control on the
   right. Stack controls below the description when space is limited.
