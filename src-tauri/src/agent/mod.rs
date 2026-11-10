@@ -9088,6 +9088,50 @@ mod permission_gate_tests {
         assert_eq!(prompts_shown(&events), 1);
     }
 
+    /// The card was up; the person flipped to full auto rather than approve
+    /// it. The command runs — contained, as the rung's commands are.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_card_the_rung_answered_runs_contained() {
+        if !sandbox::usable_here() {
+            return;
+        }
+        let (root, command) = hook_planting_setup("rung-answered-contained");
+        let sup = FakeSupervisor::with_run("rung-answered-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = std::env::temp_dir().join(format!("klide-rung-answered-runs-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx { sup: &sup, id: "rung-answered-run", request: &request, cancel: &cancel, runs_dir: runs_dir.as_path() };
+        let (_events, mut emit) = event_log();
+
+        let flip = async {
+            loop {
+                let mut answered = None;
+                sup.with_handle("rung-answered-run", &mut |h| {
+                    if h.pending_permission.lock().unwrap().is_some() {
+                        answered = Some(permission::apply_command_policy(h, true).unwrap());
+                    }
+                });
+                if let Some(answered) = answered {
+                    return answered;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        let call = command_call("call-1", command);
+        let (outcome, answered) = tokio::join!(
+            tokio::time::timeout(Duration::from_secs(10), process_command_tool(&ctx, &call, &mut emit)),
+            flip
+        );
+        assert!(answered, "the flip should have answered the command card");
+        let result = produced(outcome.expect("the answered gate must not hang"));
+        let root = std::path::Path::new(&root);
+        assert!(root.join("made.txt").exists());
+        assert!(!root.join(".git/hooks/pre-commit").exists(), "the rung answered, so the command is contained");
+        assert!(result.content.contains("ran sandboxed"), "{}", result.content);
+    }
+
     /// A command card is up when the user flips to full auto: the flip answers
     /// it, the command runs, and the transcript says the policy did it.
     #[tokio::test]

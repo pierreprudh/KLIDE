@@ -355,6 +355,7 @@ only).
 | How the command came to run | Contained |
 |---|---|
 | The full-auto rung covered it | Yes |
+| Its card was up and a flip to full auto answered it | Yes |
 | A wildcard project rule matched | Yes |
 | An exact project rule names it | No |
 | Approved for this run, or on the card | No |
