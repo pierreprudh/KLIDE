@@ -3376,14 +3376,15 @@ function App() {
     return (
       <div
         // No rail here, so the welcome page keeps the traffic-light band clear
-        // itself — and that band is the window's drag handle.
+        // itself — and that band is the window's drag handle. Its surface
+        // matches Welcome content: white in light themes.
         data-tauri-drag-region
         style={{
           height: "100vh",
           display: "flex",
           flexDirection: "column",
           paddingTop: "var(--titlebar-h)",
-          background: "var(--bg)",
+          background: "var(--bg-elevated)",
         }}
       >
         <WelcomeScreen
