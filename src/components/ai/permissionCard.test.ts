@@ -40,6 +40,28 @@ describe("permissionCard", () => {
     expect(card.suggestedPattern).toBeUndefined();
   });
 
+  it("reads a project's hooks file as a hooks card listing every command", () => {
+    const card = permissionCard("run-1", {
+      ...relayed,
+      toolName: "project_hooks",
+      input: {
+        file: ".klide/hooks.json",
+        hooks: [
+          { on: "pre_tool", tools: ["run_command"], command: "./guard.sh" },
+          { on: "post_tool", command: "npm run lint" },
+          { on: "run_settled", command: "./notify.sh" },
+        ],
+      },
+    });
+    expect(card.kind).toBe("hooks");
+    expect(card.command.split("\n")).toEqual([
+      "before run_command › ./guard.sh",
+      "after every tool › npm run lint",
+      "when the run ends › ./notify.sh",
+    ]);
+    expect(card.suggestedPattern).toBeUndefined();
+  });
+
   it("names an unknown peer by its short id when no index is given", () => {
     const card = permissionCard("run-1", { ...relayed, input: { fromRunId: "mv9abcdef0123456", envelopeId: "env-1", body: "Can you review?" } });
     expect(card.kind).toBe("message");

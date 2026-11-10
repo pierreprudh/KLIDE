@@ -5310,8 +5310,8 @@ This user request requires workspace inspection. Before answering, you MUST call
             peer={pendingPermission.peer}
             worker={pendingPermission.worker}
             connector={pendingPermission.connector}
-            onApproveForRun={pendingPermission.kind === "worker" ? undefined : () => approveCommand("run")}
-            onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" ? undefined : () => approveCommand("project")}
+            onApproveForRun={pendingPermission.kind === "worker" || pendingPermission.kind === "hooks" ? undefined : () => approveCommand("run")}
+            onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" || pendingPermission.kind === "hooks" ? undefined : () => approveCommand("project")}
             pattern={pendingPermission.suggestedPattern}
             onApprovePattern={(pattern) => approveCommand("project", pattern)}
             onFullAuto={pendingPermission.kind === "worker" ? dispatchFullAuto : undefined}

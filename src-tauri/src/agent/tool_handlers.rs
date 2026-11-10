@@ -1074,6 +1074,86 @@ fn is_git_repository(root: &str) -> bool {
 /// The choices on a dispatch gate: this once, or not at all. No run or project
 /// scope — approving one hand-off says nothing about the next task the model
 /// wants to delegate, so there is nothing sound to remember.
+/// Which of the project's hooks this Run runs (`hooks.rs`). A file a person
+/// already allowed runs; one nobody has seen raises a card, in a conversation
+/// only — a Mission attempt or a subagent goes without. `None` means the Run
+/// was cancelled while the card was up.
+pub(super) async fn resolve_project_hooks<E>(ctx: &ToolCtx<'_>, emit: &mut E) -> Result<Option<hooks::Set>, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let Some(root) = ctx.request.workspace_root.clone() else {
+        return Ok(Some(hooks::Set::none()));
+    };
+    let (root_path, runs_dir) = (std::path::PathBuf::from(&root), ctx.runs_dir.to_path_buf());
+    let read = crate::blocking::run(move || {
+        Ok(hooks::read(&root_path).map(|project| {
+            project.map(|project| {
+                let approved = hooks::is_approved(&runs_dir, &root_path, &project.digest);
+                (project, approved)
+            })
+        }))
+    })
+    .await?;
+    let project = match read {
+        Err(problem) => {
+            return Ok(Some(hooks::Set::skipped(format!(
+                "{problem}, so none of this project's hooks are running. Tell the user."
+            ))))
+        }
+        Ok(None) => return Ok(Some(hooks::Set::none())),
+        Ok(Some((project, true))) => return Ok(Some(hooks::Set::of(project.hooks))),
+        Ok(Some((project, false))) => project,
+    };
+    let declined_key = (root.clone(), project.digest.clone());
+    let in_conversation = permission::GateSubject::from_request(ctx.request).lineage == permission::RunLineage::Conversation;
+    if !in_conversation || declined_hooks().lock().unwrap().contains(&declined_key) {
+        return Ok(Some(hooks::Set::none()));
+    }
+
+    // Not a tool call of the model's: the card is about the project, so it
+    // gets an id of its own that no real call can share.
+    let call = NormalizedToolCall {
+        id: "project-hooks".to_string(),
+        name: "project_hooks".to_string(),
+        input: hooks::card_input(&project),
+    };
+    let perm = PermissionRequest {
+        id: permission::request_id(ctx, &call),
+        run_id: ctx.id.to_string(),
+        tool_call_id: call.id.clone(),
+        tool_name: call.name.clone(),
+        input: call.input.clone(),
+        summary: format!("Run this project's {} hook{}", project.hooks.len(), if project.hooks.len() == 1 { "" } else { "s" }),
+        reason: hooks::card_reason(sandbox::for_command(permission::Trusted::FullAuto, false, std::path::Path::new(&root)).is_some()),
+        options: worker_gate_options(),
+    };
+    // `None`: no rung answers this. Full auto lets commands of the agent's
+    // run; it does not decide what the project may run on its own.
+    Ok(match permission::run_gate(ctx, &call, None, perm, emit).await? {
+        permission::GateDecision::Cancelled => None,
+        permission::GateDecision::Rejected => {
+            declined_hooks().lock().unwrap().insert(declined_key);
+            Some(hooks::Set::none())
+        }
+        permission::GateDecision::Approved { .. } => {
+            let (root_path, runs_dir, digest) = (std::path::PathBuf::from(&root), ctx.runs_dir.to_path_buf(), project.digest.clone());
+            // An approval that could not be saved still holds for this Run.
+            if let Err(error) = crate::blocking::run(move || hooks::approve(&runs_dir, &root_path, &digest)).await {
+                eprintln!("klide: could not remember the hooks approval: {error}");
+            }
+            Some(hooks::Set::of(project.hooks))
+        }
+    })
+}
+
+/// Hooks files a person said no to, by project and text, until the app
+/// restarts — every message is a Run, and the same card on each would be a nag.
+fn declined_hooks() -> &'static std::sync::Mutex<std::collections::HashSet<(String, String)>> {
+    static DECLINED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<(String, String)>>> = std::sync::OnceLock::new();
+    DECLINED.get_or_init(Default::default)
+}
+
 pub(super) fn worker_gate_options() -> Vec<PermissionOption> {
     standard_gate_options("", "")
         .into_iter()
