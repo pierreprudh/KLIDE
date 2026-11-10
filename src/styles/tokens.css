@@ -2557,6 +2557,28 @@ textarea.klide-diff-comment-input:focus-visible {
   animation: ai-msg-in var(--motion-slower) var(--ease-soft);
 }
 
+/* The approval card in a narrow free-mode panel. While the card answers the
+   keyboard, it keeps only the two keys — Esc and ↵ — on the command's line:
+   the words and the scope options (run, project, pattern, Full auto) step
+   aside, and each key keeps its full name in its tooltip. Elsewhere, and
+   without keys, the words stay and the actions wrap under the command. */
+.klide-command-card {
+  container-type: inline-size;
+}
+@container (max-width: 420px) {
+  /* !important: the scope buttons set display inline. */
+  .klide-floating-panel .klide-command-card[data-hotkeys="true"] .klide-command-card-scope {
+    display: none !important;
+  }
+  .klide-floating-panel .klide-command-card[data-hotkeys="true"] [data-keycap="true"] .klide-command-card-word {
+    display: none;
+  }
+  /* Two keys fit beside any command, so the line never wraps. */
+  .klide-floating-panel .klide-command-card[data-hotkeys="true"] .klide-command-card-text {
+    flex: 1 1 0 !important;
+  }
+}
+
 /* The Focus canvas' side column. Every card in it keeps its own height: a
    card that clips its own corners (overflow: hidden) has an automatic minimum
    size of zero, so without this the column squashes the plan and the result

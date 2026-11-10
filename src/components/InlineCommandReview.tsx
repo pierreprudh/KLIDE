@@ -156,6 +156,7 @@ function BareAction({
       onClick={onClick}
       aria-label={label}
       title={label}
+      className="klide-command-card-scope"
       style={{
         flexShrink: 0,
         width: 20,
@@ -186,6 +187,7 @@ function WordAction({
   tone,
   keycap,
   title,
+  className,
   onClick,
 }: {
   label: string;
@@ -195,6 +197,7 @@ function WordAction({
   keycap?: string;
   /** What the word means here, when the word alone would not say. */
   title?: string;
+  className?: string;
   onClick: () => void;
 }) {
   const fg = tone === "accent" ? "var(--accent)" : "var(--fg-subtle)";
@@ -205,6 +208,8 @@ function WordAction({
       onClick={onClick}
       aria-label={title ?? (keycap ? `${label} (${keycap})` : label)}
       title={title ?? (keycap ? `${label} (${keycap})` : label)}
+      className={className}
+      data-keycap={keycap ? "true" : undefined}
       style={{
         flexShrink: 0,
         display: "inline-flex",
@@ -224,7 +229,7 @@ function WordAction({
       onMouseEnter={(e) => (e.currentTarget.style.color = hoverFg)}
       onMouseLeave={(e) => (e.currentTarget.style.color = fg)}
     >
-      {label}
+      <span className="klide-command-card-word">{label}</span>
       {keycap && <Kbd keys={[keycap]} />}
     </button>
   );
@@ -332,7 +337,8 @@ export function InlineCommandReview({
         : "Approve for this project";
   return (
     <div
-      className="ai-qa-card"
+      className="ai-qa-card klide-command-card"
+      data-hotkeys={hotkeys ? "true" : undefined}
       style={{
         // A touch narrower than the composer below it, centered.
         margin: "0 16px 8px",
@@ -352,6 +358,7 @@ export function InlineCommandReview({
       }}
     >
       <span
+        className="klide-command-card-text"
         style={{
           flex: "1 1 160px",
           minWidth: 0,
@@ -452,10 +459,11 @@ export function InlineCommandReview({
         {hasScopeActions && (
           // A hairline between the options and the decision, the card's one
           // divider.
-          <span aria-hidden="true" style={{ width: 1, height: 14, background: "var(--border)", margin: "0 2px" }} />
+          <span aria-hidden="true" className="klide-command-card-scope" style={{ width: 1, height: 14, background: "var(--border)", margin: "0 2px" }} />
         )}
         {(kind === "command" || kind === "worker") && onFullAuto && (
           <WordAction
+            className="klide-command-card-scope"
             label="Full auto"
             title={kind === "worker" ? "Dispatch on full auto: the worker runs its commands without asking" : "Run this and every later command without asking"}
             tone="neutral"

@@ -89,7 +89,8 @@ function App() {
       <div style={{ fontSize: 12, color: "var(--fg-subtle)" }}>last action: <b style={{ color: "var(--fg-strong)" }}>{said}</b></div>
       <Stage width={820} label="Focus column">{cards}</Stage>
       <Stage width={380} label="Workbench panel">{cards}</Stage>
-      <Stage width={290} label="Narrow panel">{cards}</Stage>
+      <Stage width={290} label="Narrow anchored panel">{cards}</Stage>
+      <div className="klide-floating-panel"><Stage width={290} label="Narrow free-mode panel">{cards}</Stage></div>
     </div>
   );
 }
