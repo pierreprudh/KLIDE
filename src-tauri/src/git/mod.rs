@@ -129,10 +129,19 @@ async fn blocking<T: Send + 'static>(
     crate::blocking::run(f).await
 }
 
+/// `git` pointed at `workspace_root`, with the one setting that makes git run
+/// a program of the repository's choosing on a plain `status` turned off.
+/// Klide polls status in whatever folder is open, including one a link or a
+/// download just put there; `core.fsmonitor` in that folder's `.git/config`
+/// would otherwise be a command nobody approved.
+fn git_in(workspace_root: &str) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(["-c", "core.fsmonitor=false", "-C", workspace_root]);
+    cmd
+}
+
 fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
+    let output = git_in(workspace_root)
         .args(args)
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -145,9 +154,7 @@ fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
 }
 
 pub(crate) fn git_output(workspace_root: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
+    let output = git_in(workspace_root)
         .args(args)
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -180,8 +187,8 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 #[tauri::command]
 pub(crate) async fn git_status(workspace_root: String) -> Result<GitStatus, String> {
     blocking(move || {
-        let output = Command::new("git")
-            .args(["-C", &workspace_root, "status", "--short", "--branch"])
+        let output = git_in(&workspace_root)
+            .args(["status", "--short", "--branch"])
             .output()
             .map_err(|e| format!("Failed to run git: {e}"))?;
 
@@ -868,6 +875,10 @@ pub(crate) async fn git_checkout_branch(
     blocking(move || {
         if branch.is_empty() {
             return Err("Branch name is required".to_string());
+        }
+        // git would read a name that starts with a dash as an option.
+        if branch.starts_with('-') {
+            return Err(format!("\"{branch}\" is not a branch name"));
         }
         run_git(&workspace_root, &["checkout", &branch])
     })

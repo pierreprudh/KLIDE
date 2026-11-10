@@ -255,6 +255,48 @@ README now states these verification limits and follows the current local-first
 stabilization → narrow VPS priority. No live acceptance item was closed by this
 audit. Worker Cancel was verified live on 2026-11-01 (see above).
 
+## Safety review follow-ups — 2026-11-10
+
+Found by the safety review and competitor comparison; the self-contained fixes
+merged in #513. Each item below needs a design call first. Review when there is
+time, workspace trust first (every competitor has closed it).
+
+- [ ] Workspace trust: a restricted state for a folder nobody has trusted, and
+  a confirmation before `klide://project` / `open` / `new&project=` switches to
+  a folder not in recents. Git filters and other repo config can still run on a
+  status poll in an untrusted clone; only `core.fsmonitor` is off, and only in
+  the `git/mod.rs` helpers — the other `Command::new("git")` call sites are not
+  hardened.
+- [ ] Full auto and secrets: reads are a token scan (`~/.config/gh/hosts.yml`,
+  `~/.claude/.credentials.json`, `~/.codex/auth.json` are not named), the
+  sandbox has no file-read denies, and `web_fetch` runs without a card — a read
+  plus a fetch is an exfiltration path.
+- [ ] Connectors: the gate trusts the server's own `readOnlyHint`
+  (`agent/connector_tools.rs`). Treat it as advisory — first use per tool, or a
+  per-connector allowlist. Import discovered connectors disabled, show the
+  `${VAR}` names they resolve, and stop following redirects with headers
+  attached (`mcp_client.rs`).
+- [ ] Hooks: approval hashes `hooks.json` only; include the digests of the
+  workspace scripts it calls.
+- [ ] Skills: key the opt-in on workspace path + a hash of `SKILL.md`, not
+  `file-{source}-{folder}`.
+- [ ] ptyd: refuse a socket folder not owned by the current uid at 0700, check
+  peer credentials, bound the pre-auth read.
+- [ ] Design canvas proxy: reject a `Host` that is not `127.0.0.1:<port>`.
+- [ ] Credential snapshots: write private atomically (`accounts.rs`), tighten
+  `~/.claude.json.klide-bak`, create scrollback logs 0600.
+- [ ] Listeners: a stalled local connection still holds the single accept
+  thread of the model-source bridge and the hook server.
+- [ ] Command rules: per-subcommand matching and deny rules, as Claude Code,
+  VS Code and Zed do; a sandbox backend off macOS.
+- [ ] Not verified by the review: background shells escaping the group kill via
+  `setsid`, LaunchServices / Apple Events under `(allow default)`, `web_fetch`
+  SSRF, the fixed gateway port 10100, the `hermes proxy` bearer.
+- [ ] Release: an auto-updater, so a security fix reaches an installed copy
+  (notarization is tracked under v0.5.1).
+- [ ] Refresh `docs/competitors-2026-11-09.md`: it says Klide has no sandbox
+  and no user hooks.
+
 ## Harness follow-ups
 
 - [x] Strengthen native compaction continuity (2026-10-31): opening goal and

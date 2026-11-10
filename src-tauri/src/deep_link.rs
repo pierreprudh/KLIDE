@@ -130,7 +130,11 @@ pub fn parse_with(raw: &str, sessions: Sessions<'_>) -> Result<LinkAction, Strin
             };
             let (session, project) = match query("session") {
                 Some(session) => {
+                    // A leading dash would reach the CLI as an option of its
+                    // own (`--resume '--some-flag'`), chosen by whoever wrote
+                    // the link.
                     if session.len() > MAX_SESSION_CHARS
+                        || session.starts_with('-')
                         || !session.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
                     {
                         return Err("That isn't a session id".to_string());
@@ -421,6 +425,8 @@ mod tests {
         assert!(parse_with("klide://resume?session=x", sessions(&none, &none)).unwrap_err().contains("provider"));
         let shell = format!("klide://resume?provider=claude-code&session={}", enc("x; rm -rf /"));
         assert!(parse_with(&shell, sessions(&none, &none)).unwrap_err().contains("session id"));
+        let flag = "klide://resume?provider=claude-code&session=--dangerously-skip-permissions";
+        assert!(parse_with(flag, sessions(&none, &none)).unwrap_err().contains("session id"), "an id is never an option");
         let long = format!("klide://resume?provider=claude-code&session={}", "a".repeat(MAX_SESSION_CHARS + 1));
         assert!(parse_with(&long, sessions(&none, &none)).is_err());
     }
