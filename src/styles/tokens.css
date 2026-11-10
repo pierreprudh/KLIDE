@@ -10734,4 +10734,8 @@ input.klide-rail-search:focus-visible {
   --inline-menu-gap: 9px;
   --inline-menu-label-size: var(--fs-base);
   --inline-menu-active-weight: 400;
+  /* The chosen place is a neutral fill, not the accent; hover stays a
+     lighter grey so the two never read as the same row. */
+  --inline-menu-active-bg: color-mix(in srgb, var(--fg) 11%, transparent);
+  --menu-row-hover: color-mix(in srgb, var(--fg) 5%, transparent);
 }

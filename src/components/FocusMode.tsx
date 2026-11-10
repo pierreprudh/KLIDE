@@ -941,7 +941,7 @@ function InlineMenu({
                     border: "none",
                     borderRadius: "var(--inline-menu-row-radius, var(--radius-sm))",
                     background: active
-                      ? "var(--menu-row-active)"
+                      ? "var(--inline-menu-active-bg, var(--menu-row-active))"
                       : focused
                         ? "var(--menu-row-hover)"
                         : "transparent",
