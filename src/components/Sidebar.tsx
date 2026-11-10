@@ -843,6 +843,9 @@ export function Sidebar({
                 // Indent guide x-position: this folder's chevron centre
                 // (row padding 8 + depth*12, chevron column is 16px wide).
                 style={{ "--guide-x": `${16 + depth * 12}px` } as CSSProperties}
+                // A folder holding one entry draws no guide: a line beside a
+                // single row groups nothing.
+                data-single={nested?.length === 1 ? "true" : undefined}
               >
                 {isLoading ? (
                   <li>
