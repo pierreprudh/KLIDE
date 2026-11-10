@@ -8957,6 +8957,56 @@ mod permission_gate_tests {
         assert!(result.content.contains("ran sandboxed"), "the model is told why: {}", result.content);
     }
 
+    /// The whole way out: refused in the sandbox, asked for by name, put to
+    /// the person even on full auto, and run uncontained once they say yes.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn leaving_the_sandbox_asks_even_on_full_auto() {
+        if !sandbox::usable_here() {
+            return;
+        }
+        let (root, command) = hook_planting_setup("sandbox-escalation");
+        let cancel = CancellationToken::new();
+        let mut request = test_request(&root, &[]);
+        request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("escalation-run", &request);
+        let runs_dir = std::env::temp_dir().join(format!("klide-escalation-runs-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx { sup: &sup, id: "escalation-run", request: &request, cancel: &cancel, runs_dir: runs_dir.as_path() };
+        let (_events, mut emit) = event_log();
+
+        let refused = run_gate_without_prompt(&ctx, &command_call("call-1", command), &mut emit).await;
+        assert!(refused.content.contains("unsandboxed: true"), "the note names the way out: {}", refused.content);
+
+        let escalate = NormalizedToolCall {
+            id: "call-2".to_string(),
+            name: "run_command".to_string(),
+            input: serde_json::json!({ "command": command, "unsandboxed": true }),
+        };
+        // The rung does not let a command out: a card goes up and waits for
+        // a person, who answers it here.
+        let (events, mut emit) = event_log();
+        let (outcome, _) = tokio::join!(
+            tokio::time::timeout(Duration::from_secs(10), process_command_tool(&ctx, &escalate, &mut emit)),
+            answer_permission(&sup, "escalation-run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let outcome = outcome.expect("the answered gate must not hang");
+        let reason = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::PermissionRequested { request, .. } => Some(request.reason.clone()),
+                _ => None,
+            })
+            .expect("a card went up");
+        assert!(reason.contains("outside the sandbox"), "the card says what is being asked: {reason}");
+        assert_eq!(full_auto_answers(&events), 0, "the person answered it, not the rung");
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+        assert!(std::path::Path::new(&root).join(".git/hooks/pre-commit").exists());
+    }
+
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn a_command_approved_by_name_runs_as_it_always_did() {

@@ -287,15 +287,35 @@ pub fn set_enabled(commands: bool) -> Result<Status, String> {
     Ok(status())
 }
 
+/// Whether commands are being contained here at all: a platform that has a
+/// sandbox, and a person who left it on.
+pub fn active() -> bool {
+    cfg!(target_os = "macos") && enabled()
+}
+
 /// The sandbox for one command, or `None` when it runs as approved.
 pub fn for_command(trusted: super::permission::Trusted, exact_rule: bool, root: &Path) -> Option<Sandbox> {
-    (cfg!(target_os = "macos") && enabled() && covers(trusted, exact_rule)).then(|| Sandbox::for_workspace(root))
+    (active() && covers(trusted, exact_rule)).then(|| Sandbox::for_workspace(root))
 }
+
+/// Whether a command that asked to leave the sandbox has to be put to the
+/// person. It does whenever it would otherwise have run contained: the rung
+/// and a wildcard rule let a command run, they do not let it out.
+pub fn must_ask(unsandboxed: bool, trusted: super::permission::Trusted, exact_rule: bool) -> bool {
+    unsandboxed && active() && covers(trusted, exact_rule)
+}
+
+/// What the approval card says about a command asking to leave the sandbox.
+pub const ESCALATION_REASON: &str = " The agent asks to run this outside the sandbox, after a sandboxed attempt was refused: it could then write anywhere your account can. Full auto and wildcard rules don't cover this; it always asks.";
+
+/// Added to the line that reports a contained background command started —
+/// its refusals arrive later, in output nobody is waiting on.
+pub const BACKGROUND_NOTE: &str = " It runs sandboxed: it can write only inside the project, temp folders and tool caches. If its output shows a refused write the task needs, start it again with unsandboxed: true.";
 
 /// What the model is told when a contained command hit the wall. Without it
 /// "Operation not permitted" reads as a broken tool, and the next move is to
 /// try the same write a different way.
-pub const DENIAL_NOTE: &str = "\n\n[Klide] This command ran sandboxed because nobody approved it by hand: it can write only inside the project, temp folders and tool caches, and not to git hooks or git config. If the task needs that write, tell the user which path — do not look for another route to it.";
+pub const DENIAL_NOTE: &str = "\n\n[Klide] This command ran sandboxed because nobody approved it by hand: it can write only inside the project, temp folders and tool caches, and not to git hooks or git config. If the task needs the refused write, run the same command again with unsandboxed: true — the user will be asked to approve it. Do not look for another route to that path.";
 
 /// Whether a contained command's output shows the sandbox refusing a write.
 pub fn was_denied(output: &str) -> bool {
@@ -417,6 +437,19 @@ mod tests {
         assert!(stored_at(&path));
         std::fs::write(&path, b"{ not json").unwrap();
         assert!(stored_at(&path), "a damaged setting must not remove the wall");
+    }
+
+    #[test]
+    fn leaving_the_sandbox_asks_exactly_when_the_command_would_have_been_contained() {
+        use super::super::permission::Trusted;
+        if !active() {
+            return;
+        }
+        assert!(must_ask(true, Trusted::FullAuto, false), "the rung lets a command run, not out");
+        assert!(must_ask(true, Trusted::Project, false), "nor does a wildcard rule");
+        assert!(!must_ask(true, Trusted::Project, true), "an exact rule already runs it uncontained");
+        assert!(!must_ask(true, Trusted::Run, false), "so does an approval for this run");
+        assert!(!must_ask(false, Trusted::FullAuto, false), "and nobody asked");
     }
 
     #[test]
