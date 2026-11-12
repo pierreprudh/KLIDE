@@ -1,3 +1,5 @@
+![Klide banner: white Klide wordmark and logo over blue clouds](.github/assets/klide-banner.jpeg)
+
 <div align="center">
 
 # Klide
