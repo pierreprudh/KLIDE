@@ -264,6 +264,10 @@ fn pipe(mut from: TcpStream, mut to: TcpStream) {
 fn serve(mut client: TcpStream, up: &Upstream, token: &str) -> io::Result<()> {
     client.set_read_timeout(Some(Duration::from_secs(30)))?;
     let (req, early) = read_head(&mut client)?;
+    let expected_host = format!("127.0.0.1:{}", client.local_addr()?.port());
+    if req.get("host") != Some(expected_host.as_str()) {
+        return respond(&mut client, "403 Forbidden", "text/plain", b"Invalid canvas host");
+    }
     let target = req.first.split(' ').nth(1).unwrap_or("/").to_string();
     if target.split('?').next() == Some(AGENT_PATH) {
         let script = AGENT.replace("__KLIDE_TOKEN__", token);
@@ -697,11 +701,17 @@ mod tests {
         let info = open(&format!("http://localhost:{port}/page")).unwrap();
         let get = |path: &str| {
             let mut s = TcpStream::connect(info.origin.trim_start_matches("http://")).unwrap();
-            write!(s, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+            write!(s, "GET {path} HTTP/1.1\r\nHost: {}\r\n\r\n", info.origin.trim_start_matches("http://")).unwrap();
             let mut out = String::new();
             s.read_to_string(&mut out).unwrap();
             out
         };
+        let mut hostile = TcpStream::connect(info.origin.trim_start_matches("http://")).unwrap();
+        write!(hostile, "GET {AGENT_PATH} HTTP/1.1\r\nHost: attacker.example\r\n\r\n").unwrap();
+        let mut denied = String::new();
+        hostile.read_to_string(&mut denied).unwrap();
+        assert!(denied.starts_with("HTTP/1.1 403"));
+        assert!(!denied.contains(&info.token));
         let page = get("/page");
         assert!(
             page.contains("<head><script src=\"/__klide_design/agent.js\"></script></head>"),

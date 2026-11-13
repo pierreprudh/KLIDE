@@ -16,7 +16,8 @@
 //!
 //! Trust follows the tool, not the door: a `connector_call` whose target the
 //! server marks `readOnlyHint` resolves to [`ToolKind::ConnectorRead`] and runs
-//! without a prompt (Plan included); anything else — unannotated counts as
+//! in Plan too; its annotation never bypasses the approval gate. Anything
+//! else — unannotated counts as
 //! "may write" — is [`ToolKind::Connector`], Goal-only, and goes through the
 //! same Permission engine as a network target, keyed `mcp:<connector>/<tool>`.
 //! That key namespace cannot collide with `host:` targets or tool names. It is
@@ -139,7 +140,7 @@ impl Catalog {
                     "name": CONNECTOR_CALL,
                     "description": format!(
                         "Run one tool on a connected service. Get its argument schema from {CONNECTOR_TOOLS} first. \
-                         Read-only tools run at once; a tool that can change something asks the user first."
+                         Every remote tool asks on first use unless the user already approved it for this run or project. Server read-only annotations are advisory."
                     ),
                     "parameters": {
                         "type": "object",
@@ -355,8 +356,8 @@ async fn execute(connector: String, tool: String, arguments: Value, workspace: O
     }
 }
 
-/// Dispatch one connector call. A read runs at once; a tool that may write
-/// asks first, through the network capability's scopes.
+/// Dispatch one connector call. Server annotations affect Plan eligibility,
+/// but every remote tool uses the per-tool run/project approval gate.
 pub(super) async fn process<E>(
     ctx: &ToolCtx<'_>,
     call: &NormalizedToolCall,
@@ -391,10 +392,6 @@ where
     if !missing.is_empty() {
         return Ok(ToolOutcome::Produced(failed(argument_hint(&connector, t, &arguments, &missing))));
     }
-    if t.read_only == Some(true) {
-        return Ok(ToolOutcome::Produced(execute(connector, tool, arguments, workspace).await));
-    }
-
     let key = format!("mcp:{connector}/{tool}");
     let project_ok = workspace
         .as_deref()
@@ -421,7 +418,10 @@ where
             "arguments": arguments,
         }),
         summary: format!("{tool} on {}", c.label),
-        reason: format!("The agent wants to use {} on {}, which can change things there.", tool, c.label),
+        reason: format!("The agent wants to use {} on {}. {}", tool, c.label,
+            if t.read_only == Some(true) {
+                "The server labels this read-only; that claim has not been independently verified. Approve only tools you trust."
+            } else { "This tool may change data on that service." }),
         options: standard_gate_options("Approve this tool for this run", "Approve this tool for this project"),
     };
     let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Connector), perm, emit).await? {
@@ -578,6 +578,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_server_claiming_read_only_cannot_bypass_a_refusal() {
+        let (result, events) = dispatch(
+            json!({ "connector": TEST_ID, "tool": "list_pull_requests" }),
+            Some(r#"{"behavior":"deny"}"#),
+        ).await;
+        assert!(!result.ok);
+        assert!(result.content.contains("declined"));
+        assert!(!result.content.contains("not enabled"), "must not reach the pool");
+        assert!(events.iter().any(|event| matches!(event,
+            AgentEvent::PermissionRequested { request, .. }
+                if request.reason.contains("not been independently verified"))));
+    }
+
+    #[tokio::test]
     async fn an_approved_write_and_a_read_both_reach_the_pool() {
         let (approved, events) = dispatch(
             json!({ "connector": TEST_ID, "tool": "create_pull_request" }),
@@ -587,8 +601,10 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e, AgentEvent::PermissionResolved { .. })));
         assert!(approved.content.contains("not enabled"), "{}", approved.content);
 
-        let (read, events) = dispatch(json!({ "connector": TEST_ID, "tool": "list_pull_requests" }), None).await;
-        assert!(events.is_empty(), "a read-only tool asks nothing: {events:?}");
+        let (read, events) = dispatch(json!({ "connector": TEST_ID, "tool": "list_pull_requests" }),
+            Some(r#"{"behavior":"allow","scope":"once"}"#)).await;
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::PermissionRequested { .. })),
+            "a server's read-only annotation must not bypass approval");
         assert!(read.content.contains("not enabled"), "{}", read.content);
     }
 

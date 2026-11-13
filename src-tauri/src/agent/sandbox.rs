@@ -8,9 +8,10 @@
 //!
 //! The profile is deliberately small and says three things:
 //!
-//! - **Reads are open.** A build reads compilers, SDKs and caches from all
-//!   over the disk; listing them would be a moving target. Secrets are kept
-//!   out of the environment by `command_env`, not by this profile.
+//! - **Reads are open except named credential stores.** A build reads SDKs
+//!   and caches across disk. Known login stores and root .env files are denied;
+//!   this is a bounded denylist, not isolation of every possible secret.
+//!   `command_env` also removes credential-shaped environment variables.
 //! - **Writes are closed, then opened by path.** Only the folders in
 //!   [`Sandbox::writable`] (and the handful of `/dev` nodes every shell
 //!   writes to) accept a write. Paths are canonicalised first: the kernel
@@ -78,6 +79,8 @@ pub struct Sandbox {
     pub sockets: Vec<PathBuf>,
     /// Whether the command may reach beyond loopback.
     pub network: bool,
+    /// Credential locations never readable by an unreviewed shell.
+    pub private_reads: Vec<PathBuf>,
 }
 
 /// `/dev` nodes a shell writes to as a matter of course. Discarding output to
@@ -125,6 +128,17 @@ impl Sandbox {
             }
             for path in pinned {
                 out.push_str("\n  (literal ");
+                out.push_str(&quoted(&path));
+                out.push(')');
+            }
+            out.push_str(")\n");
+        }
+        // Reads of known credential stores are denied even when network is
+        // enabled. Paths are canonicalized so symlinked homes keep the fence.
+        if !self.private_reads.is_empty() {
+            out.push_str("(deny file-read-data");
+            for path in real_paths(&self.private_reads) {
+                out.push_str("\n  (subpath ");
                 out.push_str(&quoted(&path));
                 out.push(')');
             }
@@ -179,7 +193,12 @@ impl Sandbox {
             pinned.push(git.clone());
             writable.push(git);
         }
-        Sandbox { writable, protected, pinned, sockets: Vec::new(), network: false }
+        let mut private_reads: Vec<PathBuf> = [".env", ".env.local", ".env.production", ".env.development"]
+            .iter().map(|path| root.join(path)).collect();
+        if let Some(home) = home {
+            private_reads.extend(SECRET_PATHS.iter().map(|path| home.join(path)));
+        }
+        Sandbox { writable, protected, pinned, sockets: Vec::new(), network: false, private_reads }
     }
 
     /// The program and leading arguments that run `shell` inside this
@@ -200,6 +219,13 @@ impl Sandbox {
 /// directory. Short on purpose: each entry is a place a command may write
 /// without asking. Grown from denials seen in real use, not from a guess at
 /// every tool there is.
+const SECRET_PATHS: &[&str] = &[
+    ".ssh", ".aws", ".gnupg", ".azure", ".kube", ".config/gh",
+    ".config/gcloud", ".codex/auth.json", ".claude/.credentials.json",
+    ".local/share/opencode/auth.json", ".config/opencode/auth.json",
+    ".hermes/.env", ".klide/accounts", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+];
+
 const TOOL_CACHES: &[&str] = &[".cargo", ".npm", ".cache", "Library/Caches"];
 
 /// What sits inside those caches and runs later, outside any sandbox: the
@@ -622,6 +648,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn contained_shell_cannot_read_a_root_env_canary_even_with_network() {
+        if !usable_here() { return; }
+        let root = scratch("secret-read");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".env"), "KLIDE_DUMMY_SECRET").unwrap();
+        std::fs::write(root.join("source.txt"), "ordinary source").unwrap();
+        let mut sandbox = Sandbox::for_workspace_in(&root, None, &std::env::temp_dir());
+        sandbox.network = true;
+        let cat = |name: &str| {
+            let (program, args) = sandbox.wrap("/bin/cat").unwrap();
+            std::process::Command::new(program).args(args).arg(root.join(name)).output().unwrap()
+        };
+        let secret = cat(".env");
+        assert!(!secret.status.success());
+        assert!(!String::from_utf8_lossy(&secret.stdout).contains("KLIDE_DUMMY_SECRET"));
+        assert!(cat("source.txt").status.success(), "ordinary source remains readable");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn enabling_network_does_not_open_known_credentials() {
+        let mut sandbox = Sandbox::for_workspace_in(Path::new("/project"), Some(Path::new("/home/user")), Path::new("/tmp"));
+        sandbox.network = true;
+        let profile = sandbox.profile();
+        assert!(profile.contains("(deny file-read-data"));
+        for secret in ["/home/user/.config/gh", "/home/user/.codex/auth.json", "/home/user/.claude/.credentials.json", "/project/.env"] {
+            assert!(profile.contains(&quoted(Path::new(secret))), "{secret}");
+        }
+    }
+
     #[test]
     fn protected_places_are_denied_after_the_folders_are_opened() {
         let sandbox = Sandbox {
@@ -630,6 +688,7 @@ mod tests {
             pinned: vec![PathBuf::from("/project/.git")],
             sockets: vec![PathBuf::from("/sockets/klide-501")],
             network: true,
+            private_reads: Vec::new(),
         };
         let profile = sandbox.profile();
         let open = profile.find("(subpath \"/project\")").unwrap();

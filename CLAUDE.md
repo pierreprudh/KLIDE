@@ -861,7 +861,7 @@ enforce wrapper coverage for the git family.
 - [x] Reasoning effort — levels read from the provider/CLI rather than assumed
 - [x] Composer `/` command menu and ↑ / ↓ prompt history
 - [x] Workers — `spawn_subagent` can hand a task to a Delegate CLI as a gated, isolated Run of its own; with `background: true` the parent gets the child's Run id back at once and the report is delivered when it settles
-- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use; the Harness calls them (reads free, writes gated) and GitHub connects in one click as the pinned account
+- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use; the Harness calls them (remote tools approval-gated per tool, including server-labelled reads) and GitHub connects in one click as the pinned account
 - [x] Visuals — an `html` or `svg` fence renders as a sanitized, themed picture in the conversation
 - [x] Delegate CLI versions — each CLI's version on its Settings row, with its own updater beside it
 - [x] Background shells — `run_command(background: true)` + `read_command_output` / `kill_command`, run-scoped, reaped at settle; a shell can wake the conversation on exit

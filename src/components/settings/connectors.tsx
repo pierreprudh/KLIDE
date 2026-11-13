@@ -33,7 +33,7 @@
 // tokens.css.
 //
 // What the assistant may do with them is said once, plainly, in the footnote:
-// read-only tools run as asked, anything that can change something asks first
+// every remote tool needs approval on first use; server annotations are advisory
 // (`agent/connector_tools.rs`).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -303,7 +303,8 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
       id: candidate.id,
       label: candidate.label,
       server: candidate.server,
-      enabled: true,
+      // Import is inspection, not permission to spawn a discovered command.
+      enabled: false,
       origin: candidate.origin,
     });
     await rescan();
@@ -376,8 +377,9 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
         </Panel>
         <FootNote>
           In Plan and Goal, the assistant can use every enabled connector. Tools
-          a server marks read-only run as asked; anything that can change
-          something — open a PR, comment on an issue — asks you first. Klide's
+          need approval on first use, even when a server marks them read-only.
+          You can approve a tool for the Run or Workspace. Imported connectors
+          stay off until you enable them. Klide's
           own <InlineCode>klide mcp coordination</InlineCode> server is the opposite
           direction: what delegate CLIs use to reach back into Klide.
         </FootNote>

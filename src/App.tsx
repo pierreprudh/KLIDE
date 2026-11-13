@@ -147,6 +147,7 @@ import { isScheduledRun } from "./scheduleStatus";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
 import { setIndexedProject } from "./workspaceIndex";
+import { confirmWorkspaceTrust } from "./workspaceTrust";
 import {
   canonicalWorkspaceRoot,
   legacyAutoRunWorkspace,
@@ -743,6 +744,8 @@ function App() {
   const pendingLinkResumeRef = useRef<{ root: string; provider: DelegateId; session: string } | null>(null);
   const deepLinkRef = useRef<(action: LinkAction) => void>(() => {});
   deepLinkRef.current = (action) => {
+    const targetRoot = action.kind === "project" ? action.path : action.project;
+    if (targetRoot && targetRoot !== workspaceRoot && !confirmWorkspaceTrust(targetRoot)) return;
     if (action.kind === "project") {
       back();
       changeRoot(action.path);
@@ -2301,6 +2304,7 @@ function App() {
   const changeRoot = (root: string | null) => {
     if (root === null) return closeFolder();
     if (root === workspaceRoot) return;
+    if (!confirmWorkspaceTrust(root)) return;
     setWorkspaceRoot(root);
   };
 
@@ -2335,7 +2339,7 @@ function App() {
     });
     if (typeof parent !== "string") return;
     const path = await invoke<string>("project_create", { parentDir: parent, name });
-    setWorkspaceRoot(path);
+    changeRoot(path);
   }
 
   // Clone: pick a parent location, `git clone` into it, then open the result.
@@ -2347,7 +2351,7 @@ function App() {
     });
     if (typeof parent !== "string") return;
     const path = await invoke<string>("project_clone", { url, parentDir: parent });
-    setWorkspaceRoot(path);
+    changeRoot(path);
   }
 
   function eventsToTitle(events: AgentEvent[]): string {

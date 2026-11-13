@@ -113,7 +113,7 @@ A model that cannot call tools collapses to a tool-less chat. `Tab` toggles the 
 | **Agent operations** | Mission Control, shared run lifecycle, attention queue, transcripts, session resume, cross-agent handoff, sub-agent visibility |
 | **Any agent, any intelligence** | One nested selector — API, Local, Self-hosted, Subscription — for Claude Code, Codex, OpenCode, and Hermes. Keys stay in the process host and the CLI only ever sees a temporary loopback credential. Claude Code and Codex reach other wires through Klide's Messages and Responses adapters, OpenCode through its native provider config, Hermes through its own backends; reasoning effort follows the routed model. Pairs without an adapter yet (Oh My Pi, Amp, Cursor, Factory; one subscription CLI powering another) stay visible and say so |
 | **Agent coordination** | One Rust-owned journal: runs address each other by a stable id, delegate CLIs join through an embedded MCP server, each Delegate session proves itself with its own secret, and another agent's words arrive in one fenced delivery, reviewed before they reach a conversation |
-| **Connectors** | The MCP servers you already configured in Claude Code, Codex, or OpenCode, local or remote; the assistant calls them in Plan and Work (reads free, writes gated per tool), and GitHub connects in one click as the pinned account |
+| **Connectors** | The MCP servers you already configured in Claude Code, Codex, or OpenCode, local or remote; the assistant calls them in Plan and Work (remote tools gated per tool; server read-only claims are advisory), and GitHub connects in one click as the pinned account |
 | **Side questions** | `/btw <question>` opens a saved, read-only conversation beside the main agent with a bounded snapshot of its public context. Uses native models with enforced read-only tools; its Stop affects only the side conversation, and closing the panel hides it |
 | **Background work** | Background shells a Run can read, stop, or be woken by; GitHub CI observer cards that follow a pinned run and open its PR in Git Review. On macOS, eligible standalone subscription conversations use the local daemon and can continue after the app quits; API runs, Mission attempts and nested workers remain app-hosted. Claude Code quit/relaunch and approval recovery were verified on 2026-11-01; Pierre confirmed the updated-build quit/reopen → Stop test passed on 2026-11-02, with no marked command process remaining. Other CLIs remain unverified; see [background conversation scope](docs/BACKGROUND_CONVERSATIONS.md) |
 | **Workers** | `spawn_subagent` hands a task to a Delegate CLI as an approved, isolated Run of its own, watched live from the parent conversation or dispatched in the background with its report delivered when it settles |
@@ -318,6 +318,20 @@ The benchmark requested streamed usage for accounting; normal Klide MLX settings
 
 ## Trust and architecture
 
+Opening a Workspace now asks for activation consent before its Git inspection
+and project integrations mount. The choice is remembered for that exact path
+in this app's local storage. External links use the same gate before switching
+projects or resuming a CLI session. This is an activation gate, not a read-only
+restricted browsing mode or a backend security boundary for every execution
+entry point. Existing schedules and explicitly started integrations retain their
+own policies.
+
+Discovered connectors import disabled. Enabling one can start its configured
+command or contact its server. Each remote tool then asks on first use unless
+already approved for this Run or Workspace, including tools advertised as
+read-only. MCP HTTP requests do not follow redirects with configured headers.
+
+
 Klide separates the interface from the durable execution layer:
 
 | Layer | Responsibility |
@@ -331,7 +345,7 @@ The Rust harness checks capabilities when it advertises tools and again before e
 
 On macOS, **Settings → AI → Execution → Sandbox unreviewed commands** is on by default. Native commands admitted by full auto or wildcard project rules are contained: writes are limited to the Workspace, repository Git directory, temporary folders and designated tool caches, with additional protected paths. Network beyond loopback is off unless enabled separately. A command approved explicitly, for the Run, or by an exact project rule runs without that containment. A contained command can request `unsandboxed: true`, which requires approval when containment would otherwise apply. Linux and Windows do not implement this backend; Delegate CLIs and terminal sessions use their own execution policies.
 
-Containment leaves file reads open and loopback reachable; it is not a general secret-isolation boundary. Credential-path command checks are best-effort scans, and outside-Workspace path warnings remain advisory for shell commands. Project hooks require approval of their configuration and run contained when containment is enabled on macOS. See the [Harness contract](docs/HARNESS_CONTRACT.md#command-containment) for exact scope and [open safety follow-ups](TODO.md#safety-review-follow-ups--2026-11-10).
+Containment blocks named credential stores and common root `.env` files, but leaves other file reads and loopback reachable; it is not a general secret-isolation boundary. Credential-path command checks are best-effort scans, and outside-Workspace path warnings remain advisory for shell commands. Project hooks require approval of their configuration and run contained when containment is enabled on macOS. See the [Harness contract](docs/HARNESS_CONTRACT.md#command-containment) for exact scope and [open safety follow-ups](TODO.md#safety-review-follow-ups--2026-11-10).
 
 Read the [Harness contract](./docs/HARNESS_CONTRACT.md) for the trust model and [Harness schema](./docs/KLIDE_HARNESS_SCHEMA.md) for the tool interface.
 The [Memory Engine](./docs/MEMORY_ENGINE.md) and [Project Memory schema](./docs/KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its authenticated MCP search/read boundary for supported Delegates.
@@ -385,6 +399,9 @@ cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 The frontend lives in `src/`. The Rust backend lives in `src-tauri/`.
+
+For release acceptance and the deferred remote-machine session, use the
+[next release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Contributing
 
