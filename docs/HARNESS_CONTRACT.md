@@ -112,7 +112,7 @@ Every Tool has one capability:
 | `PauseForUser` | `Pause` | Goal-only. Pauses the Run and resumes on an outside answer — typed user input (`userAnswerQuestion`), a nested subagent Run (`spawn_subagent`), or an advisor model (`consult_advisor`). A `spawn_subagent` call that names a `worker` (a Delegate id) is a **dispatch**: it first produces a permission request of its own, and on approval the child runs as that Delegate in an isolated worktree. |
 | `Network` | `Network` | Goal-only. Produces a permission request and reads from the network only after approval. |
 | `UpdatePlanState` | `PlanState` | May run in `plan` and `goal`. Mutates Klide's own planning metadata (the TODO store), never Workspace files, so it needs no Diff review. |
-| `ReadConnector` | `ConnectorRead` | May run in `plan` and `goal`, conversation Runs only. `connector_tools` (Klide's cached catalog) and a `connector_call` whose target the server annotates `readOnlyHint: true`. |
+| `ReadConnector` | `ConnectorRead` | May run in `plan` and `goal`, conversation Runs only. Remote calls still require per-tool approval; read-only annotations are advisory. `connector_tools` (Klide's cached catalog) and a `connector_call` whose target the server annotates `readOnlyHint: true`. |
 | `UseConnector` | `Connector` | Goal-only, conversation Runs only. A `connector_call` whose target may write — an unannotated tool counts as writing. Gated as a network target `mcp:<connector>/<tool>`. |
 
 Dynamic tools loaded from `.agents/tools.json` are shell-backed command tools.
@@ -363,8 +363,12 @@ only).
 A contained command starts behind `/usr/bin/sandbox-exec` with a generated
 Seatbelt profile; everything it starts inherits the profile.
 
-- **Reads** are open. Secrets are kept out of the command's environment by
-  `command_env.rs`, and credential files always ask.
+- **Reads** are open except named credential stores (SSH/cloud, GitHub CLI,
+  Claude Code, Codex, OpenCode, Hermes and account snapshots) and common root
+  `.env` files. These profile denies still apply when network is enabled.
+  `command_env.rs` also strips credential-shaped environment variables.
+  This is a bounded denylist, not protection for secrets at arbitrary paths;
+  explicitly approved commands are outside containment.
 - **Writes** are limited to the project, the repository's git directory (a
   worktree's sits outside it), temp folders, and `~/.cargo`, `~/.npm`,
   `~/.cache`, `~/Library/Caches`. Git hooks and git config are closed again

@@ -523,7 +523,10 @@ impl HttpPipe {
         if !matches!(url.scheme(), "https" | "http") {
             return Err(format!("{} is not an http(s) URL", server.url));
         }
+        // MCP headers may contain arbitrary credential names, not just
+        // Authorization. Never forward them through an HTTP redirect.
         let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("Klide/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| e.to_string())?;
@@ -1007,6 +1010,32 @@ sleep 5
         let spec = ServerSpec::Http(HttpServer { url: "file:///etc/passwd".to_string(), headers: BTreeMap::new() });
         let error = probe(&spec, Duration::from_secs(1)).unwrap_err();
         assert!(error.contains("not an http"), "{error}");
+    }
+
+    #[test]
+    fn http_redirects_do_not_forward_connector_credentials() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let source = TcpListener::bind("127.0.0.1:0").unwrap();
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let destination_addr = destination.local_addr().unwrap();
+        let source_addr = source.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = source.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut input = [0u8; 8192];
+            let _ = socket.read(&mut input).unwrap();
+            write!(socket, "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{destination_addr}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let spec = ServerSpec::Http(HttpServer {
+            url: format!("http://{source_addr}/mcp"),
+            headers: BTreeMap::from([("X-Private-Credential".into(), "test-secret".into())]),
+        });
+        assert!(probe(&spec, Duration::from_secs(2)).is_err());
+        server.join().unwrap();
+        assert_eq!(destination.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock,
+            "no request, including custom secret headers, may reach the redirect target");
     }
 
     #[test]

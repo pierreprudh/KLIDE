@@ -57,7 +57,7 @@ pub fn is_sensitive_path(root: &Path, path: &Path) -> bool {
     }
     if components
         .windows(2)
-        .any(|pair| pair[0] == ".config" && pair[1] == "gcloud")
+        .any(|pair| pair[0] == ".config" && matches!(pair[1].as_str(), "gcloud" | "gh"))
     {
         return true;
     }
@@ -74,6 +74,9 @@ pub fn is_sensitive_path(root: &Path, path: &Path) -> bool {
                 | ".git-credentials"
                 | "credentials"
                 | "credentials.json"
+                | ".credentials.json"
+                | "auth.json"
+                | "auth-profiles.json"
                 | "secrets.json"
                 | "secrets.yaml"
                 | "secrets.yml"
@@ -574,6 +577,11 @@ mod tests {
             ".ssh/id_rsa",
             "certs/server.pem",
             ".config/gcloud/credentials.json",
+            ".config/gh/hosts.yml",
+            ".claude/.credentials.json",
+            ".codex/auth.json",
+            ".local/share/opencode/auth.json",
+            ".openclaw/agents/main/agent/auth-profiles.json",
         ] {
             assert!(ws.is_sensitive(&root.join(rel)), "{rel} should be sensitive");
         }

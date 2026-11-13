@@ -261,28 +261,39 @@ Found by the safety review and competitor comparison; the self-contained fixes
 merged in #513. Each item below needs a design call first. Review when there is
 time, workspace trust first (every competitor has closed it).
 
+- [x] Workspace activation consent (2026-11-13): exact-path opt-in before
+  frontend Workspace activation and external-link handoffs; declining does
+  not open a project or queue a CLI resume. New clones/imports ask too. This
+  does not supply a backend restricted state or revoke existing schedules.
 - [ ] Workspace trust: a restricted state for a folder nobody has trusted, and
   a confirmation before `klide://project` / `open` / `new&project=` switches to
   a folder not in recents. Git filters and other repo config can still run on a
   status poll in an untrusted clone; only `core.fsmonitor` is off, and only in
   the `git/mod.rs` helpers — the other `Command::new("git")` call sites are not
   hardened.
-- [ ] Full auto and secrets: reads are a token scan (`~/.config/gh/hosts.yml`,
-  `~/.claude/.credentials.json`, `~/.codex/auth.json` are not named), the
-  sandbox has no file-read denies, and `web_fetch` runs without a card — a read
-  plus a fetch is an exfiltration path.
-- [ ] Connectors: the gate trusts the server's own `readOnlyHint`
-  (`agent/connector_tools.rs`). Treat it as advisory — first use per tool, or a
-  per-connector allowlist. Import discovered connectors disabled, show the
-  `${VAR}` names they resolve, and stop following redirects with headers
-  attached (`mcp_client.rs`).
+- [x] Bound known secret reads (2026-11-13): native file/preflight checks now
+  name GitHub CLI and agent login stores; the macOS command profile denies
+  known home credential stores and common root .env files even with network
+  enabled. Custom locations and indirect access still need the broader work.
+- [ ] Full auto and secrets, remaining: command preflight is still a token
+  scan; indirect reads, custom credential locations, inherited file descriptors
+  and local services are not covered by the named macOS read denies. Full-auto
+  web_fetch can send data without a card. Do not call the denylist a general
+  exfiltration boundary; approved commands and other platforms remain outside it.
+- [x] Connector tool consent (2026-11-13): server readOnlyHint no longer
+  bypasses per-tool Run/Workspace approval, including under full auto.
+  Discovery imports disabled (enable explicitly); existing rows show resolved
+  variable names. MCP HTTP redirects are refused with configured headers.
+  Server annotations still govern Plan eligibility, not permission to call.
 - [ ] Hooks: approval hashes `hooks.json` only; include the digests of the
   workspace scripts it calls.
 - [ ] Skills: key the opt-in on workspace path + a hash of `SKILL.md`, not
   `file-{source}-{folder}`.
 - [ ] ptyd: refuse a socket folder not owned by the current uid at 0700, check
   peer credentials, bound the pre-auth read.
-- [ ] Design canvas proxy: reject a `Host` that is not `127.0.0.1:<port>`.
+- [x] Design canvas proxy (2026-11-13): rejects any Host other than its
+  bound `127.0.0.1:<port>` before serving the token script or contacting the
+  upstream; includes a hostile-origin regression.
 - [ ] Credential snapshots: write private atomically (`accounts.rs`), tighten
   `~/.claude.json.klide-bak`, create scrollback logs 0600.
 - [ ] Listeners: a stalled local connection still holds the single accept
