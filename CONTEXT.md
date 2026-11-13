@@ -18,11 +18,13 @@ Adapters must expose supported combinations and explain restrictions; they must
 not imply that every external CLI accepts every model.
 
 Current implementation: the native Harness supports its registered model
-Providers. Hermes has an independent source/model choice in the chatbox, stored
-per conversation. The other Delegate integrations still follow their CLI's model
-selection capabilities; Amp chooses its own models. This is partial progress
-toward the principle, not a universal compatibility matrix or live verification
-of every combination.
+Providers. Claude Code, Codex, OpenCode and Hermes have independent intelligence
+source/model choices for supported combinations, persisted per Conversation.
+Claude Code and Codex use Klide's loopback adapters for other API wires;
+OpenCode uses provider configuration and Hermes its own backends. Unsupported
+pairs stay visible with a reason; Amp chooses its own models. Remote Claude
+Code over SSH/tmux does not carry routed intelligence. This is not universal
+compatibility or live verification of every combination.
 
 ## Klide UI guidelines
 
@@ -70,7 +72,7 @@ flat, borderless Settings sections or a blanket ban on chevrons.
 ### Workspace
 
 **Workspace**:
-The single folder open in Klide. The root of all file access — nothing is read or written outside it.
+The single folder open in Klide. Native file Tools resolve paths against it and enforce their rooted-path checks. Shell commands, terminal sessions, approved external-path operations and Remote checkouts have separate boundaries; this is not a claim that every process is unable to access files outside it.
 _Avoid_: project, folder, root dir
 
 **Workspace-rooted**:
@@ -125,15 +127,19 @@ _Avoid_: box, host (that is the Run host, a process), environment
 
 **Remote machine**:
 A Linux computer Klide reaches over SSH — a rented server (VPS) or a spare
-PC — that runs `klide ptyd` as its Run host, keeps its own Machine logins and
-its own Remote checkout, and stays on when this Mac sleeps. Designed, not
-built: `docs/REMOTE_MACHINES.md`, setup in `scripts/remote-host/`. Today's
-`agent/remote.rs` is the local daemon, not this.
+PC — with its own Machine logins and Remote checkout, which can stay on when
+this Mac sleeps. The implemented desktop path runs Claude Code in tmux over
+SSH, selected through Where it runs and configured in Settings → Machines.
+The planned native transport runs `klide ptyd` there; its Linux spike is
+recorded, but desktop Remote Run events, file/diff retrieval and Missions are
+not implemented. See `docs/REMOTE_MACHINES.md`, setup in `scripts/remote-host/`.
+Today's `agent/remote.rs` is the local daemon, not the SSH/tmux path.
 _Avoid_: cloud, VPS (one kind of Remote machine), server, remote host
 
 **Remote checkout**:
 The copy of a repository on a Remote machine, cloned once from its Git
-remote; each Run works in its own worktree of it. Its paths are remote paths,
+remote; the current SSH/tmux session uses that checkout directly. Per-Run
+worktrees belong to the planned native Remote transport. Its paths are remote paths,
 never resolved on this Mac, and it sees only what was pushed — never this
 Mac's unsaved or uncommitted work.
 _Avoid_: mirror, sync, remote workspace

@@ -6,22 +6,15 @@ Project Memory holds reviewed lessons for future work throughout the Workspace.
 
 ## User flow
 
-Foundations appears beside a conversation only when it is linked to an active foundation. It starts as an icon and opens a preview only when clicked. Unlinked conversations have no Foundations card; setup is always available in Memory.
+Foundations appears beside a conversation only when it is linked to an active foundation. It starts as an icon and opens a preview only when clicked. Unlinked conversations have no Foundations card; setup is always available in **Library → Foundations**.
 
-1. Open the **Foundations** icon on the right of a conversation for a compact summary, then choose **Manage in Memory**. The full editor is in **Memory → Foundations**, also accessible directly from the sidebar.
-2. Name a note set and choose **Create set**.
-3. Write the notes, or use an answer's **Add to Foundations** action to stage
-   its text. Edit the draft, then **Save notes**.
-4. In the **Conversations** tab, select other conversations in the Workspace.
-   Provider selection does not affect membership. A conversation can belong to
-   one set at a time; linking it to another set moves it.
-5. Saved changes reach linked conversations on their next turn. Active Runs
-   continue with the version they already received.
-6. To preserve a lasting lesson, enter its title and text in the **Project Memory** tab, then **Review lesson**. The review
-   editor opens on that draft. Edit, keep, or dismiss it using the existing
-   Memory controls. The notes remain available independently of the lesson.
-7. Archive a completed set to stop supplying its notes without losing them.
-   Restore it to resume sharing, or delete it and its links explicitly.
+1. Open **Library → Foundations** from the sidebar, or use the linked conversation's Foundations control to open its summary and full editor.
+2. Choose **New foundation**, give it a name, and choose **Create foundation**.
+3. Edit the working notes, then choose **Save**. An answer's **Add to Foundations** action stages text; choose **Add to notes** in the editor and save to keep it.
+4. Use the **Conversations** section to link other conversations in the Workspace. Save or discard pending edits before changing membership. Provider selection does not affect membership; a conversation belongs to one foundation at a time.
+5. Saved changes reach linked conversations on their next turn. Active Runs continue with the version they already received.
+6. For a lasting lesson, select a passage in the notes and choose **propose it for Project Memory** under **Lasting lesson**. Enter the lesson and choose **Review in Memory**; edit, keep or dismiss the draft in Library's Memory tab.
+7. Archive a completed foundation to stop supplying its notes without losing them. Restore it to resume sharing, or delete it and its links explicitly.
 
 Updates are user-controlled in this version. Agents do not silently publish
 notes or promote lessons. Adding an answer stages a draft; it does not save
