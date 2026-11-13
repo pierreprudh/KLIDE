@@ -502,7 +502,17 @@ behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
 / Refuse; the webview only picks a surface.
 
-### Where the product is (v0.6.11 shipped)
+### Where the product is (v0.6.11 released; main reviewed 2026-11-13)
+
+The release version remains 0.6.11; `main` contains unreleased additions:
+Library (Memory / Skills / Foundations), the Sections / Agent conversation
+sidebar, Scheduled under Mission Control, worker setup/checkCommand and
+merge/discard controls, Delegate sub-agent trays, Design mode (`⌘⇧D`),
+Settings → Machines with Claude Code over SSH/tmux, approved project hooks,
+and default-on macOS containment for unreviewed native commands. The Remote
+picker is implemented; native Remote Run transport and integrated Remote
+file/diff review remain planned. See README and the feature guides for scope.
+
 
 v0.5 closed on 2026-07-21, and the v0.6 line has cut five patch releases:
 v0.6.1 — Subscriptions and Reach (2026-08-23), v0.6.2 — Memory, Routing,
@@ -527,8 +537,9 @@ Windows/Linux validation.
 
 The product milestone is still v0.6, dependable orchestration: Missions as
 outcomes, visible budget and capacity, capability-based worker routing,
-automatic validation contracts, and durable background execution. Do not
-unpark scheduling or proactive suggestions ahead of those foundations.
+automatic validation contracts, and broader durable Remote execution. Local persistent scheduling is already
+implemented under Mission Control → Scheduled; do not describe it as parked.
+Proactive suggestions and Remote scheduling remain future work.
 
 The v0.6 durability boundary is shipped (slices 1–2 + Delegate dispatch, see
 TODO.md): Rust owns `.klide/missions/<id>/mission.md`, `tasks/*.md`, and
@@ -564,7 +575,8 @@ error, never a silent skip (2026-08-04 review).
 Still open for v0.6 proper: budget/capacity controls in the dispatch path
 (`budgetLedger.ts` / `capacityPlanner.ts` exist as models), capability-based
 routing without hard-coded provider brands, automatic validation contracts,
-and durable background execution / local-to-cloud handoff.
+and the native Remote transport / machine transfer. Local scheduled Runs and
+eligible background subscription conversations already have persistent hosts.
 
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
 - Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.

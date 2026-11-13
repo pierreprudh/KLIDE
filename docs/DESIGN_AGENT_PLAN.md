@@ -1,3 +1,11 @@
+Current app surface (reviewed 2026-11-13): Design mode is now implemented in
+`src/components/design/DesignMode.tsx` and `src-tauri/src/design_canvas.rs`.
+It is a local dev-server canvas with element previews and comments sent back
+to the current conversation; see [Design mode](DESIGN_MODE.md). This is separate
+from the developer experiment below. The historical restrictions and pending
+experiment acceptance below do not mean that the app has no Design surface,
+and the surface's existence does not close the experiment's quality gates.
+
 Update (2026-11-08, live pilot): Native image delivery passed a fresh randomized
 color canary on local Ollama `qwen3.5:9b`, with exact pre-dispatch PNG hashes.
 Earlier OCR/formatting failures and an incorrect writer transcription are retained;

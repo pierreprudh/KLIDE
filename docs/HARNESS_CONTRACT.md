@@ -369,6 +369,9 @@ Seatbelt profile; everything it starts inherits the profile.
   worktree's sits outside it), temp folders, and `~/.cargo`, `~/.npm`,
   `~/.cache`, `~/Library/Caches`. Git hooks and git config are closed again
   inside that: a planted hook would run unsandboxed at the next commit.
+  The Git directory itself cannot be moved aside to bypass these restrictions;
+  Cargo executable/configuration paths inside its cache are protected too.
+  Connections and writes to Klide's PTY-daemon socket directory are denied.
 - **Network** is closed beyond this machine unless the person opens it in
   Settings. Seatbelt cannot filter by host, so the choice is all or loopback;
   the per-host allowlist keeps governing `web_fetch` and connectors. Name
@@ -383,7 +386,8 @@ and the card says what is being asked. Approved, it runs as any approved
 command does. Nothing is re-run automatically: a refused command may already
 have done half its work, so the model decides whether to ask.
 
-Both choices are stored in `~/.klide/sandbox.json` and read in Rust at each
+The controls are in **Settings → AI → Execution**: **Sandbox unreviewed
+commands** and **Network in sandboxed commands**. Both choices are stored in `~/.klide/sandbox.json` and read in Rust at each
 command: the background host and child runs see the same answer, and a run
 request has no field that could ask for less. A missing or damaged file means
 on. `KLIDE_COMMAND_SANDBOX=0` in the app's environment turns it off for a

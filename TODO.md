@@ -349,7 +349,8 @@ time, workspace trust first (every competitor has closed it).
   acknowledgements before retry; use destination credentials. Cover dirty files,
   duplicate activation, interrupted copy and stale source events. Preserve
   ADR-0002's explicit retry for interrupted Mission attempts.
-- [x] Local scheduled Runs (2026-11-04): Scheduled in the sidebar owns named
+- [x] Local scheduled Runs (2026-11-04; navigation updated subsequently):
+  Mission Control → Scheduled owns named
   one-shot/repeating schedules and per-occurrence history. Each occurrence gets
   a fresh Run through the existing Run host, with durable claims, cancellation,
   restart recovery and explicit retry for uncertain dispatch. Create/edit,

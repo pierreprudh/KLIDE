@@ -34,7 +34,7 @@ And one rule most tools don't offer: **any agent, any intelligence.** The agent 
 
 ## Three ways to work
 
-Klide opens on the surface that matches the task, and all three share the same runs, transcripts, conversations, and review state. One rail — projects, agents, and past conversations — stands on the left of every surface.
+Klide opens on the surface that matches the task, and all three share the same runs, transcripts, conversations, and review state. The shared sidebar shows the current Workspace, New task, search, Git, Mission Control and Library. Its conversation list switches between **Sections** (Needs you, Pinned, then the rest) and **Agent**. Needs you includes waiting conversations from other Workspaces; the Workspace menu switches folders.
 
 ### Welcome — start or resume a project
 
@@ -71,7 +71,7 @@ Coding agents work well in terminals, but their sessions, diffs, and evidence sp
 ## How work moves through Klide
 
 The **Foundations** icon in the conversation’s right-side panel opens a compact
-summary. Use **Memory → Foundations** to create a named set, select the
+summary. Use **Library → Foundations** to create a named foundation, select the
 conversations that should share it, and save decisions, open
 questions, and next steps. An answer's **Add to Foundations** action stages its
 text for editing before you save. Linked chats read the saved notes on their
@@ -98,6 +98,14 @@ Klide has two modes in the composer, and one command above them:
 
 A model that cannot call tools collapses to a tool-less chat. `Tab` toggles the mode.
 
+## Work beyond one conversation
+
+- **Library** brings Memory, Skills and Foundations into one window. Review proposed lessons before keeping them; link conversations to Foundations to share working notes across providers.
+- **Mission Control → Scheduled** manages one-off and repeating local Runs, with history, Run now, pause/resume and Open Run. On macOS, a login service can keep them running after Klide closes while the Mac is awake and the user logged in. Approvals wait for you to reopen the app; uncertain dispatches require explicit retry. Remote scheduling remains unavailable. See [Scheduled Runs](docs/SCHEDULED_RUNS.md).
+- **Settings → Machines** configures SSH machines and their existing checkouts. **Where it runs** above the Focus start composer chooses this Mac or a configured machine. The current Remote path runs Claude Code's terminal in tmux over SSH and reconnects to that session; it does not yet provide Klide-native Remote Runs, routed models, Missions or integrated Remote diff retrieval. See [Remote machines](docs/REMOTE_MACHINES.md#built-first-the-picker-on-tmux-2026-11-09).
+- **Design mode** (`⌘⇧D`, with a conversation open) puts a local web app's dev server on a canvas. Select elements to preview changes, pin comments, then send the review back to that conversation as a Work turn. Preview changes do not edit source files. See [Design mode](docs/DESIGN_MODE.md).
+- **Workers** run the project's `.klide/worktree.json` setup recipe before starting. Its `checkCommand` supplies the worker's validation command, falling back to Settings' test-after-edit command. The dispatch row shows setup/validation evidence and offers Merge or Discard; API workers queue beyond 15 active workers, while Delegate CLI workers have no such cap.
+
 ## Features
 
 | Area | Included |
@@ -119,7 +127,8 @@ A model that cannot call tools collapses to a tool-less chat. `Tab` toggles the 
 | **Sight** | A model without image support borrows another model's eyes: a dropped photo is described by a vision model, local-first, with the description and its attribution kept in the conversation |
 | **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, image and document attachments, skills, dynamic tools, search over previous conversations, native recall over reviewed Project Memory with provenance, lessons proposed for review after meaningful work, and `html` / `svg` visuals drawn in the answer |
 | **From other apps** | `klide://` links open a pre-filled conversation, a file at a line, a project, or resume a CLI session; Ask Kit in the macOS Services menu sends selected text to a new conversation; a `/klide` skill lets Claude Code, Codex, OpenCode, or Oh My Pi hand its own session to Klide, and Kit can open one of theirs |
-| **Local security** | Workspace-rooted file access, operating-system keychain storage, project command allowlists, network permissions, a user-choosable transcript folder with measured cleanup, and Rust deciding what a run may open, reveal, or must refuse |
+| **Project hooks** | Approved `.klide/hooks.json` commands before/after matching tool calls and when a top-level Run settles; changed configuration asks again, including under full auto. See [Project Hooks](docs/HARNESS_CONTRACT.md#project-hooks) |
+| **Local security** | Workspace-rooted file tools, operating-system keychain storage, command approvals and allowlists; optional macOS containment for unreviewed native shell commands, enabled by default, with external network access off by default. Delegate CLI and terminal policies remain separate |
 
 OpenCode 2 is supported alongside V1, with native streaming, session resume,
 slash commands, status callbacks and Mission Control history. Klide uses a
@@ -318,7 +327,11 @@ Klide separates the interface from the durable execution layer:
 | **JSON Lines (JSONL) transcripts** | Append-only run events used by Mission Control, validation, memory, and replay |
 | **SQLite conversation index** | The conversation list and its message snapshots, under app data, with no count cap; migrated automatically from earlier builds |
 
-The Rust harness checks capabilities when it advertises tools and again before execution. Under the default review policy, writes pause for diff review and commands and network access use permission gates. Auto-accept edits and full auto change those gates; existing approvals and project allowlists can also permit execution. Delegate CLIs use their supported permission mechanisms. Workspace-rooted file tools do not sandbox arbitrary shell code; the outside-path warning is a best-effort argument scan.
+The Rust harness checks capabilities when it advertises tools and again before execution. Review policy, previous approvals and command allowlists govern when a native Run asks before editing or running commands. Full auto also covers web reads; connector writes, worker dispatches and peer messages retain their own gates.
+
+On macOS, **Settings → AI → Execution → Sandbox unreviewed commands** is on by default. Native commands admitted by full auto or wildcard project rules are contained: writes are limited to the Workspace, repository Git directory, temporary folders and designated tool caches, with additional protected paths. Network beyond loopback is off unless enabled separately. A command approved explicitly, for the Run, or by an exact project rule runs without that containment. A contained command can request `unsandboxed: true`, which requires approval when containment would otherwise apply. Linux and Windows do not implement this backend; Delegate CLIs and terminal sessions use their own execution policies.
+
+Containment leaves file reads open and loopback reachable; it is not a general secret-isolation boundary. Credential-path command checks are best-effort scans, and outside-Workspace path warnings remain advisory for shell commands. Project hooks require approval of their configuration and run contained when containment is enabled on macOS. See the [Harness contract](docs/HARNESS_CONTRACT.md#command-containment) for exact scope and [open safety follow-ups](TODO.md#safety-review-follow-ups--2026-11-10).
 
 Read the [Harness contract](./docs/HARNESS_CONTRACT.md) for the trust model and [Harness schema](./docs/KLIDE_HARNESS_SCHEMA.md) for the tool interface.
 The [Memory Engine](./docs/MEMORY_ENGINE.md) and [Project Memory schema](./docs/KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its authenticated MCP search/read boundary for supported Delegates.
@@ -329,7 +342,9 @@ The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordin
 
 Klide is under active development. The recorded 2026-10-26 baseline passed 1,753 frontend tests, the production build/bundle-split check, and the Rust suite outside the sandbox. Earlier v0.5 records cover PTY integration and release-bundle boot verification; these are dated results, not a fresh check of every change. Automated checks do not replace the live acceptance work below. Ad-hoc signed Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs the Open Anyway step above.
 
-The current line is **0.6.11** (2026-10-26).
+The latest recorded release is **0.6.11** (2026-10-26). `main` also contains unreleased work; the version in `package.json` remains 0.6.11. This documentation describes `main` as reviewed on 2026-11-13, rather than promising that every downloaded release includes these additions.
+
+Unreleased additions include the unified Library and conversation sidebar, scheduled Runs under Mission Control, worker setup/check/merge controls, Delegate sub-agent activity trays, Design mode, the SSH/tmux Remote machine path, project hooks, and macOS command containment. See [Unreleased](CHANGELOG.md#unreleased) and the feature guides above.
 
 Recent cuts, each under the name it shipped with:
 
@@ -349,23 +364,13 @@ The v0.6 orchestration milestone itself — Missions as outcomes, budget and cap
 
 Current priorities:
 
-- Finish local stabilization before VPS: real-app approval, stop/resume, restart/recovery, Diff, validation and merge/discard acceptance across native hosted, local and Delegate paths
-- Verify individual worker Cancel in the app, consolidate launch readiness, and record remaining limitations
-- Then build the first VPS slice: one SSH-connected Linux host, one supported CLI and an existing checkout, with launch, stream, stop and reattach
-- Keep spreadsheet and race acceptance open; notarization is deferred, and Windows/Linux still need real app builds and smoke checks (Linux Rust tests run in CI; Windows currently compiles without running its suite)
-- Keep phone control, machine transfer, durable scheduling and broader Mission orchestration for later work
+- Consolidate local launch readiness and remaining provider/runtime acceptance. The 2026-11-01 worktree flow passed with DeepSeek Flash through OpenRouter; Claude Code quit/relaunch recovery and individual worker Cancel also have dated acceptance records in [TODO](TODO.md#current-priority--clean-up-local-workflows-before-vps).
+- Extend the SSH/tmux path into a Klide-native Remote Run with streamed events, stop/reattach, Remote files/diffs and validation evidence. The Linux headless-host spike has a dated record; it is not the desktop transport yet.
+- Address the [safety review follow-ups](TODO.md#safety-review-follow-ups--2026-11-10), including Workspace trust, secret reads and connector trust.
+- Keep spreadsheet/race acceptance and the remaining compaction/cache/Auto desktop checks open. Notarization is deferred; Windows and Linux still need real app builds and smoke checks.
+- Keep phone control, machine transfer, Remote scheduling and broader Mission orchestration as future work. Local persistent scheduling is already implemented.
 
-Acceptance recorded so far includes `/btw` on a native Anthropic model
-(2026-10-26), foreground Claude Code worker setup/merge/discard (2026-10-26),
-and background worker approval/finish notifications (2026-10-27). These do not
-establish every provider/runtime combination or desktop quit/relaunch recovery.
-Spreadsheet/race flows, headless compaction, Auto routing in the app, and the
-Anthropic cache display after 10+ minutes still await their live checks.
-OpenCode's transport fixtures and smoke harness use a local mock model; the
-[local inference smoke](scripts/local-inference/results/SMOKE.md) records the
-specific real-server setup checks and model limitations.
-See the [acceptance evidence audit](TODO.md#acceptance-evidence-audit--2026-10-28)
-for sources, evidence scope and the remaining checks.
+Recorded desktop checks are scoped to their named providers and scenarios, not universal acceptance. Scheduled service fixtures cover persistence, approval/reconnect and restart without replay; they do not establish all real providers. The [acceptance evidence audit](TODO.md#acceptance-evidence-audit--2026-10-28) and later entries in TODO retain the sources and remaining checks. No live desktop verification was performed for this documentation refresh.
 
 See the [changelog](./CHANGELOG.md) for shipped milestones.
 

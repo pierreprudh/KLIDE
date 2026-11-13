@@ -1,7 +1,9 @@
 # Scheduled Runs
 
-Scheduled in the sidebar is the home for schedules, in both Focus and the
-workbench. Create a named schedule with instructions, a Workspace, agent/provider,
+**Mission Control → Scheduled** is the home for schedules, in both Focus and
+the workbench. Mission Control has Runs and Scheduled tabs; there is no separate
+Scheduled sidebar row. **View: Scheduled** in the command palette opens it directly.
+A failed schedule is indicated on the tab and Mission Control sidebar row. Create a named schedule with instructions, a Workspace, agent/provider,
 model, mode, local start time, and Once, Every hour, Every 24 hours, or Every
 7 days. Select a schedule to edit it, run it now, pause/resume, cancel, or remove
 it. New schedule opens a modal popup with a single instructions composer,
