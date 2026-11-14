@@ -132,14 +132,12 @@ async fn blocking<T: Send + 'static>(
 
 /// `git` pointed at `workspace_root`, through the one launcher ([`cmd::git`])
 /// that keeps a repository's config from starting programs nobody approved.
-fn git_in(workspace_root: &str) -> Command {
-    let mut cmd = cmd::git();
-    cmd.args(["-C", workspace_root]);
-    cmd
+fn git_in(workspace_root: &str) -> Result<Command, String> {
+    cmd::git_in(workspace_root)
 }
 
 fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
-    let output = git_in(workspace_root)
+    let output = git_in(workspace_root)?
         .args(args)
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -152,7 +150,7 @@ fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
 }
 
 pub(crate) fn git_output(workspace_root: &str, args: &[&str]) -> Result<String, String> {
-    let output = git_in(workspace_root)
+    let output = git_in(workspace_root)?
         .args(args)
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -185,7 +183,7 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 #[tauri::command]
 pub(crate) async fn git_status(workspace_root: String) -> Result<GitStatus, String> {
     blocking(move || {
-        let output = git_in(&workspace_root)
+        let output = git_in(&workspace_root)?
             .args(["status", "--short", "--branch"])
             .output()
             .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -989,7 +987,7 @@ pub(crate) async fn project_clone(url: String, parent_dir: String) -> Result<Str
                     .unwrap_or("repo")
             ));
         }
-        let output = crate::git::cmd::git()
+        let output = cmd::git_unscoped()
             .arg("-C")
             .arg(parent)
             .args(["clone", "--", url])
@@ -1017,8 +1015,8 @@ pub(crate) async fn git_push(workspace_root: String) -> Result<String, String> {
         // Unlike the read-only git commands this one needs credentials, so it
         // carries the pinned GitHub account's token (gh's credential helper
         // prefers GH_TOKEN) instead of whichever account `gh` has active.
-        let mut cmd = crate::git::cmd::git();
-        cmd.args(["-C", &workspace_root, "push"]);
+        let mut cmd = git_in(&workspace_root)?;
+        cmd.arg("push");
         github::apply_account_env(&mut cmd);
         let output = cmd
             .output()

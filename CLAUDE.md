@@ -327,7 +327,7 @@ Klide/
     │   ├── model_capabilities.rs The one answer to what a model can do — window, tools, vision, reasoning levels, price class, maker; one order, one memo
     │   ├── pricing.rs            Hand-curated per-model list prices (the price class is the Provider's call)
     │   ├── accounts.rs           Snapshot/list/restore delegate CLI login credentials
-    │   ├── git/                  mod.rs: git shell-outs · github.rs: gh seam, PRs, avatars, pinned identity
+    │   ├── git/                  mod.rs: git shell-outs · cmd.rs: the one git launcher (fixed settings; restricted folders: hooks off, paused on a non-plain repo config) · github.rs: gh seam, PRs, avatars, pinned identity
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
     │   ├── launch_readiness.rs   Can this provider+model start here now — ready / unsupported / needs login / offline / unknown, from the existing checks; rechecked before a worker or Mission attempt starts
@@ -337,6 +337,7 @@ Klide/
     │   ├── connector_pool.rs     Live connector sessions shared by every Run — lazy connect, reconnect on break, killed at exit
     │   ├── search.rs             Find-in-files over a Workspace with ignore policy
     │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
+    │   ├── workspace_trust.rs    Trusted folders (~/.klide/trusted-folders.json) — an untrusted folder opens restricted; read by git/cmd.rs
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
     │   ├── memory.rs             Project Memory schema, Markdown I/O, and local retrieval
     │   ├── spreadsheet.rs        File persistence for the sheet surface — containment, size, conflict checks

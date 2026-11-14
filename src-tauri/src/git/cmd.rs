@@ -7,16 +7,23 @@
 //! every invocation is built here, with the settings below fixed on the
 //! command line, where they outrank anything the repository says.
 //!
-//! What is fixed is only what no repository needs from Klide's git: an
-//! fsmonitor command, `ext::` remotes, an editor or a terminal prompt (Klide
-//! has no terminal to give them). Hooks, clean/smudge filters, `textconv`,
-//! `core.sshCommand` and credential helpers stay as configured — a trusted
-//! repository relies on them (git-lfs, a per-repo deploy key, pre-commit).
-//! Turning those off belongs to the restricted state of a folder nobody has
-//! trusted, and that state switches them here, not at a call site.
+//! Always fixed, in every folder: an fsmonitor command, `ext::` remotes, an
+//! editor or a terminal prompt (Klide has no terminal to give them).
+//!
+//! In a folder nobody has trusted (`workspace_trust.rs`), the repository gets
+//! no say at all. Its hooks are off, and Git runs only when the repository's
+//! own config holds nothing but plain data — remotes, branches, the core
+//! basics a clone writes ([`key_is_plain`]). A config that names anything
+//! else (a filter, a diff driver, an ssh command, a credential helper, an
+//! include) pauses Git in that folder until it is trusted: such settings come
+//! from a downloaded `.git`, not from a clone, and there is no complete list
+//! of the ones that start programs. In a trusted folder the repository's
+//! settings apply as configured — git-lfs, a deploy key, pre-commit.
 //!
 //! `git_in_klide_is_only_started_here` fails on a `Command::new("git")`
 //! anywhere else outside a test module.
+
+use std::path::{Path, PathBuf};
 
 /// `-c` settings every git Klide starts carries.
 const SETTINGS: &[&str] = &[
@@ -27,6 +34,9 @@ const SETTINGS: &[&str] = &[
     "protocol.ext.allow=never",
 ];
 
+/// Added in a restricted folder: hooks are found nowhere.
+const RESTRICTED: &[&str] = &["core.hooksPath=/dev/null"];
+
 /// Environment every git Klide starts carries. `:` is git's own "no editor":
 /// a commit without a message aborts instead of starting `core.editor`.
 const ENV: &[(&str, &str)] = &[
@@ -35,24 +45,157 @@ const ENV: &[(&str, &str)] = &[
     ("GIT_TERMINAL_PROMPT", "0"),
 ];
 
-/// `git` with Klide's fixed settings, for blocking callers.
-pub(crate) fn git() -> std::process::Command {
-    let mut cmd = std::process::Command::new("git");
-    for setting in SETTINGS {
+/// What a git call in a paused folder answers.
+pub(crate) const PAUSED: &str =
+    "Git is paused in this folder: its Git settings can start programs. Trust the folder to use Git here.";
+
+fn configure(cmd: &mut std::process::Command, extra: &[&str]) {
+    for setting in SETTINGS.iter().chain(extra) {
         cmd.args(["-c", setting]);
     }
     cmd.envs(ENV.iter().copied());
+}
+
+/// `git` with the fixed settings and no folder — only for a command that
+/// runs outside any repository (`clone` into a parent folder). Everything
+/// that runs in a folder goes through [`git_in`].
+pub(super) fn git_unscoped() -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    configure(&mut cmd, &[]);
     cmd
 }
 
-/// [`git`] for async callers.
-pub(crate) fn git_tokio() -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new("git");
-    for setting in SETTINGS {
-        cmd.args(["-c", setting]);
+/// `git -C dir`, under that folder's trust. `Err(PAUSED)` when the folder is
+/// restricted and its Git settings are not plain data.
+pub(crate) fn git_in(dir: impl AsRef<Path>) -> Result<std::process::Command, String> {
+    let dir = dir.as_ref();
+    let extra = restriction(dir, crate::workspace_trust::is_trusted(dir))?;
+    let mut cmd = std::process::Command::new("git");
+    configure(&mut cmd, extra);
+    cmd.arg("-C").arg(dir);
+    Ok(cmd)
+}
+
+/// [`git_in`] for async callers.
+pub(crate) fn git_in_tokio(dir: impl AsRef<Path>) -> Result<tokio::process::Command, String> {
+    let std = git_in(dir)?;
+    let mut cmd = tokio::process::Command::new(std.get_program());
+    cmd.args(std.get_args());
+    for (key, value) in std.get_envs() {
+        if let Some(value) = value {
+            cmd.env(key, value);
+        }
     }
-    cmd.envs(ENV.iter().copied());
-    cmd
+    Ok(cmd)
+}
+
+fn restriction(dir: &Path, trusted: bool) -> Result<&'static [&'static str], String> {
+    if trusted {
+        Ok(&[])
+    } else if config_is_plain(dir) {
+        Ok(RESTRICTED)
+    } else {
+        Err(PAUSED.to_string())
+    }
+}
+
+/// Whether the repository at `dir` keeps only plain data in its own config
+/// (the `local` and `worktree` scopes, includes followed). Remembered for a
+/// few seconds: a status poll asks every couple of seconds.
+pub(crate) fn config_is_plain(dir: &Path) -> bool {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static MEMO: OnceLock<Mutex<std::collections::HashMap<PathBuf, (Instant, bool)>>> = OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(&(at, plain)) = memo.lock().ok().and_then(|m| m.get(dir).copied()).as_ref() {
+        if at.elapsed() < Duration::from_secs(5) {
+            return plain;
+        }
+    }
+    let plain = read_config_is_plain(dir);
+    if let Ok(mut map) = memo.lock() {
+        map.insert(dir.to_path_buf(), (Instant::now(), plain));
+    }
+    plain
+}
+
+fn read_config_is_plain(dir: &Path) -> bool {
+    // Reading config starts nothing; a folder that is no repository lists
+    // only the user's own scopes.
+    let Ok(out) = git_unscoped()
+        .arg("-C")
+        .arg(dir)
+        .args(["config", "--list", "--show-scope", "--includes", "-z"])
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        // Not a repository, or a config git cannot parse: nothing Klide runs
+        // here would read it either.
+        return true;
+    }
+    entries_are_plain(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `git config --list --show-scope -z` output: `scope\0key[\nvalue]\0` per
+/// entry. Only what the repository wrote is judged.
+fn entries_are_plain(listing: &str) -> bool {
+    let mut tokens = listing.split('\0');
+    while let (Some(scope), Some(entry)) = (tokens.next(), tokens.next()) {
+        let key = entry.split('\n').next().unwrap_or("");
+        if matches!(scope, "local" | "worktree") && !key_is_plain(key) {
+            return false;
+        }
+    }
+    true
+}
+
+/// A repository config key that is data, never a program: what `git clone`,
+/// `git init`, `git branch`, `gh` and editors write. Anything not named here
+/// pauses Git in a restricted folder — a false alarm costs one click.
+fn key_is_plain(key: &str) -> bool {
+    let (section, rest) = key.split_once('.').unwrap_or((key, ""));
+    // `section.subsection.name` — the subsection may itself hold dots.
+    let (sub, name) = match rest.rsplit_once('.') {
+        Some((sub, name)) => (Some(sub), name),
+        None => (None, rest),
+    };
+    match (section, sub, name) {
+        ("core", None, n) => matches!(
+            n,
+            "repositoryformatversion" | "filemode" | "bare" | "logallrefupdates" | "ignorecase"
+                | "precomposeunicode" | "symlinks" | "autocrlf" | "eol" | "safecrlf" | "sparsecheckout"
+                | "sparsecheckoutcone" | "untrackedcache" | "splitindex" | "commitgraph"
+                | "multipackindex" | "abbrev" | "quotepath" | "checkstat" | "trustctime"
+        ),
+        ("extensions", None, _) | ("advice", None, _) | ("color", _, _) => true,
+        ("branch", Some(_), _) => true,
+        ("remote", None, "pushdefault") => true,
+        ("remote", Some(_), n) => matches!(
+            n,
+            "url" | "pushurl" | "fetch" | "push" | "tagopt" | "prune" | "prunetags" | "mirror" | "promisor"
+                | "partialclonefilter" | "skipdefaultupdate" | "skipfetchall"
+        ),
+        ("submodule", Some(_), n) => matches!(n, "url" | "active" | "branch" | "shallow" | "ignore" | "fetchrecursesubmodules"),
+        ("submodule", None, "active") => true,
+        ("user", None, n) => matches!(n, "name" | "email" | "signingkey"),
+        ("lfs", None, "repositoryformatversion") => true,
+        ("pull", None, n) => matches!(n, "rebase" | "ff"),
+        ("push", None, n) => matches!(n, "default" | "autosetupremote" | "followtags"),
+        ("fetch", None, n) => matches!(n, "prune" | "prunetags"),
+        ("init", None, "defaultbranch") => true,
+        ("merge", None, n) => matches!(n, "ff" | "conflictstyle"),
+        ("diff", None, n) => matches!(n, "renames" | "algorithm" | "colormoved"),
+        ("rebase", None, n) => matches!(n, "autosquash" | "autostash"),
+        ("rerere", None, "enabled") => true,
+        ("gc", None, n) => matches!(n, "auto" | "autodetach"),
+        ("maintenance", None, n) => matches!(n, "auto" | "strategy"),
+        ("index", None, "version") => true,
+        ("status", None, "showuntrackedfiles") => true,
+        ("checkout", None, "defaultremote") => true,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -74,7 +217,7 @@ mod tests {
     fn a_repository_fsmonitor_never_runs() {
         let root = scratch("fsmonitor");
         let canary = root.join("ran");
-        assert!(git().args(["init", "-q"]).current_dir(&root).status().unwrap().success());
+        assert!(git_unscoped().args(["init", "-q"]).current_dir(&root).status().unwrap().success());
         let hook = root.join("monitor.sh");
         std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", canary.display())).unwrap();
         use std::os::unix::fs::PermissionsExt;
@@ -86,7 +229,7 @@ mod tests {
             .unwrap();
         assert!(set.success());
         std::fs::write(root.join("a.txt"), "a").unwrap();
-        assert!(git().args(["status", "--short"]).current_dir(&root).output().unwrap().status.success());
+        assert!(git_unscoped().args(["status", "--short"]).current_dir(&root).output().unwrap().status.success());
         assert!(!canary.exists(), "the repository's fsmonitor command ran");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -95,7 +238,7 @@ mod tests {
     #[test]
     fn no_editor_is_ever_started() {
         let root = scratch("editor");
-        assert!(git().args(["init", "-q"]).current_dir(&root).status().unwrap().success());
+        assert!(git_unscoped().args(["init", "-q"]).current_dir(&root).status().unwrap().success());
         let canary = root.join("edited");
         std::process::Command::new("git")
             .args(["config", "core.editor", &format!("touch '{}'", canary.display())])
@@ -103,8 +246,8 @@ mod tests {
             .status()
             .unwrap();
         std::fs::write(root.join("a.txt"), "a").unwrap();
-        git().args(["add", "a.txt"]).current_dir(&root).status().unwrap();
-        let commit = git()
+        git_unscoped().args(["add", "a.txt"]).current_dir(&root).status().unwrap();
+        let commit = git_unscoped()
             .args(["-c", "user.name=t", "-c", "user.email=t@klide.local", "commit", "-q"])
             .current_dir(&root)
             .output()
@@ -112,6 +255,75 @@ mod tests {
         assert!(!commit.status.success(), "an empty message aborts the commit");
         assert!(!canary.exists(), "the repository's editor ran");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plain_keys_are_what_a_clone_writes_and_nothing_that_runs() {
+        for key in [
+            "core.repositoryformatversion", "core.bare", "remote.origin.url", "remote.origin.fetch",
+            "branch.main.merge", "branch.feat/claude.stop.remote", "branch.main.vscode-merge-base",
+            "user.email", "extensions.worktreeconfig", "push.autosetupremote", "lfs.repositoryformatversion",
+        ] {
+            assert!(key_is_plain(key), "{key} is data");
+        }
+        for key in [
+            "core.fsmonitor", "core.hookspath", "core.sshcommand", "core.askpass", "core.gitproxy",
+            "core.pager", "core.editor", "credential.helper", "credential.https://x.helper", "include.path",
+            "includeif.gitdir:/x.path", "filter.lfs.clean", "diff.x.textconv", "diff.external",
+            "remote.origin.uploadpack", "remote.origin.receivepack", "remote.origin.vcs",
+            "submodule.a.update", "gpg.program", "commit.gpgsign", "alias.st", "lfs.customtransfer.x.path",
+        ] {
+            assert!(!key_is_plain(key), "{key} can start a program");
+        }
+    }
+
+    #[test]
+    fn only_the_repository_scopes_are_judged() {
+        let clone = "local\0core.bare\nfalse\0local\0remote.origin.url\nhttps://x\0global\0filter.lfs.clean\ngit-lfs clean -- %f\0";
+        assert!(entries_are_plain(clone), "the user's own lfs filter is theirs");
+        assert!(!entries_are_plain("local\0core.bare\nfalse\0local\0filter.x.clean\nsh evil\0"));
+        assert!(!entries_are_plain("worktree\0core.sshcommand\nsh evil\0"));
+        // A value cannot smuggle a scope: it stays inside its own entry.
+        assert!(!entries_are_plain("local\0core.sshcommand\nx\nlocal\0core.bare\0"));
+        assert!(entries_are_plain("local\0core.bare\0"), "a key with no value");
+    }
+
+    fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("git").args(args).current_dir(dir).output().unwrap()
+    }
+
+    /// A restricted folder: hooks don't run, a clone-like config keeps Git
+    /// working, and a config that names a program pauses it.
+    #[cfg(unix)]
+    #[test]
+    fn a_restricted_folder_runs_no_hook_and_pauses_on_a_program_setting() {
+        let root = scratch("restricted").canonicalize().unwrap();
+        assert!(git_raw(&root, &["init", "-q"]).status.success());
+        let canary = root.join("hook-ran");
+        let hook = root.join(".git/hooks/pre-commit");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", canary.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("a.txt"), "a").unwrap();
+        let extra = restriction(&root, false).expect("a fresh repository's config is plain");
+        let mut cmd = std::process::Command::new("git");
+        configure(&mut cmd, extra);
+        let commit = cmd
+            .arg("-C")
+            .arg(&root)
+            .args(["-c", "user.name=t", "-c", "user.email=t@klide.local", "commit", "-qm", "one", "--allow-empty"])
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "{}", String::from_utf8_lossy(&commit.stderr));
+        assert!(!canary.exists(), "the repository's hook ran in a restricted folder");
+        assert!(restriction(&root, true).unwrap().is_empty(), "a trusted folder keeps its hooks");
+
+        let paused = scratch("paused").canonicalize().unwrap();
+        assert!(git_raw(&paused, &["init", "-q"]).status.success());
+        assert!(git_raw(&paused, &["config", "filter.x.clean", "sh evil"]).status.success());
+        assert_eq!(restriction(&paused, false).unwrap_err(), PAUSED);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&paused);
     }
 
     /// Source scan: outside test modules, git is started here and nowhere
@@ -156,7 +368,7 @@ mod tests {
         }
         assert!(
             offenders.is_empty(),
-            "git started outside git/cmd.rs — use crate::git::cmd::git() / git_tokio():\n{}",
+            "git started outside git/cmd.rs — use crate::git::cmd::git_in(dir) / git_in_tokio(dir):\n{}",
             offenders.join("\n")
         );
     }

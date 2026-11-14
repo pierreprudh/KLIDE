@@ -2846,9 +2846,7 @@ fn grep(ws: &Workspace, input: &serde_json::Value) -> ToolResult {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = crate::git::cmd::git()
-        .arg("-C")
-        .arg(root)
+    let output = crate::git::cmd::git_in(root)?
         .args(args)
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;

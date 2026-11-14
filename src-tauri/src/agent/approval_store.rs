@@ -55,9 +55,7 @@ fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
 }
 
 fn git_bytes_limited(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, String> {
-    let mut child = crate::git::cmd::git()
-        .arg("-C")
-        .arg(root)
+    let mut child = crate::git::cmd::git_in(root)?
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

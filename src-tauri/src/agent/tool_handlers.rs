@@ -1064,9 +1064,8 @@ async fn run_approved_setup(root: &str, approved: &str, worktree: &str, branch: 
 }
 
 fn is_git_repository(root: &str) -> bool {
-    crate::git::cmd::git()
-        .args(["-C", root, "rev-parse", "--is-inside-work-tree"])
-        .output()
+    crate::git::cmd::git_in(root)
+        .and_then(|mut git| git.args(["rev-parse", "--is-inside-work-tree"]).output().map_err(|e| e.to_string()))
         .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
         .unwrap_or(false)
 }
@@ -1695,8 +1694,9 @@ async fn document_versions(
 /// this, not to the workspace or the command's cwd, so it is what both the
 /// status read and the size read are anchored on.
 async fn repo_top(root: &str) -> Option<std::path::PathBuf> {
-    let out = crate::git::cmd::git_tokio()
-        .args(["-C", root, "rev-parse", "--show-toplevel"])
+    let out = crate::git::cmd::git_in_tokio(root)
+        .ok()?
+        .args(["rev-parse", "--show-toplevel"])
         .output()
         .await
         .ok()?;
@@ -1708,9 +1708,8 @@ async fn repo_top(root: &str) -> Option<std::path::PathBuf> {
 }
 
 async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<String, String>> {
-    let out = crate::git::cmd::git_tokio()
-        .arg("-C")
-        .arg(top)
+    let out = crate::git::cmd::git_in_tokio(top)
+        .ok()?
         // `-uall`: without it git collapses a wholly-untracked directory into
         // one `?? decks/` entry, and the deck inside it — the whole point —
         // never gets named.
