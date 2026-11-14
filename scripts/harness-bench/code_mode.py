@@ -112,8 +112,10 @@ def all_tasks(seed):
 
 
 def digest(workspace):
+    """The task's files. `.klide/` is the Harness's own state (the
+    coordination journal registers every Run), not something the agent did."""
     h = hashlib.sha256()
-    for path in sorted(p for p in workspace.rglob("*") if p.is_file()):
+    for path in sorted(p for p in workspace.rglob("*") if p.is_file() and ".klide" not in p.relative_to(workspace).parts):
         h.update(str(path.relative_to(workspace)).encode())
         h.update(path.read_bytes())
     return h.hexdigest()
