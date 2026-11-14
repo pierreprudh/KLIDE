@@ -993,6 +993,15 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
+            schema: schema(super::script::RUN_SCRIPT_TOOL, &super::script::description(),
+                serde_json::json!({ "code": { "type": "string", "description": "The body of an async JavaScript function. Call `await tools.<name>({...})`, end with `return <value>`." } }),
+                &["code"]),
+            run_read: Some(super::script::run),
+            run_write_preview: None,
+            summary: super::script::summary,
+        },
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
             schema: schema("get_git_status", "Return git branch and changed files for the workspace.",
                 serde_json::json!({}), &[]),
             run_read: Some(|ws, _input, _run_id, _runs_dir| get_git_status(ws.root())),

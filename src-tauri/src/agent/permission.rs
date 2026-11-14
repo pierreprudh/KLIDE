@@ -82,6 +82,10 @@ pub struct GateSubject {
     pub disabled: HashSet<String>,
     pub lineage: RunLineage,
     pub requested_full_auto: bool,
+    /// Whether `run_script` (Code Mode) is open to this Run — see
+    /// `script.rs`. Kept apart from `disabled`, which holds only the
+    /// person's own toggles.
+    pub script_offered: bool,
 }
 
 impl GateSubject {
@@ -93,6 +97,7 @@ impl GateSubject {
             disabled: HashSet::new(),
             lineage: RunLineage::Conversation,
             requested_full_auto: false,
+            script_offered: false,
         }
     }
 
@@ -114,7 +119,12 @@ impl GateSubject {
                 }
                 _ => Some(entry.clone()),
             })
-            .collect();
+            .collect::<HashSet<String>>();
+        // Code Mode is off unless the person switched it on, never offered to
+        // a local model, and never a way around a read Tool turned off for
+        // this Mode: a script may only call what the Run could call directly.
+        let script_offered = super::script::offered_for(super::script::enabled(), &request.provider, &request.model)
+            && !super::script::BINDINGS.iter().any(|name| disabled.contains(*name));
         let lineage = if request.parent_id.is_some() {
             RunLineage::SubagentChild
         } else if request.mission_id.is_some() {
@@ -128,6 +138,7 @@ impl GateSubject {
             lineage,
             requested_full_auto: request.auto_approve_commands == Some(true),
             read_only_side_question: request.side_question_of.is_some(),
+            script_offered,
         }
     }
 
@@ -137,7 +148,7 @@ impl GateSubject {
         if self.read_only_side_question && !matches!(kind, Some(ToolKind::ReadOnly | ToolKind::ConversationHistory | ToolKind::ConversationRetrieval | ToolKind::ProjectMemory)) {
             return Err(BlockReason::Disabled);
         }
-        if self.disabled.contains(name) {
+        if self.disabled.contains(name) || (name == super::script::RUN_SCRIPT_TOOL && !self.script_offered) {
             return Err(BlockReason::Disabled);
         }
         // consult_advisor is side-effect free, so Plan may escalate too.

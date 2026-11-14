@@ -14,6 +14,7 @@ mod artifacts;
 mod background;
 mod process;
 pub(crate) mod sandbox;
+mod script;
 mod hooks;
 pub use sandbox::Status as CommandSandboxStatus;
 /// The Settings row's two commands, kept behind the module that owns the file.
@@ -22,6 +23,14 @@ pub fn command_sandbox_status() -> CommandSandboxStatus {
 }
 pub fn command_sandbox_set(enabled: Option<bool>, network: Option<bool>) -> Result<CommandSandboxStatus, String> {
     sandbox::set(enabled, network)
+}
+pub use script::Status as CodeModeStatus;
+/// Settings › AI's Code Mode switch (`run_script`), behind the module that owns the file.
+pub fn code_mode_status() -> CodeModeStatus {
+    script::status()
+}
+pub fn code_mode_set(enabled: bool) -> Result<CodeModeStatus, String> {
+    script::set(enabled)
 }
 pub(crate) mod command_env;
 mod observers;
