@@ -317,7 +317,7 @@ Open it locally yourself if needed; do not send its contents to a model.",
     /// the next status poll, the next commit — so an edit there is a command
     /// that never met the command gate. A run changes a repository through
     /// git, where it is asked.
-    fn guard_write(&self, path: &Path, access: Access) -> Result<(), String> {
+    pub fn guard_write(&self, path: &Path, access: Access) -> Result<(), String> {
         self.guard(path, access)?;
         let relative = path.strip_prefix(&self.root).unwrap_or(path);
         let in_git = relative

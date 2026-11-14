@@ -294,6 +294,7 @@ fn start(
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
 /// The most an unauthenticated caller may make this bridge read before it
 /// hangs up. No real client is refused: a routed CLI always carries the token.
 const UNAUTHORIZED_BODY_MAX: usize = 64 * 1024;
