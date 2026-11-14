@@ -3804,7 +3804,7 @@ pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolRe
     // proposal that skipped preview can't land on a credential file.
     let full = ws.resolve_new(&diff.path).map_err(err)?;
     if let Some(binary) = &diff.binary {
-        ws.guard(&full, Access::Agent).map_err(err)?;
+        ws.guard_write(&full, Access::Agent).map_err(err)?;
         crate::spreadsheet::save(root, &full.to_string_lossy(), &binary.new_base64, binary.old_base64.as_deref()).map_err(err)?;
         return Ok(ok(format!("Saved {}. Excel export complete; formulas recalculated and checked. Use inspect_spreadsheet to verify key results. {}", diff.path, diff.reason.as_deref().unwrap_or(""))));
     }

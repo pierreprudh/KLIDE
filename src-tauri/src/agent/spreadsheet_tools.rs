@@ -379,6 +379,18 @@ mod tests {
         ]})
     }
     #[test]
+    fn a_workbook_is_never_saved_inside_the_git_folder() {
+        let (dir, ws) = workspace();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let mut spec = budget();
+        spec["path"] = json!(".git/budget.xlsx");
+        // The preview is built; the save is what refuses it, as for text.
+        let proposal = prepare(&ws, &spec, "test").unwrap();
+        let refused = apply_write(dir.to_str().unwrap(), &proposal).unwrap_err();
+        assert!(refused.content.contains(".git folder"), "{}", refused.content);
+        assert!(!dir.join(".git/budget.xlsx").exists());
+    }
+    #[test]
     fn agent_spreadsheet_create_inspect_update_and_rollback() {
         let (dir, ws) = workspace();
         let proposal = prepare(&ws, &budget(), "test").unwrap();

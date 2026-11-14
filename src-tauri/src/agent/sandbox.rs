@@ -676,7 +676,8 @@ mod tests {
         let profile = sandbox.profile();
         assert!(profile.contains("(deny file-read-data"));
         for secret in ["/home/user/.config/gh", "/home/user/.codex/auth.json", "/home/user/.claude/.credentials.json", "/project/.env"] {
-            assert!(profile.contains(&quoted(Path::new(secret))), "{secret}");
+            // As the kernel sees it: on macOS `/home` is itself a link.
+            assert!(profile.contains(&quoted(&real_path(Path::new(secret)))), "{secret}");
         }
     }
 
@@ -702,7 +703,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     /// The real kernel, not the profile text: the git directory cannot be
     /// moved aside to reach its hooks, and git still commits inside it.
     #[cfg(target_os = "macos")]
