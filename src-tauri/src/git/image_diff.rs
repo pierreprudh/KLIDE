@@ -6,7 +6,6 @@ use base64::Engine;
 use std::{
     io::Read,
     path::{Component, Path},
-    process::Command,
 };
 
 #[derive(serde::Serialize)]
@@ -50,7 +49,7 @@ fn size_ok(size: u64) -> Result<(), String> {
 fn blob(root: &str, oid: &str) -> Result<Vec<u8>, String> {
     let size = git_output(root, &["cat-file", "-s", oid])?;
     size_ok(size.trim().parse().map_err(|_| "Invalid image size")?)?;
-    let output = Command::new("git")
+    let output = crate::git::cmd::git()
         .args(["-C", root, "cat-file", "blob", oid])
         .output()
         .map_err(|e| format!("Unable to read image: {e}"))?;
@@ -64,7 +63,7 @@ fn snapshot(root: &str, path: &str, head: bool) -> Result<Option<ImageSide>, Str
     let literal = format!(":(literal){path}");
     let listing = if head {
         // A new repository has no HEAD; its staged images are additions.
-        let head = Command::new("git")
+        let head = crate::git::cmd::git()
             .args(["-C", root, "rev-parse", "--verify", "--quiet", "HEAD"])
             .output()
             .map_err(|e| e.to_string())?;

@@ -709,7 +709,7 @@ pub(crate) async fn create_pr(
         // tree (scratch files, copied worktree config) into the PR commit, which is
         // the worktree-bootstrap pollution bug. The commit/PR flow is staging-driven
         // everywhere else; keep it that way here.
-        let status = Command::new("git")
+        let status = crate::git::cmd::git()
             .args(["-C", &workspace_root, "diff", "--cached", "--quiet"])
             .status()
             .map_err(|e| format!("Failed to check git status: {e}"))?;
@@ -727,7 +727,7 @@ pub(crate) async fn create_pr(
         // The pinned account signs the push too (gh's credential helper prefers
         // GH_TOKEN), so the branch lands under the same identity that opens the
         // PR — otherwise a personal repo gets a 403 from the work login.
-        let mut push_cmd = Command::new("git");
+        let mut push_cmd = crate::git::cmd::git();
         push_cmd.args([
             "-C",
             &workspace_root,
@@ -742,10 +742,10 @@ pub(crate) async fn create_pr(
             .map_err(|e| format!("Failed to push: {e}"))?;
         if !push.status.success() {
             let err = String::from_utf8_lossy(&push.stderr);
-            let _ = Command::new("git")
+            let _ = crate::git::cmd::git()
                 .args(["-C", &workspace_root, "checkout", "-"])
                 .status();
-            let _ = Command::new("git")
+            let _ = crate::git::cmd::git()
                 .args(["-C", &workspace_root, "branch", "-D", branch.as_str()])
                 .status();
             return Err(format!("Push failed: {}", err.trim()));

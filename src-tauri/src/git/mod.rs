@@ -5,6 +5,7 @@
 // frontend. Everything GitHub-flavored (gh CLI, PRs, avatars) lives in the
 // `github` submodule.
 
+pub(crate) mod cmd;
 pub(crate) mod github;
 mod image_diff;
 
@@ -129,14 +130,11 @@ async fn blocking<T: Send + 'static>(
     crate::blocking::run(f).await
 }
 
-/// `git` pointed at `workspace_root`, with the one setting that makes git run
-/// a program of the repository's choosing on a plain `status` turned off.
-/// Klide polls status in whatever folder is open, including one a link or a
-/// download just put there; `core.fsmonitor` in that folder's `.git/config`
-/// would otherwise be a command nobody approved.
+/// `git` pointed at `workspace_root`, through the one launcher ([`cmd::git`])
+/// that keeps a repository's config from starting programs nobody approved.
 fn git_in(workspace_root: &str) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.args(["-c", "core.fsmonitor=false", "-C", workspace_root]);
+    let mut cmd = cmd::git();
+    cmd.args(["-C", workspace_root]);
     cmd
 }
 
@@ -991,7 +989,7 @@ pub(crate) async fn project_clone(url: String, parent_dir: String) -> Result<Str
                     .unwrap_or("repo")
             ));
         }
-        let output = Command::new("git")
+        let output = crate::git::cmd::git()
             .arg("-C")
             .arg(parent)
             .args(["clone", "--", url])
@@ -1019,7 +1017,7 @@ pub(crate) async fn git_push(workspace_root: String) -> Result<String, String> {
         // Unlike the read-only git commands this one needs credentials, so it
         // carries the pinned GitHub account's token (gh's credential helper
         // prefers GH_TOKEN) instead of whichever account `gh` has active.
-        let mut cmd = Command::new("git");
+        let mut cmd = crate::git::cmd::git();
         cmd.args(["-C", &workspace_root, "push"]);
         github::apply_account_env(&mut cmd);
         let output = cmd

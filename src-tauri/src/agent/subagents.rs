@@ -44,7 +44,7 @@ impl WorkerCheckoutEvidence {
 /// Call through blocking::run, like other Harness filesystem work.
 pub(super) fn worker_checkout_evidence(path: &str) -> Result<WorkerCheckoutEvidence, String> {
     let git = |args: &[&str]| -> Result<String, String> {
-        let output = std::process::Command::new("git")
+        let output = crate::git::cmd::git()
             .args(["--no-optional-locks", "-C", path])
             .args(args)
             .output()

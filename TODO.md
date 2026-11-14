@@ -267,10 +267,11 @@ time, workspace trust first (every competitor has closed it).
   does not supply a backend restricted state or revoke existing schedules.
 - [ ] Workspace trust: a restricted state for a folder nobody has trusted, and
   a confirmation before `klide://project` / `open` / `new&project=` switches to
-  a folder not in recents. Git filters and other repo config can still run on a
-  status poll in an untrusted clone; only `core.fsmonitor` is off, and only in
-  the `git/mod.rs` helpers — the other `Command::new("git")` call sites are not
-  hardened.
+  a folder not in recents. Every git Klide starts now goes through
+  `git/cmd.rs` (fsmonitor and `ext::` off, no editor or prompt; a drift test
+  holds it). Still configured by the repository, for the restricted state to
+  switch off there: hooks, clean/smudge filters, `textconv`/`diff.external`,
+  `core.sshCommand`, `core.askPass` and credential helpers.
 - [x] Bound known secret reads (2026-11-13): native file/preflight checks now
   name GitHub CLI and agent login stores; the macOS command profile denies
   known home credential stores and common root .env files even with network

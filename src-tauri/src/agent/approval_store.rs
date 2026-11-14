@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 
 const MAX_GIT_BYTES: usize = 32 * 1024 * 1024;
@@ -55,7 +55,7 @@ fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
 }
 
 fn git_bytes_limited(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, String> {
-    let mut child = Command::new("git")
+    let mut child = crate::git::cmd::git()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -443,6 +443,7 @@ mod tests {
     //! returned a constant. That is the point of the first test below.
 
     use super::*;
+    use std::process::Command;
 
     fn git(root: &Path, args: &[&str]) -> bool {
         Command::new("git")

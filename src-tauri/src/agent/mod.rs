@@ -1069,7 +1069,7 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
     if crate::delegate::worktree_label(cwd).is_none() {
         return;
     }
-    let dirty = std::process::Command::new("git")
+    let dirty = crate::git::cmd::git()
         .args(["-C", cwd, "status", "--porcelain"])
         .output()
         .ok()
@@ -1098,13 +1098,13 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
         "{subject}\n\nKlide agent run {}\nCo-Authored-By: {author} <noreply@klide.local>",
         summary.id
     );
-    if std::process::Command::new("git")
+    if crate::git::cmd::git()
         .args(["-C", cwd, "add", "-A"])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
     {
-        let _ = std::process::Command::new("git")
+        let _ = crate::git::cmd::git()
             .args(["-C", cwd, "commit", "-m", &message])
             .status();
     }
@@ -1137,7 +1137,7 @@ fn project_name(cwd: &Option<String>) -> Option<String> {
 
 fn git_branch(cwd: &Option<String>) -> Option<String> {
     let cwd = cwd.as_ref()?;
-    let output = std::process::Command::new("git")
+    let output = crate::git::cmd::git()
         .args(["-C", cwd, "branch", "--show-current"])
         .output()
         .ok()?;
