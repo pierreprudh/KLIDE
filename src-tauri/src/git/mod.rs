@@ -136,9 +136,10 @@ fn git_in(workspace_root: &str) -> Result<Command, String> {
     cmd::git_in(workspace_root)
 }
 
+/// A git action — through [`cmd::git_action`], so a restricted folder is
+/// reminded of when this would have run its hooks or Git is paused there.
 fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
-    let output = git_in(workspace_root)?
-        .args(args)
+    let output = cmd::git_action(workspace_root, args)?
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
 
@@ -1015,8 +1016,7 @@ pub(crate) async fn git_push(workspace_root: String) -> Result<String, String> {
         // Unlike the read-only git commands this one needs credentials, so it
         // carries the pinned GitHub account's token (gh's credential helper
         // prefers GH_TOKEN) instead of whichever account `gh` has active.
-        let mut cmd = git_in(&workspace_root)?;
-        cmd.arg("push");
+        let mut cmd = cmd::git_action(&workspace_root, &["push"])?;
         github::apply_account_env(&mut cmd);
         let output = cmd
             .output()

@@ -1111,7 +1111,7 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
         .map(|s| s.success())
         .unwrap_or(false)
     {
-        let _ = crate::git::cmd::git_in(cwd).map(|mut git| git.args(["commit", "-m", &message]).status());
+        let _ = crate::git::cmd::git_action(cwd, &["commit", "-m", &message]).map(|mut git| git.status());
     }
 }
 

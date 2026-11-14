@@ -69,11 +69,78 @@ pub(super) fn git_unscoped() -> std::process::Command {
 /// restricted and its Git settings are not plain data.
 pub(crate) fn git_in(dir: impl AsRef<Path>) -> Result<std::process::Command, String> {
     let dir = dir.as_ref();
-    let extra = restriction(dir, crate::workspace_trust::is_trusted(dir))?;
+    build(dir, crate::workspace_trust::is_trusted(dir))
+}
+
+fn build(dir: &Path, trusted: bool) -> Result<std::process::Command, String> {
+    let extra = restriction(dir, trusted)?;
     let mut cmd = std::process::Command::new("git");
     configure(&mut cmd, extra);
     cmd.arg("-C").arg(dir);
     Ok(cmd)
+}
+
+/// Subcommands that run a repository's hooks — what a restricted folder skips.
+const RUNS_HOOKS: &[&str] = &["commit", "push", "pull", "merge", "rebase", "checkout", "switch", "cherry-pick", "revert", "am"];
+
+/// Whether `args` would run a repository hook: one of [`RUNS_HOOKS`], or
+/// `worktree add` (post-checkout).
+fn runs_hooks(args: &[&str]) -> bool {
+    match args {
+        ["worktree", "add", ..] => true,
+        [sub, ..] => RUNS_HOOKS.contains(sub),
+        [] => false,
+    }
+}
+
+/// `git -C dir <args>` for something a person or a Run set out to do (a
+/// commit, a push, a checkout) rather than a poll. In a folder nobody trusted
+/// it also reminds: when Git is paused there, or when these args would have
+/// run the repository's hooks. The app turns that into the trust notification
+/// ([`on_restricted_attempt`]). Reads that only look go through [`git_in`].
+pub(crate) fn git_action(dir: impl AsRef<Path>, args: &[&str]) -> Result<std::process::Command, String> {
+    let dir = dir.as_ref();
+    let trusted = crate::workspace_trust::is_trusted(dir);
+    let built = build(dir, trusted);
+    if !trusted && (built.is_err() || runs_hooks(args)) {
+        remind(dir, built.is_err());
+    }
+    let mut cmd = built?;
+    cmd.args(args);
+    Ok(cmd)
+}
+
+/// Who hears that something tried to run in a restricted folder: `(folder,
+/// git_paused)`. Installed once by the app at startup; tests and the daemon
+/// have none.
+type Reminder = Box<dyn Fn(&Path, bool) + Send + Sync>;
+static REMINDER: std::sync::OnceLock<Reminder> = std::sync::OnceLock::new();
+
+pub(crate) fn on_restricted_attempt(reminder: Reminder) {
+    let _ = REMINDER.set(reminder);
+}
+
+/// At most once per folder every ten seconds: a commit then a push is one
+/// reminder, not two.
+fn remind(dir: &Path, paused: bool) {
+    if should_remind(dir, std::time::Instant::now()) {
+        if let Some(reminder) = REMINDER.get() {
+            reminder(dir, paused);
+        }
+    }
+}
+
+fn should_remind(dir: &Path, now: std::time::Instant) -> bool {
+    use std::sync::Mutex;
+    static LAST: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, std::time::Instant>>> = std::sync::OnceLock::new();
+    let Ok(mut last) = LAST.get_or_init(Default::default).lock() else { return false };
+    match last.get(dir) {
+        Some(at) if now.duration_since(*at) < std::time::Duration::from_secs(10) => false,
+        _ => {
+            last.insert(dir.to_path_buf(), now);
+            true
+        }
+    }
 }
 
 /// [`git_in`] for async callers.
@@ -286,6 +353,27 @@ mod tests {
         // A value cannot smuggle a scope: it stays inside its own entry.
         assert!(!entries_are_plain("local\0core.sshcommand\nx\nlocal\0core.bare\0"));
         assert!(entries_are_plain("local\0core.bare\0"), "a key with no value");
+    }
+
+    #[test]
+    fn actions_that_run_hooks_are_told_from_ones_that_only_look() {
+        assert!(runs_hooks(&["commit", "-m", "x"]));
+        assert!(runs_hooks(&["push"]));
+        assert!(runs_hooks(&["worktree", "add", "../x"]));
+        assert!(!runs_hooks(&["worktree", "list"]));
+        assert!(!runs_hooks(&["add", "-A"]));
+        assert!(!runs_hooks(&["stash", "push"]));
+        assert!(!runs_hooks(&[]));
+    }
+
+    #[test]
+    fn a_burst_of_attempts_reminds_once() {
+        let dir = scratch("remind");
+        let start = std::time::Instant::now();
+        assert!(should_remind(&dir, start));
+        assert!(!should_remind(&dir, start + std::time::Duration::from_secs(3)), "a commit then a push");
+        assert!(should_remind(&dir, start + std::time::Duration::from_secs(11)));
+        assert!(should_remind(&scratch("remind-other"), start), "per folder");
     }
 
     fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {

@@ -727,13 +727,7 @@ pub(crate) async fn create_pr(
         // The pinned account signs the push too (gh's credential helper prefers
         // GH_TOKEN), so the branch lands under the same identity that opens the
         // PR — otherwise a personal repo gets a 403 from the work login.
-        let mut push_cmd = crate::git::cmd::git_in(&workspace_root)?;
-        push_cmd.args([
-            "push",
-            "-u",
-            "origin",
-            branch.as_str(),
-        ]);
+        let mut push_cmd = crate::git::cmd::git_action(&workspace_root, &["push", "-u", "origin", branch.as_str()])?;
         apply_account_env(&mut push_cmd);
         let push = push_cmd
             .output()
