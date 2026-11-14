@@ -248,6 +248,17 @@ async fn command_sandbox_set(enabled: Option<bool>, network: Option<bool>) -> Re
     blocking::run(move || agent::command_sandbox_set(enabled, network)).await
 }
 
+/// Whether Code Mode (`run_script`) is on, for the Settings row.
+#[tauri::command]
+async fn code_mode_status() -> Result<agent::CodeModeStatus, String> {
+    blocking::run(|| Ok(agent::code_mode_status())).await
+}
+
+#[tauri::command]
+async fn code_mode_set(enabled: bool) -> Result<agent::CodeModeStatus, String> {
+    blocking::run(move || agent::code_mode_set(enabled)).await
+}
+
 #[tauri::command]
 async fn hermes_read_settings() -> Result<Option<hermes_settings::HermesSettings>, String> {
     blocking::run(hermes_settings::read).await
@@ -1283,6 +1294,8 @@ pub fn run() {
             ai_subscription_status,
             command_sandbox_status,
             command_sandbox_set,
+            code_mode_status,
+            code_mode_set,
             hermes_read_settings,
             hermes_source_support,
             harness_source_support,
