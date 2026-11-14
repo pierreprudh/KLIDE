@@ -348,9 +348,16 @@ fn store_at(path: &Path, stored: Stored) -> Result<(), String> {
     crate::durable::write_atomic(path, &bytes)
 }
 
-/// Whether the person turned Code Mode on. Tests never read the developer's
-/// setting.
+/// Whether the person turned Code Mode on. `KLIDE_CODE_MODE=1` / `=0` in the
+/// app's environment overrides the setting — the on/off benchmark
+/// (`scripts/harness-bench/code_mode.py`) sets it per trial. Otherwise tests
+/// never read the developer's setting.
 pub fn enabled() -> bool {
+    match std::env::var("KLIDE_CODE_MODE").as_deref() {
+        Ok("1") | Ok("on") | Ok("true") => return true,
+        Ok("0") | Ok("off") | Ok("false") => return false,
+        _ => {}
+    }
     !cfg!(test) && settings_path().map(|p| stored_at(&p).enabled).unwrap_or(false)
 }
 
