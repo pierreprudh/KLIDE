@@ -70,6 +70,7 @@ mod storage;
 mod process_lock;
 mod scheduled_service;
 mod workspace;
+mod workspace_trust;
 mod worktree_setup;
 
 use crate::providers::{AiChatResponse, ProviderKeyStatus, StreamChunk};
@@ -1261,6 +1262,8 @@ pub fn run() {
             storage::app_storage_set_runs_dir,
             storage::app_storage_reset_runs_dir,
             git::git_status,
+            workspace_trust::workspace_trust_status,
+            workspace_trust::workspace_trust_grant,
             git::git_stage,
             git::git_unstage,
             git::git_commit,

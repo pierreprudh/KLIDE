@@ -709,8 +709,8 @@ pub(crate) async fn create_pr(
         // tree (scratch files, copied worktree config) into the PR commit, which is
         // the worktree-bootstrap pollution bug. The commit/PR flow is staging-driven
         // everywhere else; keep it that way here.
-        let status = crate::git::cmd::git()
-            .args(["-C", &workspace_root, "diff", "--cached", "--quiet"])
+        let status = crate::git::cmd::git_in(&workspace_root)?
+            .args(["diff", "--cached", "--quiet"])
             .status()
             .map_err(|e| format!("Failed to check git status: {e}"))?;
         if status.success() {
@@ -727,10 +727,8 @@ pub(crate) async fn create_pr(
         // The pinned account signs the push too (gh's credential helper prefers
         // GH_TOKEN), so the branch lands under the same identity that opens the
         // PR — otherwise a personal repo gets a 403 from the work login.
-        let mut push_cmd = crate::git::cmd::git();
+        let mut push_cmd = crate::git::cmd::git_in(&workspace_root)?;
         push_cmd.args([
-            "-C",
-            &workspace_root,
             "push",
             "-u",
             "origin",
@@ -742,12 +740,12 @@ pub(crate) async fn create_pr(
             .map_err(|e| format!("Failed to push: {e}"))?;
         if !push.status.success() {
             let err = String::from_utf8_lossy(&push.stderr);
-            let _ = crate::git::cmd::git()
-                .args(["-C", &workspace_root, "checkout", "-"])
-                .status();
-            let _ = crate::git::cmd::git()
-                .args(["-C", &workspace_root, "branch", "-D", branch.as_str()])
-                .status();
+            if let Ok(mut git) = crate::git::cmd::git_in(&workspace_root) {
+                let _ = git.args(["checkout", "-"]).status();
+            }
+            if let Ok(mut git) = crate::git::cmd::git_in(&workspace_root) {
+                let _ = git.args(["branch", "-D", branch.as_str()]).status();
+            }
             return Err(format!("Push failed: {}", err.trim()));
         }
 

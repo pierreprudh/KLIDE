@@ -126,6 +126,8 @@ import { usePresence } from "../hooks/usePresence";
 
 type Props = {
   workspaceRoot: string | null;
+  /** A line under the title bar (the restricted-folder banner). */
+  notice?: React.ReactNode;
   /** Text to put in the start screen's composer — a `klide://new` link's
    *  prompt. Set, never sent; `id` changes per seed so the same text twice
    *  still lands. Cleared through `onComposerSeedConsumed` once it's in. */
@@ -206,6 +208,7 @@ const iconProps = {
 
 export function FocusMode({
   workspaceRoot,
+  notice = null,
   composerSeed = null,
   onComposerSeedConsumed,
   branch,
@@ -357,6 +360,7 @@ export function FocusMode({
       {/* Its top inset is the title-bar band, so that strip drags the window
           too — the canvas below it keeps its own clicks. */}
       <main className="klide-focus-main" data-tauri-drag-region>
+        {notice}
         {workspaceRoot && !chatActive && !conversationOpenError ? (
           <FocusGitIsland
             workspaceRoot={workspaceRoot}

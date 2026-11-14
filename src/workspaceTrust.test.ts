@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { confirmWorkspaceTrust, workspaceNeedsTrust } from "./workspaceTrust";
+import { confirmLinkedFolder, migrateTrustOnce, resetTrustMigrationForTests } from "./workspaceTrust";
 
-describe("workspace activation trust", () => {
+describe("restricted folders", () => {
   const values = new Map<string, string>();
   const confirm = vi.fn();
   beforeEach(() => {
-    values.clear(); confirm.mockReset();
+    values.clear();
+    confirm.mockReset();
+    resetTrustMigrationForTests();
     vi.stubGlobal("window", { confirm });
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => values.get(key) ?? null,
@@ -13,30 +15,35 @@ describe("workspace activation trust", () => {
     });
   });
   afterEach(() => vi.unstubAllGlobals());
-  it("does not inherit a parent or similarly named folder's approval", () => {
-    expect(workspaceNeedsTrust("/repo", ["/repo"])).toBe(false);
-    expect(workspaceNeedsTrust("/repo/clone", ["/repo"])).toBe(true);
-    expect(workspaceNeedsTrust("/repo-other", ["/repo"])).toBe(true);
+
+  it("trusts recents and the older consent's folders once, then never again", async () => {
+    values.set("klide.trustedWorkspaces.v1", JSON.stringify(["/approved", "/repo"]));
+    const grant = vi.fn().mockResolvedValue(undefined);
+    await migrateTrustOnce(["/repo", "/work"], grant);
+    expect(grant).toHaveBeenCalledWith(["/repo", "/work", "/approved"]);
+    resetTrustMigrationForTests();
+    await migrateTrustOnce(["/later"], grant);
+    expect(grant).toHaveBeenCalledOnce();
   });
-  it("a declined activation grants no remembered permission", () => {
+
+  it("a failed grant is retried on the next launch", async () => {
+    const grant = vi.fn().mockRejectedValueOnce(new Error("disk")).mockResolvedValue(undefined);
+    await migrateTrustOnce(["/repo"], grant);
+    resetTrustMigrationForTests();
+    await migrateTrustOnce(["/repo"], grant);
+    expect(grant).toHaveBeenCalledTimes(2);
+    expect(values.get("klide.trust.migrated.v1")).toBe("1");
+  });
+
+  it("a link to a trusted folder opens without asking", async () => {
+    expect(await confirmLinkedFolder("/repo", async () => ({ trusted: true, gitPaused: false }))).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("a link to any other folder asks, and a no opens nothing", async () => {
     confirm.mockReturnValue(false);
-    expect(confirmWorkspaceTrust("/download")).toBe(false);
-    expect(confirmWorkspaceTrust("/download")).toBe(false);
+    expect(await confirmLinkedFolder("/download", async () => ({ trusted: false, gitPaused: true }))).toBe(false);
+    expect(await confirmLinkedFolder("/download", async () => { throw new Error("ipc"); })).toBe(false);
     expect(confirm).toHaveBeenCalledTimes(2);
-    expect(values.size).toBe(0);
-  });
-  it("remembers an explicit approval only for that exact workspace", () => {
-    confirm.mockReturnValue(true);
-    expect(confirmWorkspaceTrust("/repo")).toBe(true);
-    expect(confirmWorkspaceTrust("/repo")).toBe(true);
-    expect(confirm).toHaveBeenCalledTimes(1);
-    confirm.mockReturnValue(false);
-    expect(confirmWorkspaceTrust("/repo/subproject")).toBe(false);
-  });
-  it("damaged stored approvals never silently open a workspace", () => {
-    values.set("klide.trustedWorkspaces.v1", '{"/download":true}');
-    confirm.mockReturnValue(false);
-    expect(confirmWorkspaceTrust("/download")).toBe(false);
-    expect(confirm).toHaveBeenCalledOnce();
   });
 });

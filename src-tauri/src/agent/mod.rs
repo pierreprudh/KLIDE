@@ -13,7 +13,7 @@ mod stream_log;
 mod artifacts;
 mod background;
 mod process;
-mod sandbox;
+pub(crate) mod sandbox;
 mod hooks;
 pub use sandbox::Status as CommandSandboxStatus;
 /// The Settings row's two commands, kept behind the module that owns the file.
@@ -1069,10 +1069,9 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
     if crate::delegate::worktree_label(cwd).is_none() {
         return;
     }
-    let dirty = crate::git::cmd::git()
-        .args(["-C", cwd, "status", "--porcelain"])
-        .output()
+    let dirty = crate::git::cmd::git_in(cwd)
         .ok()
+        .and_then(|mut git| git.args(["status", "--porcelain"]).output().ok())
         .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
         .unwrap_or(false);
     if !dirty {
@@ -1098,15 +1097,12 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
         "{subject}\n\nKlide agent run {}\nCo-Authored-By: {author} <noreply@klide.local>",
         summary.id
     );
-    if crate::git::cmd::git()
-        .args(["-C", cwd, "add", "-A"])
-        .status()
+    if crate::git::cmd::git_in(cwd)
+        .and_then(|mut git| git.args(["add", "-A"]).status().map_err(|e| e.to_string()))
         .map(|s| s.success())
         .unwrap_or(false)
     {
-        let _ = crate::git::cmd::git()
-            .args(["-C", cwd, "commit", "-m", &message])
-            .status();
+        let _ = crate::git::cmd::git_in(cwd).map(|mut git| git.args(["commit", "-m", &message]).status());
     }
 }
 
@@ -1137,8 +1133,9 @@ fn project_name(cwd: &Option<String>) -> Option<String> {
 
 fn git_branch(cwd: &Option<String>) -> Option<String> {
     let cwd = cwd.as_ref()?;
-    let output = crate::git::cmd::git()
-        .args(["-C", cwd, "branch", "--show-current"])
+    let output = crate::git::cmd::git_in(cwd)
+        .ok()?
+        .args(["branch", "--show-current"])
         .output()
         .ok()?;
     if !output.status.success() {

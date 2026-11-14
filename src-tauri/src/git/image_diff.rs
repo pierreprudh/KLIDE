@@ -49,8 +49,8 @@ fn size_ok(size: u64) -> Result<(), String> {
 fn blob(root: &str, oid: &str) -> Result<Vec<u8>, String> {
     let size = git_output(root, &["cat-file", "-s", oid])?;
     size_ok(size.trim().parse().map_err(|_| "Invalid image size")?)?;
-    let output = crate::git::cmd::git()
-        .args(["-C", root, "cat-file", "blob", oid])
+    let output = crate::git::cmd::git_in(root)?
+        .args(["cat-file", "blob", oid])
         .output()
         .map_err(|e| format!("Unable to read image: {e}"))?;
     if !output.status.success() {
@@ -63,8 +63,8 @@ fn snapshot(root: &str, path: &str, head: bool) -> Result<Option<ImageSide>, Str
     let literal = format!(":(literal){path}");
     let listing = if head {
         // A new repository has no HEAD; its staged images are additions.
-        let head = crate::git::cmd::git()
-            .args(["-C", root, "rev-parse", "--verify", "--quiet", "HEAD"])
+        let head = crate::git::cmd::git_in(root)?
+            .args(["rev-parse", "--verify", "--quiet", "HEAD"])
             .output()
             .map_err(|e| e.to_string())?;
         if head.status.code() == Some(1) {

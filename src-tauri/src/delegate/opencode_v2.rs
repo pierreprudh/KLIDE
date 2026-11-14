@@ -542,10 +542,9 @@ pub(super) fn parse_run(conn: &rusqlite::Connection, id: &str) -> Option<AgentRu
         _ if count == 0 => "done".into(),
         _ => transcript_status(updated, TranscriptState::Working),
     };
-    let branch = crate::git::cmd::git()
-        .args(["-C", &cwd, "branch", "--show-current"])
-        .output()
+    let branch = crate::git::cmd::git_in(&cwd)
         .ok()
+        .and_then(|mut git| git.args(["branch", "--show-current"]).output().ok())
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|b| !b.is_empty());

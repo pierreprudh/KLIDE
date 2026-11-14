@@ -918,8 +918,9 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
     let branch: Option<String> = cwd
         .as_deref()
         .and_then(|cwd| {
-            crate::git::cmd::git()
-                .args(["-C", cwd, "branch", "--show-current"])
+            crate::git::cmd::git_in(cwd)
+                .ok()?
+                .args(["branch", "--show-current"])
                 .output()
                 .ok()
         })
