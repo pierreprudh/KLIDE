@@ -1234,6 +1234,10 @@ export function WorkspaceRail({
   const [query, setQuery] = useState("");
   const { username, hostname, avatarUrl } = useUserInfo();
   const searchRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // The list fades out into the foot only while there is more of it below —
+  // scrolled to the end, the last row reads whole.
+  useFadeWhileMoreBelow(bodyRef);
   // Folded headings, by key: "needs", "pinned", "agent:<provider>".
   // Everything starts open; the session remembers what you folded.
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
@@ -1679,7 +1683,7 @@ export function WorkspaceRail({
             {searching ? null : <ViewSwitch value={view} onChange={setView} />}
           </div>
 
-          <div className="klide-focus-rail-body">
+          <div ref={bodyRef} className="klide-focus-rail-body">
             {!searching && !activeProjectRoot ? (
               <p className="klide-focus-rail-empty">Open a folder to start.</p>
             ) : null}
@@ -1738,4 +1742,28 @@ export function WorkspaceRail({
       </div>
     </aside>
   );
+}
+
+/** Marks a scroller `data-more-below` while content sits past its bottom edge.
+ *  Rechecked on scroll, on a resize of the scroller or of any of its direct
+ *  children (a group folding open), and after every render of the owner. */
+function useFadeWhileMoreBelow(ref: React.RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => {
+      const more = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      if (more) el.dataset.moreBelow = "";
+      else delete el.dataset.moreBelow;
+    };
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    el.addEventListener("scroll", check, { passive: true });
+    return () => {
+      observer.disconnect();
+      el.removeEventListener("scroll", check);
+    };
+  });
 }
