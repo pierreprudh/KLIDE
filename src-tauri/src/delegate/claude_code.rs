@@ -111,6 +111,12 @@ impl Delegate for ClaudeCode {
         Vec::new()
     }
 
+    /// Where Claude Code keeps its login when there is no keychain (Linux,
+    /// or a keychain it could not reach).
+    fn secret_files(&self, env: &dyn Env) -> Vec<std::path::PathBuf> {
+        self.config_home(env).map(|d| vec![d.join(".credentials.json")]).unwrap_or_default()
+    }
+
     fn supports_accounts(&self) -> bool {
         true
     }

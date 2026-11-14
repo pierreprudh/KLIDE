@@ -193,6 +193,16 @@ pub trait Delegate: Sync {
         Vec::new()
     }
 
+    /// The files holding this CLI's credentials, wherever its home is today —
+    /// what a contained command may never read. Wider than [`auth_files`]
+    /// where a login can also sit in a file Klide does not snapshot (Claude
+    /// Code's keychain fallback, OpenCode's config-home copy).
+    ///
+    /// [`auth_files`]: Delegate::auth_files
+    fn secret_files(&self, env: &dyn Env) -> Vec<std::path::PathBuf> {
+        self.auth_files(env)
+    }
+
     /// The CLI's own on-disk model list, when it keeps one Klide reads.
     fn models_cache(&self, _env: &dyn Env) -> Option<std::path::PathBuf> {
         None
@@ -640,6 +650,12 @@ pub trait RunParser {
 
 /// The registry — one adapter per delegate CLI Klide can dispatch.
 pub const ALL: [&dyn Delegate; 9] = [&ClaudeCode, &Codex, &OpenCode, &Omp, &AMP, &CURSOR, &FACTORY, &Copilot, &HERMES];
+
+/// Every Delegate's [`Delegate::secret_files`], for the command sandbox's
+/// read denies: the adapters say where a login lives, nobody else spells it.
+pub fn secret_files(env: &dyn Env) -> Vec<std::path::PathBuf> {
+    ALL.iter().flat_map(|delegate| delegate.secret_files(env)).collect()
+}
 
 pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
     ALL.into_iter().find(|d| d.id() == provider)

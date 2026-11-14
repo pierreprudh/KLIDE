@@ -87,6 +87,16 @@ impl Delegate for OpenCode {
             .unwrap_or_default()
     }
 
+    /// Provider keys: the data-home `auth.json` the CLI writes, and the
+    /// config-home one an older install or a hand edit left.
+    fn secret_files(&self, env: &dyn Env) -> Vec<std::path::PathBuf> {
+        [self.data_home(env), self.config_home(env)]
+            .into_iter()
+            .flatten()
+            .map(|d| d.join("auth.json"))
+            .collect()
+    }
+
     fn supports_accounts(&self) -> bool {
         true
     }
