@@ -147,8 +147,7 @@ import { isScheduledRun } from "./scheduleStatus";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
 import { setIndexedProject } from "./workspaceIndex";
-import { confirmLinkedFolder, migrateTrustOnce, useWorkspaceTrust } from "./workspaceTrust";
-import { RestrictedFolderBanner } from "./components/RestrictedFolderBanner";
+import { confirmLinkedFolder, migrateTrustOnce, useRestrictedFolderToast } from "./workspaceTrust";
 import {
   canonicalWorkspaceRoot,
   legacyAutoRunWorkspace,
@@ -425,7 +424,7 @@ function App() {
     }
   });
   // Trust: the folders already in recents are trusted once, on the first
-  // launch that has it; the open folder's banner reads the result.
+  // launch that has it; the open folder's notification reads the result.
   useEffect(() => {
     const opened = workspaceRoot;
     void migrateTrustOnce(recentFolders).then(() => {
@@ -434,7 +433,7 @@ function App() {
     // Once per launch, with the recents it started with.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const folderTrust = useWorkspaceTrust(workspaceRoot, onFolderTrusted);
+  useRestrictedFolderToast(workspaceRoot, onFolderTrusted);
   const [terminalVisible, setTerminalVisible] = useState(
     () => localStorage.getItem("klide-terminal-visible") === "true"
   );
@@ -2329,7 +2328,7 @@ function App() {
   const changeRoot = (root: string | null) => {
     if (root === null) return closeFolder();
     if (root === workspaceRoot) return;
-    // A folder nobody trusted opens restricted, with its banner — never a
+    // A folder nobody trusted opens restricted, with a notification — never a
     // blocking prompt for a folder you chose yourself.
     setWorkspaceRoot(root);
   };
@@ -3435,10 +3434,6 @@ function App() {
   // traffic lights down to the identity card. Focus is chrome-free: no status
   // bar. Overlay views opened from Focus bring the bar back (the bar keeps
   // its Focus styling then — `focusBase`, not the resolved surface).
-  const restrictedBanner = folderTrust.restricted ? (
-    <RestrictedFolderBanner gitPaused={folderTrust.gitPaused} onTrust={folderTrust.trustFolder} />
-  ) : null;
-
   const statusBar = !showsStatusBar(surface) ? null : (
     <StatusBar
       path={active?.path ?? null}
@@ -3670,7 +3665,6 @@ function App() {
                 fill the rest of the column and remain their own event targets,
                 so only the empty band drags. */}
             <div className="klide-shell-col" data-tauri-drag-region>
-            {restrictedBanner && !ownsTitlebar(surface) ? restrictedBanner : null}
             {overlay === "git-review" ? (
               <Suspense fallback={null}>
                 <GitReview
@@ -3743,7 +3737,6 @@ function App() {
               <Suspense fallback={null}>
                 <FocusMode
                   workspaceRoot={workspaceRoot}
-                  notice={ownsTitlebar(surface) ? restrictedBanner : null}
                   composerSeed={focusComposerSeed}
                   onComposerSeedConsumed={clearFocusComposerSeed}
                   branch={gitStatus?.branch ?? null}

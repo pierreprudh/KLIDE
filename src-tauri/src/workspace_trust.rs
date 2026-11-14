@@ -3,7 +3,7 @@
 //! A folder nobody has trusted opens *restricted*: Klide still reads and
 //! edits it, but the repository gets no say in which programs Klide's own
 //! `git` starts (see `git/cmd.rs`). Trusting a folder is one click on the
-//! banner, and covers everything inside it — including a worktree whose
+//! notification, and covers everything inside it — including a worktree whose
 //! repository is trusted, wherever the worktree lives.
 //!
 //! The list lives in `~/.klide/trusted-folders.json`, never in the folder
@@ -96,7 +96,7 @@ pub async fn workspace_trust_status(root: String) -> Result<TrustStatus, String>
     .await
 }
 
-/// Trust each folder in `roots`. Called by the banner's one click, and once
+/// Trust each folder in `roots`. Called by the notification's one click, and once
 /// on upgrade with the folders already in recents.
 #[tauri::command]
 pub async fn workspace_trust_grant(roots: Vec<String>) -> Result<(), String> {

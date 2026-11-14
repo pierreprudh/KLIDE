@@ -1,9 +1,12 @@
 // A folder nobody has trusted opens restricted: Klide reads and edits it, but
 // runs none of the repository's own Git hooks or programs (Rust's
-// `git/cmd.rs`). One click on the banner trusts it. Rust owns the list.
+// `git/cmd.rs`). A notification says so, with one click to trust it. Rust
+// owns the list.
 
 import { useCallback, useEffect, useState } from "react";
 import { trustWorkspaces, workspaceTrustStatus, type WorkspaceTrust } from "./ipc/workspaceTrust";
+import { dismissToast, notify } from "./toast";
+import { errMessage } from "./errors";
 
 const MIGRATED_KEY = "klide.trust.migrated.v1";
 /** The 2026-11-13 activation consent's list; folded into Rust's once. */
@@ -64,7 +67,7 @@ export async function confirmLinkedFolder(
   );
 }
 
-/** The open folder's trust, and the banner's one click. */
+/** The open folder's trust, and the one click that grants it. */
 export function useWorkspaceTrust(root: string | null, onTrusted?: (root: string) => void) {
   const [trust, setTrust] = useState<{ root: string; value: WorkspaceTrust } | null>(null);
   useEffect(() => {
@@ -87,4 +90,36 @@ export function useWorkspaceTrust(root: string | null, onTrusted?: (root: string
   }, [root, onTrusted]);
   const current = trust && trust.root === root ? trust.value : null;
   return { restricted: current ? !current.trusted : false, gitPaused: current?.gitPaused ?? false, trustFolder };
+}
+
+/** What the notification says about a restricted folder. */
+export function restrictedFolderMessage(gitPaused: boolean): string {
+  return gitPaused
+    ? "Restricted folder — Git is paused: its settings can run programs."
+    : "Restricted folder — Its Git hooks and programs are off.";
+}
+
+/** While the open folder is restricted, a notification in the corner says so
+ *  and offers Trust folder. It stays until answered or closed, and leaves with
+ *  the folder. Mount-safe: the cleanup dismisses, a re-run shows it again. */
+export function useRestrictedFolderToast(root: string | null, onTrusted?: (root: string) => void) {
+  const { restricted, gitPaused, trustFolder } = useWorkspaceTrust(root, onTrusted);
+  useEffect(() => {
+    if (!root || !restricted) return;
+    const id = notify(restrictedFolderMessage(gitPaused), {
+      tone: "info",
+      duration: 0,
+      action: {
+        label: "Trust folder",
+        primary: true,
+        run: () => {
+          trustFolder().then(
+            () => notify("Folder trusted", { tone: "success" }),
+            (error: unknown) => notify(`Couldn't trust this folder: ${errMessage(error)}`, { tone: "error" }),
+          );
+        },
+      },
+    });
+    return () => dismissToast(id);
+  }, [root, restricted, gitPaused, trustFolder]);
 }
