@@ -1,36 +1,41 @@
-![Klide banner: white Klide wordmark and logo over blue clouds](.github/assets/klide-banner.jpeg)
+<p align="center">
+  <img src=".github/assets/klide-banner.jpeg" alt="Klide — a workspace for coding agents" width="100%" />
+</p>
 
-<div align="center">
+<h1 align="center">Your agents. Your models. One workspace.</h1>
 
-# Klide
+<p align="center">
+  A local-first coding workspace for macOS.<br />
+  Run coding agents side by side, follow their work, and review every change.
+</p>
 
-### Every agent visible. Every change reviewable.
+<p align="center">
+  <a href="https://github.com/pierreprudh/KLIDE/releases"><img src="https://img.shields.io/github/v/release/pierreprudh/KLIDE?style=flat&label=release&color=475569" alt="Latest release" /></a>
+  <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-475569?style=flat" alt="macOS — Apple Silicon" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-475569?style=flat" alt="MIT license" /></a>
+</p>
 
-A local-first coding workspace that runs local models and coding agents side by side, with independent agent and model selection for supported combinations.
+<p align="center">
+  <a href="#get-started"><strong>Get started</strong></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#build-from-source">Build from source</a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#features">Features</a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#trust-and-architecture">Architecture</a>
+</p>
 
-<br/>
-
-![Version](https://img.shields.io/badge/version-0.6.11-7A9F4A?style=flat-square)
-![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
-[![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
-
-<br/>
-
-[**Get started**](#get-started) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Architecture](#trust-and-architecture) &nbsp;·&nbsp; [Contributing](#contributing)
-
-</div>
+<br />
 
 ## One workspace for every coding agent
 
-Klide runs local models (Ollama, MLX, llama.cpp, Llama app, LM Studio), hosted APIs (Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, any OpenAI-compatible endpoint), and the coding agents you already pay for (Claude Code, Codex, OpenCode, Oh My Pi, Hermes, Amp, Cursor, Factory, or your own CLI) without hiding their native capabilities. You can inspect tool calls, follow terminal output, compare model cost and latency, and review changes from one workspace.
+Bring Claude Code, Codex, OpenCode, Hermes and other supported agents into one workspace alongside local models and hosted APIs. Keep your editor, terminals, conversations and change review together.
 
-Klide keeps three questions in view:
+- **See the work.** Follow active runs, tool calls and terminal output. Mission Control brings waiting, blocked and reviewable work into view.
+- **Choose what powers it.** Select an agent and a compatible model source independently: a local server, hosted API, self-hosted endpoint or supported subscription.
+- **Review the result.** Inspect diffs and available validation, cost and transcript evidence before continuing.
 
-- **What is running?** Mission Control tracks Klide runs and delegate command-line interface (CLI) sessions
-- **What needs attention?** Waiting, blocked, failed, and reviewable work rises to the top
-- **What changed?** Run inspection brings together available file, branch, transcript, validation, cost, and memory evidence; coverage depends on the runtime
-
-And one rule most tools don't offer: **any agent, any intelligence.** The agent you like and the intelligence you can pay for are two separate choices. Keep Claude Code, Codex, OpenCode, or Hermes as the agent, and point it at an API key, a local model, a self-hosted endpoint, or a subscription. Available combinations depend on the CLI and its adapter; unsupported pairs remain visible with a reason. The conversation stays the agent's; the mark in your history shows what actually answered.
+Model compatibility and evidence coverage depend on the runtime. Unsupported combinations remain visible with a reason.
 
 ## Three ways to work
 
