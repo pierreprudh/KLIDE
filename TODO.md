@@ -326,6 +326,17 @@ time, workspace trust first (every competitor has closed it).
   elapsed time and cost with cold/warm cache conditions separated; retain
   failures and sample counts. Grader tests passing is not a measured model
   quality gain. Run when the environment and representative tasks are ready.
+- [ ] Code Mode on/off benchmark (`run_script`, PR #524, added 2026-11-14):
+  the same read-heavy tasks with the switch off and on, on the same hosted
+  model, beside the paid smoke in `agent/live_eval.rs`. Tasks: broken
+  Markdown links across a fixture repo, "which files import X", a summary
+  over many small files, plus one single-file fix as the control where Code
+  Mode should not help. Record per run: input/output/cache-read tokens,
+  model round trips, Tool calls (inner calls counted from `scriptCalls`),
+  wall time, cost and whether the answer was correct; repeat each pair
+  enough to see variance and keep the failures. Decide from it: keep the
+  switch, make it the default for hosted models, or drop it. Also note the
+  release bundle size before/after `rquickjs` against the 27 MB budget.
 
 ## Orb follow-ups — remote work and continuity
 
