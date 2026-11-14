@@ -2557,64 +2557,6 @@ textarea.klide-diff-comment-input:focus-visible {
   animation: ai-msg-in var(--motion-slower) var(--ease-soft);
 }
 
-/* A restricted folder's one line under the title bar (RestrictedFolderBanner):
-   chrome type on the content surface, a hairline below, the action as a word.
-   In Focus the canvas' floating Git island moves down by the line's height. */
-.klide-restricted-banner {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 32px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--fg-subtle);
-  font-size: 12px;
-  line-height: 16px;
-  animation: klide-fade-swap var(--motion-slow) var(--ease-soft);
-}
-.klide-focus-main:has(> .klide-restricted-banner) {
-  --klide-notice-h: 32px;
-}
-.klide-restricted-banner-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.klide-restricted-banner-title {
-  color: var(--fg-strong);
-  font-weight: 600;
-  margin-right: 8px;
-}
-.klide-restricted-banner-trust {
-  flex-shrink: 0;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color var(--motion-fast) var(--ease-soft), background var(--motion-fast) var(--ease-soft);
-}
-.klide-restricted-banner-trust:hover:not(:disabled) {
-  color: var(--accent-hover);
-  background: var(--accent-soft);
-}
-.klide-restricted-banner-trust:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-@media (prefers-reduced-motion: reduce) {
-  .klide-restricted-banner {
-    animation: none;
-  }
-}
-
 /* The approval card in a narrow free-mode panel. While the card answers the
    keyboard, it keeps only the two keys — Esc and ↵ — on the command's line:
    the words and the scope options (run, project, pattern, Full auto) step
@@ -6394,7 +6336,7 @@ input.klide-rail-search:focus-visible {
   position: absolute;
   /* The canvas runs to the window's top edge, so anything anchored to it
      clears the title-bar band the same way the rail does. */
-  top: calc(var(--titlebar-h) + var(--klide-notice-h, 0px) + 16px);
+  top: calc(var(--titlebar-h) + 16px);
   right: 18px;
   z-index: 4;
   width: min(272px, calc(100% - 36px));
@@ -6801,7 +6743,7 @@ input.klide-rail-search:focus-visible {
 
 .klide-focus-git-window-actions {
   position: absolute;
-  top: calc(var(--titlebar-h) + var(--klide-notice-h, 0px) + 21px);
+  top: calc(var(--titlebar-h) + 21px);
   right: 26px;
   z-index: 7;
   display: flex;
@@ -6929,7 +6871,7 @@ input.klide-rail-search:focus-visible {
    sliding in as another permanent dock. */
 .klide-focus-git-preview {
   position: absolute;
-  top: calc(var(--titlebar-h) + var(--klide-notice-h, 0px) + 16px);
+  top: calc(var(--titlebar-h) + 16px);
   right: 18px;
   z-index: 5;
   width: min(46%, 560px);

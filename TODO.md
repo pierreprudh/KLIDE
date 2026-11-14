@@ -266,15 +266,14 @@ time, workspace trust first (every competitor has closed it).
   not open a project or queue a CLI resume. New clones/imports ask too. This
   does not supply a backend restricted state or revoke existing schedules.
 - [x] Workspace trust (2026-11-14): a folder nobody trusted opens restricted
-  with a banner and one-click Trust (`workspace_trust.rs`,
+  with a corner notification and one-click Trust (`workspace_trust.rs`,
   `~/.klide/trusted-folders.json`, recents trusted once on upgrade). Every git
   Klide starts goes through `git/cmd.rs`: always fsmonitor/`ext::`/editor/
   prompt off; restricted → hooks off, and Git paused unless the repo's own
   config is plain data (allowlist). Links to an untrusted folder still confirm.
 - [ ] Trust follow-ups: an "untrust" / trusted-folders list in Settings;
   project hooks, workspace skills and project connectors could also wait on
-  trust (not chosen for the first slice); installed-app check of the banner in
-  Focus and the workbench.
+  trust (not chosen for the first slice); installed-app check of the notification.
 - [x] Bound known secret reads (2026-11-13): native file/preflight checks now
   name GitHub CLI and agent login stores; the macOS command profile denies
   known home credential stores and common root .env files even with network

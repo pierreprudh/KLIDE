@@ -7,11 +7,13 @@
 // Push three or four, then point at the corner to fan them out.
 // ?demo pushes three on load (kept until dismissed); ?demo&open also fans
 // them out, for a headless screenshot that can't hover; add &still there.
+// ?trust shows the restricted-folder notification (?trust=paused for Git paused).
 import ReactDOM from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "../src/styles/tokens.css";
 import ToastHost from "../src/components/ToastHost";
 import { notify } from "../src/toast";
+import { restrictedFolderMessage } from "../src/workspaceTrust";
 
 const THEME = new URLSearchParams(location.search).get("theme") ?? "klide-light";
 document.documentElement.dataset.theme = THEME;
@@ -60,3 +62,12 @@ if (params.has("demo")) {
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<Page />);
+if (params.has("trust")) {
+  setTimeout(() => {
+    notify(restrictedFolderMessage(params.get("trust") === "paused"), {
+      tone: "info",
+      duration: 0,
+      action: { label: "Trust folder", primary: true, run: () => notify("Folder trusted", { tone: "success" }) },
+    });
+  }, 100);
+}
