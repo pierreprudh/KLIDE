@@ -578,12 +578,16 @@ mod tests {
             "certs/server.pem",
             ".config/gcloud/credentials.json",
             ".config/gh/hosts.yml",
-            ".claude/.credentials.json",
-            ".codex/auth.json",
-            ".local/share/opencode/auth.json",
             ".openclaw/agents/main/agent/auth-profiles.json",
         ] {
             assert!(ws.is_sensitive(&root.join(rel)), "{rel} should be sensitive");
+        }
+        // A CLI home checked into a project: every login file its adapter
+        // names is caught, without this test spelling the CLI's layout.
+        let cli_logins = crate::delegate::secret_files(&crate::delegate::home::MapEnv::with_home(&root));
+        assert!(!cli_logins.is_empty());
+        for login in cli_logins {
+            assert!(ws.is_sensitive(&login), "{} should be sensitive", login.display());
         }
         assert!(!ws.is_sensitive(&root.join("src/env.rs")));
         assert!(!ws.is_sensitive(&root.join("docs/environment.md")));

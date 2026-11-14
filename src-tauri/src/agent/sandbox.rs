@@ -163,17 +163,19 @@ impl Sandbox {
 
     /// The policy for a command run in `root` with nobody reading it first.
     pub fn for_workspace(root: &Path) -> Sandbox {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
         #[allow(unused_mut)]
-        let mut sandbox = Sandbox::for_workspace_in(root, home.as_deref(), &std::env::temp_dir());
+        let mut sandbox = Sandbox::for_workspace_in(root, &crate::delegate::ProcessEnv, &std::env::temp_dir());
         #[cfg(unix)]
         sandbox.sockets.push(crate::pty_daemon::socket_dir());
         sandbox
     }
 
-    /// [`Sandbox::for_workspace`] with the home and temp folders named, so a
-    /// test can say what they are.
-    pub fn for_workspace_in(root: &Path, home: Option<&Path>, temp: &Path) -> Sandbox {
+    /// [`Sandbox::for_workspace`] with the environment and temp folder named,
+    /// so a test can say what they are. The home, and each CLI's home, are
+    /// read from `env`.
+    pub fn for_workspace_in(root: &Path, env: &dyn crate::delegate::Env, temp: &Path) -> Sandbox {
+        let home = crate::delegate::home_dir(env);
+        let home = home.as_deref();
         let mut writable = vec![root.to_path_buf(), temp.to_path_buf(), PathBuf::from("/tmp"), PathBuf::from("/var/tmp")];
         // macOS pairs the per-user temp folder `…/T` with a cache folder
         // `…/C`; compilers keep their module caches there.
@@ -198,6 +200,7 @@ impl Sandbox {
         if let Some(home) = home {
             private_reads.extend(SECRET_PATHS.iter().map(|path| home.join(path)));
         }
+        private_reads.extend(crate::delegate::secret_files(env));
         Sandbox { writable, protected, pinned, sockets: Vec::new(), network: false, private_reads }
     }
 
@@ -215,17 +218,19 @@ impl Sandbox {
     }
 }
 
+/// Credentials under the home directory a contained command may not read,
+/// network open or not. The Delegate CLIs' own logins are not listed here:
+/// their adapters name them ([`crate::delegate::secret_files`]), so a moved
+/// `CODEX_HOME` or `CLAUDE_CONFIG_DIR` is followed.
+const SECRET_PATHS: &[&str] = &[
+    ".ssh", ".aws", ".gnupg", ".azure", ".kube", ".config/gh",
+    ".config/gcloud", ".hermes/.env", ".klide/accounts", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+];
+
 /// Where build tools keep what they download and compile, under the home
 /// directory. Short on purpose: each entry is a place a command may write
 /// without asking. Grown from denials seen in real use, not from a guess at
 /// every tool there is.
-const SECRET_PATHS: &[&str] = &[
-    ".ssh", ".aws", ".gnupg", ".azure", ".kube", ".config/gh",
-    ".config/gcloud", ".codex/auth.json", ".claude/.credentials.json",
-    ".local/share/opencode/auth.json", ".config/opencode/auth.json",
-    ".hermes/.env", ".klide/accounts", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
-];
-
 const TOOL_CACHES: &[&str] = &[".cargo", ".npm", ".cache", "Library/Caches"];
 
 /// What sits inside those caches and runs later, outside any sandbox: the
@@ -498,6 +503,12 @@ fn quoted(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delegate::home::MapEnv;
+
+    /// An environment with nothing in it: no home, no CLI homes.
+    fn no_env() -> MapEnv {
+        MapEnv(std::collections::HashMap::new())
+    }
 
     #[test]
     fn the_profile_closes_writes_before_it_opens_any() {
@@ -607,7 +618,7 @@ mod tests {
         let base = scratch("plain");
         let (root, home, temp) = (base.join("project"), base.join("home"), base.join("tmp/T"));
         std::fs::create_dir_all(root.join(".git")).unwrap();
-        let sandbox = Sandbox::for_workspace_in(&root, Some(&home), &temp);
+        let sandbox = Sandbox::for_workspace_in(&root, &MapEnv::with_home(&home), &temp);
         assert!(!sandbox.network, "closed until the policy opens it");
         for dir in [root.clone(), temp.clone(), base.join("tmp/C"), home.join(".cargo"), home.join("Library/Caches"), root.join(".git")] {
             assert!(sandbox.writable.contains(&dir), "{} should be writable", dir.display());
@@ -630,7 +641,7 @@ mod tests {
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(tree.join(".git"), format!("gitdir: {}\n", git_dir.display())).unwrap();
         std::fs::write(git_dir.join("commondir"), "../..\n").unwrap();
-        let sandbox = Sandbox::for_workspace_in(&tree, None, &base.join("tmp"));
+        let sandbox = Sandbox::for_workspace_in(&tree, &no_env(), &base.join("tmp"));
         let real = real_paths(&sandbox.writable);
         assert!(real.contains(&repo.join(".git")), "a commit in a worktree writes the shared git directory");
         assert!(!real.contains(&repo), "but not the other checkout's files");
@@ -656,7 +667,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join(".env"), "KLIDE_DUMMY_SECRET").unwrap();
         std::fs::write(root.join("source.txt"), "ordinary source").unwrap();
-        let mut sandbox = Sandbox::for_workspace_in(&root, None, &std::env::temp_dir());
+        let mut sandbox = Sandbox::for_workspace_in(&root, &no_env(), &std::env::temp_dir());
         sandbox.network = true;
         let cat = |name: &str| {
             let (program, args) = sandbox.wrap("/bin/cat").unwrap();
@@ -671,13 +682,17 @@ mod tests {
 
     #[test]
     fn enabling_network_does_not_open_known_credentials() {
-        let mut sandbox = Sandbox::for_workspace_in(Path::new("/project"), Some(Path::new("/home/user")), Path::new("/tmp"));
+        let env = MapEnv::with_home(Path::new("/home/user"));
+        let mut sandbox = Sandbox::for_workspace_in(Path::new("/project"), &env, Path::new("/tmp"));
         sandbox.network = true;
         let profile = sandbox.profile();
         assert!(profile.contains("(deny file-read-data"));
-        for secret in ["/home/user/.config/gh", "/home/user/.codex/auth.json", "/home/user/.claude/.credentials.json", "/project/.env"] {
+        let cli_logins = crate::delegate::secret_files(&env);
+        assert!(cli_logins.len() >= 4, "Claude Code, Codex and OpenCode name theirs: {cli_logins:?}");
+        let named = [PathBuf::from("/home/user/.config/gh"), PathBuf::from("/project/.env")];
+        for secret in named.iter().chain(&cli_logins) {
             // As the kernel sees it: on macOS `/home` is itself a link.
-            assert!(profile.contains(&quoted(&real_path(Path::new(secret)))), "{secret}");
+            assert!(profile.contains(&quoted(&real_path(secret))), "{}", secret.display());
         }
     }
 
@@ -723,7 +738,7 @@ mod tests {
             cmd.args(["-c", script]).current_dir(&root).output().unwrap().status.success()
         };
         assert!(sh("git init -q", None));
-        let sandbox = Sandbox::for_workspace_in(&root, None, &base.join("tmp"));
+        let sandbox = Sandbox::for_workspace_in(&root, &no_env(), &base.join("tmp"));
         assert!(!sh("mv .git .gx", Some(&sandbox)), "the rename is the bypass");
         assert!(root.join(".git").is_dir());
         assert!(!sh("echo x > .git/hooks/pre-commit", Some(&sandbox)));

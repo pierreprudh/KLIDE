@@ -260,6 +260,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    /// The logins the command sandbox closes, as each adapter resolves them —
+    /// and a moved home is followed, not the default.
+    #[test]
+    fn secret_files_name_each_cli_login_and_follow_a_moved_home() {
+        let home = std::env::temp_dir().join(format!("klide-secret-files-{}", std::process::id()));
+        let files = super::super::secret_files(&MapEnv::with_home(&home));
+        for login in [".claude/.credentials.json", ".codex/auth.json", ".local/share/opencode/auth.json", ".config/opencode/auth.json"] {
+            assert!(files.contains(&home.join(login)), "{login} missing from {files:?}");
+        }
+        let moved = home.join("elsewhere");
+        let files = super::super::secret_files(&MapEnv::with_home(&home).set("CODEX_HOME", &moved));
+        assert!(files.contains(&moved.join("auth.json")));
+        assert!(!files.contains(&home.join(".codex/auth.json")));
+    }
+
     /// Source-scan: no Rust file outside `delegate/` spells a CLI's home by
     /// hand. The adapter is the one place, so a moved home is honoured
     /// everywhere or nowhere.
