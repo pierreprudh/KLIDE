@@ -371,7 +371,7 @@ fn capitalize(s: &str) -> String {
 /// The workspace's `origin` URL, so a missing Remote checkout can say how to
 /// clone it.
 fn origin_repo(workspace_root: &str) -> Option<String> {
-    let out = Command::new("git")
+    let out = crate::git::cmd::git()
         .args(["-C", workspace_root, "remote", "get-url", "origin"])
         .output()
         .ok()?;

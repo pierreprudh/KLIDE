@@ -1064,7 +1064,7 @@ async fn run_approved_setup(root: &str, approved: &str, worktree: &str, branch: 
 }
 
 fn is_git_repository(root: &str) -> bool {
-    std::process::Command::new("git")
+    crate::git::cmd::git()
         .args(["-C", root, "rev-parse", "--is-inside-work-tree"])
         .output()
         .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
@@ -1695,7 +1695,7 @@ async fn document_versions(
 /// this, not to the workspace or the command's cwd, so it is what both the
 /// status read and the size read are anchored on.
 async fn repo_top(root: &str) -> Option<std::path::PathBuf> {
-    let out = tokio::process::Command::new("git")
+    let out = crate::git::cmd::git_tokio()
         .args(["-C", root, "rev-parse", "--show-toplevel"])
         .output()
         .await
@@ -1708,7 +1708,7 @@ async fn repo_top(root: &str) -> Option<std::path::PathBuf> {
 }
 
 async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<String, String>> {
-    let out = tokio::process::Command::new("git")
+    let out = crate::git::cmd::git_tokio()
         .arg("-C")
         .arg(top)
         // `-uall`: without it git collapses a wholly-untracked directory into

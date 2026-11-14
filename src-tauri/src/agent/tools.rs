@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use tokio_util::sync::CancellationToken;
 
@@ -2847,7 +2846,7 @@ fn grep(ws: &Workspace, input: &serde_json::Value) -> ToolResult {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = crate::git::cmd::git()
         .arg("-C")
         .arg(root)
         .args(args)

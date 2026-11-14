@@ -542,7 +542,7 @@ pub(super) fn parse_run(conn: &rusqlite::Connection, id: &str) -> Option<AgentRu
         _ if count == 0 => "done".into(),
         _ => transcript_status(updated, TranscriptState::Working),
     };
-    let branch = std::process::Command::new("git")
+    let branch = crate::git::cmd::git()
         .args(["-C", &cwd, "branch", "--show-current"])
         .output()
         .ok()
