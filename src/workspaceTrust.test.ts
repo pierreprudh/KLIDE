@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { confirmLinkedFolder, migrateTrustOnce, resetTrustMigrationForTests } from "./workspaceTrust";
+import { attemptIsFor, confirmLinkedFolder, migrateTrustOnce, resetTrustMigrationForTests, restrictedFolderMessage } from "./workspaceTrust";
 
 describe("restricted folders", () => {
   const values = new Map<string, string>();
@@ -45,5 +45,18 @@ describe("restricted folders", () => {
     expect(await confirmLinkedFolder("/download", async () => ({ trusted: false, gitPaused: true }))).toBe(false);
     expect(await confirmLinkedFolder("/download", async () => { throw new Error("ipc"); })).toBe(false);
     expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("a reminder is about the open folder or somewhere inside it, nothing beside it", () => {
+    expect(attemptIsFor("/repo", "/repo")).toBe(true);
+    expect(attemptIsFor("/repo", "/repo/.klide/worktrees/a")).toBe(true);
+    expect(attemptIsFor("/repo", "/repo-other")).toBe(false);
+    expect(attemptIsFor("/repo/", "/repo/sub")).toBe(true);
+  });
+
+  it("says what was skipped once something tried to run", () => {
+    expect(restrictedFolderMessage(false)).toContain("hooks and programs are off");
+    expect(restrictedFolderMessage(false, true)).toContain("hooks were skipped");
+    expect(restrictedFolderMessage(true, true)).toContain("Git is paused");
   });
 });

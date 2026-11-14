@@ -5,6 +5,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { trustWorkspaces, workspaceTrustStatus, type WorkspaceTrust } from "./ipc/workspaceTrust";
+import { listen } from "@tauri-apps/api/event";
+import { createListenerScope } from "./tauriEvents";
 import { dismissToast, notify } from "./toast";
 import { errMessage } from "./errors";
 
@@ -92,11 +94,19 @@ export function useWorkspaceTrust(root: string | null, onTrusted?: (root: string
   return { restricted: current ? !current.trusted : false, gitPaused: current?.gitPaused ?? false, trustFolder };
 }
 
-/** What the notification says about a restricted folder. */
-export function restrictedFolderMessage(gitPaused: boolean): string {
-  return gitPaused
-    ? "Restricted folder — Git is paused: its settings can run programs."
+/** What the notification says about a restricted folder — on opening it, or
+ *  `attempted` when something just tried to run there. */
+export function restrictedFolderMessage(gitPaused: boolean, attempted = false): string {
+  if (gitPaused) return "Restricted folder — Git is paused: its settings can run programs.";
+  return attempted
+    ? "Restricted folder — Its Git hooks were skipped. Trust it to run them."
     : "Restricted folder — Its Git hooks and programs are off.";
+}
+
+/** Whether a reminder from Rust (`workspace-trust:attempt`) is about the open
+ *  folder — the folder itself, or somewhere inside it. */
+export function attemptIsFor(root: string, attemptRoot: string): boolean {
+  return attemptRoot === root || attemptRoot.startsWith(`${root.replace(/\/+$/, "")}/`);
 }
 
 /** While the open folder is restricted, a notification in the corner says so
@@ -104,9 +114,23 @@ export function restrictedFolderMessage(gitPaused: boolean): string {
  *  the folder. Mount-safe: the cleanup dismisses, a re-run shows it again. */
 export function useRestrictedFolderToast(root: string | null, onTrusted?: (root: string) => void) {
   const { restricted, gitPaused, trustFolder } = useWorkspaceTrust(root, onTrusted);
+  // Bumped when something tries to run here before it is trusted: the
+  // notification comes back, even after it was closed.
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!root || !restricted) return;
-    const id = notify(restrictedFolderMessage(gitPaused), {
+    const scope = createListenerScope();
+    scope.add(
+      listen<{ root: string; gitPaused: boolean }>("workspace-trust:attempt", (event) => {
+        if (attemptIsFor(root, event.payload.root)) setAttempt((n) => n + 1);
+      }),
+    );
+    return scope.dispose;
+  }, [root, restricted]);
+  useEffect(() => setAttempt(0), [root]);
+  useEffect(() => {
+    if (!root || !restricted) return;
+    const id = notify(restrictedFolderMessage(gitPaused, attempt > 0), {
       tone: "info",
       duration: 0,
       action: {
@@ -121,5 +145,5 @@ export function useRestrictedFolderToast(root: string | null, onTrusted?: (root:
       },
     });
     return () => dismissToast(id);
-  }, [root, restricted, gitPaused, trustFolder]);
+  }, [root, restricted, gitPaused, trustFolder, attempt]);
 }

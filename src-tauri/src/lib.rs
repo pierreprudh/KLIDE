@@ -1136,6 +1136,18 @@ pub fn run() {
 
             let handle = app.handle();
 
+            // Something tried to run in a folder nobody trusted: the page shows
+            // the trust notification again.
+            {
+                let app = handle.clone();
+                git::cmd::on_restricted_attempt(Box::new(move |dir, paused| {
+                    let _ = app.emit(
+                        "workspace-trust:attempt",
+                        serde_json::json!({ "root": dir.to_string_lossy(), "gitPaused": paused }),
+                    );
+                }));
+            }
+
             // `klide://` links: a link that launched the app, then every one
             // that arrives while it runs. deep_link.rs parses and queues them.
             {
