@@ -5231,12 +5231,30 @@ button:focus-visible .menu-leadout {
   transform: rotate(90deg);
 }
 
+/* Registered so the fade's depth can transition: a mask-image itself can't. */
+@property --rail-fade {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 .klide-focus-rail-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   /* Scroll under the section eyebrow without clipping a row's fill. */
   padding-bottom: 4px;
+  /* The list dissolves into the foot rather than being cut by it — only while
+     there is more below (WorkspaceRail sets the attribute), so the end of the
+     list still reads whole. */
+  --rail-fade: 0px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rail-fade)), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rail-fade)), transparent);
+  transition: --rail-fade var(--motion-med) var(--ease-out);
+}
+
+.klide-focus-rail-body[data-more-below] {
+  --rail-fade: 40px;
 }
 
 /* The app-wide bar is 10px with a fairly dark thumb that appears on any hover
@@ -6236,8 +6254,10 @@ input.klide-rail-search:focus-visible {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding-top: 7px;
-  margin-top: 4px;
+  /* The hairline runs the rail's full width, edge to edge, like a shelf the
+     list fades into; the row's contents keep the rail's inset. */
+  margin: 0 calc(-1 * var(--rail-pad));
+  padding: 8px var(--rail-pad) 0;
   border-top: 1px solid var(--border);
 }
 
