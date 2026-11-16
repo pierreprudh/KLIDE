@@ -321,6 +321,34 @@ The benchmark requested streamed usage for accounting; normal Klide MLX settings
 | Raw trials | [Ollama](scripts/local-inference/results/ollama.json) · [llama.cpp](scripts/local-inference/results/llamacpp.json) · [MLX](scripts/local-inference/results/mlx.json) |
 | Reproduction | [Commands and prerequisites](scripts/local-inference/README.md) |
 
+### Context-saving benchmark
+
+Does keeping bulk reads out of context help, and on which models? Three arms
+on the native Harness, read-only tasks graded on the exact answer: plain read
+Tools (**off**), plus the `read_many` form (**batch**: which files, what to
+pick, what to keep, how to total — Klide parses and adds), or plus Code Mode
+(**script**: a QuickJS program). Scaling tasks sum or audit 25–100 files; one
+file outside the listed index is a decoy.
+
+| Model (2026-11-16) | off | batch | script |
+| --- | ---: | ---: | ---: |
+| DeepSeek V4.1 Flash, 5 repeats, $0.46 | 10/15 | 14/15, cost −40%, time −51% | 15/15, cost −46%, time −36% |
+| qwen3.5:9b (Ollama), 3 repeats | 3/9 | 3/9, input −79%, time −71% | 2/9, time +23% |
+| lfm3:1.7b (Ollama), 2 repeats | 0/5 | 0/6 | not run |
+
+Scaling-task passes; savings are medians against off. A strong model gains
+from both; a 9B model writes broken scripts but handles the form; a 1.7B
+model fails multi-file work either way. So Code Mode stays off by default and
+is never offered to local models, and `read_many` is the middle rung — an
+extra Tool beside the plain reads, never instead of them. It is still a
+prototype (`KLIDE_READ_MANY=1`).
+
+| Evidence | Link |
+| --- | --- |
+| Results and limits | [CONTEXT_RUNGS_RESULTS.md](scripts/harness-bench/CONTEXT_RUNGS_RESULTS.md) |
+| Raw trials | [context-rungs-2026-11-16-data.json](scripts/harness-bench/context-rungs-2026-11-16-data.json) |
+| Driver | [code_mode.py](scripts/harness-bench/code_mode.py) |
+
 ## Trust and architecture
 
 Opening a Workspace now asks for activation consent before its Git inspection

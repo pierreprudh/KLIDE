@@ -80,7 +80,9 @@ fn fail(message: String) -> ToolResult {
 }
 
 pub fn run(ws: &Workspace, input: &Value, _run_id: &str, _runs_dir: Option<&std::path::Path>) -> ToolResult {
-    let pick = match parse_pick(&input["pick"]) {
+    let pick_field = decoded_object(&input["pick"]);
+    let keep_field = decoded_object(&input["keep"]);
+    let pick = match parse_pick(&pick_field) {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
@@ -90,7 +92,7 @@ pub fn run(ws: &Workspace, input: &Value, _run_id: &str, _runs_dir: Option<&std:
         s if s.starts_with("sum:") && s.len() > 4 => Total::Sum(s[4..].trim().to_string()),
         other => return fail(format!("total must be \"list\", \"count\" or \"sum:<field>\", not {other:?}.")),
     };
-    let keep = match &input["keep"] {
+    let keep = match &keep_field {
         Value::Null => None,
         Value::Object(map) if matches!(pick, Pick::Json(_)) => Some(map.clone()),
         Value::Object(_) => return fail("keep works only with pick {\"json\": [...]}.".into()),
@@ -215,6 +217,17 @@ pub fn run(ws: &Workspace, input: &Value, _run_id: &str, _runs_dir: Option<&std:
         }
     }
     ToolResult { ok: true, content: Value::Object(out).to_string(), metadata: Some(json!({ "filesRead": paths.len() })) }
+}
+
+/// Small models send an object field JSON-encoded in a string
+/// (`"pick": "{\"json\": [...]}"`). Take it as the object it plainly is.
+fn decoded_object(field: &Value) -> Value {
+    match field {
+        Value::String(text) if text.trim_start().starts_with('{') => {
+            serde_json::from_str::<Value>(text.trim()).ok().filter(Value::is_object).unwrap_or_else(|| field.clone())
+        }
+        _ => field.clone(),
+    }
 }
 
 /// Integral sums print without a trailing `.0`.
@@ -530,6 +543,8 @@ mod tests {
         let out = call(&ws, json!({ "files": "[\"a.json\", \"b.json\"]", "pick": { "json": ["n"] }, "total": "sum:n" }));
         assert_eq!(out["files_read"], 2);
         assert_eq!(out["sum_n"], 5);
+        let out = call(&ws, json!({ "files": "*.json", "pick": "{\"json\": [\"n\"]}", "keep": "{\"n\": {\">\": 2}}", "total": "sum:n" }));
+        assert_eq!(out["sum_n"], 103, "pick and keep sent as JSON strings");
         let _ = std::fs::remove_dir_all(dir);
     }
 

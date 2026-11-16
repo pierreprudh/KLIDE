@@ -329,9 +329,12 @@ time, workspace trust first (every competitor has closed it).
   `read_many` form, `run_script`) on DeepSeek flash and qwen3.5:9b — see
   `scripts/harness-bench/CONTEXT_RUNGS_RESULTS.md`. Code Mode stays off by
   default and away from local models; `read_many` is the middle rung.
-- [ ] `read_many` to a default: make the shortcut harder to misuse (files
-  from an index the model read, a note when a glob matches files that index
-  doesn't name), rerun qwen3.5:9b, then offer it beside the plain read Tools.
+- [x] `read_many` misuse guard (2026-11-16): `files: {from, key}`, a note when
+  a glob matches files a listed index leaves out, a note when a count/sum has
+  no `keep`; `pick`/`keep` JSON strings accepted. lfm3:1.7b rerun: too small
+  for multi-file tasks in any arm.
+- [ ] `read_many` to a default: rerun qwen3.5:9b with the guard, then offer it
+  beside the plain read Tools.
 - [ ] Preamble stop: DeepSeek ends a Run after "I'll start by reading…" with
   no tool call (7 of 90 benchmark trials, every arm). Diagnose in the run loop.
 - [ ] Measure the release bundle size before/after `rquickjs` (27 MB budget).
