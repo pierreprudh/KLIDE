@@ -3621,49 +3621,54 @@ button:focus-visible .menu-leadout {
   }
 }
 
-/* A picker's folding stack — the tool-run fold, tuned for a menu: the box
-   makes room on the settling curve, the rows fade in a beat behind it. */
-.picker-stack-body {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows var(--motion-slow) var(--ease-soft);
+/* The provider picker's side card (StackSideMenu). Rows light on hover and
+   on keyboard focus alike; a new stack's rows rise in as the card glides to
+   its eyebrow, and the open eyebrow's chevron leans toward the card. */
+.stack-side-row {
+  background: transparent;
+  transition: background var(--motion-fast) var(--ease-out);
 }
-.picker-stack-body[data-open="true"] {
-  grid-template-rows: 1fr;
+.stack-side-row:hover,
+.stack-side-row:focus-visible,
+.stack-side-heading:focus-visible {
+  background: var(--menu-row-hover);
 }
-.picker-stack-body > * {
-  overflow: hidden;
-  min-height: 0;
-  opacity: 0;
-  transform: translateY(-3px);
+.stack-side-row[data-active="true"] {
+  background: var(--menu-row-active);
+}
+.stack-side-rows {
+  animation: stack-side-rows-in 200ms var(--ease-soft) both;
+}
+@keyframes stack-side-rows-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.stack-side-chevron {
+  color: var(--fg-dim);
   transition:
-    opacity var(--motion-fast) var(--ease-out),
-    transform var(--motion-slow) var(--ease-soft);
+    transform var(--motion-med) var(--ease-soft),
+    color var(--motion-fast) var(--ease-out);
 }
-.picker-stack-body[data-open="true"] > * {
-  opacity: 1;
-  transform: none;
-  transition:
-    opacity var(--motion-med) var(--ease-out) 40ms,
-    transform var(--motion-slow) var(--ease-soft);
-}
-.picker-stack-chevron {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  transition: transform var(--motion-slow) var(--ease-soft);
-}
-.picker-stack-chevron[data-open="true"] {
-  transform: rotate(90deg);
+.stack-side-chevron[data-open="true"] {
+  transform: translateX(2px);
+  color: var(--fg-subtle);
 }
 @media (prefers-reduced-motion: reduce) {
   .picker-menu,
   .picker-menu[data-leaving="true"] {
     animation: none;
   }
-  .picker-stack-body,
-  .picker-stack-body > *,
-  .picker-stack-chevron {
+  .stack-side-rows {
+    animation: none;
+  }
+  .stack-side-chevron,
+  .stack-side-row {
     transition: none;
   }
 }
