@@ -3,7 +3,7 @@ import { delegateLabel, type DelegateId } from "../../delegates";
 import { isFavModel, toggleFavModel, subscribeFavModels } from "../../favModels";
 import { ModelPickerHeader, MODEL_FILTER_STYLE, MODEL_ROW_STYLE, StarIcon } from "./ModelPickerChrome";
 import { resolveModelLogo } from "../../modelIdentity";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type RefObject } from "react";
 import { usePresence } from "../../hooks/usePresence";
 import { inTriangle } from "./StackSideMenu";
 import { createPortal } from "react-dom";
@@ -62,6 +62,33 @@ function useEasedHeight(ref: RefObject<HTMLDivElement | null>, max: number, deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   return height;
+}
+/** The provider picker's side-card geometry (StackSideMenu), shared here. */
+const PAD = 5;
+const GAP = 6;
+const SIDE_WIDTH = 236;
+const SIDE_ROW: CSSProperties = { width: "100%", display: "flex", alignItems: "center", gap: 6, padding: "7px 9px", border: "none",
+  borderRadius: "var(--radius-sm)", color: "var(--fg-strong)", cursor: "pointer", font: "inherit", fontSize: 12, fontWeight: 500, textAlign: "left" };
+/** A stack's eyebrow, as the provider picker draws it: small caps, a chevron
+ *  that leans toward the open card, strong when open or holding the choice. */
+function Eyebrow({ label, open, held, quiet, ...rest }: { label: string; open: boolean; held: boolean; quiet?: boolean } & ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, unknown>) {
+  return <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={open} className="stack-side-heading" {...rest}
+    style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, padding: "7px 9px", border: "none", borderRadius: "var(--radius-sm)",
+      background: open ? "var(--menu-row-hover)" : "transparent", cursor: "pointer", textAlign: "left", font: "inherit",
+      fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase",
+      color: open || held ? "var(--fg-strong)" : "var(--fg-dim)", opacity: quiet ? 0.5 : 1,
+      transition: "color var(--motion-med) var(--ease-out), background var(--motion-med) var(--ease-out)" }}>
+    <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+    <span className="stack-side-chevron" data-open={open} style={{ display: "grid", placeItems: "center" }}>
+      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+    </span>
+  </button>;
+}
+/** ↗ — the row leads out to Settings rather than choosing. */
+function Leadout() {
+  return <svg className="menu-leadout" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+    <path d="M7 17 17 7" /><path d="M8 7h9v9" />
+  </svg>;
 }
 function readChoice(model: string, harness: string): { provider: string; model: string } | null {
   const prefix = harness === "hermes" ? PREFIX : "harness-source:";
@@ -149,12 +176,13 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     const rowRect = row.getBoundingClientRect();
     const isProviderPanel = row.closest('[data-level="providers"]') !== null;
     const cascadeLeft = isProviderPanel && categoryPos !== null && menu.pos !== null && categoryPos.left < menu.pos.left;
-    const left = !cascadeLeft && rect.right + width + 4 <= window.innerWidth - 8 ? rect.right + 4 : rect.left - width - 4;
+    const left = !cascadeLeft && rect.right + width + GAP <= window.innerWidth - 8 ? rect.right + GAP : rect.left - width - GAP;
+    // The card's first row sits level with the row that opened it.
     return { left: Math.max(8, Math.min(left, window.innerWidth - width - 8)),
-      top: Math.max(8, Math.min(rowRect.top, window.innerHeight - height - 8)) };
+      top: Math.max(8, Math.min(rowRect.top - PAD - 1, window.innerHeight - height - 8)) };
   }
   function showCategory(name: string, row: HTMLElement) {
-    setCategoryPos(submenuPosition(row, 220, 300));
+    setCategoryPos(submenuPosition(row, SIDE_WIDTH, 300));
     if (category !== name) { setCategory(name); setSource(null); setSourcePos(null); }
   }
   /** The agent's own models open straight from the categories panel — no provider level in between. */
@@ -190,6 +218,10 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   }, [menu.open, apiIds]);
   /** A category with nothing set up — every API key missing, no self-hosted
    *  endpoint — can't be chosen: it's quieted and leads to Settings. */
+  /** Does this stack hold the current choice? Its eyebrow reads strong. */
+  const heldBy = (name: string) => !!current && (name === OWN
+    ? current.provider === harness || (harness === "hermes" && model === "default")
+    : (sourceGroups.find((g) => g.label === name)?.items ?? []).some((item) => item.id === current.provider));
   const notSetUp = (name: string) => {
     const items = sourceGroups.find((g) => g.label === name)?.items ?? [];
     if (name === "API") return items.length === 0 || items.every((item) => keyless.has(item.id));
@@ -272,7 +304,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           requestAnimationFrame(() => menu.menuRef.current?.querySelector<HTMLInputElement>('[data-level="models"] input')?.focus());
         } else if (e.key === "ArrowRight" && target.dataset.category) {
           e.preventDefault();
-          if (notSetUp(target.dataset.category)) return; showCategory(target.dataset.category, target);
+          showCategory(target.dataset.category, target);
           requestAnimationFrame(() => menu.menuRef.current?.querySelector<HTMLButtonElement>('[data-level="providers"] button')?.focus());
         } else if (e.key === "ArrowRight" && target.dataset.source) {
           e.preventDefault(); showSource(target.dataset.source, target, true);
@@ -290,39 +322,39 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         }
       }}>
       <div role="menu" data-menu-panel data-level="categories" className="picker-menu menu-glass" data-leaving={presence.leaving}
-        style={{ overflow: "hidden", transformOrigin: upward ? "bottom right" : "top right" }}>
-        <ModelPickerHeader icon={<ProviderLogo id={harness} size={15} />} title={harnessName} caption="Choose an intelligence source" />
-        <div style={{ padding: 4 }}>
-        <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === OWN} data-own className="provider-category-row"
-          style={{ ...style, background: category === OWN ? "var(--menu-row-active)" : undefined }}
-          onMouseEnter={(e) => { const row = e.currentTarget; aimed(category === OWN ? null : providersRef.current ?? modelsRef.current, () => showOwn(row)); }} onClick={(e) => showOwn(e.currentTarget, true)}>
-          {harnessName}
-        </button>
-        {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
-          key={name} className="provider-category-row" aria-disabled={notSetUp(name) || undefined} title={notSetUp(name) ? (name === "API" ? "No API key yet — add one in Settings" : "No self-hosted endpoint yet — add one in Settings") : undefined}
-          style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: notSetUp(name) ? 0.45 : 1, background: category === name ? "var(--menu-row-active)" : undefined }}
-          onMouseEnter={(e) => { const row = e.currentTarget; if (category === name) { clearAim(); return; }
-            aimed(providersRef.current ?? modelsRef.current, () => { if (notSetUp(name)) { setCategory(null); setCategoryPos(null); setSource(null); setSourcePos(null); } else showCategory(name, row); }); }}
-          onClick={(e) => { if (notSetUp(name)) { menu.close(); openSettingsSection("api"); } else showCategory(name, e.currentTarget); }}>
-          <span style={{ flex: 1 }}>{name}</span>{notSetUp(name) && <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>Set up ↗</span>}
-        </button>)}
-        </div>
+        style={{ padding: PAD, overflow: "hidden", transformOrigin: upward ? "bottom right" : "top right" }}>
+        <Eyebrow label={harnessName} open={category === OWN} held={heldBy(OWN)} data-own
+          onMouseEnter={(e) => { const row = e.currentTarget; aimed(category === OWN ? null : providersRef.current ?? modelsRef.current, () => showOwn(row)); }} onClick={(e) => showOwn(e.currentTarget, true)} />
+        {CATEGORIES.map((name) => <Eyebrow key={name} label={name} open={category === name} held={heldBy(name)} quiet={notSetUp(name)} data-category={name}
+          onMouseEnter={(e) => { const row = e.currentTarget; if (category === name) { clearAim(); return; } aimed(providersRef.current ?? modelsRef.current, () => showCategory(name, row)); }}
+          onClick={(e) => showCategory(name, e.currentTarget)} />)}
       </div>
       {category && categoryPos && <div style={{ position: "fixed", left: categoryPos.left, top: providersGlide.top, transform: providersGlide.transform, transition: providersGlide.transition }}>
-      <div ref={providersRef} role="menu" data-menu-panel data-level="providers" className="picker-menu menu-glass" data-leaving={presence.leaving} onMouseEnter={clearAim}
-        style={{ width: 220, height: providersHeight, maxHeight: providersMax, display: "flex", flexDirection: "column", overflow: "hidden", transformOrigin: "top left", transition: providersGlide.transition === "none" ? "none" : heightEase }}>
-        <ModelPickerHeader title={category} caption="Choose a provider" />
-        <div className="menu-scroll" style={{ minHeight: 0, overflow: "auto", padding: 4 }}>
+      <div ref={providersRef} role="menu" aria-label={category} data-menu-panel data-level="providers" className="picker-menu menu-glass" data-leaving={presence.leaving} onMouseEnter={clearAim}
+        style={{ width: SIDE_WIDTH, height: providersHeight, maxHeight: providersMax, display: "flex", flexDirection: "column", overflow: "hidden", transformOrigin: "top left", transition: providersGlide.transition === "none" ? "none" : heightEase }}>
+        <div className="menu-scroll" style={{ minHeight: 0, overflow: "auto", padding: PAD, overscrollBehavior: "contain" }}>
         <div key={category} className="stack-side-rows">
-        {sources.map((p) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={source === p.id} data-source={p.id}
-          key={p.id} className="provider-category-row" aria-disabled={!support[p.id]?.supported} title={keyless.has(p.id) ? `Add a ${p.name} API key in Settings` : support[p.id]?.reason ?? (missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? `${p.id === NOUS_SOURCE ? "Hermes" : p.name} CLI is not installed` : undefined)}
-          style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || keyless.has(p.id) || missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
-          onMouseEnter={(e) => { const row = e.currentTarget; if (source === p.id) { clearAim(); return; } aimed(modelsRef.current, () => showSource(p.id, row)); }} onClick={(e) => { if (keyless.has(p.id)) { menu.close(); openSettingsSection("api"); } else showSource(p.id, e.currentTarget, true); }}>
-          <ProviderLogo id={p.id === NOUS_SOURCE ? "hermes" : p.id as ProviderId} size={16} />
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>{!support[p.id]?.supported ? <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>
-            : keyless.has(p.id) && <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>Add key ↗</span>}
-        </button>)}
-        {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint</button>}
+        {sources.map((p) => {
+          const cliMissing = missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id);
+          const unsupported = !support[p.id]?.supported;
+          const dimmed = unsupported || keyless.has(p.id) || cliMissing;
+          return <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={source === p.id} data-source={p.id}
+            key={p.id} className="stack-side-row" data-active={source === p.id || current?.provider === p.id ? "true" : undefined} aria-disabled={unsupported || undefined}
+            title={keyless.has(p.id) ? `Add a ${p.name} API key in Settings` : support[p.id]?.reason ?? (cliMissing ? `${p.id === NOUS_SOURCE ? "Hermes" : p.name} CLI is not installed` : undefined)}
+            style={SIDE_ROW}
+            onMouseEnter={(e) => { const row = e.currentTarget; if (source === p.id) { clearAim(); return; } aimed(modelsRef.current, () => showSource(p.id, row)); }}
+            onClick={(e) => { if (keyless.has(p.id)) { menu.close(); openSettingsSection("api"); } else showSource(p.id, e.currentTarget, true); }}>
+            <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0, color: "var(--fg-subtle)", opacity: dimmed ? 0.4 : 1 }}>
+              <ProviderLogo id={p.id === NOUS_SOURCE ? "hermes" : p.id as ProviderId} size={16} />
+            </span>
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: dimmed ? 0.45 : 1 }}>{p.name}</span>
+            {unsupported ? <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>
+              : keyless.has(p.id) && <Leadout />}
+          </button>;
+        })}
+        {sources.length === 0 && <button type="button" role="menuitem" className="stack-side-row" style={SIDE_ROW} onClick={() => { menu.close(); openSettingsSection("api"); }}>
+          <span style={{ flex: 1 }}>Add a self-hosted endpoint</span><Leadout />
+        </button>}
         </div>
         </div>
       </div></div>}
