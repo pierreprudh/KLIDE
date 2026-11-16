@@ -221,6 +221,8 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   mistral: "color-logo-img",
   huggingface: "color-logo-img",
   minimax: "color-logo-img",
+  // Cloudflare's orange cloud (LobeHub `cloudflare-color`).
+  "cloudflare-ai-gateway": "color-logo-img",
 };
 
 /** The mark for a Provider id or a bare brand key. A registry row's `brand`
