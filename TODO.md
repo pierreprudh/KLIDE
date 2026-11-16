@@ -325,17 +325,16 @@ time, workspace trust first (every competitor has closed it).
   elapsed time and cost with cold/warm cache conditions separated; retain
   failures and sample counts. Grader tests passing is not a measured model
   quality gain. Run when the environment and representative tasks are ready.
-- [ ] Code Mode on/off benchmark (`run_script`, PR #524, added 2026-11-14):
-  the same read-heavy tasks with the switch off and on, on the same hosted
-  model, beside the paid smoke in `agent/live_eval.rs`. Tasks: broken
-  Markdown links across a fixture repo, "which files import X", a summary
-  over many small files, plus one single-file fix as the control where Code
-  Mode should not help. Record per run: input/output/cache-read tokens,
-  model round trips, Tool calls (inner calls counted from `scriptCalls`),
-  wall time, cost and whether the answer was correct; repeat each pair
-  enough to see variance and keep the failures. Decide from it: keep the
-  switch, make it the default for hosted models, or drop it. Also note the
-  release bundle size before/after `rquickjs` against the 27 MB budget.
+- [x] Code Mode on/off benchmark (2026-11-16): three arms (plain reads, the
+  `read_many` form, `run_script`) on DeepSeek flash and qwen3.5:9b — see
+  `scripts/harness-bench/CONTEXT_RUNGS_RESULTS.md`. Code Mode stays off by
+  default and away from local models; `read_many` is the middle rung.
+- [ ] `read_many` to a default: make the shortcut harder to misuse (files
+  from an index the model read, a note when a glob matches files that index
+  doesn't name), rerun qwen3.5:9b, then offer it beside the plain read Tools.
+- [ ] Preamble stop: DeepSeek ends a Run after "I'll start by reading…" with
+  no tool call (7 of 90 benchmark trials, every arm). Diagnose in the run loop.
+- [ ] Measure the release bundle size before/after `rquickjs` (27 MB budget).
 
 ## Orb follow-ups — remote work and continuity
 

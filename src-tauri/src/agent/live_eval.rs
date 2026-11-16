@@ -182,6 +182,91 @@ async fn paired_harness_benchmark() {
     })).unwrap()).unwrap();
 }
 
+/// Code Mode on/off benchmark entry point for scripts/harness-bench/code_mode.py.
+/// One trial: the production Harness in Plan mode (reads only, so neither arm
+/// can shell out), with `run_script` offered or not according to
+/// `KLIDE_CODE_MODE`, which the driver sets per trial. The driver owns the
+/// fixtures, arm order and grading; this writes what the Transcript recorded.
+#[tokio::test]
+#[ignore = "Live model benchmark; invoke through scripts/harness-bench/code_mode.py"]
+async fn code_mode_benchmark() {
+    let base = PathBuf::from(std::env::var("KLIDE_BENCH_CASE").expect("KLIDE_BENCH_CASE"));
+    let case: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("case.json")).unwrap()).unwrap();
+    let workspace = base.join("workspace");
+    let runs = base.join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    let mut request = test_request(workspace.to_str().unwrap(), &[]);
+    request.mode = AgentMode::Plan;
+    request.provider = case["provider"].as_str().unwrap().into();
+    request.model = case["model"].as_str().unwrap().into();
+    request.initial_text = case["prompt"].as_str().unwrap().into();
+    request.max_turns = case["maxTurns"].as_u64().map(|n| n as usize);
+    request.num_ctx = case["numCtx"].as_u64().map(|n| n as usize);
+    request.num_predict = case["numPredict"].as_u64().map(|n| n as usize);
+    request.max_parallel_tools = case["maxParallelTools"].as_u64().map(|n| n as usize);
+    request.reflection_level = case["reflectionLevel"].as_str().map(str::to_string);
+    request.system_prompt = Some(format!(
+        "You are Klide's coding agent. Workspace: {}. Answer the question from the workspace files. Finish with the requested JSON and nothing after it.",
+        workspace.display()
+    ));
+    // Which arm this trial really is, read from the same gate a Run uses —
+    // never assumed from the driver's label.
+    let gate = permission::GateSubject::from_request(&request);
+    let (offered, read_many_offered) = (gate.script_offered, gate.read_many_offered);
+    let id = "code-mode-benchmark";
+    let supervisor = Arc::new(FakeSupervisor::for_request(id, &request));
+    let cancel = CancellationToken::new();
+    let started = std::time::Instant::now();
+    let future = run_agent_loop(supervisor, runs.clone(), id.into(), request,
+        Channel::new(|_| Ok(())), cancel.clone(), RealProviderCaller);
+    tokio::pin!(future);
+    let outcome = tokio::select! {
+        result = &mut future => result,
+        _ = tokio::time::sleep(std::time::Duration::from_secs(case["timeoutSeconds"].as_u64().unwrap_or(180))) => {
+            cancel.cancel();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), &mut future).await;
+            Err("Benchmark timed out".into())
+        }
+    };
+    let elapsed = started.elapsed().as_secs_f64();
+    let events = read_events(&runs, id).unwrap_or_default();
+    let provider_usages: Vec<_> = events.iter().filter_map(|e| match e {
+        AgentEvent::AssistantMessage { usage, timing: Some(_), .. } => Some(usage.as_ref()), _ => None,
+    }).collect();
+    let script_ids: Vec<&str> = events.iter().filter_map(|e| match e {
+        AgentEvent::ToolCallStarted { tool_call_id, name, .. } if name == super::script::RUN_SCRIPT_TOOL => Some(tool_call_id.as_str()),
+        _ => None,
+    }).collect();
+    let nested: usize = events.iter().filter_map(|e| match e {
+        AgentEvent::ToolCallFinished { tool_call_id, result, .. } if script_ids.contains(&tool_call_id.as_str()) => {
+            result.metadata.as_ref().and_then(|m| m["scriptCalls"].as_array()).map(Vec::len)
+        }
+        _ => None,
+    }).sum();
+    let final_answer = events.iter().rev().find_map(|e| match e {
+        AgentEvent::AssistantMessage { content, timing: Some(_), .. } => {
+            let text: String = content.iter().filter_map(|b| match b {
+                AgentContentBlock::Text { text } => Some(text.as_str()), _ => None,
+            }).collect();
+            (!text.trim().is_empty()).then_some(text)
+        }
+        _ => None,
+    });
+    let sum = |f: fn(&AgentUsage) -> Option<u64>| complete_usage_sum(&provider_usages, f);
+    std::fs::write(base.join("native-result.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "elapsedSeconds": elapsed, "error": outcome.err(), "codeModeOffered": offered, "readManyOffered": read_many_offered,
+        "readManyCalls": events.iter().filter(|e| matches!(e, AgentEvent::ToolCallStarted { name, .. } if name == super::read_many::READ_MANY_TOOL)).count(),
+        "inputTokens": sum(|u| u.prompt_tokens), "outputTokens": sum(|u| u.completion_tokens),
+        "cacheReadTokens": sum(|u| u.cache_read_tokens),
+        "costUsd": complete_usage_sum(&provider_usages, |u| u.cost_usd),
+        "modelRequests": provider_usages.len(),
+        "toolCalls": events.iter().filter(|e| matches!(e, AgentEvent::ToolCallStarted {..})).count(),
+        "scriptCalls": script_ids.len(), "nestedToolCalls": nested,
+        "finalAnswer": final_answer,
+        "transcript": super::transcripts::transcript_path(&runs, id),
+    })).unwrap()).unwrap();
+}
+
 fn complete_usage_sum<T: std::iter::Sum<T>>(
     usages: &[Option<&AgentUsage>], field: impl Fn(&AgentUsage) -> Option<T>,
 ) -> Option<T> {
