@@ -1,4 +1,4 @@
-import { ChevronIcon, ArrowRightIcon } from "../../icons";
+import { ChevronIcon } from "../../icons";
 import { delegateLabel, type DelegateId } from "../../delegates";
 import { isFavModel, toggleFavModel, subscribeFavModels } from "../../favModels";
 import { ModelPickerHeader, MODEL_FILTER_STYLE, MODEL_ROW_STYLE, StarIcon } from "./ModelPickerChrome";
@@ -9,7 +9,6 @@ import { usePortalMenu } from "../../hooks/usePortalMenu";
 import { useCustomProviders } from "../../hooks/useCustomProviders";
 import { intelligenceSourceGroups } from "../../agent/harnessModelSources";
 import { useMissingDelegateClis } from "../../hooks/useMissingDelegateClis";
-import { refreshCustomCli, type CustomCli } from "../../customCli";
 import type { ProviderId } from "../../agent/types";
 import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
 import { readHermesSettings, readHermesOwnSetup, readHarnessSourceSupport, listHarnessSourceModels, loginNousPortal, NOUS_SOURCE, type HermesOwnSetup, type HermesSourceSupport } from "../../ipc/hermes";
@@ -35,7 +34,6 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const custom = useCustomProviders();
   const [favTick, setFavTick] = useState(0);
   useEffect(() => subscribeFavModels(() => setFavTick((n) => n + 1)), []);
-  const [customClis, setCustomClis] = useState<CustomCli[]>([]);
   const [support, setSupport] = useState<Record<string, HermesSourceSupport>>({});
   const [category, setCategory] = useState<string | null>(null);
   const [source, setSource] = useState<string | null>(null);
@@ -104,7 +102,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     if (source !== id) { setModels([]); setError(""); setQuery(""); setLoading(true); }
     setSource(id);
   }
-  const sourceGroups = useMemo(() => intelligenceSourceGroups(custom, customClis), [custom, customClis]);
+  const sourceGroups = useMemo(() => intelligenceSourceGroups(custom), [custom]);
   const missingClis = useMissingDelegateClis(menu.open, sourceGroups.find((g) => g.label === "Subscription")?.items.map((item) => item.id === NOUS_SOURCE ? "hermes" : item.id));
   const sources = (sourceGroups.find((g) => g.label === category)?.items ?? []).slice()
     .sort((a, b) => Number(missingClis.has(a.id === NOUS_SOURCE ? "hermes" : a.id)) - Number(missingClis.has(b.id === NOUS_SOURCE ? "hermes" : b.id)));
@@ -112,7 +110,6 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const ownTitle = harness === "hermes" && saved ? sourceGroups.flatMap((g) => g.items).find((item) => item.id === saved.provider)?.name ?? saved.provider : harnessName;
   useEffect(() => {
     if (!menu.open) return;
-    void refreshCustomCli().then(setCustomClis).catch(() => {});
     let cancelled = false;
     void Promise.all(sourceIds.split("\n").filter(Boolean).map(async (id) => {
       try { return [id, await readHarnessSourceSupport(harness, id)] as const; }
@@ -197,12 +194,12 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === OWN} data-own className="provider-category-row"
           style={{ ...style, background: category === OWN ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showOwn(e.currentTarget)} onClick={(e) => showOwn(e.currentTarget, true)}>
-          {harnessName} <ArrowRightIcon size={14} style={{ float: "right" }} />
+          {harnessName} <ChevronIcon size={12} style={{ float: "right", marginTop: 3, rotate: "-90deg", color: "var(--fg-dim)" }} />
         </button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showCategory(name, e.currentTarget)} onClick={(e) => showCategory(name, e.currentTarget)}>
-          {name} <ArrowRightIcon size={14} style={{ float: "right" }} />
+          {name} <ChevronIcon size={12} style={{ float: "right", marginTop: 3, rotate: "-90deg", color: "var(--fg-dim)" }} />
         </button>)}
         </div>
       </div>
@@ -215,7 +212,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showSource(p.id, e.currentTarget)} onClick={(e) => showSource(p.id, e.currentTarget, true)}>
           <ProviderLogo id={p.id === NOUS_SOURCE ? "hermes" : p.id as ProviderId} size={16} />
-          <span style={{ flex: 1 }}>{p.name}</span>{support[p.id]?.supported ? <ArrowRightIcon size={14} /> : <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>{support[p.id]?.supported ? <ChevronIcon size={12} style={{ rotate: "-90deg", color: "var(--fg-dim)" }} /> : <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
         </button>)}
         {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint</button>}
         </div>

@@ -10,10 +10,13 @@ describe("shared harness intelligence catalog", () => {
     expect(groups.find((g) => g.label === "API")?.items)
       .toEqual(PROVIDER_GROUPS.find((g) => g.label === "API")?.items);
   });
-  it("includes user endpoints and CLI agents without inventing model providers", () => {
-    const groups = harnessModelSourceGroups([{ id: "custom:lab", label: "Lab" }], [{ id: "cli:work", label: "Work" }]);
+  it("includes user endpoints without inventing model providers", () => {
+    const groups = harnessModelSourceGroups([{ id: "custom:lab", label: "Lab" }]);
     expect(groups.find((g) => g.label === "Self-hosted")?.items.map((p) => p.id)).toEqual(["custom:lab"]);
-    expect(groups.find((g) => g.label === "Subscription")?.items.some((p) => p.id === "cli:work")).toBe(true);
+  });
+  it("never offers a user CLI agent (a harness, often a Remote shell) as a source", () => {
+    const ids = harnessModelSourceGroups([]).flatMap((g) => g.items.map((p) => String(p.id)));
+    expect(ids.some((id) => id.startsWith("cli:"))).toBe(false);
   });
 });
 
