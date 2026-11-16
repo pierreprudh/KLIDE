@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/klide-banner.jpeg" alt="Klide — a workspace for coding agents" width="100%" />
+  <img src=".github/assets/klide-banner.png" alt="Klide — a workspace for coding agents" width="100%" />
 </p>
 
 <h1 align="center">Your agents. Your models. One workspace.</h1>
