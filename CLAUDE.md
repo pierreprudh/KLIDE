@@ -55,7 +55,7 @@ context. Put guidance beside the control it explains.
 | Terminal | **xterm.js** + Rust **portable-pty** | Real shell, not a sandbox |
 | Frontend | **React 19 + TypeScript + Vite** | |
 | Local AI | **Ollama** (`localhost:11434`) + **MLX** (`mlx_lm.server` on `:8080`) | Both run the full tool harness; default `llama3.1:8b` |
-| Online AI | Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, Gemini, Vertex AI, Bedrock, Azure OpenAI, Groq, Cerebras, Fireworks, Hugging Face, Vercel AI Gateway, Cloudflare (AI Gateway + Workers AI), Moonshot, Kimi For Coding, MiniMax, Z.AI, Xiaomi MiMo, OpenCode Zen/Go, Prime Inference + self-hosted OpenAI-wire endpoints | Keys in macOS Keychain; self-hosted tokens via `${VAR}` refs; account-scoped URLs (Azure resource, AWS region, Cloudflare account, GCP project) fill `${VAR}` from Settings / env |
+| Online AI | Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, Gemini, Vertex AI, Bedrock, Azure OpenAI, Groq, Cerebras, Fireworks, Hugging Face, Vercel AI Gateway, Cloudflare AI Gateway, Moonshot, Kimi For Coding, MiniMax, Z.AI, Xiaomi MiMo, Prime Inference + self-hosted OpenAI-wire endpoints | Keys in macOS Keychain; self-hosted tokens via `${VAR}` refs; account-scoped URLs (Azure resource, AWS region, Cloudflare account, GCP project) fill `${VAR}` from Settings / env |
 | Documents | **IronCalc** (Rust) recalculates, **ExcelJS** renders | A run writes a real `.xlsx`; Klide opens it in a built-in sheet surface |
 | Auto-install | `npx skills add <owner/repo>` | Skill install + uninstall via Rust commands |
 

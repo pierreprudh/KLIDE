@@ -339,17 +339,6 @@ const CLOUDFLARE_GATEWAY_MODELS: &[&str] = &[
     "xai/grok-4.7",
 ];
 
-/// Workers AI's tool-capable catalogue (`@cf/…`), newest first.
-const WORKERS_AI_MODELS: &[&str] = &[
-    "@cf/zai-org/glm-5.3",
-    "@cf/zai-org/glm-5.3-flash",
-    "@cf/qwen/qwen3.8-27b",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
-    "@cf/moonshotai/kimi-k2.7-code",
-    "@cf/openai/gpt-oss-120b",
-    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-];
-
 /// The registry. One row per provider. Order is "local first, then hosted
 /// API, then subscription CLIs" — purely cosmetic, `lookup` scans.
 pub const LLAMACPP_DEFAULT_MODEL: &str = crate::llamacpp_models::KLIDE_MODEL;
@@ -1094,39 +1083,6 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         context_window: None,
     },
     ProviderEntry {
-        id: "cloudflare-workers-ai",
-        label: "Cloudflare Workers AI",
-        short_label: Some("Workers AI"),
-        group: ProviderGroup::Hosted,
-        wire: WireFormat::OpenAi(hosted_wire(
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions",
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1/models",
-            false,
-            false,
-        )),
-        key: KeySource::Hosted {
-            env: Some("CLOUDFLARE_API_TOKEN"),
-            env_legacy: Some("CLOUDFLARE_API_KEY"),
-            placeholder: "...",
-            token_command: None,
-        },
-        models: ModelsHandler::StaticPresets(WORKERS_AI_MODELS),
-        subscription: None,
-        default_model: Some("@cf/zai-org/glm-5.3"),
-        presets: WORKERS_AI_MODELS,
-        auto: AutoLadder {
-            light: Some("@cf/zai-org/glm-5.3-flash"),
-            standard: Some("@cf/zai-org/glm-5.3"),
-            strong: None,
-        },
-        brand: "cloudflare-workers-ai",
-        credits: CreditsSource::None,
-        is_local_server: false,
-        has_num_ctx: false,
-        caps: HOSTED_CAPS,
-        context_window: None,
-    },
-    ProviderEntry {
         id: "moonshot",
         label: "Moonshot AI",
         short_label: Some("Moonshot"),
@@ -1286,74 +1242,6 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             strong: None,
         },
         brand: "xiaomi-mimo",
-        credits: CreditsSource::None,
-        is_local_server: false,
-        has_num_ctx: false,
-        caps: HOSTED_CAPS,
-        context_window: None,
-    },
-    // OpenCode's hosted gateways. Their chat-completions route serves the
-    // open models; Claude, GPT and Gemini there speak their makers' own wires.
-    ProviderEntry {
-        id: "opencode-zen",
-        label: "OpenCode Zen",
-        short_label: Some("Zen"),
-        group: ProviderGroup::Hosted,
-        wire: WireFormat::OpenAi(hosted_wire(
-            "https://opencode.ai/inference/v1/chat/completions",
-            "https://opencode.ai/inference/v1/models",
-            false,
-            true,
-        )),
-        key: KeySource::Hosted {
-            env: Some("OPENCODE_API_KEY"),
-            env_legacy: None,
-            placeholder: "sk-...",
-            token_command: None,
-        },
-        models: ModelsHandler::OpenAiModels,
-        subscription: None,
-        default_model: Some("deepseek-v4.1-flash"),
-        presets: NO_PRESETS,
-        auto: AutoLadder {
-            light: Some("deepseek-v4.1-flash"),
-            standard: Some("deepseek-v4.1-flash"),
-            strong: None,
-        },
-        brand: "opencode",
-        credits: CreditsSource::None,
-        is_local_server: false,
-        has_num_ctx: false,
-        caps: HOSTED_CAPS,
-        context_window: None,
-    },
-    ProviderEntry {
-        id: "opencode-go",
-        label: "OpenCode Go",
-        short_label: Some("Go"),
-        group: ProviderGroup::Hosted,
-        wire: WireFormat::OpenAi(hosted_wire(
-            "https://opencode.ai/inference/go/v1/chat/completions",
-            "https://opencode.ai/inference/go/v1/models",
-            false,
-            true,
-        )),
-        key: KeySource::Hosted {
-            env: Some("OPENCODE_API_KEY"),
-            env_legacy: None,
-            placeholder: "sk-...",
-            token_command: None,
-        },
-        models: ModelsHandler::OpenAiModels,
-        subscription: None,
-        default_model: Some("glm-5.3"),
-        presets: NO_PRESETS,
-        auto: AutoLadder {
-            light: Some("glm-5.3-flash"),
-            standard: Some("glm-5.3"),
-            strong: Some("kimi-k3"),
-        },
-        brand: "opencode",
         credits: CreditsSource::None,
         is_local_server: false,
         has_num_ctx: false,
@@ -3136,7 +3024,6 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
             vars("cloudflare-ai-gateway"),
             vec!["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]
         );
-        assert_eq!(vars("cloudflare-workers-ai"), vec!["CLOUDFLARE_ACCOUNT_ID"]);
         assert!(vars("groq").is_empty());
         assert!(vars("openai").is_empty());
         // The models URL never needs a variable the chat URL doesn't.

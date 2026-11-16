@@ -522,39 +522,6 @@ export const PROVIDER_ROWS = [
     "keyCommand": null
   },
   {
-    "id": "cloudflare-workers-ai",
-    "label": "Cloudflare Workers AI",
-    "shortLabel": "Workers AI",
-    "group": "hosted",
-    "wire": "openai",
-    "keyEnv": "CLOUDFLARE_API_TOKEN",
-    "keyEnvLegacy": "CLOUDFLARE_API_KEY",
-    "keyPlaceholder": "...",
-    "defaultModel": "@cf/zai-org/glm-5.3",
-    "presets": [
-      "@cf/zai-org/glm-5.3",
-      "@cf/zai-org/glm-5.3-flash",
-      "@cf/qwen/qwen3.8-27b",
-      "@cf/deepseek-ai/deepseek-v4-pro-0813",
-      "@cf/moonshotai/kimi-k2.7-code",
-      "@cf/openai/gpt-oss-120b",
-      "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-    ],
-    "brand": "cloudflare-workers-ai",
-    "hasCredits": false,
-    "isLocalServer": false,
-    "hasNumCtx": false,
-    "caps": {
-      "structuredReplay": true,
-      "minimalChatContext": false
-    },
-    "contextWindow": null,
-    "endpointVars": [
-      "CLOUDFLARE_ACCOUNT_ID"
-    ],
-    "keyCommand": null
-  },
-  {
     "id": "moonshot",
     "label": "Moonshot AI",
     "shortLabel": "Moonshot",
@@ -658,52 +625,6 @@ export const PROVIDER_ROWS = [
     "defaultModel": "mimo-v2.6-pro",
     "presets": [],
     "brand": "xiaomi-mimo",
-    "hasCredits": false,
-    "isLocalServer": false,
-    "hasNumCtx": false,
-    "caps": {
-      "structuredReplay": true,
-      "minimalChatContext": false
-    },
-    "contextWindow": null,
-    "endpointVars": [],
-    "keyCommand": null
-  },
-  {
-    "id": "opencode-zen",
-    "label": "OpenCode Zen",
-    "shortLabel": "Zen",
-    "group": "hosted",
-    "wire": "openai",
-    "keyEnv": "OPENCODE_API_KEY",
-    "keyEnvLegacy": null,
-    "keyPlaceholder": "sk-...",
-    "defaultModel": "deepseek-v4.1-flash",
-    "presets": [],
-    "brand": "opencode",
-    "hasCredits": false,
-    "isLocalServer": false,
-    "hasNumCtx": false,
-    "caps": {
-      "structuredReplay": true,
-      "minimalChatContext": false
-    },
-    "contextWindow": null,
-    "endpointVars": [],
-    "keyCommand": null
-  },
-  {
-    "id": "opencode-go",
-    "label": "OpenCode Go",
-    "shortLabel": "Go",
-    "group": "hosted",
-    "wire": "openai",
-    "keyEnv": "OPENCODE_API_KEY",
-    "keyEnvLegacy": null,
-    "keyPlaceholder": "sk-...",
-    "defaultModel": "glm-5.3",
-    "presets": [],
-    "brand": "opencode",
     "hasCredits": false,
     "isLocalServer": false,
     "hasNumCtx": false,
