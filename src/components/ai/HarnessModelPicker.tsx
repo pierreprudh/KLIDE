@@ -188,6 +188,14 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     })).then((ids) => { if (!cancelled) setKeyless(new Set(ids.filter((id): id is string => id !== null))); });
     return () => { cancelled = true; };
   }, [menu.open, apiIds]);
+  /** A category with nothing set up — every API key missing, no self-hosted
+   *  endpoint — can't be chosen: it's quieted and leads to Settings. */
+  const notSetUp = (name: string) => {
+    const items = sourceGroups.find((g) => g.label === name)?.items ?? [];
+    if (name === "API") return items.length === 0 || items.every((item) => keyless.has(item.id));
+    if (name === "Self-hosted") return items.length === 0;
+    return false;
+  };
   const sourceIds = sourceGroups.flatMap((g) => g.items.map((item) => item.id)).join("\n");
   const ownTitle = harness === "hermes" && saved ? sourceGroups.flatMap((g) => g.items).find((item) => item.id === saved.provider)?.name ?? saved.provider : harnessName;
   useEffect(() => {
@@ -263,7 +271,8 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           e.preventDefault(); showOwn(target, true);
           requestAnimationFrame(() => menu.menuRef.current?.querySelector<HTMLInputElement>('[data-level="models"] input')?.focus());
         } else if (e.key === "ArrowRight" && target.dataset.category) {
-          e.preventDefault(); showCategory(target.dataset.category, target);
+          e.preventDefault();
+          if (notSetUp(target.dataset.category)) return; showCategory(target.dataset.category, target);
           requestAnimationFrame(() => menu.menuRef.current?.querySelector<HTMLButtonElement>('[data-level="providers"] button')?.focus());
         } else if (e.key === "ArrowRight" && target.dataset.source) {
           e.preventDefault(); showSource(target.dataset.source, target, true);
@@ -290,9 +299,12 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           {harnessName}
         </button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
-          key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
-          onMouseEnter={(e) => { const row = e.currentTarget; if (category === name) { clearAim(); return; } aimed(providersRef.current ?? modelsRef.current, () => showCategory(name, row)); }} onClick={(e) => showCategory(name, e.currentTarget)}>
-          {name}
+          key={name} className="provider-category-row" aria-disabled={notSetUp(name) || undefined} title={notSetUp(name) ? (name === "API" ? "No API key yet — add one in Settings" : "No self-hosted endpoint yet — add one in Settings") : undefined}
+          style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: notSetUp(name) ? 0.45 : 1, background: category === name ? "var(--menu-row-active)" : undefined }}
+          onMouseEnter={(e) => { const row = e.currentTarget; if (category === name) { clearAim(); return; }
+            aimed(providersRef.current ?? modelsRef.current, () => { if (notSetUp(name)) { setCategory(null); setCategoryPos(null); setSource(null); setSourcePos(null); } else showCategory(name, row); }); }}
+          onClick={(e) => { if (notSetUp(name)) { menu.close(); openSettingsSection("api"); } else showCategory(name, e.currentTarget); }}>
+          <span style={{ flex: 1 }}>{name}</span>{notSetUp(name) && <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>Set up ↗</span>}
         </button>)}
         </div>
       </div>
