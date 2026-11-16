@@ -194,12 +194,12 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === OWN} data-own className="provider-category-row"
           style={{ ...style, background: category === OWN ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showOwn(e.currentTarget)} onClick={(e) => showOwn(e.currentTarget, true)}>
-          {harnessName} <ChevronIcon size={12} style={{ float: "right", marginTop: 3, rotate: "-90deg", color: "var(--fg-dim)" }} />
+          {harnessName}
         </button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showCategory(name, e.currentTarget)} onClick={(e) => showCategory(name, e.currentTarget)}>
-          {name} <ChevronIcon size={12} style={{ float: "right", marginTop: 3, rotate: "-90deg", color: "var(--fg-dim)" }} />
+          {name}
         </button>)}
         </div>
       </div>
@@ -212,7 +212,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
           style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
           onMouseEnter={(e) => showSource(p.id, e.currentTarget)} onClick={(e) => showSource(p.id, e.currentTarget, true)}>
           <ProviderLogo id={p.id === NOUS_SOURCE ? "hermes" : p.id as ProviderId} size={16} />
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>{support[p.id]?.supported ? <ChevronIcon size={12} style={{ rotate: "-90deg", color: "var(--fg-dim)" }} /> : <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>{!support[p.id]?.supported && <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
         </button>)}
         {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint</button>}
         </div>
