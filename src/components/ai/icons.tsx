@@ -221,7 +221,7 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   mistral: "color-logo-img",
   huggingface: "color-logo-img",
   minimax: "color-logo-img",
-  // Cloudflare's orange cloud (LobeHub `cloudflare-color`).
+  // Cloudflare's orange cloud (the two-tone mark, via SVG Repo).
   "cloudflare-ai-gateway": "color-logo-img",
   // Azure's blue gradient A (LobeHub `azure-color`).
   azure: "color-logo-img",
