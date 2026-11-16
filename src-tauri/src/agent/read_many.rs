@@ -255,6 +255,13 @@ fn parse_pick(pick: &Value) -> Result<Pick, String> {
 }
 
 fn resolve_files(ws: &Workspace, files: &Value) -> Result<Vec<String>, String> {
+    // Models often send the list JSON-encoded inside a string. Take it as the
+    // list it plainly is rather than as a glob that matches nothing.
+    let decoded = match files {
+        Value::String(text) if text.trim_start().starts_with('[') => serde_json::from_str::<Value>(text.trim()).ok(),
+        _ => None,
+    };
+    let files = decoded.as_ref().filter(|v| v.is_array()).unwrap_or(files);
     let mut out = match files {
         Value::String(pattern) if !pattern.trim().is_empty() => {
             let pattern = pattern.trim();
@@ -271,7 +278,10 @@ fn resolve_files(ws: &Workspace, files: &Value) -> Result<Vec<String>, String> {
     out.sort();
     out.dedup();
     if out.is_empty() {
-        return Err("No files match `files`.".into());
+        return Err(match files {
+            Value::String(pattern) => format!("No files match the glob {pattern:?}. Pass a glob like \"dir/*.json\" or a JSON array of paths."),
+            _ => "None of the listed paths exist.".into(),
+        });
     }
     if out.len() > MAX_FILES {
         return Err(format!("{} files match; the limit is {MAX_FILES}. Narrow the glob.", out.len()));
@@ -390,13 +400,22 @@ mod tests {
     }
 
     #[test]
+    fn a_list_sent_as_a_json_string_is_read_as_the_list() {
+        let (dir, ws) = workspace(&[("a.json", r#"{"n":2}"#), ("b.json", r#"{"n":3}"#), ("c.json", r#"{"n":100}"#)]);
+        let out = call(&ws, json!({ "files": "[\"a.json\", \"b.json\"]", "pick": { "json": ["n"] }, "total": "sum:n" }));
+        assert_eq!(out["files_read"], 2);
+        assert_eq!(out["sum_n"], 5);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_malformed_form_gets_a_precise_error() {
         let (dir, ws) = workspace(&[("a.json", "{}")]);
         for (input, needle) in [
             (json!({ "files": "*.json" }), "pick is required"),
             (json!({ "files": "*.json", "pick": { "json": [] } }), "at least one field"),
             (json!({ "files": "*.json", "pick": { "json": ["n"] }, "total": "avg" }), "total must be"),
-            (json!({ "files": "*.md", "pick": { "json": ["n"] } }), "No files match"),
+            (json!({ "files": "*.md", "pick": { "json": ["n"] } }), "No files match the glob"),
             (json!({ "files": "*.json", "pick": { "lines_matching": "x" }, "keep": { "a": 1 } }), "keep works only"),
             (json!({ "files": "*.json", "pick": { "json": ["n"] }, "keep": { "n": { ">": "big" } } }), "needs a number"),
         ] {
