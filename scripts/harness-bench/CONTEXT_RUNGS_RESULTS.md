@@ -56,6 +56,24 @@ wrong for reasoning reasons, not tool ones — on `rollup-100` it sent
 `files: "batch-*.json"` with no `keep`, so it summed the decoy and inactive
 rows. Off failed the same task by filling 54–90k tokens of context.
 
+## lfm3:1.7b (Ollama, 32k context) — after the index guard, 23 trials
+
+Run after `read_many` learned `files: {"from": "index.json"}`, the glob-past-
+an-index note and the no-`keep` note; off vs batch only. Stopped after two of
+three repeats: the answer was already plain.
+
+| Arm | Scaling passes | Single read | Batch calls |
+| --- | ---: | ---: | ---: |
+| off | 0/5 | 2/2 | — |
+| batch | 0/6 | 2/2 | 28, in one trial |
+
+At 1.7B the model fails every multi-file task with or without the batch form:
+it reads files one by one, rereads them, messages itself, or runs out of its
+reply budget reasoning. In the one trial it used `read_many`, it read one file
+per call and sent `pick` JSON-encoded in a string — now accepted, like
+`files`. The guard could not be tested on this model; a rerun on
+qwen3.5:9b is what would show whether it stops the glob shortcut.
+
 ## Conclusion
 
 - Code Mode helps only a model that writes correct code first time. Keep it
@@ -63,9 +81,10 @@ rows. Off failed the same task by filling 54–90k tokens of context.
 - `read_many` is the middle rung: most of the saving on a strong model, and
   no loss on a weak one. It is added beside the plain Tools, never instead of
   them — small models need the plain Tools.
-- Still a prototype: offered only when `KLIDE_READ_MANY=1`. Before a default,
-  make the shortcut harder to misuse (e.g. files from a listed index, a note
-  when a glob matches files an index doesn't name) and rerun qwen.
+- Still a prototype: offered only when `KLIDE_READ_MANY=1`. The misuse guard
+  (`files.from`, the index note, the no-`keep` note) is in; rerun qwen3.5:9b
+  before a default.
+- Below a size, no rung helps: lfm3 1.7B cannot do multi-file aggregation.
 
 ## Limits
 
