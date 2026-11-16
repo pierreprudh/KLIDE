@@ -228,7 +228,7 @@ export function StackSideMenu({
     // The card's own entrance (`picker-menu`) scales from the corner nearest
     // the menu; the glide between stacks is the wrapper's translate.
     transformOrigin: sidePos?.side === "left" ? "top right" : "top left",
-    transition: placed ? "height 220ms var(--ease-soft)" : "none",
+    transition: placed ? "height 300ms var(--ease-soft)" : "none",
   };
 
   return (
@@ -289,7 +289,7 @@ export function StackSideMenu({
                 textTransform: "uppercase",
                 color: open || holdsSelected ? "var(--fg-strong)" : "var(--fg-dim)",
                 opacity: allQuiet ? 0.5 : 1,
-                transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+                transition: "color var(--motion-med) var(--ease-out), background var(--motion-med) var(--ease-out)",
               }}
             >
               <span style={{ flex: 1, minWidth: 0 }}>{s.label}</span>
@@ -315,7 +315,7 @@ export function StackSideMenu({
             inset: 0,
             pointerEvents: "none",
             transform: `translateY(${sidePos?.top ?? 0}px)`,
-            transition: placed ? "transform 220ms var(--ease-soft)" : "none",
+            transition: placed ? "transform 300ms var(--ease-soft)" : "none",
             visibility: sidePos ? "visible" : "hidden",
           }}
         >

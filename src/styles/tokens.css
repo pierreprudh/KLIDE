@@ -3626,7 +3626,7 @@ button:focus-visible .menu-leadout {
    its eyebrow, and the open eyebrow's chevron leans toward the card. */
 .stack-side-row {
   background: transparent;
-  transition: background var(--motion-fast) var(--ease-out);
+  transition: background var(--motion-med) var(--ease-out);
 }
 .stack-side-row:hover,
 .stack-side-row:focus-visible,
@@ -3637,12 +3637,14 @@ button:focus-visible .menu-leadout {
   background: var(--menu-row-active);
 }
 .stack-side-rows {
-  animation: stack-side-rows-in 200ms var(--ease-soft) both;
+  /* A beat behind the card's glide, so the rows settle into a card that has
+     already arrived rather than racing it. */
+  animation: stack-side-rows-in 320ms var(--ease-soft) 40ms both;
 }
 @keyframes stack-side-rows-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(3px);
   }
   to {
     opacity: 1;
@@ -3652,7 +3654,7 @@ button:focus-visible .menu-leadout {
 .stack-side-chevron {
   color: var(--fg-dim);
   transition:
-    transform var(--motion-med) var(--ease-soft),
+    transform var(--motion-slow) var(--ease-soft),
     color var(--motion-fast) var(--ease-out);
 }
 .stack-side-chevron[data-open="true"] {
