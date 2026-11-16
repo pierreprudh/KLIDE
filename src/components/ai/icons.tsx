@@ -194,7 +194,8 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   "cloudflare-ai-gateway": "/providers/cloudflare-ai-gateway.svg",
   moonshot: "/providers/moonshot.svg",
   kimi: "/providers/kimi.svg",
-  minimax: "/providers/minimax.svg",
+  // The same mark MiniMax models already wear.
+  minimax: "/minimax-logo.png",
   zai: "/providers/zai.svg",
   "xiaomi-mimo": "/providers/xiaomi-mimo.svg",
   prime: "/providers/prime.svg",
@@ -219,6 +220,7 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   // Mistral's pixel M is a yellow→red gradient; inverting it would ruin it.
   mistral: "color-logo-img",
   huggingface: "color-logo-img",
+  minimax: "color-logo-img",
 };
 
 /** The mark for a Provider id or a bare brand key. A registry row's `brand`
