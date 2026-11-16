@@ -177,6 +177,27 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   copilot: "/copilot-logo.svg",
   "claude-code": "/claude-code-logo.png",
   codex: "/codex-logo.png",
+  // The hugging face in its own yellow (the mark its models wear, cropped
+  // to its edge so it reads at the size of its neighbours).
+  huggingface: "/providers/huggingface.png",
+  // The hosted APIs added in one batch: black marks from
+  // @lobehub/icons-static-svg 1.99.0 (MIT) — the set the provider list was
+  // designed against — and Prime Intellect's own (via models.dev, MIT).
+  // Files, not inline paths, so they stay out of the entry chunk.
+  "google-vertex": "/providers/google-vertex.svg",
+  "amazon-bedrock": "/providers/amazon-bedrock.svg",
+  azure: "/providers/azure.svg",
+  groq: "/providers/groq.svg",
+  cerebras: "/providers/cerebras.svg",
+  fireworks: "/providers/fireworks.svg",
+  vercel: "/providers/vercel.svg",
+  "cloudflare-ai-gateway": "/providers/cloudflare-ai-gateway.svg",
+  moonshot: "/providers/moonshot.svg",
+  kimi: "/providers/kimi.svg",
+  minimax: "/providers/minimax.svg",
+  zai: "/providers/zai.svg",
+  "xiaomi-mimo": "/providers/xiaomi-mimo.svg",
+  prime: "/providers/prime.svg",
 };
 
 // How each image mark reacts to theme:
@@ -197,6 +218,7 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   gemini: "color-logo-img",
   // Mistral's pixel M is a yellow→red gradient; inverting it would ruin it.
   mistral: "color-logo-img",
+  huggingface: "color-logo-img",
 };
 
 /** The mark for a Provider id or a bare brand key. A registry row's `brand`

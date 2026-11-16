@@ -76,6 +76,13 @@ static OPENAI_MODEL_META_CACHE: LazyLock<
 
 const MODEL_META_TTL: Duration = Duration::from_secs(300);
 
+/// A listed id as chat completions takes it. Gemini's OpenAI-compatible
+/// `/models` names every model `models/gemini-…`, while its chat route takes
+/// the bare name, so the resource prefix is dropped.
+fn listed_model_id(id: &str) -> &str {
+    id.strip_prefix("models/").unwrap_or(id)
+}
+
 fn normalize_model_ids(value: &serde_json::Value) -> Vec<String> {
     value
         .get("data")
@@ -84,7 +91,7 @@ fn normalize_model_ids(value: &serde_json::Value) -> Vec<String> {
             models
                 .iter()
                 .filter_map(|m| m.get("id").and_then(|id| id.as_str()))
-                .map(str::to_string)
+                .map(|id| listed_model_id(id).to_string())
                 .collect()
         })
         .unwrap_or_default()
@@ -142,8 +149,9 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
             };
             // Hosted providers require a key (errors when missing); local
             // OpenAI-wire ones (LM Studio) return Ok(None) → no auth header.
+            let url = providers::openai_models_url(entry.id, &openai, None)?;
             let key = provider_key(entry.id)?;
-            fetch_openai_compatible_models(entry.id, openai.models_url, key).await
+            fetch_openai_compatible_models(entry.id, &url, key).await
         }
         providers::ModelsHandler::StaticPresets(presets) => {
             Ok(presets.iter().map(|m| (*m).to_string()).collect())
@@ -463,7 +471,7 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
         return out;
     };
     for m in arr {
-        let Some(id) = m.get("id").and_then(|v| v.as_str()) else {
+        let Some(id) = m.get("id").and_then(|v| v.as_str()).map(listed_model_id) else {
             continue;
         };
         // Top-level `context_length` is the model's window; `top_provider`
@@ -557,7 +565,10 @@ pub(crate) async fn fetch_openai_model_meta(provider: &str) -> HashMap<String, M
             .unwrap_or_default();
     };
     let url = match entry.wire {
-        providers::WireFormat::OpenAi(cfg) => cfg.models_url,
+        providers::WireFormat::OpenAi(cfg) => match providers::openai_models_url(entry.id, &cfg, None) {
+            Ok(url) => url,
+            Err(_) => return HashMap::new(),
+        },
         _ => return HashMap::new(),
     };
     // No key (or an unresolved reference) → skip auth; OpenRouter's listing
@@ -1441,6 +1452,9 @@ mod tests {
             "data": [{ "id": "a" }, { "id": "b" }, { "noid": 1 }]
         });
         assert_eq!(normalize_model_ids(&value), vec!["a", "b"]);
+        // Gemini lists `models/…`; chat takes the bare name.
+        let gemini = serde_json::json!({ "data": [{ "id": "models/gemini-flash-latest" }] });
+        assert_eq!(normalize_model_ids(&gemini), vec!["gemini-flash-latest"]);
         // No data array → empty, never panics.
         assert!(normalize_model_ids(&serde_json::json!({})).is_empty());
         assert!(normalize_model_ids(&serde_json::json!({ "data": "nope" })).is_empty());

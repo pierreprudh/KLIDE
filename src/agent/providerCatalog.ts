@@ -48,6 +48,11 @@ export type ProviderRow = {
   hasNumCtx: boolean;
   caps: ProviderCaps;
   contextWindow: number | null;
+  /** The `${VAR}` names an account-scoped endpoint needs (an Azure resource,
+   *  an AWS region, a Cloudflare account) — Settings asks for each. */
+  endpointVars: readonly string[];
+  /** The command that mints a token when no key is saved (Vertex's gcloud). */
+  keyCommand: string | null;
 };
 
 // The mirror is `as const` so ids and brands are literal types; this line is
@@ -102,6 +107,10 @@ export function providerDefaultModel(id: string): string | null {
  *  listed. Empty for anything without a row. */
 export function providerPresets(id: string): readonly string[] {
   return BY_ID.get(id)?.presets ?? [];
+}
+
+export function providerEndpointVars(id: string): readonly string[] {
+  return BY_ID.get(id)?.endpointVars ?? [];
 }
 
 export function providerKeyEnv(id: string): string | null {

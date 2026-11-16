@@ -11,7 +11,17 @@ export function listProviders(): Promise<ProviderRow[]> {
 
 export type ProviderKeyStatus = {
   hasKey: boolean;
-  source: "keychain" | "env" | "reference" | "none";
+  /** `command`: no key saved, a token is minted per request
+   *  (`ProviderRow.keyCommand`, Vertex's gcloud). */
+  source: "keychain" | "env" | "reference" | "command" | "none";
+};
+
+/** One account-scoped part of a hosted endpoint — an Azure resource, an AWS
+ *  region, a Cloudflare account. A name, not a secret. */
+export type EndpointVarStatus = {
+  name: string;
+  value: string | null;
+  source: "settings" | "env" | "none";
 };
 
 export type ProviderModelMetadata = {
@@ -86,6 +96,15 @@ export function listProviderModels(provider: string): Promise<string[]> {
  *  on whether the window has announced it to Rust yet. */
 export function readProviderKeyStatus(provider: string, workspace?: string | null): Promise<ProviderKeyStatus> {
   return invoke<ProviderKeyStatus>("ai_provider_key_status", { provider, workspace: workspace ?? null });
+}
+
+export function readProviderEndpoint(provider: string, workspace?: string | null): Promise<EndpointVarStatus[]> {
+  return invoke<EndpointVarStatus[]>("ai_provider_endpoint_status", { provider, workspace: workspace ?? null });
+}
+
+/** Save one endpoint variable; `null` clears it back to the env / `.env`. */
+export function setProviderEndpointValue(name: string, value: string | null): Promise<void> {
+  return invoke("ai_set_provider_endpoint_value", { name, value });
 }
 
 /** One of a provider's saved keys (`provider_keys.rs`). A pasted key's value

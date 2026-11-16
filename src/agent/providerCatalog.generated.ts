@@ -28,7 +28,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": true
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "mlx",
@@ -55,7 +57,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": true
     },
-    "contextWindow": 128000
+    "contextWindow": 128000,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "llamacpp",
@@ -76,7 +80,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": true
     },
-    "contextWindow": 16384
+    "contextWindow": 16384,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "lmstudio",
@@ -97,7 +103,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "llamaapp",
@@ -118,7 +126,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "anthropic",
@@ -139,7 +149,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "openai",
@@ -160,7 +172,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "mistral",
@@ -181,7 +195,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "xai",
@@ -202,7 +218,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "deepseek",
@@ -223,7 +241,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "openrouter",
@@ -244,7 +264,400 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "gemini",
+    "label": "Google Gemini",
+    "shortLabel": "Gemini",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "GEMINI_API_KEY",
+    "keyEnvLegacy": "GOOGLE_API_KEY",
+    "keyPlaceholder": "AIza...",
+    "defaultModel": "gemini-flash-latest",
+    "presets": [],
+    "brand": "gemini",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "google-vertex",
+    "label": "Google Vertex AI",
+    "shortLabel": "Vertex AI",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "GOOGLE_VERTEX_ACCESS_TOKEN",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "ya29... (empty: gcloud signs in)",
+    "defaultModel": "google/gemini-flash-latest",
+    "presets": [
+      "google/gemini-flash-latest",
+      "google/gemini-flash-lite-latest",
+      "google/gemini-3.8-flash",
+      "google/gemini-4-argon",
+      "google/gemini-2.5-pro"
+    ],
+    "brand": "google-vertex",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [
+      "GOOGLE_CLOUD_PROJECT"
+    ],
+    "keyCommand": "gcloud auth print-access-token"
+  },
+  {
+    "id": "amazon-bedrock",
+    "label": "Amazon Bedrock",
+    "shortLabel": "Bedrock",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "AWS_BEARER_TOKEN_BEDROCK",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "ABSK...",
+    "defaultModel": "openai.gpt-oss-120b",
+    "presets": [],
+    "brand": "amazon-bedrock",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [
+      "AWS_REGION"
+    ],
+    "keyCommand": null
+  },
+  {
+    "id": "azure",
+    "label": "Azure OpenAI",
+    "shortLabel": "Azure",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "AZURE_OPENAI_API_KEY",
+    "keyEnvLegacy": "AZURE_API_KEY",
+    "keyPlaceholder": "...",
+    "defaultModel": "gpt-5-mini",
+    "presets": [],
+    "brand": "azure",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [
+      "AZURE_RESOURCE_NAME"
+    ],
+    "keyCommand": null
+  },
+  {
+    "id": "groq",
+    "label": "Groq",
+    "shortLabel": null,
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "GROQ_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "gsk_...",
+    "defaultModel": "openai/gpt-oss-120b",
+    "presets": [],
+    "brand": "groq",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "cerebras",
+    "label": "Cerebras",
+    "shortLabel": null,
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "CEREBRAS_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "csk-...",
+    "defaultModel": "gpt-oss-120b",
+    "presets": [],
+    "brand": "cerebras",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "fireworks",
+    "label": "Fireworks",
+    "shortLabel": null,
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "FIREWORKS_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "fw_...",
+    "defaultModel": "accounts/fireworks/routers/glm-latest",
+    "presets": [],
+    "brand": "fireworks",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "huggingface",
+    "label": "Hugging Face",
+    "shortLabel": null,
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "HF_TOKEN",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "hf_...",
+    "defaultModel": "zai-org/GLM-5.3",
+    "presets": [],
+    "brand": "huggingface",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "vercel",
+    "label": "Vercel AI Gateway",
+    "shortLabel": "Vercel",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "AI_GATEWAY_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "vck_...",
+    "defaultModel": "anthropic/claude-sonnet-5.5",
+    "presets": [],
+    "brand": "vercel",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "cloudflare-ai-gateway",
+    "label": "Cloudflare AI Gateway",
+    "shortLabel": "CF Gateway",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "CLOUDFLARE_API_TOKEN",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "...",
+    "defaultModel": "anthropic/claude-sonnet-5.5",
+    "presets": [
+      "anthropic/claude-sonnet-5.5",
+      "anthropic/claude-haiku-5.5",
+      "anthropic/claude-opus-5.5",
+      "openai/gpt-6-sol",
+      "openai/gpt-6-luna",
+      "google/gemini-4-argon",
+      "xai/grok-4.7"
+    ],
+    "brand": "cloudflare-ai-gateway",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_GATEWAY_ID"
+    ],
+    "keyCommand": null
+  },
+  {
+    "id": "moonshot",
+    "label": "Moonshot AI",
+    "shortLabel": "Moonshot",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "MOONSHOT_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "sk-...",
+    "defaultModel": "kimi-k2.7-code",
+    "presets": [],
+    "brand": "moonshot",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "kimi-for-coding",
+    "label": "Kimi For Coding",
+    "shortLabel": "Kimi Code",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "KIMI_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "sk-kimi-...",
+    "defaultModel": "kimi-for-coding",
+    "presets": [],
+    "brand": "kimi",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "minimax",
+    "label": "MiniMax",
+    "shortLabel": null,
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "MINIMAX_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "...",
+    "defaultModel": "MiniMax-M3",
+    "presets": [],
+    "brand": "minimax",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "zai",
+    "label": "Z.AI",
+    "shortLabel": null,
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "ZAI_API_KEY",
+    "keyEnvLegacy": "ZHIPU_API_KEY",
+    "keyPlaceholder": "...",
+    "defaultModel": "glm-5.3",
+    "presets": [],
+    "brand": "zai",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "xiaomi-mimo",
+    "label": "Xiaomi MiMo",
+    "shortLabel": "MiMo",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "XIAOMI_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "sk-...",
+    "defaultModel": "mimo-v2.6-pro",
+    "presets": [],
+    "brand": "xiaomi-mimo",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
+  },
+  {
+    "id": "prime",
+    "label": "Prime Inference",
+    "shortLabel": "Prime",
+    "group": "hosted",
+    "wire": "openai",
+    "keyEnv": "PRIME_API_KEY",
+    "keyEnvLegacy": null,
+    "keyPlaceholder": "pit_...",
+    "defaultModel": "anthropic/claude-sonnet-5.5",
+    "presets": [],
+    "brand": "prime",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "claude-code",
@@ -265,7 +678,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": 200000
+    "contextWindow": 200000,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "codex",
@@ -286,7 +701,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": 272000
+    "contextWindow": 272000,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "opencode",
@@ -307,7 +724,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "omp",
@@ -328,7 +747,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "amp",
@@ -349,7 +770,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "cursor",
@@ -370,7 +793,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "factory",
@@ -391,7 +816,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "copilot",
@@ -412,7 +839,9 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   },
   {
     "id": "hermes",
@@ -433,6 +862,8 @@ export const PROVIDER_ROWS = [
       "structuredReplay": true,
       "minimalChatContext": false
     },
-    "contextWindow": null
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   }
 ] as const;

@@ -8,16 +8,19 @@ import {
   addProviderKey,
   listProviderKeys,
   listProviderModels,
+  readProviderEndpoint,
   readProviderKeyStatus,
+  setProviderEndpointValue,
   removeProviderKey,
   setMainProviderKey,
+  type EndpointVarStatus,
   type ProviderKeys,
   type ProviderKeyStatus,
   type SavedKey,
 } from "../../ipc/aiProviders";
 import { DotGridLoader, ProviderLogo, providerChartColor } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
-import { hostedProviderRows } from "../../agent/providerCatalog";
+import { hostedProviderRows, providerEndpointVars, providerRow } from "../../agent/providerCatalog";
 import { notify } from "../../toast";
 import { errMessage } from "../../errors";
 import { ProviderWordmark } from "./providerWordmarks";
@@ -117,6 +120,8 @@ export function ApiKeyRow({
   // In "Env ref" the field's placeholder is the conventional reference, so an
   // empty Save takes it rather than doing nothing.
   const suggestedRef = `\${${envVar}}`;
+  const keyCommand = providerRow(id)?.keyCommand ?? null;
+  const endpointVars = providerEndpointVars(id);
   const mainKey = saved.keys.find((k) => k.id === saved.main) ?? null;
 
   // The main key changed: check it against the live provider before claiming
@@ -237,6 +242,8 @@ export function ApiKeyRow({
       )
     ) : status.source === "env" ? (
       <StatusText tone="warn">From env</StatusText>
+    ) : status.source === "command" ? (
+      <StatusText tone="ok">Via {keyCommand?.split(" ")[0] ?? "command"}</StatusText>
     ) : (
       <StatusText tone="idle">Not set</StatusText>
     );
@@ -253,6 +260,8 @@ export function ApiKeyRow({
       : `No project is open, and ~/.klide/.env doesn't have ${mainKey?.reference ?? "the variable"}.`
     : status.source === "env"
     ? `Using ${envVar} from the environment. Edit to move it into the Keychain (survives a packaged build).`
+    : status.source === "command"
+    ? `No key saved — each request asks \`${keyCommand}\` for a token.`
     : saved.keys.length > 1
     ? mainKey
       ? `Using ${mainKey.label} · ${others} more saved`
@@ -292,8 +301,15 @@ export function ApiKeyRow({
       description={description}
       leading={<ProviderLogo id={id as ProviderId} size={24} />}
       footer={
-        listOpen ? (
-          <SavedKeyList keys={saved.keys} main={saved.main} busy={busy} onUse={useKey} onRemove={removeKey} />
+        listOpen || endpointVars.length > 0 ? (
+          <>
+            {endpointVars.length > 0 && (
+              <EndpointFields provider={id} title={title} workspaceRoot={workspaceRoot} onChange={() => onChange?.(id)} />
+            )}
+            {listOpen && (
+              <SavedKeyList keys={saved.keys} main={saved.main} busy={busy} onUse={useKey} onRemove={removeKey} />
+            )}
+          </>
         ) : undefined
       }
       control={
@@ -387,6 +403,117 @@ export function ApiKeyRow({
         )
       }
     />
+  );
+}
+
+// What each endpoint variable is called beside its field. The variable name
+// stays the fallback, and is what the env / `.env` route reads.
+const ENDPOINT_VAR_LABEL: Record<string, string> = {
+  AZURE_RESOURCE_NAME: "Resource name",
+  AWS_REGION: "Region",
+  GOOGLE_CLOUD_PROJECT: "Project ID",
+  CLOUDFLARE_ACCOUNT_ID: "Account ID",
+  CLOUDFLARE_GATEWAY_ID: "Gateway ID",
+};
+
+const ENDPOINT_VAR_PLACEHOLDER: Record<string, string> = {
+  AZURE_RESOURCE_NAME: "my-resource",
+  AWS_REGION: "us-east-1",
+  GOOGLE_CLOUD_PROJECT: "my-project",
+  CLOUDFLARE_ACCOUNT_ID: "Account ID from the dashboard URL",
+  CLOUDFLARE_GATEWAY_ID: "my-gateway",
+};
+
+// The account-scoped half of an endpoint — the Azure resource, AWS region or
+// Cloudflare account its URL names. Saved on Enter or blur; a value from the
+// environment shows as the placeholder and stays until one is typed here.
+function EndpointFields({
+  provider,
+  title,
+  workspaceRoot,
+  onChange,
+}: {
+  provider: string;
+  title: string;
+  workspaceRoot: string | null;
+  onChange: () => void;
+}) {
+  const [vars, setVars] = useState<EndpointVarStatus[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await readProviderEndpoint(provider, workspaceRoot);
+      setVars(next);
+      setDrafts(Object.fromEntries(next.map((v) => [v.name, v.source === "settings" ? v.value ?? "" : ""])));
+    } catch {
+      setVars([]);
+    }
+  }, [provider, workspaceRoot]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function commit(v: EndpointVarStatus) {
+    const draft = (drafts[v.name] ?? "").trim();
+    const current = v.source === "settings" ? v.value ?? "" : "";
+    if (draft === current) return;
+    setError(null);
+    try {
+      await setProviderEndpointValue(v.name, draft || null);
+      await refresh();
+      onChange();
+    } catch (e) {
+      setError(errMessage(e));
+      notify(`Couldn't save ${title} ${ENDPOINT_VAR_LABEL[v.name] ?? v.name}: ${errMessage(e)}`, { tone: "error" });
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 8, padding: "4px 0 2px" }}>
+      {vars.map((v) => {
+        const label = ENDPOINT_VAR_LABEL[v.name] ?? v.name;
+        const fromEnv = v.source === "env" ? v.value : null;
+        return (
+          <label
+            key={v.name}
+            style={{ display: "grid", gridTemplateColumns: "120px minmax(0, 1fr) auto", alignItems: "center", gap: 12 }}
+          >
+            <span className="klide-row-description" style={{ margin: 0 }}>
+              {label}
+            </span>
+            <input
+              value={drafts[v.name] ?? ""}
+              placeholder={fromEnv ?? ENDPOINT_VAR_PLACEHOLDER[v.name] ?? v.name}
+              onChange={(e) => setDrafts((d) => ({ ...d, [v.name]: e.target.value }))}
+              onBlur={() => void commit(v)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              aria-label={`${title} ${label}`}
+              autoComplete="off"
+              spellCheck={false}
+              className="klide-field"
+              style={{ width: "100%", height: 34, padding: "0 12px" }}
+            />
+            {v.source === "none" ? (
+              <StatusText tone="warn">Needed</StatusText>
+            ) : v.source === "env" ? (
+              <StatusText tone="idle">From {v.name}</StatusText>
+            ) : (
+              <StatusText tone="ok">Saved</StatusText>
+            )}
+          </label>
+        );
+      })}
+      {error && (
+        <p className="klide-row-description" style={{ margin: 0 }}>
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
