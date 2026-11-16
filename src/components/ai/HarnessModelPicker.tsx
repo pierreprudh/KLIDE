@@ -5,6 +5,7 @@ import { ModelPickerHeader, MODEL_FILTER_STYLE, MODEL_ROW_STYLE, StarIcon } from
 import { resolveModelLogo } from "../../modelIdentity";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { usePresence } from "../../hooks/usePresence";
+import { inTriangle } from "./StackSideMenu";
 import { createPortal } from "react-dom";
 import { usePortalMenu } from "../../hooks/usePortalMenu";
 import { useCustomProviders } from "../../hooks/useCustomProviders";
@@ -23,9 +24,25 @@ const PREFIX = "hermes-source:";
 const CATEGORIES = ["API", "Local", "Self-hosted", "Subscription"];
 /** The row named after the agent itself — its own models. */
 const OWN = "own";
-/** The side card's motion (StackSideMenu): a submenu glides to the row that
- *  opened it and its height eases to the new list, on the same 300 ms curve. */
-const GLIDE: CSSProperties = { transition: "top 300ms var(--ease-soft), height 300ms var(--ease-soft)" };
+/** The side card's motion (StackSideMenu), one for one: the card keeps the
+ *  top it first opened at and glides by `translateY` on a wrapper (so its own
+ *  grow-in keyframes, which animate `transform`, stay untouched), its height
+ *  eases to the new list, both on the same 300 ms soft curve. */
+const GLIDE_MS = 300;
+const EASE = "var(--ease-soft)";
+/** How long a crossed row waits while the pointer heads for the open card. */
+const AIM_DELAY = 220;
+/** Anchor a fixed panel at its first `top`; later moves become a translate. */
+function useGlide(top: number | undefined): { top?: number; transform?: string; transition: string } {
+  const anchor = useRef<number | undefined>(undefined);
+  if (top === undefined) anchor.current = undefined;
+  else if (anchor.current === undefined) anchor.current = top;
+  const placed = top !== undefined && anchor.current !== top;
+  const moved = useRef(false);
+  if (top === undefined) moved.current = false; else if (placed) moved.current = true;
+  return { top: anchor.current, transform: top === undefined ? undefined : `translateY(${top - (anchor.current ?? top)}px)`,
+    transition: moved.current ? `transform ${GLIDE_MS}ms ${EASE}` : "none" };
+}
 /** A panel's natural height — fixed chrome plus its list's full scroll
  *  height — measured after each change so `height` has a number to ease to. */
 function useEasedHeight(ref: RefObject<HTMLDivElement | null>, max: number, deps: unknown[]) {
@@ -59,6 +76,9 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const [favTick, setFavTick] = useState(0);
   useEffect(() => subscribeFavModels(() => setFavTick((n) => n + 1)), []);
   const [support, setSupport] = useState<Record<string, HermesSourceSupport>>({});
+  /** API sources with no key in the keychain — they can't answer, so they're
+   *  quieted and lead to Settings, as the provider side card does. */
+  const [keyless, setKeyless] = useState<Set<string>>(new Set());
   const [category, setCategory] = useState<string | null>(null);
   const [source, setSource] = useState<string | null>(null);
   const [categoryPos, setCategoryPos] = useState<{ left: number; top: number } | null>(null);
@@ -86,6 +106,27 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const shownPos = menu.pos ?? (presence.leaving ? lastPos.current : null);
   const providersRef = useRef<HTMLDivElement>(null);
   const modelsRef = useRef<HTMLDivElement>(null);
+  // ── Menu-aim, as the side card does it: a row the pointer merely crosses on
+  // its way to the open card waits instead of swapping the card out.
+  const lastPoint = useRef<{ x: number; y: number } | null>(null);
+  const prevPoint = useRef<{ x: number; y: number } | null>(null);
+  const pendingAim = useRef<number | null>(null);
+  const clearAim = () => { if (pendingAim.current !== null) window.clearTimeout(pendingAim.current); pendingAim.current = null; };
+  useEffect(() => clearAim, []);
+  function aimingAt(card: HTMLElement | null): boolean {
+    const r = card?.getBoundingClientRect(); const from = prevPoint.current; const to = lastPoint.current;
+    if (!r || !from || !to) return false;
+    const right = r.left >= from.x;
+    if (right ? to.x < from.x : to.x > from.x) return false;
+    const edgeX = right ? r.left : r.right;
+    return inTriangle(to, from, { x: edgeX, y: r.top - 8 }, { x: edgeX, y: r.bottom + 8 });
+  }
+  /** Hover a row: open its card now, or — heading for the open card — after a beat. */
+  function aimed(card: HTMLElement | null, open: () => void) {
+    clearAim();
+    if (aimingAt(card)) pendingAim.current = window.setTimeout(() => { pendingAim.current = null; open(); }, AIM_DELAY);
+    else open();
+  }
   /** Hermes's own setup — what it runs on when Klide passes nothing. */
   const [own, setOwn] = useState<HermesOwnSetup | null>(null);
   useEffect(() => {
@@ -127,7 +168,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     setSource(own);
   }
   function showSource(id: string, row: HTMLElement, focus = false) {
-    if (!support[id]?.supported) { setSource(null); setSourcePos(null); return; }
+    if (!support[id]?.supported || keyless.has(id)) { setSource(null); setSourcePos(null); return; }
     setSourcePos(submenuPosition(row, 300, 360));
     focusModels.current = focus;
     if (source === id && focus) menu.menuRef.current?.querySelector<HTMLInputElement>("input")?.focus();
@@ -137,7 +178,16 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const sourceGroups = useMemo(() => intelligenceSourceGroups(custom), [custom]);
   const missingClis = useMissingDelegateClis(menu.open, sourceGroups.find((g) => g.label === "Subscription")?.items.map((item) => item.id === NOUS_SOURCE ? "hermes" : item.id));
   const sources = (sourceGroups.find((g) => g.label === category)?.items ?? []).slice()
-    .sort((a, b) => Number(missingClis.has(a.id === NOUS_SOURCE ? "hermes" : a.id)) - Number(missingClis.has(b.id === NOUS_SOURCE ? "hermes" : b.id)));
+    .sort((a, b) => Number(missingClis.has(a.id === NOUS_SOURCE ? "hermes" : a.id) || keyless.has(a.id)) - Number(missingClis.has(b.id === NOUS_SOURCE ? "hermes" : b.id) || keyless.has(b.id)));
+  const apiIds = (sourceGroups.find((g) => g.label === "API")?.items ?? []).map((item) => item.id).join("\n");
+  useEffect(() => {
+    if (!menu.open || !apiIds) return;
+    let cancelled = false;
+    void Promise.all(apiIds.split("\n").map(async (id) => {
+      try { return (await readProviderKeyStatus(id)).hasKey ? null : id; } catch { return null; }
+    })).then((ids) => { if (!cancelled) setKeyless(new Set(ids.filter((id): id is string => id !== null))); });
+    return () => { cancelled = true; };
+  }, [menu.open, apiIds]);
   const sourceIds = sourceGroups.flatMap((g) => g.items.map((item) => item.id)).join("\n");
   const ownTitle = harness === "hermes" && saved ? sourceGroups.flatMap((g) => g.items).find((item) => item.id === saved.provider)?.name ?? saved.provider : harnessName;
   useEffect(() => {
@@ -171,7 +221,8 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const favoriteCount = source ? filteredModels.filter((id) => isFavModel(source, id)).length : 0;
   const sectioned = !query.trim() && favoriteCount > 0 && favoriteCount < filteredModels.length;
   const sectionStyle = { padding: "7px 9px 3px", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase" as const, color: "var(--fg-dim)" };
-  const style = MODEL_ROW_STYLE;
+  // The side card's row fill eases at the medium beat, not the fast one.
+  const style: CSSProperties = { ...MODEL_ROW_STYLE, transition: `background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out)` };
   const select = (id: string) => {
     if (!source) return;
     if (harness === "claude-code" && source === NOUS_SOURCE && !id.startsWith("anthropic/claude-") && !id.startsWith("claude-")) return;
@@ -186,6 +237,9 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   const providersHeight = useEasedHeight(providersRef, providersMax, [category, sources.length, providersMax]);
   const modelsHeight = useEasedHeight(modelsRef, modelsMax, [category, source, filteredModels.length, loading, error, query.trim() === "", loginBusy, modelsMax]);
   const upward = shownPos?.bottom !== undefined;
+  const providersGlide = useGlide(category && category !== OWN ? categoryPos?.top : undefined);
+  const modelsGlide = useGlide((source || category === OWN) ? sourcePos?.top : undefined);
+  const heightEase = `height ${GLIDE_MS}ms ${EASE}`;
   return <div style={{ flex: fluid ? 1 : "0 1 112px", minWidth: 64, maxWidth: fluid ? undefined : 138 }}>
     <button type="button" ref={menu.triggerRef} disabled={disabled} aria-haspopup="menu" aria-expanded={menu.open}
       title={current ? `${current.provider} · ${current.model}` : model} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: fluid ? "flex-start" : "flex-end", gap: 5,
@@ -201,6 +255,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     </button>
     {presence.mounted && shownPos && createPortal(<div ref={menu.menuRef}
       style={{ position: "fixed", ...shownPos, width: 200, zIndex: Z.popover }}
+      onMouseMove={(e) => { prevPoint.current = lastPoint.current; lastPoint.current = { x: e.clientX, y: e.clientY }; }}
       onKeyDown={(e) => {
         if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); menu.close(); menu.triggerRef.current?.focus(); }
         const target = e.target as HTMLElement;
@@ -231,34 +286,37 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         <div style={{ padding: 4 }}>
         <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === OWN} data-own className="provider-category-row"
           style={{ ...style, background: category === OWN ? "var(--menu-row-active)" : undefined }}
-          onMouseEnter={(e) => showOwn(e.currentTarget)} onClick={(e) => showOwn(e.currentTarget, true)}>
+          onMouseEnter={(e) => { const row = e.currentTarget; aimed(category === OWN ? null : providersRef.current ?? modelsRef.current, () => showOwn(row)); }} onClick={(e) => showOwn(e.currentTarget, true)}>
           {harnessName}
         </button>
         {CATEGORIES.map((name) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={category === name} data-category={name}
           key={name} className="provider-category-row" style={{ ...style, background: category === name ? "var(--menu-row-active)" : undefined }}
-          onMouseEnter={(e) => showCategory(name, e.currentTarget)} onClick={(e) => showCategory(name, e.currentTarget)}>
+          onMouseEnter={(e) => { const row = e.currentTarget; if (category === name) { clearAim(); return; } aimed(providersRef.current ?? modelsRef.current, () => showCategory(name, row)); }} onClick={(e) => showCategory(name, e.currentTarget)}>
           {name}
         </button>)}
         </div>
       </div>
-      {category && categoryPos && <div ref={providersRef} role="menu" data-menu-panel data-level="providers" className="picker-menu menu-glass" data-leaving={presence.leaving}
-        style={{ position: "fixed", ...categoryPos, width: 220, height: providersHeight, maxHeight: providersMax, display: "flex", flexDirection: "column", overflow: "hidden", transformOrigin: "top left", ...GLIDE }}>
+      {category && categoryPos && <div style={{ position: "fixed", left: categoryPos.left, top: providersGlide.top, transform: providersGlide.transform, transition: providersGlide.transition }}>
+      <div ref={providersRef} role="menu" data-menu-panel data-level="providers" className="picker-menu menu-glass" data-leaving={presence.leaving} onMouseEnter={clearAim}
+        style={{ width: 220, height: providersHeight, maxHeight: providersMax, display: "flex", flexDirection: "column", overflow: "hidden", transformOrigin: "top left", transition: providersGlide.transition === "none" ? "none" : heightEase }}>
         <ModelPickerHeader title={category} caption="Choose a provider" />
         <div className="menu-scroll" style={{ minHeight: 0, overflow: "auto", padding: 4 }}>
         <div key={category} className="stack-side-rows">
         {sources.map((p) => <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={source === p.id} data-source={p.id}
-          key={p.id} className="provider-category-row" aria-disabled={!support[p.id]?.supported} title={support[p.id]?.reason ?? (missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? `${p.id === NOUS_SOURCE ? "Hermes" : p.name} CLI is not installed` : undefined)}
-          style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
-          onMouseEnter={(e) => showSource(p.id, e.currentTarget)} onClick={(e) => showSource(p.id, e.currentTarget, true)}>
+          key={p.id} className="provider-category-row" aria-disabled={!support[p.id]?.supported} title={keyless.has(p.id) ? `Add a ${p.name} API key in Settings` : support[p.id]?.reason ?? (missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? `${p.id === NOUS_SOURCE ? "Hermes" : p.name} CLI is not installed` : undefined)}
+          style={{ ...style, display: "flex", alignItems: "center", gap: 8, opacity: !support[p.id]?.supported || keyless.has(p.id) || missingClis.has(p.id === NOUS_SOURCE ? "hermes" : p.id) ? 0.45 : 1, background: source === p.id ? "var(--menu-row-active)" : undefined }}
+          onMouseEnter={(e) => { const row = e.currentTarget; if (source === p.id) { clearAim(); return; } aimed(modelsRef.current, () => showSource(p.id, row)); }} onClick={(e) => { if (keyless.has(p.id)) { menu.close(); openSettingsSection("api"); } else showSource(p.id, e.currentTarget, true); }}>
           <ProviderLogo id={p.id === NOUS_SOURCE ? "hermes" : p.id as ProviderId} size={16} />
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>{!support[p.id]?.supported && <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>}
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>{!support[p.id]?.supported ? <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{support[p.id] ? "Needs bridge" : "Checking…"}</span>
+            : keyless.has(p.id) && <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>Add key ↗</span>}
         </button>)}
         {sources.length === 0 && <button type="button" style={style} onClick={() => { menu.close(); openSettingsSection("api"); }}>Add a self-hosted endpoint</button>}
         </div>
         </div>
-      </div>}
-      {(source || category === OWN) && sourcePos && <div ref={modelsRef} role="menu" data-menu-panel data-level="models" className="picker-menu menu-glass" data-leaving={presence.leaving}
-        style={{ position: "fixed", ...sourcePos, width: 300, height: modelsHeight, maxHeight: modelsMax, display: "flex", flexDirection: "column", overflow: "hidden", transformOrigin: "top left", ...GLIDE }}>
+      </div></div>}
+      {(source || category === OWN) && sourcePos && <div style={{ position: "fixed", left: sourcePos.left, top: modelsGlide.top, transform: modelsGlide.transform, transition: modelsGlide.transition }}>
+      <div ref={modelsRef} role="menu" data-menu-panel data-level="models" className="picker-menu menu-glass" data-leaving={presence.leaving} onMouseEnter={clearAim}
+        style={{ width: 300, height: modelsHeight, maxHeight: modelsMax, display: "flex", flexDirection: "column", overflow: "hidden", transformOrigin: "top left", transition: modelsGlide.transition === "none" ? "none" : heightEase }}>
         <ModelPickerHeader icon={<ProviderLogo id={!source || source.startsWith("hermes-subscription:") ? (source ? "hermes" : harness) : source as ProviderId} size={15} />}
           title={category === OWN ? ownTitle : sources.find((p) => p.id === source)?.name ?? "Models"}
           caption={category === OWN ? (harness === "hermes" ? (saved ? "Hermes’s configured source" : ownNative ? "Hermes’s own setup" : "Not set up yet") : `${harnessName}’s own models`) : loading ? "Loading models…" : `${models.length} models available`} />
@@ -309,7 +367,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         {!error && !loading && query.trim() && !models.includes(query.trim()) && <button type="button" role="menuitem" style={style} onClick={() => select(query.trim())}>Use “{query.trim()}”</button>}
         </div>
         </div>
-      </div>}
+      </div></div>}
     </div>, portalContainer ?? document.body)}
   </div>;
 }
