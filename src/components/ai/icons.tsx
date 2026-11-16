@@ -177,6 +177,9 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   copilot: "/copilot-logo.svg",
   "claude-code": "/claude-code-logo.png",
   codex: "/codex-logo.png",
+  // The hugging face in its own yellow (the mark its models wear, cropped
+  // to its edge so it reads at the size of its neighbours).
+  huggingface: "/providers/huggingface.png",
   // The hosted APIs added in one batch: black marks from
   // @lobehub/icons-static-svg 1.99.0 (MIT) — the set the provider list was
   // designed against — and Prime Intellect's own (via models.dev, MIT).
@@ -187,7 +190,6 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   groq: "/providers/groq.svg",
   cerebras: "/providers/cerebras.svg",
   fireworks: "/providers/fireworks.svg",
-  huggingface: "/providers/huggingface.svg",
   vercel: "/providers/vercel.svg",
   "cloudflare-ai-gateway": "/providers/cloudflare-ai-gateway.svg",
   moonshot: "/providers/moonshot.svg",
@@ -216,6 +218,7 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   gemini: "color-logo-img",
   // Mistral's pixel M is a yellow→red gradient; inverting it would ruin it.
   mistral: "color-logo-img",
+  huggingface: "color-logo-img",
 };
 
 /** The mark for a Provider id or a bare brand key. A registry row's `brand`
