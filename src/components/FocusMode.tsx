@@ -4,6 +4,7 @@ import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
 import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from "../hooks/useLlamaSetupMode";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
+import { StackSideMenu, type Stack } from "./ai/StackSideMenu";
 import { sideQuestionDirective } from "./ai/sideQuestions";
 // FocusMode — Klide's chat-first workspace, blending the project/thread
 // command-centre pattern with an artifact-first agent home. A quiet left rail
@@ -586,11 +587,11 @@ function InlineMenu({
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState(false);
   const [focusIdx, setFocusIdx] = useState(-1);
-  // Headings are collapsible stacks. Each open starts compact — only the
-  // stack holding the current choice is unfolded — the same rule the AI
-  // panel's provider picker follows, so both pickers open the same way.
+  // Headings make it the provider picker: each stack is one eyebrow and its
+  // rows open in a card beside the menu (StackSideMenu, shared with the AI
+  // panel's picker, so both open the same way).
   const presence = usePresence(open, 150);
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const stacked = options.some((o) => o.heading);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   // Portalled to <body> (fixed, measured from the trigger) so it escapes the
@@ -608,19 +609,6 @@ function InlineMenu({
     const left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - width - 8));
     setMenuPos({ bottom: Math.round(window.innerHeight - r.top + 8), left });
     setFocusIdx(-1);
-    const stacks = new Set<string>();
-    let stack: string | null = null;
-    let selectedStack: string | null = null;
-    for (const o of options) {
-      if (o.heading) {
-        stack = o.label;
-        stacks.add(o.label);
-      } else if (stack && o.value === selected) {
-        selectedStack = stack;
-      }
-    }
-    if (selectedStack) stacks.delete(selectedStack);
-    setCollapsed(stacks);
     setOpen(true);
   }
 
@@ -644,53 +632,29 @@ function InlineMenu({
   }, [open]);
 
   const hasIcons = options.some((o) => !o.heading && o.icon);
-  // Which stack each row sits under, so a folded heading hides its rows.
-  const stackOf: Array<string | null> = [];
-  {
-    let stack: string | null = null;
+  // The provider picker's stacks, as StackSideMenu reads them.
+  const stacks: Stack[] = [];
+  if (stacked) {
     for (const o of options) {
-      if (o.heading) stack = o.label;
-      stackOf.push(o.heading ? null : stack);
-    }
-  }
-  // Lays the rows out as stacks: each heading, then its rows inside a fold
-  // that stays mounted, so closing a stack animates instead of snapping.
-  function renderStacks(render: (o: MenuOption, idx: number) => ReactNode) {
-    const out: ReactNode[] = [];
-    let i = 0;
-    while (i < options.length) {
-      const o = options[i];
-      if (!o.heading) {
-        out.push(render(o, i));
-        i++;
+      if (o.heading) {
+        stacks.push({ label: o.label, rows: [] });
         continue;
       }
-      out.push(render(o, i));
-      const rows: ReactNode[] = [];
-      let j = i + 1;
-      for (; j < options.length && !options[j].heading; j++) rows.push(render(options[j], j));
-      const folded = collapsed.has(o.label);
-      out.push(
-        <div
-          key={`s-${o.label}`}
-          className="picker-stack-body"
-          data-open={folded ? "false" : "true"}
-          inert={folded}
-        >
-          <div>{rows}</div>
-        </div>,
-      );
-      i = j;
+      stacks[stacks.length - 1]?.rows.push({
+        id: String(o.value),
+        label: o.label,
+        icon: o.icon,
+        active: o.value === selected,
+        dimmed: o.dimmed,
+        leadout: !!o.resolve,
+        title: o.resolve?.title,
+        onPick: () => {
+          setOpen(false);
+          if (o.resolve) o.resolve.run();
+          else onSelect(o.value);
+        },
+      });
     }
-    return out;
-  }
-  function toggleStack(label: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
   }
 
   return (
@@ -804,7 +768,13 @@ function InlineMenu({
         </svg>
       </button>
       )}
-      {presence.mounted && menuPos && createPortal(
+      {presence.mounted && menuPos && stacked && createPortal(
+        <div ref={menuRef} style={{ position: "fixed", bottom: menuPos.bottom, left: menuPos.left, zIndex: Z.popover }}>
+          <StackSideMenu stacks={stacks} leaving={presence.leaving} origin="bottom left" />
+        </div>,
+        document.body
+      )}
+      {presence.mounted && menuPos && !stacked && createPortal(
         <div
           ref={menuRef}
           role="listbox"
@@ -875,46 +845,7 @@ function InlineMenu({
               that shapes its own card (`menuClassName`) restyles its rows in
               CSS, on the token scale, without overriding inline styles. */}
           <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "var(--inline-menu-pad, 5px)" }}>
-            {renderStacks((o, idx) => {
-              if (o.heading) {
-                const folded = collapsed.has(o.label);
-                // A folded stack that holds the current choice says so.
-                const holdsSelected =
-                  folded && options.some((r, i) => stackOf[i] === o.label && r.value === selected);
-                return (
-                  <button
-                    key={`h-${o.label}`}
-                    type="button"
-                    aria-expanded={!folded}
-                    onClick={() => toggleStack(o.label)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 5,
-                      width: "100%",
-                      padding: "7px 9px 3px",
-                      border: "none",
-                      background: "transparent",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      fontSize: 9.5,
-                      fontWeight: 600,
-                      letterSpacing: "0.07em",
-                      textTransform: "uppercase",
-                      color: holdsSelected ? "var(--fg-strong)" : "var(--fg-dim)",
-                      opacity: o.dimmed ? 0.5 : 1,
-                      transition: "color var(--motion-fast) var(--ease-out)",
-                    }}
-                  >
-                    <span className="picker-stack-chevron" data-open={!folded}>
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                        <path d="M9 6l6 6-6 6" />
-                      </svg>
-                    </span>
-                    {o.label}
-                  </button>
-                );
-              }
+            {options.map((o, idx) => {
               const active = o.value === selected;
               const focused = idx === focusIdx;
               return (

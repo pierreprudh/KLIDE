@@ -138,6 +138,7 @@ import type {
 import { enabledRunSkills, enabledSkillsPrompt, enabledSkillsPromptParts, skillFolderOf, type Skill } from "../skills";
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
+import { StackSideMenu } from "./ai/StackSideMenu";
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
@@ -1738,16 +1739,6 @@ export function AiPanel({
   // so a missing key is visible *before* selecting + sending, not after a failed
   // run. Populated when the menu opens.
   const [keylessProviders, setKeylessProviders] = useState<Set<string>>(new Set());
-  // Collapsible provider groups ("stacks"). Each opens via the header chevron.
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  function toggleGroup(label: string) {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
-  }
   useEffect(() => {
     if (!providerOpen) return;
     void refreshCustomProviders().catch(() => {});
@@ -1768,10 +1759,8 @@ export function AiPanel({
       );
       setKeylessProviders(missing);
     })();
-    // Open compact: expand only the stack holding the active provider.
-    // (Outside-click close lives in usePortalMenu.)
-    const activeGroup = providerGroupsForSurface.find((g) => g.items.some((it) => it.id === provider));
-    setExpandedGroups(new Set(activeGroup ? [activeGroup.label] : []));
+    // (Outside-click close lives in usePortalMenu; the side card opens on the
+    // stack holding the active provider — StackSideMenu.)
   }, [providerOpen]);
   function selectProvider(id: ProviderId) {
     if (sideQuestionParent && isDelegateProvider(id)) return;
@@ -4185,63 +4174,42 @@ This user request requires workspace inspection. Before answering, you MUST call
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
       </button>
       {providerPresence.mounted && shownProviderMenuPos && createPortal(
-        <div ref={providerMenuRef} role="menu" className="picker-menu menu-scroll menu-glass" data-leaving={providerPresence.leaving} style={{ transformOrigin: shownProviderMenuPos.bottom !== undefined ? "bottom left" : "top left", position: "fixed", top: shownProviderMenuPos.top, bottom: shownProviderMenuPos.bottom, left: shownProviderMenuPos.left, width: 236, maxHeight: shownProviderMenuPos.maxHeight, overflowY: "auto", overscrollBehavior: "contain", padding: 5, zIndex: Z.popover }}>
-          {/* Drawn to the Focus start stage's picker (FocusMode InlineMenu):
-              plain eyebrows with a fold chevron, roomy logo rows, the active
-              row carried by its fill and weight. Rows that can't run yet
-              (unavailable providers) are left out, as they are there. */}
-          {providerGroupsForSurface.map((group) => {
-            const items = group.items.filter((it) => it.available).sort((a, b) => Number(missingDelegateClis.has(a.id)) - Number(missingDelegateClis.has(b.id)));
-            if (items.length === 0) return null;
-            const expanded = expandedGroups.has(group.label);
-            const hasActive = items.some((it) => it.id === provider);
-            // A whole stack with no keys anywhere reads as quiet as its rows.
-            const stackKeyless = items.every((it) => keylessProviders.has(it.id) || missingDelegateClis.has(it.id));
-            return (
-            <div key={group.label}>
-              <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={expanded}
-                style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, background: "transparent", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)", padding: "7px 9px 3px", textAlign: "left", opacity: stackKeyless ? 0.5 : 1, transition: "color var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out)" }}>
-                <span className="picker-stack-chevron" data-open={expanded}>
-                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-                </span>
-                {group.label}
-              </button>
-              {/* Rows stay mounted inside the fold so a stack closes as smoothly as it opens. */}
-              <div className="picker-stack-body" data-open={expanded ? "true" : "false"} inert={!expanded}>
-              <div>
-              {items.map((item) => {
-                const active = item.id === provider;
-                // No key Rust can resolve → the row can't run. Quiet it and
-                // (when the host wired Settings) send the click to API keys
-                // instead of selecting a provider that would fail on send.
-                const keyless = item.available && keylessProviders.has(item.id);
-                const missingCli = missingDelegateClis.has(item.id);
-                const dimmed = keyless || missingCli;
-                const routesToSettings = keyless && !!onOpenSettingsSection;
-                return (
-                  <button key={item.id} role="menuitem"
-                    title={missingCli ? `${item.name} CLI is not installed` : keyless ? `${item.name} has no API key — open Settings` : undefined}
-                    onClick={() => {
+        <div ref={providerMenuRef} style={{ position: "fixed", top: shownProviderMenuPos.top, bottom: shownProviderMenuPos.bottom, left: shownProviderMenuPos.left, zIndex: Z.popover }}>
+          {/* One eyebrow per stack; its rows open in a card beside it
+              (StackSideMenu, shared with Focus's picker). Rows that can't run
+              yet are quieted, and a keyless API row leads to Settings. */}
+          <StackSideMenu
+            leaving={providerPresence.leaving}
+            origin={shownProviderMenuPos.bottom !== undefined ? "bottom left" : "top left"}
+            stacks={providerGroupsForSurface.flatMap((group) => {
+              const items = group.items.filter((it) => it.available).sort((a, b) => Number(missingDelegateClis.has(a.id)) - Number(missingDelegateClis.has(b.id)));
+              if (items.length === 0) return [];
+              return [{
+                label: group.label,
+                rows: items.map((item) => {
+                  // No key Rust can resolve → the row can't run. Quiet it and
+                  // (when the host wired Settings) send the click to API keys
+                  // instead of selecting a provider that would fail on send.
+                  const keyless = keylessProviders.has(item.id);
+                  const missingCli = missingDelegateClis.has(item.id);
+                  const routesToSettings = keyless && !!onOpenSettingsSection;
+                  return {
+                    id: item.id,
+                    label: item.name,
+                    icon: <ProviderLogo id={item.id} size={17} />,
+                    active: item.id === provider,
+                    dimmed: keyless || missingCli,
+                    leadout: routesToSettings,
+                    title: missingCli ? `${item.name} CLI is not installed` : keyless ? `${item.name} has no API key — open Settings` : undefined,
+                    onPick: () => {
                       if (routesToSettings) { closeProviderMenu(); onOpenSettingsSection?.("api"); return; }
                       selectProvider(item.id);
-                    }}
-                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, padding: "7px 9px", border: "none", borderRadius: "var(--radius-sm)", background: active ? "var(--menu-row-active)" : "transparent", color: "var(--fg-strong)", cursor: "pointer", fontSize: 12, fontWeight: active ? 550 : 500, textAlign: "left", transition: "background var(--motion-fast) var(--ease-out)" }}
-                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--menu-row-hover)"; }}
-                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
-                    <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0, color: "var(--fg-subtle)", opacity: dimmed ? 0.4 : 1 }}><ProviderLogo id={item.id} size={17} /></span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: dimmed ? 0.45 : 1 }}>{item.name}</span>
-                    {routesToSettings && (
-                      /* Leads out to Settings rather than choosing anything. */
-                      <svg className="menu-leadout" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}><path d="M7 17 17 7" /><path d="M8 7h9v9" /></svg>
-                    )}
-                  </button>
-                );
-              })}
-              </div>
-              </div>
-            </div>
-            );
-          })}
+                    },
+                  };
+                }),
+              }];
+            })}
+          />
         </div>,
         document.body
       )}
