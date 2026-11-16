@@ -200,6 +200,26 @@ async fn ai_clear_provider_key_reference(provider: String) -> Result<(), String>
     .await
 }
 
+// The account-scoped parts of a hosted endpoint (an Azure resource, an AWS
+// region, a Cloudflare account) — names, not secrets, kept in
+// ~/.klide/provider_endpoints.json beside the env / `.env` fallback.
+#[tauri::command]
+async fn ai_provider_endpoint_status(
+    provider: String,
+    workspace: Option<String>,
+) -> Vec<providers::EndpointVarStatus> {
+    blocking::run_infallible(move || {
+        let scope = workspace.filter(|w| !w.trim().is_empty()).map(std::path::PathBuf::from);
+        providers::endpoint_status(&provider, scope.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn ai_set_provider_endpoint_value(name: String, value: Option<String>) -> Result<(), String> {
+    blocking::run(move || providers::set_endpoint_value(&name, value.as_deref())).await
+}
+
 // A provider's saved keys (provider_keys.rs): several per provider, one main.
 // The list carries ids, labels and `${VAR}` references, never a secret.
 #[tauri::command]
@@ -1337,6 +1357,8 @@ pub fn run() {
             ai_tool_catalog,
             search_in_files,
             ai_provider_key_status,
+            ai_provider_endpoint_status,
+            ai_set_provider_endpoint_value,
             ai_set_provider_key,
             ai_clear_provider_key,
             ai_set_provider_key_reference,

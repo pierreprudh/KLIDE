@@ -17,7 +17,12 @@ pub struct Endpoint {
 pub fn available(id: &str) -> bool {
     id == crate::harness_source::NOUS
         || crate::custom_providers::get(id).is_some()
-        || crate::providers::lookup(id).is_some_and(|row| row.group != ProviderGroup::Subscription)
+        || crate::providers::lookup(id).is_some_and(|row| {
+            row.group != ProviderGroup::Subscription
+                // The bridge speaks bearer auth; a gateway that reads its
+                // token from its own header is not a source it can reach.
+                && !matches!(row.wire, WireFormat::OpenAi(cfg) if cfg.auth_header.is_some())
+        })
 }
 pub fn resolve(id: &str, scope: Option<&Path>) -> Result<Endpoint, String> {
     if id == crate::harness_source::NOUS {
@@ -54,8 +59,13 @@ pub fn resolve(id: &str, scope: Option<&Path>) -> Result<Endpoint, String> {
             false,
         ),
         WireFormat::Ollama => ("http://127.0.0.1:11434/v1".into(), Wire::Chat, false),
+        WireFormat::OpenAi(cfg) if cfg.auth_header.is_some() => {
+            return Err(format!("{} can't be routed to an agent CLI.", row.label));
+        }
         WireFormat::OpenAi(cfg) => (
-            cfg.chat_url.trim_end_matches("/chat/completions").into(),
+            crate::providers::openai_chat_url(id, &cfg, scope)?
+                .trim_end_matches("/chat/completions")
+                .to_string(),
             if id == "openai" {
                 Wire::Responses
             } else {

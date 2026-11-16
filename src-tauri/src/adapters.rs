@@ -705,6 +705,10 @@ struct OpenAiAdapter {
     /// Whether to send Klide app-attribution headers. From
     /// `OpenAiConfig::send_attribution`.
     send_attribution: bool,
+    /// The header the key travels in, when it is not `Authorization: Bearer`
+    /// (Cloudflare AI Gateway's `cf-aig-authorization`). From
+    /// `OpenAiConfig::auth_header`.
+    auth_header: Option<&'static str>,
     model: String,
     /// OpenRouter's router only: restrict its choice to these models.
     allowed_models: Vec<String>,
@@ -826,7 +830,10 @@ impl StreamingProvider for OpenAiAdapter {
         }
         let mut req = client.post(&self.chat_url).json(&body);
         if let Some(key) = &self.key {
-            req = req.bearer_auth(key);
+            req = match self.auth_header {
+                Some(header) => req.header(header, format!("Bearer {key}")),
+                None => req.bearer_auth(key),
+            };
         }
         // App-attribution headers — they identify Klide on the provider's
         // activity dashboard and public usage rankings (OpenRouter). Harmless
@@ -1056,6 +1063,7 @@ pub(crate) async fn openai_compatible_chat(
     include_usage_in_stream: bool,
     include_cost_accounting: bool,
     send_attribution: bool,
+    auth_header: Option<&'static str>,
     key: Option<String>,
     reasoning_effort: Option<String>,
     cache: OpenAiCache,
@@ -1072,6 +1080,7 @@ pub(crate) async fn openai_compatible_chat(
         include_usage_in_stream,
         include_cost_accounting,
         send_attribution,
+        auth_header,
         model,
         messages,
         tools,
@@ -2476,6 +2485,7 @@ mod tests {
             include_usage_in_stream: true,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
             model: "gpt-4.1".to_string(),
             messages: vec![],
             tools: None,
@@ -2559,6 +2569,7 @@ mod tests {
             include_usage_in_stream: true,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
             model: "gpt-5".to_string(),
             messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
             tools: None,
@@ -2587,6 +2598,7 @@ mod tests {
             include_usage_in_stream: true,
             include_cost_accounting: true,
             send_attribution: true,
+            auth_header: None,
             model: "openrouter/auto".to_string(),
             messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
             tools: None,
@@ -2624,6 +2636,7 @@ mod tests {
             include_usage_in_stream: true,
             include_cost_accounting: true,
             send_attribution: true,
+            auth_header: None,
             model: "z-ai/glm-5.2".to_string(),
             messages: vec![],
             tools: None,
@@ -2655,6 +2668,7 @@ mod tests {
             include_usage_in_stream: false,
             include_cost_accounting,
             send_attribution,
+            auth_header: None,
             model: "some-model".to_string(),
             messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
             tools: None,
@@ -2699,6 +2713,38 @@ mod tests {
         let off = build_flagged_request(false, false);
         assert!(off.headers().get("HTTP-Referer").is_none());
         assert!(off.headers().get("X-Title").is_none());
+    }
+
+    #[test]
+    fn a_named_auth_header_carries_the_key_instead_of_authorization() {
+        let bearer = build_flagged_request(false, false);
+        assert_eq!(bearer.headers().get("authorization").unwrap(), "Bearer sk-test");
+
+        let adapter_request = |header: Option<&'static str>| {
+            let adapter = OpenAiAdapter {
+                allowed_models: Vec::new(),
+                answered_model: None,
+                provider: "cloudflare-ai-gateway".to_string(),
+                chat_url: "https://example.test/v1/chat/completions".to_string(),
+                include_tools: true,
+                include_usage_in_stream: false,
+                include_cost_accounting: false,
+                send_attribution: false,
+                auth_header: header,
+                model: "openai/gpt-test".to_string(),
+                messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+                tools: None,
+                key: Some("cf-token".to_string()),
+                reasoning_effort: None,
+                usage: AiUsage::default(),
+                cache: Default::default(),
+            };
+            adapter.build_request(&reqwest::Client::new()).unwrap().build().unwrap()
+        };
+        let gateway = adapter_request(Some("cf-aig-authorization"));
+        assert_eq!(gateway.headers().get("cf-aig-authorization").unwrap(), "Bearer cf-token");
+        // The upstream's own `Authorization` is left for the gateway's stored keys.
+        assert!(gateway.headers().get("authorization").is_none());
     }
 
     #[test]
@@ -2823,6 +2869,7 @@ mod tests {
             include_usage_in_stream: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
             model: "mistral-large".to_string(),
             messages: vec![],
             tools: None,
@@ -3402,6 +3449,7 @@ mod tests {
                 include_usage_in_stream: true,
                 include_cost_accounting: false,
                 send_attribution: false,
+                auth_header: None,
                 model: "m".to_string(),
                 messages: vec![],
                 tools: None,

@@ -7,6 +7,7 @@ import {
   providerBrand,
   providerCaps,
   providerDefaultModel,
+  providerEndpointVars,
   providerGroup,
   providerHasCredits,
   providerHasNumCtx,
@@ -87,9 +88,18 @@ describe("Provider catalog — the one TS door onto the Rust registry", () => {
     const hosted = hostedProviderRows();
     expect(hosted.map((r) => r.id)).toEqual(providerRowsIn("hosted").map((r) => r.id));
     for (const row of hosted) {
-      expect(row.keyEnv, row.id).toMatch(/_API_KEY$/);
+      // Most are `*_API_KEY`; some services name theirs a token (HF_TOKEN,
+      // AWS_BEARER_TOKEN_BEDROCK, CLOUDFLARE_API_TOKEN).
+      expect(row.keyEnv, row.id).toMatch(/^[A-Z][A-Z0-9_]*(_API_KEY|TOKEN[A-Z_]*)$/);
       expect(row.keyPlaceholder, row.id).not.toBeNull();
     }
+  });
+
+  it("asks for the account-scoped part of an endpoint beside the key", () => {
+    expect(providerEndpointVars("azure")).toEqual(["AZURE_RESOURCE_NAME"]);
+    expect(providerEndpointVars("cloudflare-ai-gateway")).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]);
+    expect(providerEndpointVars("groq")).toEqual([]);
+    expect(providerEndpointVars("custom:anything")).toEqual([]);
   });
 
   it("ignores IPC object-key order, including nested capabilities", async () => {

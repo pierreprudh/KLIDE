@@ -178,7 +178,9 @@ pub fn runtime_env(provider: &str, scope: Option<&Path>) -> Result<Vec<(String, 
             if let crate::providers::WireFormat::OpenAi(cfg) = row.wire {
                 env.push((
                     "OPENAI_BASE_URL".into(),
-                    cfg.chat_url.trim_end_matches("/chat/completions").into(),
+                    crate::providers::openai_chat_url(provider, &cfg, scope)?
+                        .trim_end_matches("/chat/completions")
+                        .to_string(),
                 ));
             }
         }

@@ -85,6 +85,10 @@ pub struct OpenAiConfig {
     /// public usage rankings; other endpoints ignore them, so we scope the
     /// headers to providers that use them rather than string-matching the id.
     pub send_attribution: bool,
+    /// The header the key travels in when it is not `Authorization: Bearer`.
+    /// Cloudflare AI Gateway reads its own token from `cf-aig-authorization`
+    /// and leaves `Authorization` for an upstream key. `None` is bearer auth.
+    pub auth_header: Option<&'static str>,
 }
 
 /// How a provider's API key is sourced. Local providers don't have one.
@@ -100,6 +104,10 @@ pub enum KeySource {
         /// The shape of a key from this provider, shown in the empty key
         /// field ("sk-ant-..."). A hint, never validated.
         placeholder: &'static str,
+        /// A command whose stdout is a short-lived token, run when no key
+        /// is saved anywhere — Vertex AI's `gcloud auth print-access-token`,
+        /// whose tokens expire within the hour, so pasting one would not do.
+        token_command: Option<&'static [&'static str]>,
     },
 }
 
@@ -288,6 +296,60 @@ pub const NO_LADDER: AutoLadder = AutoLadder {
     strong: None,
 };
 
+/// The hosted OpenAI-wire posture every newer row shares: tools on, usage on
+/// the stream, no cost accounting or attribution, bearer auth. A row names
+/// only what differs (`OpenAiConfig { auth_header: …, ..hosted_wire(…) }`).
+const fn hosted_wire(
+    chat_url: &'static str,
+    models_url: &'static str,
+    supports_reasoning_effort: bool,
+    include_usage_in_stream: bool,
+) -> OpenAiConfig {
+    OpenAiConfig {
+        chat_url,
+        models_url,
+        include_tools: true,
+        include_usage_in_stream,
+        supports_reasoning_effort,
+        include_cost_accounting: false,
+        send_attribution: false,
+        auth_header: None,
+    }
+}
+
+/// Vertex AI's OpenAI endpoint lists no models; these are the ones it serves
+/// over chat completions (Gemini, and partner models under their publisher).
+const VERTEX_MODELS: &[&str] = &[
+    "google/gemini-flash-latest",
+    "google/gemini-flash-lite-latest",
+    "google/gemini-3.8-flash",
+    "google/gemini-4-argon",
+    "google/gemini-2.5-pro",
+];
+
+/// Cloudflare AI Gateway's `/compat` route takes `provider/model`; these are
+/// common picks, and any other id the gateway routes works when typed.
+const CLOUDFLARE_GATEWAY_MODELS: &[&str] = &[
+    "anthropic/claude-sonnet-5.5",
+    "anthropic/claude-haiku-5.5",
+    "anthropic/claude-opus-5.5",
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna",
+    "google/gemini-4-argon",
+    "xai/grok-4.7",
+];
+
+/// Workers AI's tool-capable catalogue (`@cf/…`), newest first.
+const WORKERS_AI_MODELS: &[&str] = &[
+    "@cf/zai-org/glm-5.3",
+    "@cf/zai-org/glm-5.3-flash",
+    "@cf/qwen/qwen3.8-27b",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
+    "@cf/moonshotai/kimi-k2.7-code",
+    "@cf/openai/gpt-oss-120b",
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+];
+
 /// The registry. One row per provider. Order is "local first, then hosted
 /// API, then subscription CLIs" — purely cosmetic, `lookup` scans.
 pub const LLAMACPP_DEFAULT_MODEL: &str = crate::llamacpp_models::KLIDE_MODEL;
@@ -334,6 +396,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Local,
         // mlx_lm.server's /v1/models is expensive/noisy and can interfere
@@ -368,6 +431,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Local,
         models: ModelsHandler::StaticPresets(&[LLAMACPP_DEFAULT_MODEL]),
@@ -404,6 +468,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Local,
         models: ModelsHandler::OpenAiModels,
@@ -431,6 +496,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Local,
         models: ModelsHandler::OpenAiModels,
@@ -456,6 +522,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             env: Some("ANTHROPIC_API_KEY"),
             env_legacy: None,
             placeholder: "sk-ant-...",
+            token_command: None,
         },
         models: ModelsHandler::AnthropicModels,
         subscription: None,
@@ -486,11 +553,13 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: true,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Hosted {
             env: Some("OPENAI_API_KEY"),
             env_legacy: None,
             placeholder: "sk-...",
+            token_command: None,
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
@@ -528,11 +597,13 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Hosted {
             env: Some("MISTRAL_API_KEY"),
             env_legacy: None,
             placeholder: "...",
+            token_command: None,
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
@@ -563,12 +634,14 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Hosted {
             env: Some("XAI_API_KEY"),
             // Legacy alias — older setups used GROK_API_KEY.
             env_legacy: Some("GROK_API_KEY"),
             placeholder: "xai-...",
+            token_command: None,
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
@@ -607,11 +680,13 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             supports_reasoning_effort: false,
             include_cost_accounting: false,
             send_attribution: false,
+            auth_header: None,
         }),
         key: KeySource::Hosted {
             env: Some("DEEPSEEK_API_KEY"),
             env_legacy: None,
             placeholder: "sk-...",
+            token_command: None,
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
@@ -649,11 +724,13 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             // accounting is requested; and it surfaces app-attribution headers.
             include_cost_accounting: true,
             send_attribution: true,
+            auth_header: None,
         }),
         key: KeySource::Hosted {
             env: Some("OPENROUTER_API_KEY"),
             env_legacy: None,
             placeholder: "sk-or-...",
+            token_command: None,
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
@@ -666,6 +743,651 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         brand: "openrouter",
         credits: CreditsSource::OpenRouter,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // Gemini's OpenAI-compatible surface (`/v1beta/openai`): chat, tools,
+    // `reasoning_effort`, and a `/models` listing.
+    ProviderEntry {
+        id: "gemini",
+        label: "Google Gemini",
+        short_label: Some("Gemini"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "https://generativelanguage.googleapis.com/v1beta/openai/models",
+            true,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("GEMINI_API_KEY"),
+            env_legacy: Some("GOOGLE_API_KEY"),
+            placeholder: "AIza...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("gemini-flash-latest"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("gemini-flash-lite-latest"),
+            standard: Some("gemini-flash-latest"),
+            strong: Some("gemini-4-argon"),
+        },
+        brand: "gemini",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // Vertex AI's OpenAI-compatible endpoint, on the global location. It takes
+    // an OAuth access token, not a key: with none saved, Klide asks `gcloud`.
+    // The endpoint publishes no `/models`, so the picker offers a curated list.
+    ProviderEntry {
+        id: "google-vertex",
+        label: "Google Vertex AI",
+        short_label: Some("Vertex AI"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/global/endpoints/openapi/chat/completions",
+            "https://aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/global/endpoints/openapi/models",
+            true,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("GOOGLE_VERTEX_ACCESS_TOKEN"),
+            env_legacy: None,
+            placeholder: "ya29... (empty: gcloud signs in)",
+            token_command: Some(&["gcloud", "auth", "print-access-token"]),
+        },
+        models: ModelsHandler::StaticPresets(VERTEX_MODELS),
+        subscription: None,
+        default_model: Some("google/gemini-flash-latest"),
+        presets: VERTEX_MODELS,
+        auto: AutoLadder {
+            light: Some("google/gemini-flash-lite-latest"),
+            standard: Some("google/gemini-flash-latest"),
+            strong: Some("google/gemini-4-argon"),
+        },
+        brand: "google-vertex",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // Bedrock's OpenAI-compatible Mantle endpoint with a Bedrock API key
+    // (bearer). Regional, so the URL names the region.
+    ProviderEntry {
+        id: "amazon-bedrock",
+        label: "Amazon Bedrock",
+        short_label: Some("Bedrock"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://bedrock-mantle.${AWS_REGION}.api.aws/v1/chat/completions",
+            "https://bedrock-mantle.${AWS_REGION}.api.aws/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("AWS_BEARER_TOKEN_BEDROCK"),
+            env_legacy: None,
+            placeholder: "ABSK...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("openai.gpt-oss-120b"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("openai.gpt-oss-20b"),
+            standard: Some("openai.gpt-oss-120b"),
+            strong: None,
+        },
+        brand: "amazon-bedrock",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // Azure OpenAI's v1 API. The model is the deployment name.
+    ProviderEntry {
+        id: "azure",
+        label: "Azure OpenAI",
+        short_label: Some("Azure"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://${AZURE_RESOURCE_NAME}.openai.azure.com/openai/v1/chat/completions",
+            "https://${AZURE_RESOURCE_NAME}.openai.azure.com/openai/v1/models",
+            true,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("AZURE_OPENAI_API_KEY"),
+            env_legacy: Some("AZURE_API_KEY"),
+            placeholder: "...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("gpt-5-mini"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("gpt-5-mini"),
+            standard: Some("gpt-5"),
+            strong: None,
+        },
+        brand: "azure",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "groq",
+        label: "Groq",
+        short_label: None,
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.groq.com/openai/v1/chat/completions",
+            "https://api.groq.com/openai/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("GROQ_API_KEY"),
+            env_legacy: None,
+            placeholder: "gsk_...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("openai/gpt-oss-120b"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("openai/gpt-oss-20b"),
+            standard: Some("openai/gpt-oss-120b"),
+            strong: None,
+        },
+        brand: "groq",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "cerebras",
+        label: "Cerebras",
+        short_label: None,
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.cerebras.ai/v1/chat/completions",
+            "https://api.cerebras.ai/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("CEREBRAS_API_KEY"),
+            env_legacy: None,
+            placeholder: "csk-...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("gpt-oss-120b"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: None,
+            standard: Some("gpt-oss-120b"),
+            strong: None,
+        },
+        brand: "cerebras",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "fireworks",
+        label: "Fireworks",
+        short_label: None,
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.fireworks.ai/inference/v1/chat/completions",
+            "https://api.fireworks.ai/inference/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("FIREWORKS_API_KEY"),
+            env_legacy: None,
+            placeholder: "fw_...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("accounts/fireworks/routers/glm-latest"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("accounts/fireworks/models/deepseek-v4p1-flash"),
+            standard: Some("accounts/fireworks/routers/glm-latest"),
+            strong: Some("accounts/fireworks/routers/kimi-latest"),
+        },
+        brand: "fireworks",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // Hugging Face Inference Providers' router.
+    ProviderEntry {
+        id: "huggingface",
+        label: "Hugging Face",
+        short_label: None,
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://router.huggingface.co/v1/chat/completions",
+            "https://router.huggingface.co/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("HF_TOKEN"),
+            env_legacy: None,
+            placeholder: "hf_...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("zai-org/GLM-5.3"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("deepseek-ai/DeepSeek-V4.1-Flash"),
+            standard: Some("zai-org/GLM-5.3"),
+            strong: Some("moonshotai/Kimi-K3"),
+        },
+        brand: "huggingface",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "vercel",
+        label: "Vercel AI Gateway",
+        short_label: Some("Vercel"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://ai-gateway.vercel.sh/v1/chat/completions",
+            "https://ai-gateway.vercel.sh/v1/models",
+            true,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("AI_GATEWAY_API_KEY"),
+            env_legacy: None,
+            placeholder: "vck_...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("anthropic/claude-sonnet-5.5"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("anthropic/claude-haiku-5.5"),
+            standard: Some("anthropic/claude-sonnet-5.5"),
+            strong: Some("anthropic/claude-opus-5.5"),
+        },
+        brand: "vercel",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // Cloudflare AI Gateway's unified `/compat` endpoint. The Cloudflare token
+    // rides `cf-aig-authorization`; the upstream is billed through the gateway
+    // (Unified Billing or keys stored on it). Models are `provider/model`.
+    ProviderEntry {
+        id: "cloudflare-ai-gateway",
+        label: "Cloudflare AI Gateway",
+        short_label: Some("CF Gateway"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(OpenAiConfig {
+            auth_header: Some("cf-aig-authorization"),
+            ..hosted_wire(
+                "https://gateway.ai.cloudflare.com/v1/${CLOUDFLARE_ACCOUNT_ID}/${CLOUDFLARE_GATEWAY_ID}/compat/chat/completions",
+                "https://gateway.ai.cloudflare.com/v1/${CLOUDFLARE_ACCOUNT_ID}/${CLOUDFLARE_GATEWAY_ID}/compat/models",
+                false,
+                false,
+            )
+        }),
+        key: KeySource::Hosted {
+            env: Some("CLOUDFLARE_API_TOKEN"),
+            env_legacy: None,
+            placeholder: "...",
+            token_command: None,
+        },
+        models: ModelsHandler::StaticPresets(CLOUDFLARE_GATEWAY_MODELS),
+        subscription: None,
+        default_model: Some("anthropic/claude-sonnet-5.5"),
+        presets: CLOUDFLARE_GATEWAY_MODELS,
+        auto: AutoLadder {
+            light: Some("anthropic/claude-haiku-5.5"),
+            standard: Some("anthropic/claude-sonnet-5.5"),
+            strong: Some("anthropic/claude-opus-5.5"),
+        },
+        brand: "cloudflare-ai-gateway",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "cloudflare-workers-ai",
+        label: "Cloudflare Workers AI",
+        short_label: Some("Workers AI"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions",
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1/models",
+            false,
+            false,
+        )),
+        key: KeySource::Hosted {
+            env: Some("CLOUDFLARE_API_TOKEN"),
+            env_legacy: Some("CLOUDFLARE_API_KEY"),
+            placeholder: "...",
+            token_command: None,
+        },
+        models: ModelsHandler::StaticPresets(WORKERS_AI_MODELS),
+        subscription: None,
+        default_model: Some("@cf/zai-org/glm-5.3"),
+        presets: WORKERS_AI_MODELS,
+        auto: AutoLadder {
+            light: Some("@cf/zai-org/glm-5.3-flash"),
+            standard: Some("@cf/zai-org/glm-5.3"),
+            strong: None,
+        },
+        brand: "cloudflare-workers-ai",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "moonshot",
+        label: "Moonshot AI",
+        short_label: Some("Moonshot"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.moonshot.ai/v1/chat/completions",
+            "https://api.moonshot.ai/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("MOONSHOT_API_KEY"),
+            env_legacy: None,
+            placeholder: "sk-...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("kimi-k2.7-code"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: None,
+            standard: Some("kimi-k2.7-code"),
+            strong: Some("kimi-k3"),
+        },
+        brand: "moonshot",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // The Kimi Code subscription's own endpoint.
+    ProviderEntry {
+        id: "kimi-for-coding",
+        label: "Kimi For Coding",
+        short_label: Some("Kimi Code"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.kimi.ai/coding/v1/chat/completions",
+            "https://api.kimi.ai/coding/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("KIMI_API_KEY"),
+            env_legacy: None,
+            placeholder: "sk-kimi-...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("kimi-for-coding"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: None,
+            standard: Some("kimi-for-coding"),
+            strong: None,
+        },
+        brand: "kimi",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "minimax",
+        label: "MiniMax",
+        short_label: None,
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.minimax.io/v1/chat/completions",
+            "https://api.minimax.io/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("MINIMAX_API_KEY"),
+            env_legacy: None,
+            placeholder: "...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("MiniMax-M3"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: None,
+            standard: Some("MiniMax-M3"),
+            strong: None,
+        },
+        brand: "minimax",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "zai",
+        label: "Z.AI",
+        short_label: None,
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.z.ai/api/paas/v4/chat/completions",
+            "https://api.z.ai/api/paas/v4/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("ZAI_API_KEY"),
+            env_legacy: Some("ZHIPU_API_KEY"),
+            placeholder: "...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("glm-5.3"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("glm-5.3-flash"),
+            standard: Some("glm-5.3"),
+            strong: None,
+        },
+        brand: "zai",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "xiaomi-mimo",
+        label: "Xiaomi MiMo",
+        short_label: Some("MiMo"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.xiaomimimo.com/v1/chat/completions",
+            "https://api.xiaomimimo.com/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("XIAOMI_API_KEY"),
+            env_legacy: None,
+            placeholder: "sk-...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("mimo-v2.6-pro"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("mimo-v2.6-flash"),
+            standard: Some("mimo-v2.6-pro"),
+            strong: None,
+        },
+        brand: "xiaomi-mimo",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    // OpenCode's hosted gateways. Their chat-completions route serves the
+    // open models; Claude, GPT and Gemini there speak their makers' own wires.
+    ProviderEntry {
+        id: "opencode-zen",
+        label: "OpenCode Zen",
+        short_label: Some("Zen"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://opencode.ai/inference/v1/chat/completions",
+            "https://opencode.ai/inference/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("OPENCODE_API_KEY"),
+            env_legacy: None,
+            placeholder: "sk-...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("deepseek-v4.1-flash"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("deepseek-v4.1-flash"),
+            standard: Some("deepseek-v4.1-flash"),
+            strong: None,
+        },
+        brand: "opencode",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "opencode-go",
+        label: "OpenCode Go",
+        short_label: Some("Go"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://opencode.ai/inference/go/v1/chat/completions",
+            "https://opencode.ai/inference/go/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("OPENCODE_API_KEY"),
+            env_legacy: None,
+            placeholder: "sk-...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("glm-5.3"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("glm-5.3-flash"),
+            standard: Some("glm-5.3"),
+            strong: Some("kimi-k3"),
+        },
+        brand: "opencode",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
+        context_window: None,
+    },
+    ProviderEntry {
+        id: "prime",
+        label: "Prime Inference",
+        short_label: Some("Prime"),
+        group: ProviderGroup::Hosted,
+        wire: WireFormat::OpenAi(hosted_wire(
+            "https://api.pinference.ai/api/v1/chat/completions",
+            "https://api.pinference.ai/api/v1/models",
+            false,
+            true,
+        )),
+        key: KeySource::Hosted {
+            env: Some("PRIME_API_KEY"),
+            env_legacy: None,
+            placeholder: "pit_...",
+            token_command: None,
+        },
+        models: ModelsHandler::OpenAiModels,
+        subscription: None,
+        default_model: Some("anthropic/claude-sonnet-5.5"),
+        presets: NO_PRESETS,
+        auto: AutoLadder {
+            light: Some("openai/gpt-6-luna"),
+            standard: Some("anthropic/claude-sonnet-5.5"),
+            strong: Some("anthropic/claude-opus-5.5"),
+        },
+        brand: "prime",
+        credits: CreditsSource::None,
         is_local_server: false,
         has_num_ctx: false,
         caps: HOSTED_CAPS,
@@ -896,17 +1618,28 @@ pub struct ProviderRow {
     pub has_num_ctx: bool,
     pub caps: ProviderCaps,
     pub context_window: Option<usize>,
+    /// The `${VAR}` names the endpoint URL needs (an Azure resource, an AWS
+    /// region, a Cloudflare account) — Settings asks for each beside the key.
+    pub endpoint_vars: Vec<&'static str>,
+    /// The command that mints a token when no key is saved
+    /// (`gcloud auth print-access-token`), for the key field's hint.
+    pub key_command: Option<String>,
 }
 
 impl ProviderRow {
     pub fn from_entry(entry: &ProviderEntry) -> Self {
-        let (key_env, key_env_legacy, key_placeholder) = match entry.key {
+        let (key_env, key_env_legacy, key_placeholder, key_command) = match entry.key {
             KeySource::Hosted {
                 env,
                 env_legacy,
                 placeholder,
-            } => (env, env_legacy, Some(placeholder)),
-            KeySource::Local => (None, None, None),
+                token_command,
+            } => (env, env_legacy, Some(placeholder), token_command.map(|c| c.join(" "))),
+            KeySource::Local => (None, None, None, None),
+        };
+        let endpoint_vars = match entry.wire {
+            WireFormat::OpenAi(cfg) if entry.subscription.is_none() => template_vars(cfg.chat_url),
+            _ => Vec::new(),
         };
         let wire = if entry.subscription.is_some() {
             WireName::Delegate
@@ -934,6 +1667,8 @@ impl ProviderRow {
             has_num_ctx: entry.has_num_ctx,
             caps: entry.caps,
             context_window: entry.context_window,
+            endpoint_vars,
+            key_command,
         }
     }
 }
@@ -1042,10 +1777,13 @@ pub fn provider_key_in(
             let from_env = env
                 .and_then(env_var)
                 .or_else(|| env_legacy.and_then(env_var));
-            match keychain.or(from_env) {
-                Some(key) => Ok(Some(key)),
-                None => Err(format!("No API key saved for {id}")),
+            if let Some(key) = keychain.or(from_env) {
+                return Ok(Some(key));
             }
+            if let KeySource::Hosted { token_command: Some(command), .. } = entry.key {
+                return command_token(id, command).map(Some);
+            }
+            Err(format!("No API key saved for {id}"))
         }
     }
 }
@@ -1114,10 +1852,238 @@ pub fn key_status_in(id: &str, scope: Option<&std::path::Path>) -> Result<Provid
             source: "env".to_string(),
         });
     }
+    // A token command counts when its binary is installed. Running it here
+    // would cost a sign-in round trip per Settings render; whether the
+    // session is live is the send's to find out, with the command's own error.
+    if let KeySource::Hosted { token_command: Some(command), .. } = entry.key {
+        if crate::cli::resolve_command(command[0]).is_ok() {
+            return Ok(ProviderKeyStatus {
+                has_key: true,
+                source: "command".to_string(),
+            });
+        }
+    }
     Ok(ProviderKeyStatus {
         has_key: false,
         source: "none".to_string(),
     })
+}
+
+// ── Short-lived tokens from a command ────────────────────────────────────
+// Vertex AI takes an OAuth access token that expires within the hour, so a
+// pasted one is useless by lunch. When no key is saved, the row's command
+// (`gcloud auth print-access-token`) mints one; it is kept in memory for 45
+// minutes and never written anywhere.
+
+const COMMAND_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(45 * 60);
+/// A failed sign-in is remembered briefly too, so Auto weighing every
+/// Provider doesn't run a doomed `gcloud` on each message.
+const COMMAND_FAILURE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+type CommandToken = (std::time::Instant, Result<String, String>);
+
+static COMMAND_TOKENS: LazyLock<Mutex<HashMap<String, CommandToken>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn command_token(id: &str, command: &[&str]) -> Result<String, String> {
+    if let Some((at, result)) = COMMAND_TOKENS.lock().unwrap().get(id) {
+        let ttl = if result.is_ok() { COMMAND_TOKEN_TTL } else { COMMAND_FAILURE_TTL };
+        if at.elapsed() < ttl {
+            return result.clone();
+        }
+    }
+    let result = run_token_command(id, command);
+    COMMAND_TOKENS
+        .lock()
+        .unwrap()
+        .insert(id.to_string(), (std::time::Instant::now(), result.clone()));
+    result
+}
+
+fn run_token_command(id: &str, command: &[&str]) -> Result<String, String> {
+    let (program, args) = command.split_first().ok_or("Empty token command")?;
+    let binary = crate::cli::resolve_command(program).map_err(|_| {
+        format!(
+            "No key saved for {id}, and `{}` is not installed to sign in with",
+            command.join(" ")
+        )
+    })?;
+    let output = std::process::Command::new(binary)
+        .args(args)
+        .output()
+        .map_err(|e| format!("`{}` failed to start: {e}", command.join(" ")))?;
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || token.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("no token printed");
+        return Err(format!("`{}` did not return a token: {}", command.join(" "), reason.trim()));
+    }
+    Ok(token)
+}
+
+// ── Endpoint variables ───────────────────────────────────────────────────
+// A few hosted endpoints live under the user's own account: an Azure
+// resource, an AWS region, a Cloudflare account and gateway, a Google Cloud
+// project. Their row's URL names the part as `${VAR}`, and the value comes
+// from Settings (`~/.klide/provider_endpoints.json`, plain names, no secrets),
+// then the environment, then a `.env` — the same places a key reference
+// resolves from. A value is a name, never a URL: only letters, digits, `-`
+// and `_`, so no value can move the host a key is sent to.
+
+/// The `${VAR}` names in a URL template, in order of appearance.
+pub fn template_vars(template: &'static str) -> Vec<&'static str> {
+    let mut vars = Vec::new();
+    let mut rest = template;
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else { break };
+        let name = &after[..end];
+        if !vars.contains(&name) {
+            vars.push(name);
+        }
+        rest = &after[end + 1..];
+    }
+    vars
+}
+
+/// Every endpoint variable some row's URL names.
+fn known_endpoint_vars() -> Vec<&'static str> {
+    let mut vars = Vec::new();
+    for entry in PROVIDERS {
+        if let WireFormat::OpenAi(cfg) = entry.wire {
+            for name in template_vars(cfg.chat_url).into_iter().chain(template_vars(cfg.models_url)) {
+                if !vars.contains(&name) {
+                    vars.push(name);
+                }
+            }
+        }
+    }
+    vars
+}
+
+fn endpoint_values_path() -> Option<std::path::PathBuf> {
+    crate::cli::home_dir_path().map(|home| home.join(".klide").join("provider_endpoints.json"))
+}
+
+fn read_endpoint_values() -> HashMap<String, String> {
+    endpoint_values_path()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn valid_endpoint_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Save (or clear, with `None`/empty) one endpoint variable from Settings.
+pub fn set_endpoint_value(name: &str, value: Option<&str>) -> Result<(), String> {
+    if !known_endpoint_vars().contains(&name) {
+        return Err(format!("{name} is not an endpoint setting"));
+    }
+    let mut values = read_endpoint_values();
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) if valid_endpoint_value(v) => {
+            values.insert(name.to_string(), v.to_string());
+        }
+        Some(_) => {
+            return Err(format!(
+                "{name} takes a name — letters, digits, '-' and '_' — not a URL"
+            ))
+        }
+        None => {
+            values.remove(name);
+        }
+    }
+    let path = endpoint_values_path().ok_or("Could not resolve home directory")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(&values).map_err(|e| e.to_string())?;
+    crate::durable::write_atomic_private(&path, &json)
+        .map_err(|e| format!("Could not write {path:?}: {e}"))
+}
+
+/// One endpoint variable as Settings shows it. The value is an account or
+/// region name, not a secret, so it crosses to the renderer.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointVarStatus {
+    pub name: String,
+    pub value: Option<String>,
+    /// "settings" | "env" | "none"
+    pub source: &'static str,
+}
+
+fn endpoint_value(name: &str, scope: Option<&std::path::Path>) -> Option<(String, &'static str)> {
+    if let Some(v) = read_endpoint_values().remove(name) {
+        return Some((v, "settings"));
+    }
+    env_var(name)
+        .or_else(|| dotenv_lookup(name, scope))
+        .map(|v| (v.trim().to_string(), "env"))
+}
+
+/// The endpoint variables a provider's URL needs, with where each resolves.
+pub fn endpoint_status(id: &str, scope: Option<&std::path::Path>) -> Vec<EndpointVarStatus> {
+    let Some(WireFormat::OpenAi(cfg)) = lookup(id).map(|e| e.wire) else {
+        return Vec::new();
+    };
+    template_vars(cfg.chat_url)
+        .into_iter()
+        .map(|name| match endpoint_value(name, scope) {
+            Some((value, source)) => EndpointVarStatus {
+                name: name.to_string(),
+                value: Some(value),
+                source,
+            },
+            None => EndpointVarStatus {
+                name: name.to_string(),
+                value: None,
+                source: "none",
+            },
+        })
+        .collect()
+}
+
+/// Fill a URL template's `${VAR}`s. A missing or malformed value is an
+/// error that names the setting, before any request is made.
+pub fn resolve_endpoint(
+    id: &str,
+    template: &'static str,
+    scope: Option<&std::path::Path>,
+) -> Result<String, String> {
+    let mut url = template.to_string();
+    for name in template_vars(template) {
+        let label = lookup(id).map(|e| e.label).unwrap_or(id);
+        let (value, _) = endpoint_value(name, scope)
+            .ok_or_else(|| format!("{label} needs {name} — set it in Settings → API keys"))?;
+        if !valid_endpoint_value(&value) {
+            return Err(format!(
+                "{name} must be a name (letters, digits, '-', '_'), got {value:?}"
+            ));
+        }
+        url = url.replace(&format!("${{{name}}}"), &value);
+    }
+    Ok(url)
+}
+
+/// Whether every endpoint variable a row's URL names has a value — what the
+/// router asks before it puts an account-scoped Provider on the bench.
+pub fn endpoint_ready(id: &str) -> bool {
+    endpoint_status(id, None).iter().all(|var| var.value.is_some())
+}
+
+/// A row's chat-completions URL with its endpoint variables filled.
+pub fn openai_chat_url(id: &str, cfg: &OpenAiConfig, scope: Option<&std::path::Path>) -> Result<String, String> {
+    resolve_endpoint(id, cfg.chat_url, scope)
+}
+
+/// A row's `/models` URL with its endpoint variables filled.
+pub fn openai_models_url(id: &str, cfg: &OpenAiConfig, scope: Option<&std::path::Path>) -> Result<String, String> {
+    resolve_endpoint(id, cfg.models_url, scope)
 }
 
 // ── Keychain plumbing (kept here so the registry is self-contained) ──
@@ -1897,6 +2863,7 @@ pub(crate) async fn dispatch(
                 false,
                 false,
                 false,
+                None,
                 custom_token(&id, key_scope.as_deref()),
                 None,
                 crate::adapters::OpenAiCache::default(),
@@ -1956,14 +2923,16 @@ pub(crate) async fn dispatch(
             // Hosted providers require a key (`provider_key` errors when
             // missing); local OpenAI-wire ones (MLX, LM Studio) return
             // Ok(None) and send no auth header.
+            let chat_url = openai_chat_url(provider_id, &cfg, key_scope.as_deref())?;
             let key = provider_key_in(provider_id, key_scope.as_deref())?;
             crate::adapters::openai_compatible_chat(
                 provider_id.to_string(),
-                cfg.chat_url.to_string(),
+                chat_url,
                 cfg.include_tools,
                 cfg.include_usage_in_stream,
                 cfg.include_cost_accounting,
                 cfg.send_attribution,
+                cfg.auth_header,
                 key,
                 if cfg.supports_reasoning_effort {
                     crate::adapters::reflection_level_to_openai_effort(reflection_level.as_deref())
@@ -2155,6 +3124,76 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
         assert_eq!(ProviderCaps::for_provider("ollama"), lookup("ollama").unwrap().caps);
         assert_eq!(ProviderCaps::for_provider("custom:my-box"), ProviderCaps::HOSTED);
         assert_eq!(ProviderCaps::for_provider("auto"), ProviderCaps::HOSTED);
+    }
+
+    #[test]
+    fn account_scoped_endpoints_name_their_variables() {
+        let vars = |id: &str| catalog().into_iter().find(|r| r.id == id).unwrap().endpoint_vars;
+        assert_eq!(vars("azure"), vec!["AZURE_RESOURCE_NAME"]);
+        assert_eq!(vars("amazon-bedrock"), vec!["AWS_REGION"]);
+        assert_eq!(vars("google-vertex"), vec!["GOOGLE_CLOUD_PROJECT"]);
+        assert_eq!(
+            vars("cloudflare-ai-gateway"),
+            vec!["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]
+        );
+        assert_eq!(vars("cloudflare-workers-ai"), vec!["CLOUDFLARE_ACCOUNT_ID"]);
+        assert!(vars("groq").is_empty());
+        assert!(vars("openai").is_empty());
+        // The models URL never needs a variable the chat URL doesn't.
+        for entry in PROVIDERS {
+            if let WireFormat::OpenAi(cfg) = entry.wire {
+                for name in template_vars(cfg.models_url) {
+                    assert!(template_vars(cfg.chat_url).contains(&name), "{}: {name}", entry.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_endpoint_value_is_a_name_never_a_url() {
+        assert!(valid_endpoint_value("my-resource_01"));
+        assert!(valid_endpoint_value("us-east-1"));
+        for bad in ["", "evil.com/", "a.b", "x?y", "x#", "a b", "user@host", "https://x"] {
+            assert!(!valid_endpoint_value(bad), "{bad:?}");
+        }
+        assert!(set_endpoint_value("HOME", Some("x")).unwrap_err().contains("not an endpoint setting"));
+    }
+
+    #[test]
+    fn a_template_fills_from_the_environment_and_names_what_is_missing() {
+        // A variable only this test sets, so the developer's settings file
+        // can't answer for it.
+        let template: &'static str = "https://${KLIDE_TEST_ENDPOINT_VAR}.example.test/v1/chat/completions";
+        std::env::remove_var("KLIDE_TEST_ENDPOINT_VAR");
+        let err = resolve_endpoint("azure", template, None).unwrap_err();
+        assert!(err.contains("KLIDE_TEST_ENDPOINT_VAR"), "{err}");
+        std::env::set_var("KLIDE_TEST_ENDPOINT_VAR", "acct-1");
+        assert_eq!(
+            resolve_endpoint("azure", template, None).unwrap(),
+            "https://acct-1.example.test/v1/chat/completions"
+        );
+        std::env::set_var("KLIDE_TEST_ENDPOINT_VAR", "evil.com/");
+        assert!(resolve_endpoint("azure", template, None).is_err());
+        std::env::remove_var("KLIDE_TEST_ENDPOINT_VAR");
+    }
+
+    #[test]
+    fn only_cloudflare_gateway_moves_the_key_out_of_authorization() {
+        for entry in PROVIDERS {
+            if let WireFormat::OpenAi(cfg) = entry.wire {
+                let expected = (entry.id == "cloudflare-ai-gateway").then_some("cf-aig-authorization");
+                assert_eq!(cfg.auth_header, expected, "{}", entry.id);
+            }
+        }
+        assert!(!crate::source_endpoint::available("cloudflare-ai-gateway"));
+        assert!(crate::source_endpoint::available("groq"));
+    }
+
+    #[test]
+    fn vertex_mints_its_token_with_gcloud_when_no_key_is_saved() {
+        let row = catalog().into_iter().find(|r| r.id == "google-vertex").unwrap();
+        assert_eq!(row.key_command.as_deref(), Some("gcloud auth print-access-token"));
+        assert!(catalog().iter().filter(|r| r.key_command.is_some()).count() == 1);
     }
 
     #[test]

@@ -578,9 +578,11 @@ pub async fn gather_candidates(preferred: &[PreferredModel]) -> Vec<Candidate> {
 }
 
 /// A hosted Provider with a key the router can send. `provider_key` answers
-/// `Ok(None)` for a key that was never set, so `is_ok()` is not enough.
+/// `Ok(None)` for a key that was never set, so `is_ok()` is not enough. An
+/// account-scoped endpoint (Azure, Bedrock, Cloudflare, Vertex) also needs
+/// its resource named, or the request has nowhere to go.
 fn has_key(provider: &str) -> bool {
-    matches!(providers::provider_key(provider), Ok(Some(_)))
+    providers::endpoint_ready(provider) && matches!(providers::provider_key(provider), Ok(Some(_)))
 }
 
 /// Ask the Provider about one Candidate. Availability first (a missing key or
