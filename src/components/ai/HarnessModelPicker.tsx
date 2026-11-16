@@ -33,10 +33,12 @@ const EASE = "var(--ease-soft)";
 /** How long a crossed row waits while the pointer heads for the open card. */
 const AIM_DELAY = 220;
 /** Anchor a fixed panel at its first `top`; later moves become a translate. */
-function useGlide(top: number | undefined): { top?: number; transform?: string; transition: string } {
+function useGlide(top: number | undefined, ready: boolean): { top?: number; transform?: string; transition: string } {
   const anchor = useRef<number | undefined>(undefined);
-  if (top === undefined) anchor.current = undefined;
-  else if (anchor.current === undefined) anchor.current = top;
+  const settled = useRef(false);
+  if (top === undefined) { anchor.current = undefined; settled.current = false; }
+  // Until the card has measured itself its top is a guess: re-anchor, don't glide.
+  else if (anchor.current === undefined || !settled.current) { anchor.current = top; settled.current = ready; }
   const placed = top !== undefined && anchor.current !== top;
   const moved = useRef(false);
   if (top === undefined) moved.current = false; else if (placed) moved.current = true;
@@ -171,7 +173,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
       focusModels.current = false;
     }
   }, [source, menu.menuRef]);
-  function submenuPosition(row: HTMLElement, width: number, height: number) {
+  function submenuPosition(row: HTMLElement, width: number) {
     const rect = row.closest("[data-menu-panel]")!.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
     const isProviderPanel = row.closest('[data-level="providers"]') !== null;
@@ -179,17 +181,17 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     const left = !cascadeLeft && rect.right + width + GAP <= window.innerWidth - 8 ? rect.right + GAP : rect.left - width - GAP;
     // The card's first row sits level with the row that opened it.
     return { left: Math.max(8, Math.min(left, window.innerWidth - width - 8)),
-      top: Math.max(8, Math.min(rowRect.top - PAD - 1, window.innerHeight - height - 8)) };
+      top: rowRect.top - PAD - 1 };
   }
   function showCategory(name: string, row: HTMLElement) {
-    setCategoryPos(submenuPosition(row, SIDE_WIDTH, 300));
+    setCategoryPos(submenuPosition(row, SIDE_WIDTH));
     if (category !== name) { setCategory(name); setSource(null); setSourcePos(null); }
   }
   /** The agent's own models open straight from the categories panel — no provider level in between. */
   function showOwn(row: HTMLElement, focus = false) {
     const own = harness === "hermes" ? saved?.provider ?? null : harness;
     setCategory(OWN); setCategoryPos(null);
-    setSourcePos(submenuPosition(row, 300, 360));
+    setSourcePos(submenuPosition(row, 300));
     focusModels.current = focus;
     if (own && source === own && focus) menu.menuRef.current?.querySelector<HTMLInputElement>("input")?.focus();
     if (source !== own) { setModels([]); setError(""); setQuery(""); setLoading(own !== null); }
@@ -197,7 +199,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   }
   function showSource(id: string, row: HTMLElement, focus = false) {
     if (!support[id]?.supported || keyless.has(id)) { setSource(null); setSourcePos(null); return; }
-    setSourcePos(submenuPosition(row, 300, 360));
+    setSourcePos(submenuPosition(row, 300));
     focusModels.current = focus;
     if (source === id && focus) menu.menuRef.current?.querySelector<HTMLInputElement>("input")?.focus();
     if (source !== id) { setModels([]); setError(""); setQuery(""); setLoading(true); }
@@ -272,13 +274,18 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
     menu.triggerRef.current?.focus();
   };
   const current = choice ?? (model === "default" ? (harness === "hermes" ? saved ?? (ownNative?.model ? { provider: "hermes", model: ownNative.model } : null) : null) : harness !== "hermes" ? { provider: harness, model } : null);
-  const providersMax = categoryPos ? Math.min(300, window.innerHeight - categoryPos.top - 8) : 300;
-  const modelsMax = sourcePos ? Math.min(360, window.innerHeight - sourcePos.top - 8) : 360;
+  // A card's ceiling never depends on where it sits; where it sits depends on
+  // its real height — level with its row, lifted only as far as the window's
+  // bottom edge needs (the side card's rule), never by a fixed guess.
+  const providersMax = Math.min(300, window.innerHeight - 16);
+  const modelsMax = Math.min(360, window.innerHeight - 16);
   const providersHeight = useEasedHeight(providersRef, providersMax, [category, sources.length, providersMax]);
   const modelsHeight = useEasedHeight(modelsRef, modelsMax, [category, source, filteredModels.length, loading, error, query.trim() === "", loginBusy, modelsMax]);
   const upward = shownPos?.bottom !== undefined;
-  const providersGlide = useGlide(category && category !== OWN ? categoryPos?.top : undefined);
-  const modelsGlide = useGlide((source || category === OWN) ? sourcePos?.top : undefined);
+  const lift = (top: number | undefined, height: number) => top === undefined ? undefined : Math.max(8, Math.min(top, window.innerHeight - height - 8));
+  const providersGuess = Math.min(providersMax, Math.max(1, sources.length) * 34 + PAD * 2 + 2);
+  const providersGlide = useGlide(category && category !== OWN ? lift(categoryPos?.top, providersHeight ?? providersGuess) : undefined, providersHeight !== undefined);
+  const modelsGlide = useGlide((source || category === OWN) ? lift(sourcePos?.top, modelsHeight ?? modelsMax) : undefined, modelsHeight !== undefined);
   const heightEase = `height ${GLIDE_MS}ms ${EASE}`;
   return <div style={{ flex: fluid ? 1 : "0 1 112px", minWidth: 64, maxWidth: fluid ? undefined : 138 }}>
     <button type="button" ref={menu.triggerRef} disabled={disabled} aria-haspopup="menu" aria-expanded={menu.open}
