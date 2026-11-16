@@ -34,7 +34,8 @@ pub fn offered() -> bool {
 pub fn description() -> &'static str {
     "Read many workspace files in one call and get back only what you ask for. Use it instead of many read_file calls \
 when a task needs the same information from many files. Klide does the counting and summing exactly. \
-`files`: a glob such as \"services/*.json\" or a list of paths. \
+`files`: a glob such as \"services/*.json\", a list of paths, or {\"from\": \"index.json\", \"key\": \"batches\"} to read exactly \
+the paths a JSON file lists. When the task says to follow a list or index, use `from`, not a glob. \
 `pick`: what to take from each file — {\"json\": [field names]} (a JSON file holding an object or an array of objects; each object is one record), \
 {\"lines_matching\": \"text\"} (lines containing the text), or {\"lines\": [start, end]}. \
 `keep` (json only, optional): conditions every kept record must meet — {\"field\": value} for equality, \
@@ -44,8 +45,9 @@ when a task needs the same information from many files. Klide does the counting 
 
 pub fn schema_properties() -> Value {
     json!({
-        "files": { "description": "A glob (\"docs/**/*.md\") or an array of workspace-relative paths.",
-                   "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+        "files": { "description": "A glob (\"docs/**/*.md\"), an array of workspace-relative paths, or {\"from\": \"index.json\", \"key\": \"batches\"} for the paths a JSON file lists.",
+                   "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } },
+                             { "type": "object", "properties": { "from": { "type": "string" }, "key": { "type": "string" } }, "required": ["from"] }] },
         "pick": { "type": "object", "description": "One of {\"json\": [fields]}, {\"lines_matching\": \"text\"}, {\"lines\": [start, end]}." },
         "keep": { "type": "object", "description": "json only: conditions a record must meet." },
         "total": { "type": "string", "description": "\"list\" (default), \"count\" or \"sum:<field>\"." }
@@ -56,6 +58,7 @@ pub fn summary(call: &super::tools::NormalizedToolCall) -> String {
     match &call.input["files"] {
         Value::String(glob) => format!("read_many {glob}"),
         Value::Array(list) => format!("read_many {} files", list.len()),
+        Value::Object(o) if o.get("from").and_then(Value::as_str).is_some() => format!("read_many files listed in {}", o["from"].as_str().unwrap_or("")),
         _ => "read_many".into(),
     }
 }
@@ -96,10 +99,14 @@ pub fn run(ws: &Workspace, input: &Value, _run_id: &str, _runs_dir: Option<&std:
     if let (Total::Sum(_), false) = (&total, matches!(pick, Pick::Json(_))) {
         return fail("sum:<field> works only with pick {\"json\": [...]}.".into());
     }
-    let paths = match resolve_files(ws, &input["files"]) {
-        Ok(p) => p,
+    let Resolved { paths, index_note } = match resolve_files(ws, &input["files"]) {
+        Ok(r) => r,
         Err(e) => return fail(e),
     };
+    let mut notes: Vec<String> = index_note.into_iter().collect();
+    if keep.is_none() && matches!(pick, Pick::Json(_)) && !matches!(total, Total::List) {
+        notes.push("No keep was given, so every record was counted. Add keep if the task counts only some records.".into());
+    }
 
     let mut failed = Vec::new();
     let mut items: Vec<Value> = Vec::new();
@@ -168,6 +175,9 @@ pub fn run(ws: &Workspace, input: &Value, _run_id: &str, _runs_dir: Option<&std:
     }
     if matches!(pick, Pick::Json(_)) {
         out.insert("records_seen".into(), json!(seen));
+    }
+    if !notes.is_empty() {
+        out.insert("notes".into(), json!(notes));
     }
     match total {
         Total::Count => {
@@ -254,39 +264,154 @@ fn parse_pick(pick: &Value) -> Result<Pick, String> {
     Err("pick must have one of json, lines_matching or lines.".into())
 }
 
-fn resolve_files(ws: &Workspace, files: &Value) -> Result<Vec<String>, String> {
+struct Resolved {
+    paths: Vec<String>,
+    /// Set when a glob matched files that a JSON list in the Workspace leaves out.
+    index_note: Option<String>,
+}
+
+fn resolve_files(ws: &Workspace, files: &Value) -> Result<Resolved, String> {
     // Models often send the list JSON-encoded inside a string. Take it as the
     // list it plainly is rather than as a glob that matches nothing.
     let decoded = match files {
-        Value::String(text) if text.trim_start().starts_with('[') => serde_json::from_str::<Value>(text.trim()).ok(),
+        Value::String(text) if text.trim_start().starts_with('[') || text.trim_start().starts_with('{') => {
+            serde_json::from_str::<Value>(text.trim()).ok()
+        }
         _ => None,
     };
-    let files = decoded.as_ref().filter(|v| v.is_array()).unwrap_or(files);
+    let files = decoded.as_ref().filter(|v| v.is_array() || v.is_object()).unwrap_or(files);
+    let mut index_note = None;
     let mut out = match files {
         Value::String(pattern) if !pattern.trim().is_empty() => {
             let pattern = pattern.trim();
             let mut all = Vec::new();
             super::tools::walk_files(ws.root(), ws.root(), &mut all);
-            all.into_iter()
-                .map(|p| ws.display(&p))
+            let all: Vec<String> = all.into_iter().map(|p| ws.display(&p)).collect();
+            let mut matched: Vec<String> = all
+                .iter()
                 .filter(|rel| wildcard_match(pattern, rel) || wildcard_match(&pattern.replace("**/", ""), rel))
-                .collect::<Vec<_>>()
+                .cloned()
+                .collect();
+            matched.sort();
+            index_note = index_note_for(ws, &all, &matched);
+            matched
         }
         Value::Array(list) if !list.is_empty() => list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
-        _ => return Err("files must be a glob string or a non-empty array of paths.".into()),
+        Value::Object(spec) => listed_in(ws, spec)?,
+        _ => return Err("files must be a glob string, a non-empty array of paths, or {\"from\": \"index.json\", \"key\": \"...\"}.".into()),
     };
     out.sort();
     out.dedup();
     if out.is_empty() {
         return Err(match files {
             Value::String(pattern) => format!("No files match the glob {pattern:?}. Pass a glob like \"dir/*.json\" or a JSON array of paths."),
+            Value::Object(_) => "That list names no paths.".into(),
             _ => "None of the listed paths exist.".into(),
         });
     }
     if out.len() > MAX_FILES {
         return Err(format!("{} files match; the limit is {MAX_FILES}. Narrow the glob.", out.len()));
     }
-    Ok(out)
+    Ok(Resolved { paths: out, index_note })
+}
+
+/// `{"from": "index.json", "key": "batches"}` — the paths a JSON file lists,
+/// relative to that file's folder. Without `key`, a top-level array or the
+/// object's only array of strings.
+fn listed_in(ws: &Workspace, spec: &Map<String, Value>) -> Result<Vec<String>, String> {
+    let from = spec.get("from").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).ok_or("files.from must name a JSON file.")?;
+    let text = ws.resolve_existing(from).and_then(|full| ws.read_text(&full, Access::Agent)).map_err(|e| format!("files.from {from:?}: {e}"))?;
+    let doc: Value = serde_json::from_str(&text).map_err(|e| format!("files.from {from:?} is not JSON: {e}"))?;
+    let list = match spec.get("key").and_then(Value::as_str) {
+        Some(key) => doc.get(key).ok_or_else(|| format!("{from:?} has no field {key:?}. Fields: {}.", field_names(&doc)))?,
+        None => match &doc {
+            Value::Array(_) => &doc,
+            Value::Object(map) => {
+                let mut arrays = map.values().filter(|v| is_string_list(v));
+                match (arrays.next(), arrays.next()) {
+                    (Some(only), None) => only,
+                    _ => return Err(format!("{from:?} has several fields; name one with key. Fields: {}.", field_names(&doc))),
+                }
+            }
+            _ => return Err(format!("{from:?} holds no list of paths.")),
+        },
+    };
+    if !is_string_list(list) {
+        return Err(format!("files.from {from:?}: that field is not a list of paths."));
+    }
+    let dir = from.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    Ok(list.as_array().unwrap().iter().filter_map(Value::as_str).map(|p| join(dir, p)).collect())
+}
+
+fn field_names(doc: &Value) -> String {
+    doc.as_object().map(|m| m.keys().cloned().collect::<Vec<_>>().join(", ")).unwrap_or_else(|| "none".into())
+}
+
+fn is_string_list(v: &Value) -> bool {
+    v.as_array().is_some_and(|a| !a.is_empty() && a.iter().all(Value::is_string))
+}
+
+fn join(dir: &str, path: &str) -> String {
+    if dir.is_empty() || path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("{dir}/{path}")
+    }
+}
+
+/// A glob is the easy shortcut past an index: it also catches files the
+/// index leaves out. If a small JSON file in the Workspace lists at least two
+/// of the matched files but not all of them, say so — the model decides.
+fn index_note_for(ws: &Workspace, all: &[String], matched: &[String]) -> Option<String> {
+    const MAX_CANDIDATES: usize = 50;
+    const MAX_INDEX_BYTES: u64 = 256 * 1024;
+    if matched.len() < 3 {
+        return None;
+    }
+    let matched_set: std::collections::HashSet<&str> = matched.iter().map(String::as_str).collect();
+    let mut best: Option<(String, Vec<String>)> = None;
+    for rel in all.iter().filter(|r| r.ends_with(".json") && !matched_set.contains(r.as_str())).take(MAX_CANDIDATES) {
+        let Ok(full) = ws.resolve_existing(rel) else { continue };
+        if std::fs::metadata(&full).map(|m| m.len() > MAX_INDEX_BYTES).unwrap_or(true) {
+            continue;
+        }
+        let Ok(doc) = ws.read_text(&full, Access::Agent).map_err(|_| ()).and_then(|t| serde_json::from_str::<Value>(&t).map_err(|_| ())) else {
+            continue;
+        };
+        let dir = rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        let mut named = Vec::new();
+        collect_strings(&doc, &mut |s| {
+            let path = join(dir, s);
+            if matched_set.contains(path.as_str()) {
+                named.push(path);
+            }
+        });
+        named.sort();
+        named.dedup();
+        if named.len() >= 2 && named.len() < matched.len() && best.as_ref().is_none_or(|(_, b)| named.len() > b.len()) {
+            best = Some((rel.clone(), named));
+        }
+    }
+    let (index, named) = best?;
+    let named: std::collections::HashSet<&str> = named.iter().map(String::as_str).collect();
+    let unlisted: Vec<&str> = matched.iter().map(String::as_str).filter(|m| !named.contains(m)).collect();
+    let shown: Vec<&str> = unlisted.iter().take(5).copied().collect();
+    let more = if unlisted.len() > shown.len() { format!(" and {} more", unlisted.len() - shown.len()) } else { String::new() };
+    Some(format!(
+        "{index} lists {} of the {} files this glob matched; not listed: {}{more}. If the task follows {index}, call again with files {{\"from\": \"{index}\"}}.",
+        named.len(),
+        matched.len(),
+        shown.join(", ")
+    ))
+}
+
+fn collect_strings(v: &Value, f: &mut impl FnMut(&str)) {
+    match v {
+        Value::String(s) => f(s),
+        Value::Array(a) => a.iter().for_each(|x| collect_strings(x, f)),
+        Value::Object(m) => m.values().for_each(|x| collect_strings(x, f)),
+        _ => {}
+    }
 }
 
 fn matches_all(record: &Map<String, Value>, conditions: &Map<String, Value>) -> Result<bool, String> {
@@ -405,6 +530,52 @@ mod tests {
         let out = call(&ws, json!({ "files": "[\"a.json\", \"b.json\"]", "pick": { "json": ["n"] }, "total": "sum:n" }));
         assert_eq!(out["files_read"], 2);
         assert_eq!(out["sum_n"], 5);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn files_from_an_index_reads_exactly_what_it_lists() {
+        let (dir, ws) = workspace(&[
+            ("d/index.json", r#"{"title":"x","batches":["a.json","b.json"]}"#),
+            ("d/a.json", r#"[{"n":2}]"#),
+            ("d/b.json", r#"[{"n":3}]"#),
+            ("d/unlisted.json", r#"[{"n":1000}]"#),
+        ]);
+        let out = call(&ws, json!({ "files": { "from": "d/index.json", "key": "batches" }, "pick": { "json": ["n"] }, "total": "sum:n" }));
+        assert_eq!((out["files_read"].clone(), out["sum_n"].clone()), (json!(2), json!(5)));
+        let out = call(&ws, json!({ "files": { "from": "d/index.json" }, "pick": { "json": ["n"] }, "total": "sum:n" }));
+        assert_eq!(out["sum_n"], 5, "the only list of strings is taken without a key");
+        let out = call(&ws, json!({ "files": "{\"from\": \"d/index.json\"}", "pick": { "json": ["n"] }, "total": "sum:n" }));
+        assert_eq!(out["sum_n"], 5, "the spec sent as a JSON string");
+        let result = run(&ws, &json!({ "files": { "from": "d/index.json", "key": "nope" }, "pick": { "json": ["n"] } }), "run", None);
+        assert!(!result.ok && result.content.contains("has no field \"nope\"") && result.content.contains("batches"), "{}", result.content);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_glob_past_an_index_is_flagged_and_a_missing_keep_is_named() {
+        let (dir, ws) = workspace(&[
+            ("index.json", r#"{"batches":["batch-0.json","batch-1.json","batch-2.json"]}"#),
+            ("batch-0.json", r#"[{"active":true,"cents":1}]"#),
+            ("batch-1.json", r#"[{"active":false,"cents":2}]"#),
+            ("batch-2.json", r#"[{"active":true,"cents":3}]"#),
+            ("batch-unlisted.json", r#"[{"active":true,"cents":1000}]"#),
+        ]);
+        let out = call(&ws, json!({ "files": "batch-*.json", "pick": { "json": ["cents"] }, "total": "sum:cents" }));
+        let notes = out["notes"].to_string();
+        assert!(notes.contains("index.json lists 3 of the 4 files") && notes.contains("batch-unlisted.json"), "{notes}");
+        assert!(notes.contains("No keep was given"), "{notes}");
+        let out = call(&ws, json!({ "files": { "from": "index.json" }, "pick": { "json": ["cents"] }, "keep": { "active": true }, "total": "sum:cents" }));
+        assert!(out.get("notes").is_none(), "{out}");
+        assert_eq!(out["sum_cents"], 4);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_glob_no_list_names_carries_no_note() {
+        let (dir, ws) = workspace(&[("s/a.json", "{}"), ("s/b.json", "{}"), ("s/c.json", "{}"), ("package.json", r#"{"name":"x"}"#)]);
+        let out = call(&ws, json!({ "files": "s/*.json", "pick": { "json": ["n"] } }));
+        assert!(out.get("notes").is_none(), "{out}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
