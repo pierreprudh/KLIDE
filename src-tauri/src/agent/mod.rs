@@ -15,6 +15,7 @@ mod background;
 mod process;
 pub(crate) mod sandbox;
 mod script;
+mod read_many;
 mod hooks;
 pub use sandbox::Status as CommandSandboxStatus;
 /// The Settings row's two commands, kept behind the module that owns the file.

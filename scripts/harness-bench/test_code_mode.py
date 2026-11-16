@@ -68,33 +68,43 @@ class Grading(unittest.TestCase):
 
 
 class Verdict(unittest.TestCase):
-    def trial(self, task, arm, cost, seconds, passed=True):
+    def trial(self, task, arm, cost, seconds, passed=True, tokens=1000):
         return {"task": task, "arm": arm, "repeat": 0, "costUsd": cost, "elapsedSeconds": seconds, "passed": passed,
-                "inputTokens": 100, "cacheReadTokens": 10, "outputTokens": 5, "modelRequests": 2, "scriptCalls": 1 if arm == "on" else 0}
+                "inputTokens": tokens, "cacheReadTokens": 0, "outputTokens": 5, "modelRequests": 2,
+                "scriptCalls": 1 if arm == "script" else 0, "readManyCalls": 1 if arm == "batch" else 0}
 
     def tasks(self):
         return [{"id": "rollup-25"}, {"id": "rollup-100"}, {"id": "audit-40"}]
 
-    def test_keep_needs_all_three_checks(self):
-        results = [self.trial(t["id"], "off", 1.0, 10) for t in self.tasks()] + \
-                  [self.trial(t["id"], "on", 0.7, 10.5) for t in self.tasks()]
-        self.assertEqual(bench.summarize(results, self.tasks())["verdict"], "keep")
+    def run_arms(self, spec):
+        results = []
+        for arm, kwargs in spec.items():
+            for t in self.tasks():
+                k = dict(kwargs)
+                if callable(k.get("passed")):
+                    k["passed"] = k["passed"](t["id"])
+                results.append(self.trial(t["id"], arm, **k))
+        return bench.summarize(results, self.tasks())
 
-    def test_slower_or_less_correct_reverts(self):
-        slow = [self.trial(t["id"], "off", 1.0, 10) for t in self.tasks()] + \
-               [self.trial(t["id"], "on", 0.5, 12) for t in self.tasks()]
-        self.assertEqual(bench.summarize(slow, self.tasks())["verdict"], "revert")
-        wrong = [self.trial(t["id"], "off", 1.0, 10) for t in self.tasks()] + \
-                [self.trial(t["id"], "on", 0.5, 9, passed=t["id"] != "audit-40") for t in self.tasks()]
-        self.assertEqual(bench.summarize(wrong, self.tasks())["verdict"], "revert")
+    def test_each_arm_is_judged_against_off(self):
+        summary = self.run_arms({"off": {"cost": 1.0, "seconds": 10}, "batch": {"cost": 0.7, "seconds": 10.5},
+                                 "script": {"cost": 0.5, "seconds": 12}})
+        self.assertEqual(summary["verdicts"]["batch"]["verdict"], "keep")
+        self.assertEqual(summary["verdicts"]["script"]["verdict"], "drop", "too slow")
 
-    def test_missing_cost_is_not_a_saving(self):
-        results = [self.trial(t["id"], "off", None, 10) for t in self.tasks()] + \
-                  [self.trial(t["id"], "on", 0.1, 9) for t in self.tasks()]
-        self.assertEqual(bench.summarize(results, self.tasks())["verdict"], "revert")
+    def test_a_lost_answer_drops_the_arm(self):
+        summary = self.run_arms({"off": {"cost": 1.0, "seconds": 10},
+                                 "batch": {"cost": 0.5, "seconds": 9, "passed": lambda t: t != "audit-40"}})
+        self.assertEqual(summary["verdicts"]["batch"]["verdict"], "drop")
+
+    def test_a_local_model_is_judged_on_uncached_input(self):
+        summary = self.run_arms({"off": {"cost": None, "seconds": 10, "tokens": 10000},
+                                 "batch": {"cost": None, "seconds": 9, "tokens": 2000}})
+        self.assertEqual(summary["metric"], "medianUncachedInputTokens")
+        self.assertEqual(summary["verdicts"]["batch"]["verdict"], "keep")
 
     def test_no_trials_is_incomplete(self):
-        self.assertIsNone(bench.summarize([], self.tasks())["verdict"])
+        self.assertEqual(bench.summarize([], self.tasks())["verdicts"]["batch"]["verdict"], None)
 
 
 if __name__ == "__main__":

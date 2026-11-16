@@ -211,7 +211,8 @@ async fn code_mode_benchmark() {
     ));
     // Which arm this trial really is, read from the same gate a Run uses —
     // never assumed from the driver's label.
-    let offered = permission::GateSubject::from_request(&request).script_offered;
+    let gate = permission::GateSubject::from_request(&request);
+    let (offered, read_many_offered) = (gate.script_offered, gate.read_many_offered);
     let id = "code-mode-benchmark";
     let supervisor = Arc::new(FakeSupervisor::for_request(id, &request));
     let cancel = CancellationToken::new();
@@ -253,7 +254,8 @@ async fn code_mode_benchmark() {
     });
     let sum = |f: fn(&AgentUsage) -> Option<u64>| complete_usage_sum(&provider_usages, f);
     std::fs::write(base.join("native-result.json"), serde_json::to_vec_pretty(&serde_json::json!({
-        "elapsedSeconds": elapsed, "error": outcome.err(), "codeModeOffered": offered,
+        "elapsedSeconds": elapsed, "error": outcome.err(), "codeModeOffered": offered, "readManyOffered": read_many_offered,
+        "readManyCalls": events.iter().filter(|e| matches!(e, AgentEvent::ToolCallStarted { name, .. } if name == super::read_many::READ_MANY_TOOL)).count(),
         "inputTokens": sum(|u| u.prompt_tokens), "outputTokens": sum(|u| u.completion_tokens),
         "cacheReadTokens": sum(|u| u.cache_read_tokens),
         "costUsd": complete_usage_sum(&provider_usages, |u| u.cost_usd),

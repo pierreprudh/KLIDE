@@ -354,7 +354,7 @@ fn store_at(path: &Path, stored: Stored) -> Result<(), String> {
 /// never read the developer's setting.
 pub fn enabled() -> bool {
     match std::env::var("KLIDE_CODE_MODE").as_deref() {
-        Ok("1") | Ok("on") | Ok("true") => return true,
+        Ok("1") | Ok("on") | Ok("true") | Ok("force") => return true,
         Ok("0") | Ok("off") | Ok("false") => return false,
         _ => {}
     }
@@ -381,6 +381,11 @@ pub fn set(enabled: bool) -> Result<Status, String> {
 /// May a Run on this pair be offered `run_script`? Only when the switch is on
 /// and the model is not a local one.
 pub fn offered_for(switch_on: bool, provider: &str, model: &str) -> bool {
+    // `KLIDE_CODE_MODE=force` — benchmarks only: offer it to any model, so the
+    // claim that small models write broken scripts can itself be measured.
+    if matches!(std::env::var("KLIDE_CODE_MODE").as_deref(), Ok("force")) {
+        return true;
+    }
     switch_on && !matches!(crate::model_capabilities::price_class(provider, model), crate::model_capabilities::PriceClass::Local)
 }
 

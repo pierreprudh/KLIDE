@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Code Mode on/off benchmark — the same read tasks with `run_script` offered
-and not offered, on the real native Harness. Standard library only.
+"""Context-saving rungs benchmark — the same read tasks with plain reads only,
+with `read_many` (a batch-read form) and with `run_script` (Code Mode), on the
+real native Harness. Standard library only.
 
 Default is a no-inference preview of the manifest. --run executes trials, which
 makes paid provider calls. Every trial is kept, failures included.
 
-Arms: `off` (KLIDE_CODE_MODE=0) and `on` (KLIDE_CODE_MODE=1). The Rust entry
-point reads the arm back from the Harness gate and the trial is invalid if it
-does not match. Both arms run in Plan mode: reads only, no shell, no edits.
+Arms: `off` (plain reads), `batch` (+ read_many, KLIDE_READ_MANY=1) and
+`script` (+ run_script, KLIDE_CODE_MODE=force so local models get it too). The
+Rust entry point reads each arm back from the Harness gate and the trial is
+invalid if it does not match. Every arm runs in Plan mode: reads only, no
+shell, no edits.
 
 Tasks: the three 2026-10-30 tasks verbatim from the archive (controls and
 continuity with READ_SCRIPT_RESULTS.md), the same rollup at 25 and 100 files
@@ -33,17 +36,21 @@ from run import execute, read_native_result  # noqa: E402
 REPO = HERE.parents[1]
 ARCHIVE = HERE / "read-script-2026-10-30-data.json"
 TEST = "agent::live_eval::code_mode_benchmark"
-ARMS = ("off", "on")
+ARMS = ("off", "batch", "script")
+ARM_ENV = {"off": {"KLIDE_CODE_MODE": "0", "KLIDE_READ_MANY": "0"},
+           "batch": {"KLIDE_CODE_MODE": "0", "KLIDE_READ_MANY": "1"},
+           "script": {"KLIDE_CODE_MODE": "force", "KLIDE_READ_MANY": "0"}}
+ARM_GATE = {"off": (False, False), "batch": (False, True), "script": (True, False)}
 
 # Written before any trial ran. The report evaluates it as stated.
 DECISION_RULE = {
-    "scope": "scaling tasks: rollup-25, rollup-100, audit-40",
+    "scope": "scaling tasks: rollup-25, rollup-100, audit-40; each arm judged against off",
     "keep_if": [
-        "pooled median cost per trial with Code Mode on is at least 20% lower than off",
-        "pass count with Code Mode on is not lower than off",
-        "pooled median elapsed time with Code Mode on is at most 10% higher than off",
+        "pooled median cost per trial is at least 20% lower than off (uncached input tokens when the provider reports no cost, e.g. a local model)",
+        "pass count is not lower than off",
+        "pooled median elapsed time is at most 10% higher than off",
     ],
-    "otherwise": "revert PR #524",
+    "otherwise": "script: revert PR #524; batch: drop the read_many prototype",
 }
 
 NOTE = "Synthetic irrelevant description " * 3
@@ -157,42 +164,54 @@ def change(off, on):
     return (on - off) / off
 
 
+def uncached(r):
+    return r["inputTokens"] - (r.get("cacheReadTokens") or 0) if isinstance(r.get("inputTokens"), int) else None
+
+
+def arm_stats(trials):
+    return {
+        "trials": len(trials),
+        "passed": sum(1 for r in trials if r["passed"]),
+        "medianCostUsd": median([r.get("costUsd") for r in trials]),
+        "medianUncachedInputTokens": median([uncached(r) for r in trials]),
+        "medianOutputTokens": median([r.get("outputTokens") for r in trials]),
+        "medianModelRequests": median([r.get("modelRequests") for r in trials]),
+        "medianElapsedSeconds": median([r.get("elapsedSeconds") for r in trials]),
+        "trialsUsingTool": sum(1 for r in trials if (r.get("scriptCalls") or 0) + (r.get("readManyCalls") or 0) > 0),
+    }
+
+
+SCALING = {"rollup-25", "rollup-100", "audit-40"}
+
+
 def summarize(results, tasks):
+    arms = [a for a in ARMS if any(r["arm"] == a for r in results)] or list(ARMS)
     rows = []
     for task in tasks:
         row = {"task": task["id"]}
-        for arm in ARMS:
-            trials = [r for r in results if r["task"] == task["id"] and r["arm"] == arm]
-            row[arm] = {
-                "trials": len(trials),
-                "passed": sum(1 for r in trials if r["passed"]),
-                "medianCostUsd": median([r.get("costUsd") for r in trials]),
-                "medianUncachedInputTokens": median([r["inputTokens"] - (r.get("cacheReadTokens") or 0)
-                                                     for r in trials if isinstance(r.get("inputTokens"), int)]),
-                "medianOutputTokens": median([r.get("outputTokens") for r in trials]),
-                "medianModelRequests": median([r.get("modelRequests") for r in trials]),
-                "medianElapsedSeconds": median([r.get("elapsedSeconds") for r in trials]),
-                "trialsUsingScripts": sum(1 for r in trials if (r.get("scriptCalls") or 0) > 0),
-            }
-        row["costChange"] = change(row["off"]["medianCostUsd"], row["on"]["medianCostUsd"])
-        row["elapsedChange"] = change(row["off"]["medianElapsedSeconds"], row["on"]["medianElapsedSeconds"])
+        for arm in arms:
+            row[arm] = arm_stats([r for r in results if r["task"] == task["id"] and r["arm"] == arm])
         rows.append(row)
-    scaling = {"rollup-25", "rollup-100", "audit-40"}
-    pooled = {}
-    for arm in ARMS:
-        trials = [r for r in results if r["task"] in scaling and r["arm"] == arm]
-        pooled[arm] = {"trials": len(trials), "passed": sum(1 for r in trials if r["passed"]),
-                       "medianCostUsd": median([r.get("costUsd") for r in trials]),
-                       "medianElapsedSeconds": median([r.get("elapsedSeconds") for r in trials])}
-    cost = change(pooled["off"]["medianCostUsd"], pooled["on"]["medianCostUsd"])
-    elapsed = change(pooled["off"]["medianElapsedSeconds"], pooled["on"]["medianElapsedSeconds"])
-    complete = all(pooled[a]["trials"] > 0 for a in ARMS)
-    checks = {"cost at least 20% lower": cost is not None and cost <= -0.20,
-              "pass count not lower": pooled["on"]["passed"] >= pooled["off"]["passed"],
-              "elapsed at most 10% higher": elapsed is not None and elapsed <= 0.10}
-    verdict = None if not complete else ("keep" if all(checks.values()) else "revert")
-    return {"tasks": rows, "scalingPooled": pooled, "scalingCostChange": cost,
-            "scalingElapsedChange": elapsed, "ruleChecks": checks, "verdict": verdict}
+    pooled = {arm: arm_stats([r for r in results if r["task"] in SCALING and r["arm"] == arm]) for arm in arms}
+    scaling = [r for r in results if r["task"] in SCALING]
+    # Cost when every scaling trial has one; otherwise (a local model) uncached input.
+    metric = "medianCostUsd" if scaling and all(isinstance(r.get("costUsd"), (int, float)) for r in scaling) else "medianUncachedInputTokens"
+    verdicts = {}
+    for arm in arms:
+        if arm == "off":
+            continue
+        base, test = pooled.get("off"), pooled[arm]
+        if not base or not base["trials"] or not test["trials"]:
+            verdicts[arm] = {"verdict": None}
+            continue
+        saving = change(base[metric], test[metric])
+        elapsed = change(base["medianElapsedSeconds"], test["medianElapsedSeconds"])
+        checks = {"20% saving": saving is not None and saving <= -0.20,
+                  "pass count not lower": test["passed"] >= base["passed"],
+                  "elapsed at most 10% higher": elapsed is not None and elapsed <= 0.10}
+        verdicts[arm] = {"verdict": "keep" if all(checks.values()) else "drop", "saving": saving,
+                         "elapsedChange": elapsed, "checks": checks}
+    return {"arms": arms, "metric": metric, "tasks": rows, "scalingPooled": pooled, "verdicts": verdicts}
 
 
 def fmt(value, kind):
@@ -210,32 +229,35 @@ def fmt(value, kind):
 def write_report(output, manifest, results, tasks):
     summary = summarize(results, tasks)
     (output / "summary.json").write_text(json.dumps(summary, indent=2))
-    lines = [f"# Code Mode on/off — {manifest['startedAt'][:10]}", "",
+    arms, metric = summary["arms"], summary["metric"]
+    unit = "usd" if metric == "medianCostUsd" else "n"
+    lines = [f"# Context-saving rungs — {manifest['startedAt'][:10]}", "",
              f"Model `{manifest['model']}` on `{manifest['provider']}`, {manifest['repeats']} repeats, seed {manifest['seed']}, "
-             f"source `{manifest['sourceRevision']}`{' (dirty)' if manifest['sourceDirty'] else ''}.", "",
-             f"**Verdict by the pre-registered rule: {summary['verdict'] or 'incomplete'}**", ""]
-    for name, ok in summary["ruleChecks"].items():
-        lines.append(f"- {'✓' if ok else '✗'} {name}")
-    lines += ["", f"Scaling tasks pooled: cost {fmt(summary['scalingCostChange'], 'pct')}, "
-                  f"elapsed {fmt(summary['scalingElapsedChange'], 'pct')}, passed "
-                  f"{summary['scalingPooled']['off']['passed']}/{summary['scalingPooled']['off']['trials']} off → "
-                  f"{summary['scalingPooled']['on']['passed']}/{summary['scalingPooled']['on']['trials']} on.", "",
-              "| Task | Passed off → on | Median cost off | on | Δ | Median time off | on | Δ | Requests off → on | Uncached input off → on | Used scripts |",
-              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+             f"context {manifest['numCtx']}, source `{manifest['sourceRevision']}`{' (dirty)' if manifest['sourceDirty'] else ''}.", "",
+             f"Saving measured as {'cost' if unit == 'usd' else 'uncached input tokens'}.", ""]
+    for arm, v in summary["verdicts"].items():
+        if v["verdict"] is None:
+            lines.append(f"- **{arm}: incomplete**")
+            continue
+        marks = ", ".join(f"{'✓' if ok else '✗'} {name}" for name, ok in v["checks"].items())
+        lines.append(f"- **{arm}: {v['verdict']}** — saving {fmt(v['saving'], 'pct')}, time {fmt(v['elapsedChange'], 'pct')} ({marks})")
+    pooled = summary["scalingPooled"]
+    lines += ["", "Scaling tasks pooled, passed: " + ", ".join(f"{a} {pooled[a]['passed']}/{pooled[a]['trials']}" for a in arms) + ".", ""]
+    header = "| Task | " + " | ".join(f"{a} pass | {a} {'cost' if unit == 'usd' else 'uncached in'} | {a} time | {a} req" for a in arms) + " |"
+    lines += [header, "| --- |" + " ---: | ---: | ---: | ---: |" * len(arms)]
     for row in summary["tasks"]:
-        off, on = row["off"], row["on"]
-        lines.append(f"| {row['task']} | {off['passed']}/{off['trials']} → {on['passed']}/{on['trials']} | "
-                     f"{fmt(off['medianCostUsd'], 'usd')} | {fmt(on['medianCostUsd'], 'usd')} | {fmt(row['costChange'], 'pct')} | "
-                     f"{fmt(off['medianElapsedSeconds'], 's')} | {fmt(on['medianElapsedSeconds'], 's')} | {fmt(row['elapsedChange'], 'pct')} | "
-                     f"{fmt(off['medianModelRequests'], 'n')} → {fmt(on['medianModelRequests'], 'n')} | "
-                     f"{fmt(off['medianUncachedInputTokens'], 'n')} → {fmt(on['medianUncachedInputTokens'], 'n')} | "
-                     f"{on['trialsUsingScripts']}/{on['trials']} |")
-    lines += ["", "## Every trial", "", "| Task | Repeat | Arm | Pass | Requests | Scripts | Nested reads | Cost USD | Time s | Error |",
-              "| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |"]
+        cells = []
+        for a in arms:
+            st = row[a]
+            cells.append(f"{st['passed']}/{st['trials']} | {fmt(st[metric], unit)} | {fmt(st['medianElapsedSeconds'], 's')} | {fmt(st['medianModelRequests'], 'n')}")
+        lines.append(f"| {row['task']} | " + " | ".join(cells) + " |")
+    lines += ["", "## Every trial", "", "| Task | Repeat | Arm | Pass | Requests | Batch calls | Scripts | Nested reads | Cost USD | Uncached input | Time s | Error |",
+              "| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for r in results:
         lines.append(f"| {r['task']} | {r['repeat'] + 1} | {r['arm']} | {'yes' if r['passed'] else 'no'} | {fmt(r.get('modelRequests'), 'n')} | "
-                     f"{fmt(r.get('scriptCalls'), 'n')} | {fmt(r.get('nestedToolCalls'), 'n')} | {fmt(r.get('costUsd'), 'usd')} | "
-                     f"{fmt(r.get('elapsedSeconds'), 's')} | {(r.get('error') or '').replace('|', '/')[:80]} |")
+                     f"{fmt(r.get('readManyCalls'), 'n')} | {fmt(r.get('scriptCalls'), 'n')} | {fmt(r.get('nestedToolCalls'), 'n')} | "
+                     f"{fmt(r.get('costUsd'), 'usd')} | {fmt(uncached(r), 'n')} | {fmt(r.get('elapsedSeconds'), 's')} | "
+                     f"{(r.get('error') or '').replace('|', '/')[:80]} |")
     lines += ["", "## Limits", ""] + [f"- {item}" for item in manifest["limits"]]
     (output / "REPORT.md").write_text("\n".join(lines) + "\n")
     return summary
@@ -248,11 +270,14 @@ def main(argv=None):
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--task", action="append", help="Run only these task ids (repeatable)")
+    parser.add_argument("--arm", action="append", choices=ARMS, help="Run only these arms (repeatable; off is always kept as the baseline)")
+    parser.add_argument("--num-ctx", type=int, default=65536)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run", action="store_true", help="Execute trials (paid provider calls)")
     args = parser.parse_args(argv)
     if args.repeats < 1:
         parser.error("repeats must be positive")
+    arms = list(ARMS) if not args.arm else ["off"] + [a for a in ARMS if a in args.arm and a != "off"]
     tasks = all_tasks(args.seed)
     if args.task:
         unknown = set(args.task) - {t["id"] for t in tasks}
@@ -262,9 +287,9 @@ def main(argv=None):
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
     dirty = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True)
     manifest = {
-        "benchmark": "klide-code-mode-v1", "provider": args.provider, "model": args.model,
-        "repeats": args.repeats, "seed": args.seed, "arms": list(ARMS), "mode": "plan",
-        "numCtx": 65536, "numPredict": 2048, "reflectionLevel": "off", "maxParallelTools": 4,
+        "benchmark": "klide-context-rungs-v1", "provider": args.provider, "model": args.model,
+        "repeats": args.repeats, "seed": args.seed, "arms": arms, "mode": "plan",
+        "numCtx": args.num_ctx, "numPredict": 2048, "reflectionLevel": "off", "maxParallelTools": 4,
         "tasks": [{"id": t["id"], "files": len(t["files"]), "bytes": sum(len(v) for v in t["files"].values()),
                    "maxTurns": t["maxTurns"], "timeoutSeconds": t["timeoutSeconds"], "origin": t["origin"]} for t in tasks],
         "decisionRule": DECISION_RULE,
@@ -273,9 +298,9 @@ def main(argv=None):
         "startedAt": datetime.now(timezone.utc).isoformat(),
         "machine": {"system": platform.system(), "architecture": platform.machine()},
         "limits": [
-            "One hosted model (chosen for price); says nothing about stronger models or local ones",
+            "One model per run; a result says nothing about other models",
             "Synthetic read-only tasks in Plan mode; not a coding-quality measure",
-            "Code Mode is offered, not forced: the on arm may still choose direct reads",
+            "The batch and script Tools are offered, not forced: those arms may still choose plain reads",
             "Provider caches are not reset; cached input is reported separately, not controlled",
             "Arm order randomized per task and repeat with the stated seed; failures kept in every median",
             "Debug-build Harness timing; compilation and UI start excluded",
@@ -298,7 +323,7 @@ def main(argv=None):
     rng, results = random.Random(args.seed), []
     for repeat in range(args.repeats):
         for task in tasks:
-            order = list(ARMS)
+            order = list(arms)
             rng.shuffle(order)
             for arm in order:
                 base = output / f"{task['id']}-{repeat}-{arm}"
@@ -315,12 +340,13 @@ def main(argv=None):
                 (base / "case.json").write_text(json.dumps(case, indent=2))
                 env = os.environ.copy()
                 env["KLIDE_BENCH_CASE"] = str(base)
-                env["KLIDE_CODE_MODE"] = "1" if arm == "on" else "0"
+                env.update(ARM_ENV[arm])
                 measured = execute(cargo + ["--", "--ignored", "--exact", TEST, "--nocapture"], base, env,
                                    timeout=task["timeoutSeconds"] + 60)
                 measured = read_native_result(base, measured)
-                if measured.get("codeModeOffered") is not None and measured["codeModeOffered"] != (arm == "on"):
-                    measured["error"] = measured.get("error") or f"Arm mismatch: gate offered Code Mode = {measured['codeModeOffered']}"
+                gate = (measured.get("codeModeOffered"), measured.get("readManyOffered"))
+                if None not in gate and gate != ARM_GATE[arm]:
+                    measured["error"] = measured.get("error") or f"Arm mismatch: gate offered (run_script, read_many) = {gate}"
                 record = {"task": task["id"], "repeat": repeat, "arm": arm, **measured,
                           "grading": grade(task, workspace, before, measured.get("finalAnswer"))}
                 record["passed"] = not record.get("error") and record["grading"]["passed"]
@@ -329,9 +355,9 @@ def main(argv=None):
                 write_report(output, manifest, results, tasks)
                 print(f"{task['id']} repeat {repeat + 1} {arm}: {'PASS' if record['passed'] else 'FAIL'}"
                       f" cost={fmt(record.get('costUsd'), 'usd')} time={fmt(record.get('elapsedSeconds'), 's')}"
-                      f" scripts={record.get('scriptCalls')}", flush=True)
+                      f" batch={record.get('readManyCalls')} scripts={record.get('scriptCalls')}", flush=True)
     summary = write_report(output, manifest, results, tasks)
-    print(f"Report: {output / 'REPORT.md'}  verdict: {summary['verdict']}")
+    print(f"Report: {output / 'REPORT.md'}  verdicts: " + ", ".join(f"{a}={v['verdict']}" for a, v in summary['verdicts'].items()))
     return 0
 
 

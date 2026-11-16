@@ -993,6 +993,14 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
+            schema: schema(super::read_many::READ_MANY_TOOL, super::read_many::description(),
+                super::read_many::schema_properties(), &["files", "pick"]),
+            run_read: Some(super::read_many::run),
+            run_write_preview: None,
+            summary: super::read_many::summary,
+        },
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
             schema: schema(super::script::RUN_SCRIPT_TOOL, &super::script::description(),
                 serde_json::json!({ "code": { "type": "string", "description": "The body of an async JavaScript function. Call `await tools.<name>({...})`, end with `return <value>`." } }),
                 &["code"]),
@@ -2731,7 +2739,7 @@ fn ignored_dir(name: &str) -> bool {
     )
 }
 
-fn walk_files(root: &Path, start: &Path, out: &mut Vec<PathBuf>) {
+pub(super) fn walk_files(root: &Path, start: &Path, out: &mut Vec<PathBuf>) {
     if out.len() >= MAX_WALK_FILES {
         return;
     }
