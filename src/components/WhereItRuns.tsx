@@ -1,14 +1,14 @@
 // "Where it runs" — which Machine a new Focus conversation starts on
 // (docs/REMOTE_MACHINES.md, Q6). The menu itself is Focus's own InlineMenu, the
 // same dropdown as the agent picker beside it: This Mac, then each Remote
-// machine from ~/.klide/machines.json, plus connection and management actions.
+// machine from ~/.klide/machines.json, plus an Add a machine action.
 // This module is the logic behind that menu.
 //
 // It behaves like the environment switch in the Claude and Codex apps: each
 // project remembers where it last started, readiness is checked in the
 // background when the start stage appears (`machineStatus.ts`), and nothing
 // waits on a check. A machine whose last check failed stays in the menu; picking
-// it raises a notification with the reason and a Copy fix action instead of
+// it raises a notification with the reason and a setup action instead of
 // choosing it. Picking a Remote machine puts the conversation on Claude Code —
 // the one CLI the first slice runs there.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -38,14 +38,14 @@ export function useWhereItRuns({
   workspaceRoot,
   provider,
   onProviderChange,
-  onConnectMachine,
-  onManageMachines,
+  onAddMachine,
+  onOpenMachineSettings,
 }: {
   workspaceRoot: string | null;
   provider: string;
   onProviderChange: (provider: string) => void;
-  onConnectMachine: () => void;
-  onManageMachines: () => void;
+  onAddMachine: () => void;
+  onOpenMachineSettings: () => void;
 }): WhereItRunsMenu {
   const machine = useStartStageMachine();
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -114,8 +114,7 @@ export function useWhereItRuns({
         icon: <MachineIcon size={14} />,
         dimmed: blockedReason(m) !== null,
       })),
-      { label: "Connect a machine…", value: "action:connect-machine", icon: <MachineIcon size={14} />, resolve: { title: "Connect an SSH machine", run: onConnectMachine } },
-      ...(machines.length ? [{ label: "Manage machines…", value: "action:manage-machines", icon: <MachineIcon size={14} />, resolve: { title: "Open machine settings", run: onManageMachines } }] : []),
+      { label: "Add a machine…", value: "action:add-machine", icon: <MachineIcon size={14} />, resolve: { title: "Add an SSH machine", run: onAddMachine } },
     ],
     selected: chosen ? chosen.id : THIS_MAC,
     onSelect: (value) => {
@@ -132,7 +131,7 @@ export function useWhereItRuns({
         pushToast(`${machineLabel(target)}: ${blocked.why}`, {
           tone: "warn",
           duration: 8000,
-          action: { label: "Set up machine", run: onManageMachines },
+          action: { label: "Set up machine", run: onOpenMachineSettings },
         });
         return;
       }

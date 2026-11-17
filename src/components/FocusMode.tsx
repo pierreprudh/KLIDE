@@ -1963,8 +1963,8 @@ export function FocusComposer({
   const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
   const whereItRuns = useWhereItRuns({
     workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId),
-    onConnectMachine: () => { requestMachineSetup(); onOpenSettingsSection("machines"); },
-    onManageMachines: () => onOpenSettingsSection("machines"),
+    onAddMachine: () => { requestMachineSetup(); onOpenSettingsSection("machines"); },
+    onOpenMachineSettings: () => onOpenSettingsSection("machines"),
   });
 
   // The persistent task dock combines Codex's context ribbon with Claude's
