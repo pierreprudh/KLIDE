@@ -4,8 +4,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/klide-logo-dark.svg" />
-    <img src=".github/assets/klide-logo-light.svg" alt="Klide logo" width="72" />
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/klide-app-icon-dark.svg" />
+    <img src=".github/assets/klide-app-icon-light.svg" alt="Klide app icon" width="96" />
   </picture>
 </p>
 
