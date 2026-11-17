@@ -65,7 +65,7 @@ function VersionLine({ row }: { row: CliVersion }) {
       {row.updateAvailable && row.latest ? (
         <>
           <span style={{ opacity: 0.55 }}> → </span>
-          {/* Emphasis is colour, not weight — Atkinson is single-weight. */}
+          {/* Keep version metadata visually quiet. */}
           <span style={{ color: "var(--fg-strong)" }}>{row.latest}</span>
           <span style={{ fontFamily: "var(--font-ui)" }}> available</span>
         </>

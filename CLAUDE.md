@@ -21,7 +21,7 @@ Pierre is new to building desktop apps and is learning Rust as he goes. Frame te
 | Keep the familiar IDE structural layout (sidebar rail, tabs, editor, status bar, panel) | Strip out structural elements to "simplify" |
 | Quiet light/dark palettes with shared app + terminal tokens | Saturated accent colors, gradients, drop shadows |
 | Generous whitespace, rounded groups, thin borders and subtle panel shadows | Heavy frames, dividers or shadows |
-| Restrained type — Atkinson Hyperlegible for UI, Monaspace for code | Multiple display fonts, decorative weights |
+| Restrained type — San Francisco for macOS UI, Inter for wordmark, Monaspace for code | Multiple display fonts, decorative weights |
 | Subtle, considered motion (fades, no bounces) | Springy animations |
 | Icons only when they earn their place | Icon-for-every-button maximalism |
 
