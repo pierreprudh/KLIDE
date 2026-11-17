@@ -2,6 +2,13 @@
   <img src=".github/assets/klide-banner.png" alt="Klide — a workspace for coding agents" width="100%" />
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/klide-logo-dark.svg" />
+    <img src=".github/assets/klide-logo-light.svg" alt="Klide logo" width="72" />
+  </picture>
+</p>
+
 <h1 align="center">Your agents. Your models. One workspace.</h1>
 
 <p align="center">
