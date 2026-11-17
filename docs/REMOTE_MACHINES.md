@@ -1,8 +1,43 @@
 # Remote machines
 
-Design note, started 2026-11-03, updated 2026-11-09. Nothing is built in Klide
-yet. The first Remote machine exists and is bootstrapped (see "The first
-machine"). Terms in **bold** are defined in `CONTEXT.md`.
+Design note, started 2026-11-03, updated 2026-11-17. Native remote
+conversations now launch through the SSH Run host, stream into Klide, replay
+missed activity and reconnect after a network interruption. The implementation
+has controlled-process and browser acceptance; live Linux acceptance on
+`klide-box` remains pending because SSH timed out. Terms in **bold** are defined
+in `CONTEXT.md`.
+
+## Use it
+
+1. Connect from Terminal once (`ssh <alias>`) to accept the host key. Use an
+   SSH alias for keys and ports; Tailscale addresses work through the same SSH
+   connection.
+2. In Settings › Machines, add the SSH alias and the project's Remote
+   checkout. Clone the repository there first; the Mac's unsaved files are not
+   automatically copied.
+3. Choose **Install Run host**. Klide uses this Mac's `gh` connection to
+   download the successful `Linux host binary` CI artifact for this app's
+   source commit, sends only that binary over SSH, validates its package,
+   protocol and source commit, and replaces an idle host. Alternatively,
+   choose an already-downloaded, extracted Linux `klide` binary. Active tasks
+   prevent an update. The current CI artifact targets Linux x86_64; the host
+   still needs WebKitGTK and GTK runtime libraries (see the setup facts).
+4. Check the machine's facts: matching Run host, Claude Code installed and
+   logged in there, and Remote checkout present. Pick that machine above the
+   Focus composer and send the task. It runs in its own remote worktree.
+5. Quit Klide or shut down the Mac. Leave the Remote machine on. Reopen the
+   same conversation to replay missed output and resume live streaming;
+   pending approvals and questions are restored too. A quiet Reconnecting
+   label appears during a lost connection. Stop and approval answers travel
+   back to the owning host.
+6. **Remote changes** reads the worktree's diff from the remote machine,
+   including commits made during the task. Mac-only file, rollback and
+   artifact actions never operate on remote paths. Merge/Discard and opening
+   individual remote artifacts remain follow-ups.
+
+For the current Windows-hosted VM, Windows and the VM must stay on while the
+Mac is off. A machine reboot or host crash interrupts execution; a connection
+loss does not. Transcript recovery retains evidence after the host exits.
 
 ## The idea
 
@@ -74,7 +109,7 @@ work and leaves logins there.
   dependencies (WebKitGTK).
 - `agent/run_host.rs` decides once where a Run lives (`placement`: app or ptyd)
   and holds the one admission and failure-budget judgement.
-- `agent/remote.rs` connects to ptyd over a local unix socket, forwards events,
+- `agent/daemon_client.rs` connects to ptyd over a local unix socket, forwards events,
   and replays a durable gap after a reconnect.
 - `pty_client.rs` checks the daemon's package version, protocol revision and
   build id on every connect, and replaces an older idle daemon.
@@ -128,8 +163,8 @@ autostart. 3.2 GB is enough for Claude Code, tight for Rust builds.
 3. **Transcript → on the machine, the source of truth.** The app replays from
    it, exactly as it replays from the local daemon today. No mirror in the
    first slice.
-4. **Review** — still open: diffs and files are read through new ptyd requests,
-   addressed as (Machine, path), never as a local path.
+4. **Review** — remote diffs are read through a host request scoped to the
+   conversation worktree. Individual files and Merge/Discard remain follow-ups.
 5. **Readiness** — reachable, ptyd version, Claude Code installed and logged
    in, Remote checkout present and clean.
 6. **Choosing the Machine in the UI → decided 2026-11-09** (prototype:
@@ -143,8 +178,8 @@ autostart. 3.2 GB is enough for Claude Code, tight for Rust builds.
    the Machine first, then a folder on it (or clone onto it); SSH hosts come
    from `~/.ssh/config`. Settings › Machines lists each Machine's readiness
    (Q5) as facts, each problem with the command that fixes it.
-7. **Naming** — rename `agent/remote.rs` (it means the local daemon) before
-   "remote" starts meaning another computer.
+7. **Naming** — completed 2026-11-17: `agent/remote.rs` became
+   `agent/daemon_client.rs`; it connects to the local background daemon.
 
 ## Built first: the picker on tmux (2026-11-09)
 
@@ -177,8 +212,10 @@ code on the machine: Claude Code in tmux over SSH.
   sources and Missions are refused or skipped on a Remote machine; review is
   `git fetch <machine-remote>` then Git Review.
 
-Steps 0–6 replace the terminal with Klide's own Run on the machine; the
-picker and the per-conversation placement stay.
+This section records the original tmux implementation. Since 2026-11-17,
+new remote conversations use the native Run host. An existing tmux session is
+not silently migrated or driven by a second writer: finish it there and start
+a new native conversation.
 
 ## Plan for the first slice
 
@@ -208,26 +245,66 @@ Each step is one PR and ends with something checkable on `klide-box`.
    **Decision: build on CI.** A 3 GB box should not compile the app, and the
    Tauri-free `klide-host` binary is not needed to start — the cost of the
    whole-app build is the two runtime packages and 63 MB.
-1. **Rename** `agent/remote.rs` (Q7). Pure rename, tests unchanged.
-2. **One Remote machine + readiness.** `~/.klide/machines.json` holds one SSH
-   alias; a Rust check over `ssh -o BatchMode=yes` reports the Q5 facts as
-   `Readiness`. A Settings row shows it. No Runs yet.
-3. **Transport.** `klide ptyd connect` on the remote side; a transport trait in
-   `pty_client.rs`; Ping/version check over SSH. Test: the same client tests
-   against a local SSH-shaped child process.
-4. **Install and upgrade.** Push the matching binary, systemd user unit,
-   replace-when-idle. Test: a version bump on the Mac upgrades the box.
-5. **Launch, stream, stop, reattach.** A Conversation bound to (Machine,
-   Remote checkout) starts a Claude Code Run on the box in its own worktree.
-   Acceptance: start a task, quit Klide, reopen — the Run kept going and
-   replays; Stop works after reattach.
-6. **Review remote results.** File and diff requests over the wire; Merge /
-   Discard on the box; validation evidence shown in Klide.
-7. **Choose the Machine in the UI** (Q6) — built first, on tmux (above); this
-   step moves it onto the Run host.
+1. **Rename** `agent/remote.rs` to `agent/daemon_client.rs` (Q7).
+   Completed 2026-11-17; behavior unchanged.
+2. **Machine + readiness — implemented.** Settings manages the SSH alias
+   and checkout mapping. Facts report the matching native Run host, Claude
+   installation/login and checkout; tmux is no longer needed for new tasks.
+3. **Transport — implemented.** `pty_transport.rs` shares authenticated local
+   socket and SSH-child connections. `ptyd connect --ensure` starts the
+   matching detached daemon when needed; credentials stay on the host.
+   Protocol 3 adds bounded remote replay, remote identity, isolated starts,
+   diff reads and idle-upgrade reservation. SSH has no TTY or login prompts.
+4. **Install and upgrade — implemented.** Explicit Settings action downloads
+   the CI artifact for this app's source commit (or takes a selected binary),
+   validates the staged binary remotely, refuses active work and replaces
+   the idle host. New starts cannot race the upgrade reservation. A detached
+   host is started on demand; no always-on systemd service is required for
+   the Mac-disconnection guarantee. The machine must remain running.
+5. **Launch, stream, stop, reattach — implemented.** Backend placement is
+   persisted before dispatch and cannot fall back to local execution. The
+   host owns its transcript and reuses one worktree per conversation. The Mac
+   caches only received events in memory. Subscribe-before-replay and
+   sequence checks close gaps and remove overlap. A lost SSH child reconnects
+   and replays; a confirmed lost host owner is reported as interrupted.
+6. **Review remote results — partial.** Remote changes compares the worktree
+   against its recorded starting commit, including task commits. Paths are
+   never treated as Mac paths. Merge/Discard, individual artifact opening and
+   remote checkpoint management remain outside this implementation.
+7. **Choose the Machine in the UI — implemented.** The existing picker and
+   conversation placement now dispatch native Runs, in Focus and restored
+   conversation surfaces. Legacy tmux sessions keep their old terminal path.
 
 Out of the first slice: other CLIs, Harness Runs on API models, Missions,
 transfer between machines, phone, several machines.
+
+### Verification and remaining acceptance
+
+`python3 tests/remote-machine-smoke.py` uses a real detached host and a
+controlled Claude CLI, with no model calls. It verifies launch, isolated
+worktree placement, every client disconnecting mid-turn, replay, ordered live
+stream resumption, completion recovery, follow-up transcript reuse, Stop and
+active-upgrade refusal. Rust tests cover replay bounds, immutable placement,
+corrupt-placement refusal, transport framing, quoting, timeouts and detach.
+Browser checks cover Settings installation/errors and native remote
+conversation replay plus Remote changes without a terminal surface.
+
+Live Linux SSH acceptance is still owed: `klide-box` timed out twice on
+2026-11-17. Once reachable, install the matching CI binary, launch a real
+Claude task in Klide, quit/reopen, then sleep/wake the Mac and confirm resumed
+streaming and Stop. These checks must not be called passed based on the
+controlled-process fixture.
+
+The package and wire protocol match on connect; source identity is checked
+before a new remote task. Existing local strict build checks still use binary
+size/mtime so a dev rebuild cannot leave the local daemon on stale code.
+
+Manual transport check after installation:
+
+```bash
+/path/to/klide ptyd ping --ssh klide-box \
+  --binary '~/.klide/bin/klide' --data-dir '~/.klide/run-host'
+```
 
 ### The Linux binary
 

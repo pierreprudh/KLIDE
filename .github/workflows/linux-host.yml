@@ -32,6 +32,10 @@ jobs:
       # ptyd needs no frontend; the window half is never opened on the box.
       - run: mkdir -p dist
       - run: cargo build --release --bin klide --manifest-path src-tauri/Cargo.toml
+        env:
+          KLIDE_SOURCE_COMMIT: ${{ github.sha }}
+      - name: Native remote disconnect and replay smoke test
+        run: python3 tests/remote-machine-smoke.py src-tauri/target/release/klide
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: klide-linux-x86_64

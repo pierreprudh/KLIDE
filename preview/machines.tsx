@@ -11,6 +11,10 @@ document.body.style.background = "var(--bg-panel)";
 let machines: Machine[] = [{ id: "cloud-dev", label: "Cloud development", sshHost: "cloud-dev", checkouts: { "/Users/me/app": "~/code/app" } }, { id: "home-server", label: "Home server", sshHost: "dev@home-server" }];
 (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
   invoke: async (command: string, args: Record<string, unknown>) => {
+    if (command === "machine_install_host") {
+      if (new URLSearchParams(location.search).has("active")) throw new Error("Finish the remote host's active sessions before updating");
+      return null;
+    }
     if (command === "machines_list") return machines;
     if (command === "machine_save") {
       const machine = args.machine as Machine;

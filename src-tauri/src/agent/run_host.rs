@@ -27,7 +27,7 @@ use crate::pty_wire::ChatControl;
 pub(super) enum Placement {
     /// This process: the app's `TauriSupervisor` (or, inside ptyd, its `RunHost`).
     App,
-    /// `klide ptyd`, reached through `remote.rs`; the answer finishes with the
+    /// `klide ptyd`, reached through `daemon_client.rs`; the answer finishes with the
     /// window closed.
     Background,
 }
@@ -298,6 +298,11 @@ pub(super) async fn control(
     id: &str,
     control: ChatControl,
 ) -> Result<bool, String> {
+    #[cfg(unix)]
+    if let Some(binding) = remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, id)? {
+        let id = id.to_string();
+        return crate::blocking::run(move || remote_machine::control(&binding, &id, control)).await;
+    }
     if matches!(&control, ChatControl::Stop) {
         // Setup and slot admission have no Run handle yet. The admitted Run
         // shares this token, including a cancel racing its creation.
@@ -315,11 +320,15 @@ pub(super) async fn control(
             return answer(handle, control);
         }
     }
-    remote::control(app, id.to_string(), control).await
+    daemon_client::control(app, id.to_string(), control).await
 }
 
 /// Live status of `id` wherever it runs, or `None` when no host holds it.
 pub(super) async fn state(app: &tauri::AppHandle, id: &str) -> Result<RunState, String> {
+    #[cfg(unix)]
+    if let Some(binding) = remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, id)? {
+        return remote_machine::state(app, id, binding).await;
+    }
     let local = app
         .state::<AgentSupervisorState>()
         .runs
@@ -337,7 +346,7 @@ pub(super) async fn state(app: &tauri::AppHandle, id: &str) -> Result<RunState, 
     if super::worker_slots::api_slots().is_queued(id) {
         return Ok(RunState { status: Some("queued".to_string()), from_seq: None });
     }
-    remote::state(app, id).await
+    daemon_client::state(app, id).await
 }
 
 /// Whether some host still runs a live loop for `id` (see [`ACTIVE`]).
@@ -354,7 +363,7 @@ pub(super) fn is_active(app: &tauri::AppHandle, id: &str) -> bool {
         .is_some_and(is_active_status);
     local
         || off_the_worker(|| {
-            remote::statuses(app)
+            daemon_client::statuses(app)
                 .ok()
                 .is_some_and(|runs| runs.get(id).is_some_and(|s| is_active_wire(s)))
         })
@@ -370,7 +379,7 @@ pub(super) fn any_hosted(app: &tauri::AppHandle) -> Result<bool, String> {
         .lock()
         .map_err(|_| "Agent state unavailable".to_string())?
         .is_empty();
-    Ok(local || !remote::statuses(app)?.is_empty())
+    Ok(local || !daemon_client::statuses(app)?.is_empty())
 }
 
 /// Every active Run across both hosts, as wire statuses.
@@ -387,7 +396,7 @@ pub(super) async fn active_statuses(
         .map(|(id, handle)| (id.clone(), run_status_wire(&handle.status).to_string()))
         .collect();
     let remote_app = app.clone();
-    let remote = crate::blocking::run(move || remote::statuses(&remote_app)).await?;
+    let remote = crate::blocking::run(move || daemon_client::statuses(&remote_app)).await?;
     for (id, status) in remote {
         if is_active_wire(&status) {
             live.entry(id).or_insert(status);

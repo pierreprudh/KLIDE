@@ -1,3 +1,4 @@
+import { conversationMachine } from "../conversationMachines";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { LiveWorkerUsage } from "./capacityPlanner";
@@ -114,6 +115,7 @@ export async function startAgentRun(
   // The Rust command spawns the run loop and returns the id immediately;
   // progress streams through the channel until run_result / run_error.
   const response = await invoke<StartRunResponse>("agent_start_run", {
+    machineId: conversationMachine(input.runId),
     request: toStartRunRequest(input),
     onEvent: onEventChannel,
   });

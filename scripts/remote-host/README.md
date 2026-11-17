@@ -1,8 +1,10 @@
 # Remote host setup
 
 How to get a Linux server Klide can run agents on. This prepares the machine
-only; Klide itself does not talk to it yet — that is the VPS execution slice
-in `TODO.md`.
+only. In Klide, Settings › Machines installs the matching native Run host
+over SSH; the machine picker starts a streaming task that can survive the
+Mac disconnecting. See `docs/REMOTE_MACHINES.md` for setup, verification and
+remaining live acceptance.
 
 The server runs the agent, keeps its own logins, and stays on. Your Mac only
 connects to it over SSH, through Tailscale (a private network between your

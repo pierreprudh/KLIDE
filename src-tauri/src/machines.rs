@@ -159,7 +159,7 @@ pub fn tmux_session_name(session_id: &str) -> String {
 
 /// A remote path as a shell word: `~/x` becomes `"$HOME"/'x'` so the remote
 /// shell expands the home folder and nothing else.
-fn remote_path_word(path: &str) -> String {
+pub(crate) fn remote_path_word(path: &str) -> String {
     match path.strip_prefix("~/") {
         Some(rest) => format!("\"$HOME\"/{}", shell_quote(rest)),
         None if path == "~" => "\"$HOME\"".to_string(),
@@ -169,7 +169,7 @@ fn remote_path_word(path: &str) -> String {
 
 /// The SSH options every call shares. BatchMode: never stop at a password
 /// prompt inside a PTY nobody is watching yet.
-const SSH_OPTS: &[&str] = &[
+pub(crate) const SSH_OPTS: &[&str] = &[
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     "-o", "ServerAliveInterval=30",
@@ -245,7 +245,7 @@ fn fact(label: &str, value: impl Into<String>, tone: &'static str, fix: Option<S
 fn probe_script(checkout: Option<&str>) -> String {
     let mut s = String::from(
         "export PATH=\"$HOME/.local/bin:$PATH\"; \
-         echo tmux=$(tmux -V 2>/dev/null); \
+         echo host=$(\"$HOME/.klide/bin/klide\" ptyd version 2>/dev/null); \
          echo claude=$(claude --version 2>/dev/null | head -n1); \
          echo login=$(claude auth status 2>/dev/null | tr -d ' \\n' | grep -o '\"loggedIn\":[a-z]*' | cut -d: -f2); \
          echo gh=$(gh auth status 2>&1 | grep -o 'account [^ ]*' | head -n1 | cut -d' ' -f2); ",
@@ -253,7 +253,7 @@ fn probe_script(checkout: Option<&str>) -> String {
     if let Some(path) = checkout {
         let word = remote_path_word(path);
         s.push_str(&format!(
-            "if [ -d {word}/.git ]; then echo checkout=yes; \
+            "if [ -e {word}/.git ]; then echo checkout=yes; \
              echo branch=$(git -C {word} branch --show-current); \
              echo dirty=$(git -C {word} status --porcelain | wc -l | tr -d ' '); \
              else echo checkout=no; fi; "
@@ -312,11 +312,16 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     status.facts.push(fact("Reached", format!("in {} ms", elapsed_ms(elapsed)), "ok", None));
 
     let mut problems: Vec<&str> = Vec::new();
-    match got("tmux") {
-        Some(v) => status.facts.push(fact("tmux", v, "ok", None)),
+    let expected = format!("{} {} {}", env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION, env!("KLIDE_SOURCE_COMMIT"));
+    match got("host") {
+        Some(version) if version == expected => status.facts.push(fact("Run host", "Installed · matches this app", "ok", None)),
+        Some(version) => {
+            problems.push("Run host needs updating in Settings → Machines");
+            status.facts.push(fact("Run host", format!("{version} · update required"), "warn", None));
+        }
         None => {
-            problems.push("tmux missing");
-            status.facts.push(fact("tmux", "not installed", "bad", Some(format!("ssh -t {} 'sudo apt-get install -y tmux'", machine.ssh_host))));
+            problems.push("Install Run host in Settings → Machines");
+            status.facts.push(fact("Run host", "Not installed or missing Linux runtime libraries", "warn", Some(format!("ssh -t {} 'sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0t64'", machine.ssh_host))));
         }
     }
     match (got("claude"), got("login")) {

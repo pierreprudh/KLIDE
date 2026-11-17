@@ -15,8 +15,18 @@ describe("where a conversation runs", () => {
     expect(m.conversationMachine("c1")).toBeNull();
     m.setConversationMachine("c1", "klide-box");
     expect(m.conversationMachine("c1")).toBe("klide-box");
+    expect(m.conversationMachineIsNative("c1")).toBe(true);
     m.setConversationMachine("c1", null);
     expect(m.conversationMachine("c1")).toBeNull();
+  });
+
+  it("keeps existing tmux placements on the terminal path", async () => {
+    const m = await fresh();
+    localStorage.setItem("klide.conversationMachines", JSON.stringify({ old: "klide-box" }));
+    expect(m.conversationMachine("old")).toBe("klide-box");
+    expect(m.conversationMachineIsNative("old")).toBe(false);
+    m.setConversationMachine("old", "klide-box");
+    expect(m.conversationMachineIsNative("old")).toBe(false);
   });
 
   it("each project remembers the machine it last started on", async () => {

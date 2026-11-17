@@ -57,6 +57,9 @@ mod providers;
 mod provider_keys;
 mod pty;
 mod pty_client;
+mod machine_install;
+#[cfg(unix)]
+mod pty_transport;
 mod pty_frame;
 mod pty_wire;
 pub mod pty_daemon;
@@ -1377,6 +1380,9 @@ pub fn run() {
             machines::machine_save,
             machines::machine_remove,
             machines::machine_check,
+            machine_install::machine_install_host,
+            #[cfg(unix)]
+            agent::remote_machine::machine_run_changes,
             custom_cli_upsert,
             custom_cli_remove,
             accounts_list,

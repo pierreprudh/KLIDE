@@ -5,7 +5,9 @@ pub(crate) mod design_feedback;
 mod approval_store;
 pub(crate) mod skill_resources;
 pub(crate) mod daemon;
-mod remote;
+mod daemon_client;
+#[cfg(unix)]
+pub(crate) mod remote_machine;
 mod run_host;
 mod dispatch_cancel;
 mod side_questions;
@@ -1790,7 +1792,21 @@ pub async fn agent_start_run(
     app: tauri::AppHandle,
     request: StartRunRequest,
     on_event: Channel<AgentEvent>,
+    machine_id: Option<String>,
 ) -> Result<StartRunResponse, String> {
+    #[cfg(unix)]
+    {
+        let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if let Some(parent) = request.parent_id.as_deref() {
+            if remote_machine::binding(&base, parent)?.is_some() { return Err("Remote conversations cannot dispatch local child Runs".into()); }
+        }
+        let bound = request.run_id.as_deref().map(|id| remote_machine::binding(&base, id)).transpose()?.flatten();
+        if machine_id.is_some() || bound.is_some() {
+            return remote_machine::start(app, request, on_event, machine_id).await;
+        }
+    }
+    #[cfg(not(unix))]
+    if machine_id.is_some() { return Err("Remote Runs require a Unix SSH client".into()); }
     start_run(app, request, on_event, None, None).await
 }
 
@@ -2079,12 +2095,12 @@ async fn start_run(
     #[cfg(unix)]
     if run_host::placement(&request, nested) == run_host::Placement::Background {
         request.run_id = Some(id.clone());
-        return remote::start(app, request, runs_dir, on_event).await;
+        return daemon_client::start(app, request, runs_dir, on_event).await;
     }
     #[cfg(not(unix))]
     let _ = nested;
     // A provider switch must not start a local writer beside a daemon-owned turn.
-    if remote::status(&app, &id).await?.is_some() {
+    if daemon_client::status(&app, &id).await?.is_some() {
         return Err(run_host::busy(&id));
     }
 
@@ -4075,6 +4091,7 @@ pub async fn agent_compact_conversation(
     model: String,
     context_window: Option<usize>,
 ) -> Result<CompactionOutcome, String> {
+    local_files_only(&app, &run_id)?;
     validate_run_id(&run_id)?;
     if run_is_active(&app, &run_id) {
         return Err("Wait for this conversation to finish before compacting it.".into());
@@ -4235,6 +4252,13 @@ pub async fn agent_read_run(
     run_id: String,
 ) -> Result<Vec<AgentEvent>, String> {
     validate_run_id(&run_id)?;
+    #[cfg(unix)]
+    {
+        let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if let Some(binding) = remote_machine::binding(&base, &run_id)? {
+            return crate::blocking::run(move || remote_machine::read_all(&binding, &run_id)).await;
+        }
+    }
     let runs_dir = app_runs_dir(&app)?;
     crate::blocking::run(move || read_events(&runs_dir, &run_id)).await
 }
@@ -4258,6 +4282,7 @@ pub async fn agent_export_evidence(
     run_id: String,
     workspace_root: Option<String>,
 ) -> Result<EvidenceExport, String> {
+    local_files_only(&app, &run_id)?;
     validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     let summary = transcripts::read_summary(&runs_dir, &run_id)?;
@@ -4438,12 +4463,24 @@ pub(crate) fn accept_all_checkpoints_at(
     Ok(AcceptCheckpointsResult { accepted })
 }
 
+fn local_files_only(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    if remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, id)?.is_some() {
+        return Err("This task's files are on its remote machine. Use Remote changes to inspect its worktree.".into());
+    }
+    #[cfg(not(unix))]
+    let _ = (app, id);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn agent_list_checkpoints(
     app: tauri::AppHandle,
     run_id: String,
 ) -> Result<Vec<CheckpointEntry>, String> {
     validate_run_id(&run_id)?;
+    #[cfg(unix)]
+    if remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, &run_id)?.is_some() { return Ok(Vec::new()); }
     let runs_dir = app_runs_dir(&app)?;
     list_checkpoints_at(&runs_dir, &run_id)
 }
@@ -4454,6 +4491,7 @@ pub async fn agent_revert_checkpoint(
     run_id: String,
     tool_call_id: String,
 ) -> Result<(), String> {
+    local_files_only(&app, &run_id)?;
     validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     revert_checkpoint_at(&runs_dir, &run_id, &tool_call_id)
@@ -4464,6 +4502,7 @@ pub async fn agent_revert_run_checkpoints(
     app: tauri::AppHandle,
     run_id: String,
 ) -> Result<RevertCheckpointsResult, String> {
+    local_files_only(&app, &run_id)?;
     validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     revert_all_checkpoints_at(&runs_dir, &run_id)
@@ -4474,6 +4513,7 @@ pub async fn agent_accept_run_checkpoints(
     app: tauri::AppHandle,
     run_id: String,
 ) -> Result<AcceptCheckpointsResult, String> {
+    local_files_only(&app, &run_id)?;
     validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     accept_all_checkpoints_at(&runs_dir, &run_id)

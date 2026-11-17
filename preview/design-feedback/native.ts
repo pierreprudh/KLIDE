@@ -42,6 +42,7 @@ export function installNativeFixture(scenario: ScenarioId) {
       case "path_exists": return false;
       case "custom_provider_list": case "custom_cli_list": case "ai_list_tools":
       case "list_agent_runs": case "agent_list_runs": return [];
+      case "machine_run_changes": return { worktree: "/home/klide/.klide/run-host/worktrees/task", status: "", diff: "diff --git a/hello.txt b/hello.txt\n+remote task result" };
       case "agent_read_run": return structuredClone(events);
       case "coordination_snapshot": return { schemaVersion: 1, nextSeq: 0, runs: [], envelopes: [], results: [] };
       case "github_current_user": return { login: "fixture", avatarUrl: "" };

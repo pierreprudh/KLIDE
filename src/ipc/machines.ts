@@ -1,6 +1,6 @@
 // Remote machines wire — `machines_list` / `machine_check` (src-tauri/src/machines.rs).
 // A Remote machine is an SSH host from ~/.klide/machines.json; a Claude Code
-// conversation placed on it runs there inside a tmux session.
+// conversation placed on it streams from its durable Run host.
 import { invoke } from "@tauri-apps/api/core";
 
 export type MachineFactTone = "ok" | "warn" | "bad" | "quiet";
@@ -58,4 +58,10 @@ export async function machineRemove(id: string): Promise<Machine[]> {
   const machines = await invoke<Machine[]>("machine_remove", { id });
   for (const listener of listeners) listener();
   return machines;
+}
+
+/** Explicit setup action; omitted binaryPath downloads this revision's CI artifact. */
+export async function machineInstallHost(id: string, binaryPath?: string): Promise<void> {
+  await invoke("machine_install_host", { id, binaryPath: binaryPath ?? null });
+  for (const listener of listeners) listener();
 }

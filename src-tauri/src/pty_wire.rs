@@ -15,7 +15,7 @@
 //! `pty_host::SessionHost` exposes as methods. Keeping them in step is manual;
 //! `Recent` is the evidence — it is served but never sent.
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Which binary a process is running, captured once at start: the executable's
 /// length and modification time. The package version alone does not change on
@@ -60,6 +60,8 @@ pub enum Request {
     /// Ask the daemon to exit once this response is written. Sessions die
     /// with it — the client is expected to have drained/warned first.
     Shutdown,
+    PrepareUpgrade,
+    RemoteIdentity,
     ReuseOrCd {
         session_id: String,
         cwd: Option<String>,
@@ -103,6 +105,9 @@ pub enum Request {
         request: Box<crate::agent::types::StartRunRequest>,
         runs_dir: std::path::PathBuf,
     },
+    RemoteStart { request: Box<crate::agent::types::StartRunRequest>, checkout: String },
+    RemoteRead { run_id: String, from_seq: u64, limit: usize },
+    RemoteChanges { run_id: String },
     ChatStatus { run_id: String },
     ChatList,
     ChatOperations { run_id: String },
@@ -139,6 +144,9 @@ pub enum ChatControl {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    RemoteIdentity { source: String },
+    RemoteChanges { diff: String, status: String, worktree: String },
+    RemoteEvents { events: Vec<crate::agent::types::AgentEvent>, next_seq: u64 },
     ChatStarted { from_seq: u64 },
     ChatOperations { operations: Vec<ChatOperation> },
     Pong {

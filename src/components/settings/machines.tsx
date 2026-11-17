@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { machineCheck, machineLabel, machineRemove, machineSave, machinesList, type Machine, type MachineStatus } from "../../ipc/machines";
+import { machineCheck, machineInstallHost, machineLabel, machineRemove, machineSave, machinesList, type Machine, type MachineStatus } from "../../ipc/machines";
+import { open } from "@tauri-apps/plugin-dialog";
 import { errMessage } from "../../errors";
 import { refreshMachineStatus } from "../../machineStatus";
 import { GhostButton, SettingBlock } from "./controls";
@@ -16,6 +17,8 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled }: 
   const [status, setStatus] = useState<MachineStatus | null>(null);
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
@@ -31,6 +34,17 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled }: 
     return () => { live = false; };
   }, [machine.id, workspaceRoot, revision]);
   const caption = error || (checking ? "Checking…" : status?.ready ? "Ready" : status?.caption ?? "Not checked");
+  async function install(chooseFile = false) {
+    setInstalling(true); setInstallError("");
+    try {
+      const selected = chooseFile ? await open({ title: "Choose the extracted Linux klide host binary", multiple: false, directory: false }) : undefined;
+      if (chooseFile && typeof selected !== "string") return;
+      await machineInstallHost(machine.id, typeof selected === "string" ? selected : undefined);
+      setRevision((r) => r + 1);
+      refreshMachineStatus(machine.id, workspaceRoot, { force: true });
+    } catch (reason) { setInstallError(errMessage(reason)); }
+    finally { setInstalling(false); }
+  }
   return <article className="klide-machine-entry">
     <div className="klide-machine-row">
       <span className="klide-machine-glyph"><MachineIcon size={20} /></span>
@@ -39,10 +53,15 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled }: 
       <div className="klide-machine-row-actions">
         <button type="button" className="klide-button klide-button-ghost" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen((open) => !open)}>{detailsOpen ? "Hide details" : "Details"}</button>
         <GhostButton disabled={disabled} onClick={onEdit}>Edit</GhostButton>
+        <GhostButton disabled={disabled || installing} onClick={() => { setDetailsOpen(true); void install(); }}>{installing ? "Installing…" : "Install Run host"}</GhostButton>
       </div>
     </div>
     <div id={detailsId} hidden={!detailsOpen} className="klide-machine-details">
       <div className="klide-machine-details-body">
+        <p>Tasks run on this machine and keep going when your Mac is off. The machine must stay on. Claude Code uses its login on that machine.</p>
+        <p>Install Run host downloads the matching Linux build using this Mac’s GitHub CLI, then installs it over SSH. Active tasks prevent an update.</p>
+        <GhostButton disabled={disabled || installing} onClick={() => { void install(true); }}>Choose downloaded host binary…</GhostButton>
+        {installError && <p role="alert">{installError}</p>}
         <div className="klide-machine-detail-heading"><span>SSH · Claude Code</span><GhostButton disabled={checking || disabled} onClick={() => { setRevision((r) => r + 1); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }}>{checking ? "Checking…" : "Check connection"}</GhostButton></div>
         {error && <p role="alert">{error}</p>}
         {!checking && !error && status?.facts.map((fact) => <div className="klide-machine-fact" key={fact.label}>

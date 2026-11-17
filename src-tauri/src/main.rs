@@ -29,6 +29,54 @@ fn main() {
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
         if matches!(args.first().map(String::as_str), Some("ptyd" | "scheduled")) {
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("version") {
+                println!(
+                    "{} {} {}",
+                    env!("CARGO_PKG_VERSION"),
+                    klide_lib::pty_daemon::protocol_version(),
+                    env!("KLIDE_SOURCE_COMMIT")
+                );
+                return;
+            }
+            if args[0] == "ptyd"
+                && matches!(
+                    args.get(1).map(String::as_str),
+                    Some("connect" | "ping" | "ensure" | "prepare-upgrade")
+                )
+            {
+                let option = |name: &str| {
+                    args.iter()
+                        .position(|a| a == name)
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str)
+                };
+                let code = match (args[1].as_str(), option("--data-dir")) {
+                    ("ensure", Some(dir)) => {
+                        klide_lib::pty_daemon::ensure_main(std::path::Path::new(dir))
+                    }
+                    ("prepare-upgrade", Some(dir)) => {
+                        klide_lib::pty_daemon::prepare_upgrade_main(std::path::Path::new(dir))
+                    }
+                    ("connect", Some(dir)) => klide_lib::pty_daemon::connect_main(
+                        std::path::Path::new(dir),
+                        args.iter().any(|a| a == "--ensure"),
+                    ),
+                    ("ping", Some(dir))
+                        if option("--ssh").is_some() && option("--binary").is_some() =>
+                    {
+                        klide_lib::pty_daemon::ping_remote_main(
+                            option("--ssh").unwrap(),
+                            option("--binary").unwrap(),
+                            dir,
+                        )
+                    }
+                    _ => {
+                        eprintln!("usage: klide ptyd connect --data-dir <dir>\n       klide ptyd ping --ssh <host> --binary <remote-path> --data-dir <remote-dir>");
+                        2
+                    }
+                };
+                std::process::exit(code);
+            }
             let data_dir = args
                 .iter()
                 .position(|a| a == "--data-dir")

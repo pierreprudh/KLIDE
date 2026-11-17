@@ -10,6 +10,7 @@ import { SideQuestionResize } from "./ai/SideQuestionResize";
 import "./ai/sideQuestions.css";
 import { sideQuestionDirective, sideQuestionModel, sideQuestionContext } from "./ai/sideQuestions";
 import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
+import { useRemoteRunConnection } from "./ai/useRemoteRunConnection";
 import { appendMissionReports } from "./ai/missionReports";
 import { MissionLibrary } from "./missionControl/MissionLibrary";
 import { listDurableMissions } from "../agent/durableMissions";
@@ -144,7 +145,7 @@ import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MachineIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
-import { DelegateTerminalSurface, DesignMode } from "./lazySurfaces";
+import { DelegateTerminalSurface, DesignMode, RemoteRunChanges } from "./lazySurfaces";
 import { promoteDesignOpener, registerDesignOpener } from "../designNavigation";
 import { designDockWidth, isInterfaceConversation } from "./design/designReview";
 import { PendingInboxRow, delegationThinking, renderMessageBody, CompactionRow, ToolRunRow, ThinkingBlock, extractThinking, RunInterruptedRow, RunFailedRow, WorkingSince } from "./ai/ChatMessage";
@@ -251,7 +252,7 @@ import {
 import { Z } from "../zLayers";
 import { notify } from "../toast";
 import { delegateSessionId, stopDelegatePty, writeDelegatePty } from "../ipc/delegatePty";
-import { conversationMachine, setConversationMachine, subscribeConversationMachines } from "../conversationMachines";
+import { conversationMachine, conversationMachineIsNative, setConversationMachine, subscribeConversationMachines } from "../conversationMachines";
 import { REMOTE_PROVIDER } from "../ipc/machines";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
 import { SETTINGS, useSetting } from "../settingsStore";
@@ -510,7 +511,7 @@ type Props = {
   initialMessage?: string | null;
   /** The Remote machine the Focus start stage chose for that first message
    *  (`src/ipc/machines.ts`). Set, the new conversation is placed there and
-   *  opens Claude Code on the machine in its terminal instead of a headless
+   *  opens a native streaming Run on the machine instead of a local
    *  turn. Null or absent: this Mac. */
   hostMachine?: string | null;
   /** Photos/documents staged beside that first message on the Focus start
@@ -1445,12 +1446,12 @@ export function AiPanel({
   // rendered as an ordinary Klide message.
   const providerDelegatesWork = isDelegateProvider(provider);
   // Where this conversation runs (`conversationMachines.ts`). A conversation
-  // on a Remote machine is its CLI's terminal everywhere — Focus included —
-  // because the CLI runs over there in tmux, not as a headless local turn.
+  // on a Remote machine uses the native Run host stream in every surface.
   const [, setMachineTick] = useState(0);
   useEffect(() => subscribeConversationMachines(() => setMachineTick((t) => t + 1)), []);
   const remoteMachine = provider === REMOTE_PROVIDER ? conversationMachine(currentId) : null;
-  const delegateSession = providerDelegatesWork && (variant !== "focus" || remoteMachine !== null);
+  const nativeRemoteMachine = remoteMachine && conversationMachineIsNative(currentId) ? remoteMachine : null;
+  const delegateSession = providerDelegatesWork && (remoteMachine ? !nativeRemoteMachine : variant !== "focus");
   const isLocalProvider = isManagedLocalProvider(provider);
   // A panel handed an explicit conversation — a Mission Control reattach, a
   // race-watch column — holds that thread from its first frame, but nothing
@@ -2438,6 +2439,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   const controllerDepsRef = useRef<RunControllerDeps>(null as unknown as RunControllerDeps);
   const [controller] = useState(() => createRunController(() => controllerDepsRef.current));
   const runView = useSyncExternalStore(controller.subscribe, controller.getState);
+  const remoteConnectionError = useRemoteRunConnection(nativeRemoteMachine, currentId, () => {
+    if (controller.getState().activeRunId !== currentId) controller.attach({ conversationId: currentId, provider });
+  });
   // The rung flipped while this conversation's Run works: tell that Run. Full
   // auto answers a command card it has up and silences the ones to come;
   // stepping back down makes it ask again. Nothing to tell on mount — a fresh
@@ -2817,9 +2821,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     const session = conversationSessionRef.current;
     if (hostMachine && session.provider === REMOTE_PROVIDER && turn.text.trim()) {
       setConversationMachine(session.conversationId, hostMachine);
-      handoffSpawnRef.current = { conversationId: session.conversationId, resumeSessionId: null, task: turn.text };
-      setMsgs([{ role: "user", content: turn.text }]);
-      return;
     }
     void send({ text: turn.text, attachments: turn.attachments, mode: turn.mode });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2881,7 +2882,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   // Quiet learning: one bounded extraction after meaningful tool work or an
   // explicit correction. Zero lessons is normal. Durable writes require review.
   async function runAutoSummarize(turn: QueuedTurn) {
-    if (!workspaceRoot || summarizing) return;
+    if (remoteMachine || !workspaceRoot || summarizing) return;
     const snapshot = msgsRef.current;
     if (snapshot.length < 2 || normalizeAgentMode(turn.mode) === "chat") return;
     if (getMemoryDrafts().filter((d) => d.workspaceRoot === workspaceRoot && (!d.automatic || Date.now() - d.createdAtMs < MEMORY_DRAFT_TTL)).length >= MAX_PENDING_MEMORY) return;
@@ -4535,9 +4536,9 @@ This user request requires workspace inspection. Before answering, you MUST call
             if (variant === "focus") return null;
             return <CompletionCard key={i} completion={completion} disabled={streaming} onOpenDesign={workspaceRoot ? openDesign : undefined}
               compact={canvasWidth > 0 && canvasWidth < 300}
-              onReview={onReviewChanges ? (path) => onReviewChanges({ runId: completion.runId, title: "Run changes", path }) : undefined}
-              onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: completion.runId, path, documents: documentSet(completion) }) : undefined}
-              onPreviewArtifact={onPreviewArtifact}
+              onReview={!remoteMachine && onReviewChanges ? (path) => onReviewChanges({ runId: completion.runId, title: "Run changes", path }) : undefined}
+              onOpenArtifact={!remoteMachine && onOpenArtifact ? (path) => onOpenArtifact({ runId: completion.runId, path, documents: documentSet(completion) }) : undefined}
+              onPreviewArtifact={remoteMachine ? undefined : onPreviewArtifact}
               loadChanges={listCheckpoints}
               revert={completionRevert(completion)}
               checkpointsVersion={checkpointsVersion}
@@ -5017,7 +5018,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onApplyAll={onRequireDiffReviewChange ? handleDiffApplyAll : undefined}
               onReject={handleDiffReject}
               onRequestChanges={handleDiffRequestChanges}
-              onOpenChanges={onOpenDiff ? () => onOpenDiff({
+              onOpenChanges={!remoteMachine && onOpenDiff ? () => onOpenDiff({
                 path: pendingDiff.path,
                 oldContent: pendingDiff.oldContent,
                 newContent: pendingDiff.newContent,
@@ -5220,9 +5221,9 @@ This user request requires workspace inspection. Before answering, you MUST call
               onUnfold={() => setSidePanelHidden(false)}
               completion={latestCompletion}
               disabled={streaming}
-              onReview={onReviewChanges ? (path) => onReviewChanges({ runId: latestCompletion.runId, title: "Run changes", path }) : undefined}
-              onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: latestCompletion.runId, path, documents: documentSet(latestCompletion) }) : undefined}
-              onPreviewArtifact={onPreviewArtifact}
+              onReview={!remoteMachine && onReviewChanges ? (path) => onReviewChanges({ runId: latestCompletion.runId, title: "Run changes", path }) : undefined}
+              onOpenArtifact={!remoteMachine && onOpenArtifact ? (path) => onOpenArtifact({ runId: latestCompletion.runId, path, documents: documentSet(latestCompletion) }) : undefined}
+              onPreviewArtifact={remoteMachine ? undefined : onPreviewArtifact}
               loadChanges={listCheckpoints}
               revert={completionRevert(latestCompletion)}
               checkpointsVersion={checkpointsVersion}
@@ -5825,14 +5826,15 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
           </div>
         </div>
+        {nativeRemoteMachine && <RemoteRunChanges key={currentId} runId={currentId} />}
         <div className="klide-ai-conversation-status">
           {remoteMachine && (
             <span
               className="klide-ai-machine-label"
-              title={`Runs on ${remoteMachine} in tmux — keeps going when this Mac sleeps. Reopening this conversation reattaches.`}
+              title={remoteConnectionError ?? `Runs on ${remoteMachine} — keeps going when this Mac sleeps. Reopening this conversation reattaches.`}
             >
               <MachineIcon size={12} />
-              {remoteMachine}
+              {remoteMachine}{remoteConnectionError ? " · Reconnecting…" : ""}
             </span>
           )}
           {worktreeName ? (

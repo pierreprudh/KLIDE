@@ -6,18 +6,20 @@
 // the panel persists a conversation whole on every snapshot.
 
 const KEY = "klide.conversationMachines";
+type Placement = string | { machineId: string; transport: "native" };
 
-function read(): Record<string, string> {
+function read(): Record<string, Placement> {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || "{}");
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-    return Object.fromEntries(Object.entries(raw).filter((e): e is [string, string] => typeof e[1] === "string"));
+    return Object.fromEntries(Object.entries(raw).filter((e): e is [string, Placement] => typeof e[1] === "string" ||
+      (!!e[1] && typeof e[1] === "object" && "machineId" in e[1] && typeof e[1].machineId === "string" && "transport" in e[1] && e[1].transport === "native")));
   } catch {
     return {};
   }
 }
 
-function write(map: Record<string, string>): void {
+function write(map: Record<string, Placement>): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(map));
   } catch {
@@ -30,14 +32,21 @@ const listeners = new Set<() => void>();
 /** The Remote machine id a conversation runs on, or null for this Mac. */
 export function conversationMachine(conversationId: string | null | undefined): string | null {
   if (!conversationId) return null;
-  return read()[conversationId] ?? null;
+  const placement = read()[conversationId];
+  return typeof placement === "string" ? placement : placement?.machineId ?? null;
+}
+
+/** Legacy string entries keep their tmux session; new placements are native. */
+export function conversationMachineIsNative(conversationId: string): boolean {
+  const placement = read()[conversationId];
+  return !!placement && typeof placement === "object" && placement.transport === "native";
 }
 
 /** Place a conversation on a Remote machine (or back on this Mac with null). */
 export function setConversationMachine(conversationId: string, machineId: string | null): void {
   const map = read();
-  if ((map[conversationId] ?? null) === machineId) return;
-  if (machineId) map[conversationId] = machineId;
+  if (conversationMachine(conversationId) === machineId) return;
+  if (machineId) map[conversationId] = { machineId, transport: "native" };
   else delete map[conversationId];
   write(map);
   for (const listener of listeners) listener();
