@@ -367,7 +367,7 @@ Klide/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── run_host.rs        The one Run host door — placement (app vs ptyd), admission, spawn + backstop, card answers, the one "active" rule
     │       ├── daemon.rs          Background subscription chats — the Harness loop hosted in `klide ptyd`, survives app exit
-    │       ├── remote.rs          App-side proxy to those runs — start, reconnect, replay the durable gap, route Stop/approvals
+    │       ├── daemon_client.rs   App-side proxy to those runs — start, reconnect, replay the durable gap, route Stop/approvals
     │       ├── stream_log.rs      Streamed output of a background turn — deltas merged per 150 ms, written without a disk wait
     │       ├── run_core.rs        Tauri-free turn prep — provider quirks, message assembly, compaction
     │       ├── routing.rs         The `auto` Provider → one concrete provider+model at run start (gate, rank, lock)

@@ -134,18 +134,20 @@ _Avoid_: box, host (that is the Run host, a process), environment
 **Remote machine**:
 A Linux computer Klide reaches over SSH — a rented server (VPS) or a spare
 PC — with its own Machine logins and Remote checkout, which can stay on when
-this Mac sleeps. The implemented desktop path runs Claude Code in tmux over
-SSH, selected through Where it runs and configured in Settings → Machines.
-The planned native transport runs `klide ptyd` there; its Linux spike is
-recorded, but desktop Remote Run events, file/diff retrieval and Missions are
-not implemented. See `docs/REMOTE_MACHINES.md`, setup in `scripts/remote-host/`.
-Today's `agent/remote.rs` is the local daemon, not the SSH/tmux path.
+this Mac sleeps. New Claude Code Conversations use a native SSH transport to
+`klide ptyd`, selected through Where it runs and configured in Settings → Machines.
+The remote Run host persists events for replay and resumed streaming, owns
+execution and supplies remote changes. Existing tmux Conversations retain their
+terminal attachment. Remote Missions remain unsupported. See
+`docs/REMOTE_MACHINES.md`, setup in `scripts/remote-host/`.
+`agent/daemon_client.rs` is the local daemon client; `agent/remote_machine.rs`
+owns native SSH Conversation placement and replay.
 _Avoid_: cloud, VPS (one kind of Remote machine), server, remote host
 
 **Remote checkout**:
 The copy of a repository on a Remote machine, cloned once from its Git
-remote; the current SSH/tmux session uses that checkout directly. Per-Run
-worktrees belong to the planned native Remote transport. Its paths are remote paths,
+remote. Native remote Conversations run in isolated remote worktrees; legacy
+SSH/tmux sessions use the checkout directly. Its paths are remote paths,
 never resolved on this Mac, and it sees only what was pushed — never this
 Mac's unsaved or uncommitted work.
 _Avoid_: mirror, sync, remote workspace

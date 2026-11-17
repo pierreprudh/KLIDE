@@ -59,3 +59,15 @@
   .klide-machine-option { padding: 24px 18px; grid-template-columns: 32px minmax(0, 1fr); gap: 14px; }
   .klide-machine-option > button { grid-column: 2; justify-self: start; }
 }
+.klide-machine-setup { margin: 0 26px 24px 74px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 13px; line-height: 1.7; }
+.klide-machine-setup p { color: var(--fg-subtle); max-width: 72ch; }
+.klide-machine-steps { display: flex; gap: 16px; list-style: none; padding: 0; margin: 0 0 20px; flex-wrap: wrap; color: var(--fg-subtle); font-size: 12px; }
+.klide-machine-steps [aria-current="step"] { color: var(--fg-strong); font-weight: 600; border-bottom: 2px solid var(--fg-strong); }
+.klide-machine-setup .klide-machine-actions { flex-wrap: wrap; }
+.klide-machine-terminal { height: 280px; padding: 12px; margin-top: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--terminal-bg); overflow: hidden; }
+.klide-machine-project { display: grid; gap: 6px; max-width: 520px; }
+.klide-machine-project input { min-width: 0; width: 100%; box-sizing: border-box; }
+.klide-machine-setup details, .klide-machine-form details { overflow-wrap: anywhere; }
+.klide-machine-setup summary, .klide-machine-form summary { cursor: pointer; color: var(--fg-subtle); }
+.klide-machine-setup details code { font: 11px/1.8 var(--font-mono); }
+@media (max-width: 700px) { .klide-machine-setup { margin: 0 16px 20px; } }

@@ -1008,6 +1008,42 @@ pub fn pty_write(state: State<PtyState>, id: String, data: String) -> Result<(),
     Ok(())
 }
 
+/// Interactive SSH setup uses the native PTY registry, so passwords and host
+/// trust prompts stay in the terminal and are never stored by the renderer.
+pub(crate) fn spawn_machine_setup(
+    app: tauri::AppHandle, state: &PtyState, id: String,
+    command: CommandBuilder, rows: u16, cols: u16,
+) -> Result<(), String> {
+    let mut shells = state.shells.lock().map_err(|_| "Terminal state unavailable")?;
+    if shells.contains_key(&id) { return Ok(()); }
+    let pair = native_pty_system().openpty(PtySize { rows: rows.max(1), cols: cols.max(1), pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())?;
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let mut child = pair.slave.spawn_command(command).map_err(|e| e.to_string())?;
+    crate::machine_setup::track(&id, child.clone_killer());
+    drop(pair.slave);
+    shells.insert(id.clone(), Shell { writer, master: pair.master, cwd: None });
+    drop(shells);
+    std::thread::spawn(move || {
+        let mut bytes = [0u8; 4096];
+        let mut framer = crate::pty_frame::Utf8Framer::new();
+        loop {
+            let (chunk, done) = match reader.read(&mut bytes) {
+                Ok(0) | Err(_) => (framer.finish(), true),
+                Ok(count) => (framer.push(&bytes[..count]), false),
+            };
+            if !chunk.is_empty() { let _ = app.emit("pty:data", PtyChunk { id: id.clone(), chunk }); }
+            if done { break; }
+        }
+        let success = child.wait().is_ok_and(|status| status.success());
+        crate::machine_setup::finished(&id);
+        if let Some(state) = app.try_state::<PtyState>() { state.shells.lock().unwrap().remove(&id); }
+        let _ = app.emit("machine-setup:exit", serde_json::json!({ "id": id, "success": success }));
+        let _ = app.emit("pty:exit", id);
+    });
+    Ok(())
+}
+
 /// Close a terminal tab: drop the shell so its PTY hangs up and the child sees
 /// EOF. The reader thread then emits `pty:exit` on its way out.
 #[tauri::command]

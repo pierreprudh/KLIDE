@@ -26,6 +26,11 @@ async function boot() {
   const native = installNativeFixture(scenarioId);
   let conversation = fixtureConversation(scenarioId);
   localStorage.clear();
+  if (new URLSearchParams(location.search).has("remote")) {
+    conversation.provider = "claude-code";
+    conversation.model = "default";
+    localStorage.setItem("klide.conversationMachines", JSON.stringify({ [conversation.id]: { machineId: "klide-box", transport: "native" } }));
+  }
   localStorage.setItem("klide-conversations", JSON.stringify([conversation]));
   localStorage.setItem("klide.provider", "openai");
   const { AiPanel } = await import("../src/components/AiPanel");

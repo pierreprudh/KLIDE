@@ -6,6 +6,37 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Dependency audit follow-up, 2026-11-18
+
+- [ ] Replace the temporary dev-only picomatch advisory exception with a
+  patched compatible release once available, then remove the exception from
+  `scripts/audit-dependencies.mjs`. See `docs/DEPENDENCY_AUDIT.md`. Production
+  and unrelated high/critical advisories remain blocked.
+
+## Remote machines — cross-platform deployment next, 2026-11-18
+
+Parked for the next session: make remote execution and distribution ready for
+macOS and Windows, beyond the current x86_64 Linux host support.
+
+- [ ] macOS remote hosts (including Mac mini): build matching arm64 and
+  x86_64 helpers; support installation, remote CLI login and a detached
+  lifecycle that survives the client disconnecting.
+- [ ] Windows remote hosts: decide and label native Windows versus WSL
+  support; implement and verify OpenSSH setup, process ownership, IPC,
+  Windows paths and shell quoting. Do not advertise native Windows support
+  based only on a WSL/Linux test.
+- [ ] Make discovery, readiness and the guided installer choose the matching
+  OS/architecture artifacts, dependencies and upgrade path. Enable each host
+  platform only after its acceptance checks pass.
+- [ ] Prepare macOS and Windows distribution: CI artifact matrix, signed and
+  notarized Mac app, signed Windows installer, and published matching helper
+  assets with checksums.
+- [ ] Clean-machine acceptance per platform: install → sign in → launch a
+  real task → disconnect/turn off the client → reconnect and replay/live
+  stream → Stop; verify upgrade refusal during active work and define host
+  sleep/reboot recovery. The outstanding real Linux-host acceptance remains
+  required too.
+
 ## Conductor follow-up — product and business line, 2026-11-05
 
 Customer confirmed: solo developers and small teams bringing their own agent
@@ -136,7 +167,7 @@ baseline; unchecked items below are verification or specific remaining gaps.
   permission reason and `externalPaths`; the card and notification name them.
   This is a best-effort argument scan, not containment of arbitrary shell code.
 - [x] Background subscription approval forwarding (code reconciled 2026-10-28):
-  `agent/remote.rs` passes forwarded events through `attention::emit`, shared
+  `agent/daemon_client.rs` passes forwarded events through `attention::emit`, shared
   with app-hosted Runs. Asking/clearing and external-path payloads have tests
   in `agent/attention.rs`; the real-app restart/hidden-conversation acceptance
   above remains open.
@@ -355,7 +386,7 @@ time, workspace trust first (every competitor has closed it).
   after desktop disconnection; retrieve remote files/diffs and validation
   evidence without treating remote paths as local. Keep destination credentials
   on that host and reuse Run host admission/control semantics. Extract the
-  headless host as needed; `agent/remote.rs` currently means the local daemon.
+  headless host as needed; `agent/daemon_client.rs` owns the local daemon proxy (renamed 2026-11-17).
   Design note, words and open questions: [Remote machines](docs/REMOTE_MACHINES.md);
   machine setup: `scripts/remote-host/`. The first host is a local Ubuntu
   26.04 VM reached over Tailscale (2026-11-09), not a rented server; the
@@ -364,7 +395,14 @@ time, workspace trust first (every competitor has closed it).
   (`linux-host.yml`) runs `klide ptyd` on the box — auth, ping, a shell
   session's spawn/snapshot/stop, survives SSH disconnect. Build on CI, decided.
   Claude Code background conversations (Chat, Work, Stop mid-stream) ran
-  through it the same day — step 0 done; next is step 1, the rename.
+  through it the same day — step 0 done. Native integration implemented
+  2026-11-17: SSH transport, durable machine binding, remote transcript replay,
+  live streaming/reconnection, controls and isolated conversation worktrees.
+  Settings installs a source-matched CI host and refuses active upgrades;
+  Remote changes reads the remote diff. Controlled-process and browser
+  acceptance passed. Real Linux/Mac-disconnection acceptance is still pending
+  because `klide-box` timed out. Remote Merge/Discard and individual artifact
+  opening remain follow-ups; the complete VPS item stays open.
 - [ ] Extend the unified launch readiness item above with minimal remote
   checks in the VPS slice, reusing `launch_readiness::Readiness` as the
   shape a remote host reports.

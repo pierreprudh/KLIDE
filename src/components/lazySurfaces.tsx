@@ -17,6 +17,11 @@ import { lazy, Suspense, type ComponentProps } from "react";
 
 const EditorAreaImpl = lazy(() => import("./EditorArea").then((m) => ({ default: m.EditorArea })));
 const SpreadsheetViewerImpl = lazy(() => import("./SpreadsheetViewer").then((m) => ({ default: m.SpreadsheetViewer })));
+const RemoteRunChangesImpl = lazy(() => import("./ai/RemoteRunChanges").then((m) => ({ default: m.RemoteRunChanges })));
+
+export function RemoteRunChanges(props: ComponentProps<typeof RemoteRunChangesImpl>) {
+  return <Suspense fallback={null}><RemoteRunChangesImpl {...props} /></Suspense>;
+}
 
 export function SpreadsheetViewer(props: ComponentProps<typeof SpreadsheetViewerImpl>) {
   return <Suspense fallback={<div role="status" style={{ position: "fixed", right: 24, bottom: 24, zIndex: 9999 }}>Opening spreadsheet…</div>}><SpreadsheetViewerImpl {...props} /></Suspense>;

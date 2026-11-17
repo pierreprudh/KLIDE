@@ -1,3 +1,4 @@
+import { AddMachineDialog } from "./AddMachineDialog";
 import { useWhereItRuns } from "./WhereItRuns";
 import { composerDraftKey, useComposerDraft } from "./ai/composerDraft";
 import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
@@ -467,7 +468,7 @@ type MenuOption = {
   /** Turns the row into a way out instead of a choice: it grows a trailing ↗
    *  and clicking anywhere on it runs this rather than selecting the value.
    *  Focus uses it to send keyless providers to Settings → API keys. */
-  resolve?: { title: string; run: () => void };
+  resolve?: { title: string; run: () => void; showArrow?: boolean };
 };
 
 /** Reasoning-effort glyph — the AI panel's reflection-bars language: five
@@ -646,7 +647,7 @@ function InlineMenu({
         icon: o.icon,
         active: o.value === selected,
         dimmed: o.dimmed,
-        leadout: !!o.resolve,
+        leadout: !!o.resolve && o.resolve.showArrow !== false,
         title: o.resolve?.title,
         onPick: () => {
           setOpen(false);
@@ -915,7 +916,7 @@ function InlineMenu({
                     >
                       {o.label}
                     </span>
-                    {o.resolve && (
+                    {o.resolve && o.resolve.showArrow !== false && (
                       <span
                         className="menu-leadout"
                         style={{ flexShrink: 0, display: "grid", placeItems: "center" }}
@@ -1614,6 +1615,7 @@ export function FocusComposer({
   const customProviders = useCustomProviders();
   const llamaSetupMode = useLlamaSetupMode();
   const missingDelegateClis = useMissingDelegateClis();
+  const [addMachineOpen, setAddMachineOpen] = useState(false);
   const providerMenuOptions = useMemo(
     () => buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api"), llamaSetupMode, missingDelegateClis),
     [customProviders, keylessProviders, onOpenSettingsSection, llamaSetupMode, missingDelegateClis],
@@ -1960,12 +1962,17 @@ export function FocusComposer({
   }
 
   const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
-  const whereItRuns = useWhereItRuns({ workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId) });
+  const whereItRuns = useWhereItRuns({
+    workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId),
+    onAddMachine: () => setAddMachineOpen(true),
+    onOpenMachineSettings: () => onOpenSettingsSection("machines"),
+  });
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
   return (
     <div className="klide-focus-composer-dock">
+      {addMachineOpen && <AddMachineDialog workspaceRoot={workspaceRoot} onClose={() => setAddMachineOpen(false)} />}
       {((branch && onPingGit) || artifactOutput || whereItRuns) && (
         // The chosen output stands beside the branch tab, not inside it: the
         // tab carries the one git fact, the output is this turn's own. Where
@@ -1973,7 +1980,7 @@ export function FocusComposer({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 34 }}>
           {whereItRuns && (
             <div className="klide-where-it-runs">
-              <InlineMenu label="Where it runs" width={196} menuClassName="klide-where-menu" {...whereItRuns} />
+              <InlineMenu label="Where it runs" width={220} menuClassName="klide-where-menu" {...whereItRuns} />
             </div>
           )}
           <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />

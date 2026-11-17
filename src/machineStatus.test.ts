@@ -7,6 +7,7 @@ vi.mock("./ipc/machines", () => ({ machineCheck: (id: string, root: string | nul
 const status = (ready: boolean): MachineStatus => ({
   id: "klide-box", label: "klide-box", sshHost: "klide-box", ready,
   caption: ready ? "Keeps going when this Mac sleeps" : "Not reached", facts: [], checkout: null,
+  setup: { connection: ready ? "connected" : "offline", host: "ready", claude: "ready", project: "notSelected" },
 });
 
 async function fresh() {

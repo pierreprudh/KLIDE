@@ -266,7 +266,7 @@ pub async fn agent_start_design_review(
     on_event: Channel<AgentEvent>,
 ) -> Result<ReviewStarted, String> {
     let (input, prepared) = prepare(input).await?;
-    let response = super::agent_start_run(app, request(&input, &prepared)?, on_event).await?;
+    let response = super::agent_start_run(app, request(&input, &prepared)?, on_event, None).await?;
     Ok(ReviewStarted {
         run_id: response.run_id,
         evidence: prepared,

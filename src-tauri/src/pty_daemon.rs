@@ -47,6 +47,8 @@ const IDLE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(60)
 
 const LOG_FILE: &str = "ptyd.log";
 
+pub fn protocol_version() -> u32 { crate::pty_wire::PROTOCOL_VERSION }
+
 /// Where the daemon for `data_dir` listens. NOT inside `data_dir`: Unix
 /// socket paths are capped at ~104 bytes (`SUN_LEN`) on macOS, and
 /// `~/Library/Application Support/...` can exceed that. Instead — the tmux
@@ -81,6 +83,78 @@ pub fn token_path(data_dir: &Path) -> PathBuf {
     data_dir.join("ptyd.token")
 }
 
+/// SSH-side entry point. Return a process status so the binary exits instead
+/// of opening a GUI after the relay ends. Diagnostics go to stderr only.
+pub fn connect_main(data_dir: &Path, ensure: bool) -> i32 {
+    if ensure {
+        let _lease = match crate::process_lock::exclusive(&data_dir.join("upgrade.lock")) { Ok(lease) => lease, Err(e) => { eprintln!("{e}"); return 1; } };
+        if let Err(error) = crate::pty_client::ensure_chat_daemon(data_dir) { eprintln!("ptyd connect: {error}"); return 1; }
+    }
+    match crate::pty_transport::relay(data_dir) {
+        Ok(()) => 0,
+        Err(error) => { eprintln!("ptyd connect: {error}"); 1 }
+    }
+}
+
+pub fn ensure_main(data_dir: &Path) -> i32 {
+    match crate::pty_client::ensure_chat_daemon(data_dir) {
+        Ok(()) => 0,
+        Err(error) => { eprintln!("{error}"); 1 }
+    }
+}
+
+pub fn prepare_upgrade_main(data_dir: &Path) -> i32 {
+    let result = (|| -> Result<(), String> {
+        match crate::pty_client::request(data_dir, &Request::Ping) {
+            Err(error) if error.starts_with("connect:") => return Ok(()),
+            Ok(Response::Pong { protocol, .. }) if protocol >= 3 => {
+                match crate::pty_client::request(data_dir, &Request::PrepareUpgrade)? {
+                    Response::Ok => {},
+                    Response::Err { message } => return Err(message),
+                    _ => return Err("Could not reserve the idle Run host for upgrade".into()),
+                }
+            }
+            Ok(Response::Pong { .. }) => {
+                if !matches!(crate::pty_client::request(data_dir, &Request::LiveRows)?, Response::LiveRows { rows } if rows.is_empty())
+                    || !matches!(crate::pty_client::request(data_dir, &Request::ChatList)?, Response::ChatList { runs } if runs.is_empty()) {
+                    return Err("Finish the remote host's active sessions before updating".into());
+                }
+            }
+            Err(error) => return Err(error),
+            _ => return Err("Could not check the existing Run host".into()),
+        }
+        match crate::pty_client::request(data_dir, &Request::Shutdown)? {
+            Response::Ok => {},
+            _ => return Err("Could not stop the idle host".into()),
+        }
+        for _ in 0..40 {
+            if !socket_path(data_dir).exists() { return Ok(()); }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Err("The old Run host did not release its socket".into())
+    })();
+    match result { Ok(()) => 0, Err(error) => { eprintln!("{error}"); 1 } }
+}
+
+/// Manual transport acceptance, without starting a Run or replacing a host.
+pub fn ping_remote_main(host: &str, binary: &str, data_dir: &str) -> i32 {
+    let transport = crate::pty_transport::Ssh { host, binary, data_dir };
+    match crate::pty_client::request_on(&transport, &Request::Ping) {
+        Ok(Response::Pong { version, protocol, build, pid }) => {
+            if version != env!("CARGO_PKG_VERSION") || protocol != crate::pty_wire::PROTOCOL_VERSION {
+                eprintln!("Remote host v{version}, protocol {protocol} is incompatible with this client (v{}, protocol {})",
+                    env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION);
+                return 1;
+            }
+            println!("Remote host v{version}, protocol {protocol}, pid {pid}, build {build}");
+            0
+        }
+        Ok(Response::Err { message }) => { eprintln!("ptyd ping: {message}"); 1 }
+        Ok(_) => { eprintln!("ptyd ping: unexpected host response"); 1 }
+        Err(error) => { eprintln!("ptyd ping: {error}"); 1 }
+    }
+}
+
 /// Read the existing token, or mint one from OS randomness and persist it
 /// 0600. Reusing the file keeps a restarting daemon compatible with clients
 /// that read it moments earlier.
@@ -109,6 +183,7 @@ pub fn ensure_token(data_dir: &Path) -> Result<String, String> {
 /// (adapter spawn syntax, status-hook env) stays in the app; the daemon only
 /// runs what it is given.
 pub struct DaemonState {
+    upgrading: Mutex<bool>,
     host: SessionHost,
     chats: Arc<crate::agent::daemon::RunHost>,
     /// Event-stream connections, keyed by a client id so a dead writer can be
@@ -444,7 +519,40 @@ fn respond(writer: &mut UnixStream, response: &Response) -> std::io::Result<()> 
 }
 
 fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
+    let mut admission = if matches!(&request, Request::RemoteStart { .. } | Request::ChatStart { .. } | Request::Spawn { .. } | Request::PrepareUpgrade) {
+        Some(state.upgrading.lock().unwrap())
+    } else { None };
+    if admission.as_deref().is_some_and(|upgrading| *upgrading) {
+        return Response::Err { message: "The remote Run host is being updated; reconnect before starting a task".into() };
+    }
     match request {
+        Request::RemoteIdentity => Response::RemoteIdentity { source: env!("KLIDE_SOURCE_COMMIT").into() },
+        Request::RemoteChanges { run_id } => {
+            match crate::agent::remote_machine::changes_on_host(&state.data_dir, &run_id) {
+                Ok((diff, status, worktree)) => Response::RemoteChanges { diff, status, worktree },
+                Err(message) => Response::Err { message },
+            }
+        }
+        Request::PrepareUpgrade => {
+            if !state.host.live_rows().is_empty() || !state.chats.statuses().is_empty() {
+                Response::Err { message: "Finish the remote host's active sessions before updating".into() }
+            } else {
+                **admission.as_mut().unwrap() = true;
+                Response::Ok
+            }
+        }
+        Request::RemoteStart { request, checkout } => {
+            match crate::agent::remote_machine::start_on_host(&state.chats, &state.data_dir, *request, &checkout) {
+                Ok(from_seq) => Response::ChatStarted { from_seq },
+                Err(message) => Response::Err { message },
+            }
+        }
+        Request::RemoteRead { run_id, from_seq, limit } => {
+            match crate::agent::remote_machine::read_on_host(&state.data_dir, &run_id, from_seq, limit) {
+                Ok((events, next_seq)) => Response::RemoteEvents { events, next_seq },
+                Err(message) => Response::Err { message },
+            }
+        }
         Request::ChatStart { request, runs_dir } => match state.chats.start(*request, runs_dir) {
             Ok(from_seq) => Response::ChatStarted { from_seq },
             Err(message) => Response::Err { message },
@@ -560,6 +668,7 @@ fn new_state(data_dir: PathBuf, token: String) -> Arc<DaemonState> {
             }
         }));
         DaemonState {
+            upgrading: Mutex::new(false),
             host: SessionHost::default(),
             chats,
             subscribers: Mutex::new(HashMap::new()),

@@ -23,6 +23,7 @@ type ChangeSink = Arc<dyn Fn(&str, u64) + Send + Sync>;
 pub(crate) struct RunHost {
     runs: Mutex<HashMap<String, AgentRunHandle>>,
     starts: Mutex<HashMap<String, u64>>,
+    remote_runs: Mutex<std::collections::HashSet<String>>,
     store: CoordinationStoreState,
     bridge: CoordinationBridgeState,
     data_dir: PathBuf,
@@ -37,6 +38,7 @@ impl RunHost {
         Arc::new(Self {
             runs: Mutex::new(HashMap::new()),
             starts: Mutex::new(HashMap::new()),
+            remote_runs: Mutex::new(std::collections::HashSet::new()),
             store: CoordinationStoreState::default(),
             bridge: CoordinationBridgeState::default(),
             data_dir,
@@ -85,6 +87,10 @@ impl RunHost {
         request: crate::missions::orchestration::Request,
     ) -> tokio::sync::oneshot::Receiver<Result<serde_json::Value, String>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        if self.remote_runs.lock().unwrap().contains(&run_id) {
+            let _ = tx.send(Err("Remote conversations cannot dispatch Klide Missions or operations requiring the Mac. Use the CLI's own tools on the remote machine.".into()));
+            return rx;
+        }
         let op = crate::pty_wire::ChatOperation {
             id: transcripts::run_id(),
             run_id,
@@ -145,13 +151,17 @@ impl RunHost {
         self.start_with(request, runs_dir, RealProviderCaller)
     }
 
+    pub(crate) fn start_remote(self: &Arc<Self>, request: StartRunRequest, runs_dir: PathBuf) -> Result<u64, String> {
+        self.start_admitted(request, runs_dir, RealProviderCaller, false, false, true)
+    }
+
     fn start_with(
         self: &Arc<Self>,
         request: StartRunRequest,
         runs_dir: PathBuf,
         caller: impl AgentProviderCaller,
     ) -> Result<u64, String> {
-        self.start_admitted(request, runs_dir, caller, false, false)
+        self.start_admitted(request, runs_dir, caller, false, false, false)
     }
 
     /// A durable Schedule authorizes a standalone Run in this host for any
@@ -170,15 +180,15 @@ impl RunHost {
         route_auto(&runs_dir, &id, &mut request).await?;
         crate::local_servers::ensure_for_background(&request.provider, &request.model).await?;
         let host = self.clone();
-        crate::blocking::run(move || host.start_admitted(request, runs_dir, RealProviderCaller, true, false)).await
+        crate::blocking::run(move || host.start_admitted(request, runs_dir, RealProviderCaller, true, false, false)).await
     }
 
     #[cfg(debug_assertions)]
     pub(crate) fn start_design_pilot(self: &Arc<Self>, request: StartRunRequest, runs_dir: PathBuf) -> Result<u64,String> {
-        self.start_admitted(request, runs_dir, RealProviderCaller, false, true)
+        self.start_admitted(request, runs_dir, RealProviderCaller, false, true, false)
     }
 
-    fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool, pilot: bool) -> Result<u64, String> {
+    fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool, pilot: bool, remote: bool) -> Result<u64, String> {
         if !scheduled && !pilot && !run_host::background_eligible(&request) {
             return Err("Only standalone subscription conversations can run in this host".into());
         }
@@ -196,6 +206,7 @@ impl RunHost {
         let admitted = run_host::admit(&self.runs, &runs_dir, &id, &request, || Ok(()))?;
         let from = admitted.from_seq();
         self.starts.lock().unwrap().insert(id.clone(), from);
+        if remote { self.remote_runs.lock().unwrap().insert(id.clone()); }
         self.ensure_bridge();
         if scheduled { let _ = register_coordination_run(self.as_ref(), &request, &id); }
         // RunLease retires the handle on success, error, and panic; the
@@ -367,6 +378,7 @@ impl RunSupervisor for RunHost {
             .unwrap()
             .retain(|_, (op, _)| op.run_id != id);
         self.starts.lock().unwrap().remove(id);
+        self.remote_runs.lock().unwrap().remove(id);
         if let Ok(mut runs) = self.runs.lock() {
             runs.remove(id);
         }
@@ -416,6 +428,15 @@ impl RunSupervisor for RunHost {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_operations_fail_promptly_instead_of_waiting_for_an_absent_mac() {
+        let host = RunHost::new(std::env::temp_dir().join("klide-remote-operation-test"), Arc::new(|_, _, _| {}));
+        host.remote_runs.lock().unwrap().insert("remote".into());
+        let mut reply = host.queue_operation("/remote".into(), "remote".into(), crate::missions::orchestration::Request::Dispatch { mission_id: "mission".into(), task_id: "task".into() });
+        assert!(reply.try_recv().unwrap().unwrap_err().contains("cannot dispatch"));
+        assert!(host.operations("remote").is_empty());
+    }
+
     use super::*;
     use tokio::sync::Notify;
 

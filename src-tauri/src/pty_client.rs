@@ -1,6 +1,6 @@
 //! App-side client for the `klide ptyd` daemon (Slice 3c of
-//! docs/delegate-session-replay.md). Transport only: connect to the socket,
-//! start the daemon when it isn't running, one request/response round-trip
+//! docs/delegate-session-replay.md). Framing and local host lifecycle: connect
+//! through `pty_transport`, start a local daemon when needed, one round-trip
 //! per call, and the subscribe upgrade. What to DO with responses and events
 //! stays in pty.rs, next to the in-process host it mirrors.
 
@@ -18,46 +18,25 @@ use std::io::BufRead;
 use std::path::Path;
 
 #[cfg(unix)]
-use crate::pty_daemon::{socket_path, token_path};
+use crate::pty_transport::{Local, Transport};
 #[cfg(unix)]
 use std::io::{BufReader, Write};
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-#[cfg(unix)]
-/// Every connection opens with the auth line — the daemon serves nothing
-/// before it. The token file is written by the daemon on startup; a missing
-/// file reads the same as a missing daemon (caller respawns and retries).
-fn write_auth(stream: &mut UnixStream, data_dir: &Path) -> Result<(), String> {
-    let token = std::fs::read_to_string(token_path(data_dir))
-        .map_err(|e| format!("connect: no ptyd token: {e}"))?;
-    let line = serde_json::to_string(&Request::Auth {
-        token: token.trim().to_string(),
-    })
-    .map_err(|e| e.to_string())?;
-    writeln!(stream, "{line}").map_err(|e| format!("send auth: {e}"))
+/// One request → one response over a fresh authenticated connection.
+pub fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
+    request_on(&Local(data_dir), request)
 }
 
 #[cfg(unix)]
-/// One request → one response over a fresh connection. Unix-socket connects
-/// are microseconds; a connection per call keeps every call independent and
-/// immune to a wedged predecessor.
-pub fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
-    let mut stream =
-        UnixStream::connect(socket_path(data_dir)).map_err(|e| format!("connect: {e}"))?;
-    stream
-        .set_read_timeout(Some(REQUEST_TIMEOUT))
-        .map_err(|e| e.to_string())?;
-    write_auth(&mut stream, data_dir)?;
+pub(crate) fn request_on(transport: &impl Transport, request: &Request) -> Result<Response, String> {
+    let mut connection = transport.connect()?;
     let line = serde_json::to_string(request).map_err(|e| e.to_string())?;
-    writeln!(stream, "{line}").map_err(|e| format!("send: {e}"))?;
+    writeln!(connection, "{line}").map_err(|e| format!("send: {e}"))?;
     let mut reply = String::new();
-    BufReader::new(stream)
+    BufReader::new(connection)
         .read_line(&mut reply)
         .map_err(|e| format!("recv: {e}"))?;
     serde_json::from_str(&reply).map_err(|e| format!("bad response: {e}"))
@@ -186,27 +165,22 @@ fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
 /// as a line reader once the daemon acks. The caller owns the read loop; EOF
 /// or an error there means "reconnect if you still care".
 pub fn subscribe(data_dir: &Path) -> Result<Box<dyn BufRead + Send>, String> {
-    let mut stream =
-        UnixStream::connect(socket_path(data_dir)).map_err(|e| format!("connect: {e}"))?;
-    stream
-        .set_read_timeout(Some(REQUEST_TIMEOUT))
-        .map_err(|e| e.to_string())?;
-    write_auth(&mut stream, data_dir)?;
+    subscribe_on(&Local(data_dir))
+}
+
+#[cfg(unix)]
+pub(crate) fn subscribe_on(transport: &impl Transport) -> Result<Box<dyn BufRead + Send>, String> {
+    let mut connection = transport.connect()?;
     let line = serde_json::to_string(&Request::Subscribe).map_err(|e| e.to_string())?;
-    writeln!(stream, "{line}").map_err(|e| format!("send: {e}"))?;
-    let mut reader = BufReader::new(stream);
+    writeln!(connection, "{line}").map_err(|e| format!("send: {e}"))?;
+    let mut reader = BufReader::new(connection);
     let mut ack = String::new();
-    reader
-        .read_line(&mut ack)
-        .map_err(|e| format!("recv: {e}"))?;
+    reader.read_line(&mut ack).map_err(|e| format!("recv: {e}"))?;
     match serde_json::from_str::<Response>(&ack) {
         Ok(Response::Subscribed) => {
             // Events are pushed at the session's pace — an idle session may be
             // silent for hours. No read timeout from here on.
-            reader
-                .get_ref()
-                .set_read_timeout(None)
-                .map_err(|e| e.to_string())?;
+            reader.get_ref().streaming()?;
             Ok(Box::new(reader))
         }
         Ok(Response::Err { message }) => Err(message),

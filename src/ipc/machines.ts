@@ -1,6 +1,6 @@
 // Remote machines wire — `machines_list` / `machine_check` (src-tauri/src/machines.rs).
 // A Remote machine is an SSH host from ~/.klide/machines.json; a Claude Code
-// conversation placed on it runs there inside a tmux session.
+// conversation placed on it streams from its durable Run host.
 import { invoke } from "@tauri-apps/api/core";
 
 export type MachineFactTone = "ok" | "warn" | "bad" | "quiet";
@@ -24,6 +24,12 @@ export type MachineStatus = {
   caption: string;
   facts: MachineFact[];
   checkout: string | null;
+  setup: {
+    connection: "connected" | "offline" | "needsTrust" | "needsAuthentication";
+    host: "ready" | "outdated" | "missing" | "unknown";
+    claude: "ready" | "needsLogin" | "missing" | "unknown";
+    project: "ready" | "missing" | "unknown" | "notSelected";
+  };
 };
 
 /** The only Delegate the first slice runs remotely (Rust `REMOTE_PROVIDER`). */
@@ -58,4 +64,19 @@ export async function machineRemove(id: string): Promise<Machine[]> {
   const machines = await invoke<Machine[]>("machine_remove", { id });
   for (const listener of listeners) listener();
   return machines;
+}
+
+export type MachineSetupAction = "connect" | "prepare" | "signIn" | "gitHub" | "clone";
+
+/** Explicit setup action; omitted binaryPath downloads this revision's public helper. */
+export async function machineInstallHost(id: string, binaryPath?: string): Promise<void> {
+  await invoke("machine_install_host", { id, binaryPath: binaryPath ?? null });
+  for (const listener of listeners) listener();
+}
+
+export type MachineConnectionMethod = "tailscale" | "vpn" | "ssh";
+export type MachineCandidate = { label: string; sshHost: string; source: "tailscale" | "sshConfig" | "saved"; online: boolean | null; supported: boolean; detail: string; machine: Machine | null };
+export type MachineDiscovery = { machines: MachineCandidate[]; message: string };
+export function machineDiscover(method: MachineConnectionMethod): Promise<MachineDiscovery> {
+  return invoke("machine_discover", { method });
 }

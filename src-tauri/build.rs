@@ -1,4 +1,19 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=KLIDE_SOURCE_COMMIT");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/refs");
+    let source = std::env::var("KLIDE_SOURCE_COMMIT")
+        .ok()
+        .or_else(|| {
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        })
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=KLIDE_SOURCE_COMMIT={source}");
     // tauri-codegen resolves the directory's standard config filename, even
     // when generate_context! is passed another filename. TAURI_CONFIG is the
     // CLI's own `--config` channel: a JSON merge patch over tauri.conf.json,
