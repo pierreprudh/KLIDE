@@ -65,13 +65,15 @@ fn ssh(host: &str, script: &str) -> Result<Output, String> {
 }
 
 fn artifact(cache: &Path) -> Result<PathBuf, String> {
-    let out = run(Command::new("gh").args(["run", "list", "--repo", "pierreprudh/KLIDE", "--workflow", "linux-host.yml",
+    let gh = crate::cli::resolve_command("gh")
+        .map_err(|error| format!("GitHub CLI is unavailable. Install gh and sign in on this Mac, or choose a downloaded Linux host binary. {error}"))?;
+    let out = run(Command::new(&gh).args(["run", "list", "--repo", "pierreprudh/KLIDE", "--workflow", "linux-host.yml",
         "--commit", env!("KLIDE_SOURCE_COMMIT"), "--status", "success", "--limit", "1", "--json", "databaseId"]))
         .map_err(|e| format!("Could not find a matching Linux build. Sign in to gh on this Mac or choose a downloaded host binary. {e}"))?;
     let runs: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
     let id = runs[0]["databaseId"].as_u64().ok_or("No Linux host build exists for this app revision. Run the Linux host binary workflow for this revision, or choose its downloaded binary.")?;
     std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
-    run(Command::new("gh")
+    run(Command::new(&gh)
         .args([
             "run",
             "download",
