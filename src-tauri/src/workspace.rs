@@ -175,7 +175,10 @@ impl Workspace {
     /// apply_write). canonicalize() fails on non-existent paths, so instead we
     /// reject any `..`/absolute component outright, then canonicalize the
     /// deepest existing ancestor so a symlinked directory can't smuggle the
-    /// write outside the root.
+    /// write outside the root. The returned path is the *canonical* ancestor
+    /// with the missing tail re-joined: returning the lexical candidate would
+    /// let a symlink alias (`alias -> .git`) hide the real `.git` component
+    /// from `guard_write` while the write itself follows the link.
     pub fn resolve_new(&self, user_path: &str) -> Result<PathBuf, String> {
         let cleaned = self.clean_user_path(user_path);
         let rel = Path::new(&cleaned);
@@ -203,7 +206,15 @@ impl Workspace {
         if !ancestor_real.starts_with(&self.root) {
             return Err(format!("Path \"{user_path}\" is outside the workspace"));
         }
-        Ok(candidate)
+        let tail = candidate
+            .strip_prefix(&ancestor)
+            .map_err(|_| format!("Path \"{user_path}\" is outside the workspace"))?;
+        // join("") would append a trailing separator and turn a file into a
+        // "not a directory"; an existing target resolves to itself.
+        if tail.as_os_str().is_empty() {
+            return Ok(ancestor_real);
+        }
+        Ok(ancestor_real.join(tail))
     }
 
     /// Validate an absolute path the frontend wants to read (read_text_file,
@@ -220,7 +231,9 @@ impl Workspace {
     /// Validate an absolute path for an operation on the entry itself
     /// (create/rename/delete). The entry may not exist yet and may be a
     /// symlink we must not follow, so the check canonicalizes its parent
-    /// directory. Returns the validated lexical path.
+    /// directory and returns the parent's canonical form with the entry name
+    /// re-joined — a symlinked parent (`alias -> .git`) must not hide the
+    /// real location from `guard_write` while the operation follows the link.
     pub fn resolve_abs_entry(&self, path: &str) -> Result<PathBuf, String> {
         let target = PathBuf::from(path);
         if !target.is_absolute()
@@ -231,6 +244,9 @@ impl Workspace {
         {
             return Err("Path is outside the open workspace".to_string());
         }
+        let name = target
+            .file_name()
+            .ok_or_else(|| "Path has no entry name".to_string())?;
         let parent = target
             .parent()
             .ok_or_else(|| "Path has no parent folder".to_string())?;
@@ -238,11 +254,14 @@ impl Workspace {
         if !parent.starts_with(&self.root) {
             return Err("Path is outside the open workspace".to_string());
         }
-        Ok(target)
+        Ok(parent.join(name))
     }
 
     /// Validate an absolute path that may not exist yet. This is the frontend
     /// twin of `resolve_new`: used for writes that may create parent folders.
+    /// Returns the canonical ancestor with the missing tail re-joined, like
+    /// `resolve_new`, so a symlinked (even dangling) parent can't smuggle the
+    /// write outside the root or past the guards.
     pub fn resolve_abs_new(&self, path: &str) -> Result<PathBuf, String> {
         let target = PathBuf::from(path);
         if !target.is_absolute() {
@@ -258,19 +277,30 @@ impl Workspace {
             return Err("Path is outside the open workspace".to_string());
         }
         let mut ancestor = target.clone();
-        while !ancestor.exists() {
+        // `symlink_metadata`, not `exists()`: a dangling symlink does not
+        // "exist", and walking past it would hand back a path the write then
+        // follows out of the workspace.
+        while ancestor.symlink_metadata().is_err() {
             match ancestor.parent() {
                 Some(p) => ancestor = p.to_path_buf(),
                 None => return Err("Path is outside the open workspace".to_string()),
             }
         }
-        let ancestor = ancestor
+        let ancestor_real = ancestor
             .canonicalize()
             .map_err(|e| format!("Invalid path: {e}"))?;
-        if !ancestor.starts_with(&self.root) {
+        if !ancestor_real.starts_with(&self.root) {
             return Err("Path is outside the open workspace".to_string());
         }
-        Ok(target)
+        let tail = target
+            .strip_prefix(&ancestor)
+            .map_err(|_| "Path is outside the open workspace".to_string())?;
+        // join("") would append a trailing separator; an existing target
+        // resolves to itself.
+        if tail.as_os_str().is_empty() {
+            return Ok(ancestor_real);
+        }
+        Ok(ancestor_real.join(tail))
     }
 
     /// Resolve an absolute path for a read-or-write where the caller doesn't
@@ -512,6 +542,75 @@ mod tests {
         assert!(escaped.is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn resolve_new_returns_canonical_path_through_alias() {
+        let (dir, ws) = temp_workspace("new-alias");
+        std::fs::create_dir_all(dir.join(".git/hooks")).unwrap();
+        // A repo can ship this alias; the write must not hide the real .git.
+        std::os::unix::fs::symlink(".git", dir.join("alias")).unwrap();
+        let resolved = ws.resolve_new("alias/hooks/pre-commit").unwrap();
+        assert_eq!(resolved, ws.root().join(".git/hooks/pre-commit"));
+        // The agent-tier write guard sees the canonical .git and refuses.
+        assert!(ws.guard_write(&resolved, Access::Agent).is_err());
+        // ...and the write itself is refused before touching the real hook.
+        assert!(ws.write_text(&resolved, "#!/bin/sh\n", Access::Agent).is_err());
+        assert!(!ws.root().join(".git/hooks/pre-commit").exists());
+        // The user tier may still write there — they saw what they did.
+        assert!(ws.write_text(&resolved, "#!/bin/sh\n", Access::User).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_new_alias_cannot_reach_review_store_or_secrets() {
+        let (dir, ws) = temp_workspace("new-alias-guards");
+        std::fs::create_dir_all(dir.join(".klide/memory-proposals")).unwrap();
+        std::fs::create_dir_all(dir.join(".ssh")).unwrap();
+        std::os::unix::fs::symlink(".klide", dir.join("notes")).unwrap();
+        std::os::unix::fs::symlink(".ssh", dir.join("keys")).unwrap();
+        let proposals = ws.resolve_new("notes/memory-proposals/state.json").unwrap();
+        assert!(ws.guard(&proposals, Access::Agent).is_err());
+        let ssh = ws.resolve_new("keys/id_rsa").unwrap();
+        assert!(ws.guard_write(&ssh, Access::Agent).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_abs_entry_returns_canonical_parent_through_alias() {
+        let (dir, ws) = temp_workspace("abs-entry-alias");
+        let dir = dir.canonicalize().unwrap();
+        std::fs::create_dir_all(dir.join(".git/hooks")).unwrap();
+        std::os::unix::fs::symlink(".git", dir.join("alias")).unwrap();
+        let target = dir.join("alias/hooks/pre-commit");
+        let resolved = ws.resolve_abs_entry(target.to_str().unwrap()).unwrap();
+        assert_eq!(resolved, dir.join(".git/hooks/pre-commit"));
+        assert!(ws.guard_write(&resolved, Access::Agent).is_err());
+        // A plain in-root entry still resolves under its real parent.
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let plain = ws
+            .resolve_abs_entry(dir.join("sub/new.txt").to_str().unwrap())
+            .unwrap();
+        assert_eq!(plain, dir.join("sub/new.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_abs_new_does_not_walk_past_dangling_symlink() {
+        let (dir, ws) = temp_workspace("abs-new-dangling");
+        let dir = dir.canonicalize().unwrap();
+        std::os::unix::fs::symlink("/definitely/not/here-klide", dir.join("dangling")).unwrap();
+        // `exists()` would treat the dangling link as missing and walk past it;
+        // symlink_metadata sees the link and canonicalize fails.
+        assert!(ws
+            .resolve_abs_new(dir.join("dangling/child.txt").to_str().unwrap())
+            .is_err());
+        // A real in-root target still resolves, canonically.
+        let ok = ws
+            .resolve_abs_new(dir.join("fresh/child.txt").to_str().unwrap())
+            .unwrap();
+        assert_eq!(ok, dir.join("fresh/child.txt"));
+    }
+
     #[test]
     fn resolve_abs_read_checks_containment() {
         let (dir, ws) = temp_workspace("abs-read");
@@ -673,5 +772,17 @@ mod tests {
         let full = ws.resolve_existing("a.txt").unwrap();
         assert_eq!(ws.display(&full), "a.txt");
         assert_eq!(ws.display(ws.root()), ".");
+    }
+
+    #[test]
+    fn resolve_new_of_existing_file_returns_it_exactly() {
+        let (dir, ws) = temp_workspace("new-existing");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/a.txt"), "hi").unwrap();
+        // An existing target resolves to itself — no trailing separator, which
+        // would read back as "not a directory".
+        let resolved = ws.resolve_new("sub/a.txt").unwrap();
+        assert_eq!(resolved, ws.root().join("sub/a.txt"));
+        assert!(resolved.is_file());
     }
 }
