@@ -7,7 +7,7 @@ import { GhostButton } from "./controls";
 
 const methods = [
   { id: "tailscale", label: "Tailscale", description: "Choose a device on your private Tailscale network." },
-  { id: "vpn", label: "Other VPN", description: "WireGuard, ZeroTier, OpenVPN or your existing private network." },
+  { id: "vpn", label: "Other VPN", description: "Use a VPN that’s already connected on this Mac." },
   { id: "ssh", label: "Direct SSH", description: "A server address or a host from your SSH configuration." },
 ] as const;
 
@@ -34,7 +34,11 @@ export function MachineConnectionPicker({ method, onMethod, onSelect, onManual, 
     <p>How would you like to connect?</p>
     <div className="klide-machine-methods">{methods.map((option, index) => <button ref={index === 0 ? first : undefined} key={option.id} type="button" onClick={() => onMethod(option.id)}>
       {option.id === "tailscale" ? <TailscaleIcon size={24} /> : <MachineIcon size={24} />}
-      <span><strong>{option.label}</strong><span>{option.description}</span></span>
+      <span><strong>{option.label}</strong><span>{option.description}</span>{option.id === "vpn" && <span className="klide-vpn-brands">
+        <span className="klide-vpn-brand"><img src="/vpn/wireguard.svg" alt="WireGuard" width="100" height="24" /></span>
+        <span className="klide-vpn-brand"><img src="/vpn/zerotier.svg" alt="ZeroTier" width="100" height="24" /></span>
+        <span className="klide-vpn-brand"><img src="/vpn/openvpn.svg" alt="" width="23" height="23" /><span>OpenVPN</span></span>
+      </span>}</span>
     </button>)}</div>
     <div className="klide-machine-dialog-footer"><GhostButton onClick={onClose}>Cancel</GhostButton></div>
   </div>;

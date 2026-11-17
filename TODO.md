@@ -6,6 +6,30 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Remote machines — cross-platform deployment next, 2026-11-18
+
+Parked for the next session: make remote execution and distribution ready for
+macOS and Windows, beyond the current x86_64 Linux host support.
+
+- [ ] macOS remote hosts (including Mac mini): build matching arm64 and
+  x86_64 helpers; support installation, remote CLI login and a detached
+  lifecycle that survives the client disconnecting.
+- [ ] Windows remote hosts: decide and label native Windows versus WSL
+  support; implement and verify OpenSSH setup, process ownership, IPC,
+  Windows paths and shell quoting. Do not advertise native Windows support
+  based only on a WSL/Linux test.
+- [ ] Make discovery, readiness and the guided installer choose the matching
+  OS/architecture artifacts, dependencies and upgrade path. Enable each host
+  platform only after its acceptance checks pass.
+- [ ] Prepare macOS and Windows distribution: CI artifact matrix, signed and
+  notarized Mac app, signed Windows installer, and published matching helper
+  assets with checksums.
+- [ ] Clean-machine acceptance per platform: install → sign in → launch a
+  real task → disconnect/turn off the client → reconnect and replay/live
+  stream → Stop; verify upgrade refusal during active work and define host
+  sleep/reboot recovery. The outstanding real Linux-host acceptance remains
+  required too.
+
 ## Conductor follow-up — product and business line, 2026-11-05
 
 Customer confirmed: solo developers and small teams bringing their own agent
