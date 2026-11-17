@@ -18,7 +18,9 @@
     "design:typecheck": "tsc --project tsconfig.design.json --noEmit",
     "design:parity": "node scripts/design-feedback/prepare-native.mjs",
     "design:canary": "node scripts/design-feedback/canary.mjs",
-    "design:experiment": "node scripts/design-feedback/experiment.mjs"
+    "design:experiment": "node scripts/design-feedback/experiment.mjs",
+    "audit": "node scripts/audit-dependencies.mjs",
+    "test:audit": "node --test scripts/audit-dependencies-checks.mjs"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "^5.2.8",
@@ -52,7 +54,7 @@
     "pngjs": "7.0.0",
     "typescript": "~5.8.3",
     "vite": "^7.3.6",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.12"
   },
   "overrides": {
     "@babel/core": "7.29.7",

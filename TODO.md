@@ -6,6 +6,13 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Dependency audit follow-up, 2026-11-18
+
+- [ ] Replace the temporary dev-only picomatch advisory exception with a
+  patched compatible release once available, then remove the exception from
+  `scripts/audit-dependencies.mjs`. See `docs/DEPENDENCY_AUDIT.md`. Production
+  and unrelated high/critical advisories remain blocked.
+
 ## Remote machines — cross-platform deployment next, 2026-11-18
 
 Parked for the next session: make remote execution and distribution ready for
