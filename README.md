@@ -59,7 +59,7 @@ Press **⌘F** to open the search bar and find text in the current conversation,
 
 The editor-first layout: explorer, tabs, Monaco, terminal, and AI panels. Anchor the panels, pick a fixed preset, build a grid, or float them freely over the editor — run a hosted model and the delegate CLIs side by side, each in its own live terminal, compare their answers, and keep the file you are reviewing open behind them.
 
-<img src=".github/assets/free-mode.png" alt="Klide workbench in free mode: an OpenRouter conversation beside three delegate panels running Oh My Pi, OpenCode and Claude Code as live terminals" width="900" />
+<img src=".github/assets/free-mode.png" alt="Klide workbench in free mode: an OpenRouter conversation beside four delegate panels running Claude Code, two OpenCode sessions and Hermes as live terminals" width="900" />
 
 ## Why Klide
 
