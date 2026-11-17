@@ -1,3 +1,10 @@
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/inter/400-italic.css";
+@import "@fontsource/inter/700-italic.css";
+
 :root {
   /* Surfaces — cool light-grey chrome and white content. See Design.md. */
   --bg:           #F5F6F7;
@@ -156,7 +163,8 @@
   --inset-drop:      rgba(0, 0, 0, 0.05);
 
   /* Typography */
-  --font-ui:   "Atkinson Hyperlegible", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", Inter, system-ui, sans-serif;
+  --font-ui:   -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", system-ui, sans-serif;
+  --font-brand: "Inter", var(--font-ui);
   --font-mono: "Monaspace Neon", "Monaspace Argon", "Monaspace", "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
 
   --fs-xs:   12px;
@@ -1795,7 +1803,7 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 
 .klide-welcome-wordmark {
-  font-family: var(--font-mono);
+  font-family: var(--font-brand);
   font-size: 12px;
   line-height: 1;
   color: var(--w-dim);
@@ -3676,7 +3684,7 @@ button:focus-visible .menu-leadout {
 }
 
 /* Editorial quote — the small italic pull-quote used in detail views.
-   Uses Atkinson Hyperlegible at italic with em-dashes to feel like a
+   Uses the interface face at italic with em-dashes to feel like a
    footnote from a manual. */
 .klide-quote {
   margin: 0;
@@ -3804,9 +3812,7 @@ button:focus-visible .menu-leadout {
 .klide-viz-page > [data-visual-content] > :first-child { margin-top: 0; }
 .klide-viz-page > [data-visual-content] > :last-child { margin-bottom: 0; }
 
-/* Emphasis is size and color, never weight — Atkinson Hyperlegible is
-   single-weight, and a faux-bold heading is the one thing that makes a
-   Klide document look like someone else's. */
+/* Keep document headings quiet; preserve the existing size and color hierarchy. */
 .klide-viz-page :is(h1, h2, h3, h4, h5, h6) {
   font-weight: 400;
   color: var(--viz-ink);
@@ -9890,7 +9896,7 @@ input.klide-rail-search:focus-visible {
    (beautifului.dev): a numbered section head with a one-line note, a dashed
    rule between sections, and — the idea worth stealing — a single highlight
    that *glides* between rows rather than each row lighting up on its own.
-   Everything inside it is Klide's: neutral surfaces, sage, Atkinson, hairlines.
+   Everything inside it is Klide's: neutral surfaces, sage, system typography, hairlines.
 
    A ledger, not a stack of cards. State is carried by type colour, and the
    verbs stay out of the way until a row is hovered or focused. */

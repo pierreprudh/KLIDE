@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: Klide
-description: "A light-grey and white design system: #F5F6F7 chrome, #FFFFFF content, charcoal text and a quiet sage accent. Atkinson Hyperlegible for UI and Monaspace Neon for code. Rounded groups, generous spacing and soft borders define the interface. No beige or cream UI surfaces."
+description: "A light-grey and white design system: #F5F6F7 chrome, #FFFFFF content, charcoal text and a quiet sage accent. San Francisco for the macOS UI, Inter for the wordmark and Monaspace Neon for code. Rounded groups, generous spacing and soft borders define the interface. No beige or cream UI surfaces."
 
 seo:
   title: "Klide Design System — Light Grey + White + Charcoal + Sage"
@@ -15,13 +15,13 @@ seo:
   tags:
     - "AI & LLM Platforms"
     - "Developer Tools & IDEs"
-  lastUpdated: "2026-11-10"
+  lastUpdated: "2026-11-17"
   author:
     name: "Pierre Prudhomme"
   opening: |
     Klide uses a cool light-grey (#F5F6F7) foundation for chrome, rails and sidebars, with white (#FFFFFF) content, editor, terminal and panel surfaces. The palette applies across all light themes, including menus, welcome screens, viewers and Settings. Beige, cream, parchment and warm off-white UI backgrounds are not part of the design system. Dark themes keep their own dark surfaces; user content, artwork, service logos, syntax and status colours keep their meaning.
 
-    Near-black charcoal carries text, Atkinson Hyperlegible carries the UI, and Monaspace Neon carries code. A quiet sage accent identifies interactive states. Related settings sit in rounded groups with 20px corners, 12px controls, generous row spacing, fine dividers and subtle shadows. Use chevrons when they clarify dropdowns or expandable content; reserve full arrows for directional navigation.
+    Near-black charcoal carries text, San Francisco carries the macOS UI, Inter carries the wordmark, and Monaspace Neon carries code. A quiet sage accent identifies interactive states. Related settings sit in rounded groups with 20px corners, 12px controls, generous row spacing, fine dividers and subtle shadows. Use chevrons when they clarify dropdowns or expandable content; reserve full arrows for directional navigation.
 
     To change the system, update this file and the implementation in `src/styles/tokens.css`, `src/theme.ts` and any native editor or terminal palette. `CONTEXT.md` and `CLAUDE.md` carry the same approved guidelines.
   related:
@@ -37,7 +37,7 @@ seo:
       answer: "Klide uses light-grey chrome (#F5F6F7), white content (#FFFFFF), charcoal text and a soft sage accent (#5A7B4C). Accents identify interaction and semantic information; backgrounds stay neutral."
     - id: "typography"
       title: "What typography does Klide use?"
-      answer: "Klide runs Atkinson Hyperlegible for the UI surface and Monaspace Neon for code. Atkinson is a humanist sans-serif designed by the Braille Institute for low-vision readers — generous x-height, open apertures, slightly rounded terminals. The type scale runs 12px (xs) → 24px (xxl) in 5 steps. There is no display weight: emphasis is carried by color and size, not by weight variation."
+      answer: "Klide uses the native system font stack (San Francisco on macOS) for the UI, locally bundled Inter for the wordmark, and Monaspace Neon for code. The type scale runs 12px (xs) → 24px (xxl) in 5 steps. Use regular copy and restrained medium/semibold emphasis while preserving the existing type scale."
     - id: "opacity-grays"
       title: "Why does Klide derive grays from opacity instead of hex values?"
       answer: "The foundation uses cool light grey (#F5F6F7), white (#FFFFFF) and cool-grey borders (#E4E7EB). Charcoal opacity stops provide coherent hover fills and text hierarchies without beige or cream tints."
@@ -98,7 +98,8 @@ colors:
   # Mission Control tabs use --fg-subtle (4.5:1 on page/elevated surfaces).
 
 typography:
-  font-ui:   '"Atkinson Hyperlegible", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", Inter, system-ui, sans-serif'
+  font-ui:   '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", system-ui, sans-serif'
+  font-brand: '"Inter", var(--font-ui)'
   font-mono: '"Monaspace Neon", "Monaspace Argon", "Monaspace", "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace'
   fs-xs:   12px   # Captions, tertiary labels
   fs-base: 13px   # Body, list items, default UI
@@ -106,8 +107,8 @@ typography:
   fs-lg:   16px   # Primary text, buttons
   fs-xl:   18px   # Section headers in panels
   fs-xxl:  24px   # Page-level headers, hero numbers
-  # No display weight. Emphasis is carried by color (charcoal vs muted) and
-  # size, not by weight variation. Atkinson Hyperlegible is single-weight.
+  # The UI uses the native system font. Inter stays bundled for the wordmark.
+  # Preserve existing component weights and hierarchy; avoid excessive emphasis.
 
 rounded:
   micro:       4px   # Pills, toggles, status dots
@@ -290,9 +291,9 @@ principles:
   - "Opacity grays over hex grays. Every gray is the same charcoal at a different transparency. Tonal coherence is automatic."
   - "Soft borders and subtle shadows contain rounded groups. Keep dividers fine and spacing generous."
   - "Selection is a grey lift, not a colour. Picked rows in lists and menus (Explorer, Git Review files, Where it runs) fill with the text colour at ~10% and hover at ~5%, on 8px corners — never the accent."
-  - "Atkinson over Inter. Humanist, not geometric. Open apertures. Rounded terminals. Built for reading."
+  - "San Francisco for the macOS interface; Inter for the wordmark. Keep the current light and dark themes."
   - "Monaspace over JetBrains. Code gets a different typeface. Same warmth, but mechanical."
-  - "No display weight. Atkinson Hyperlegible is single-weight. Emphasis is color and size, not weight."
+  - "Restrained emphasis. Preserve existing component hierarchy and use stronger weights only where useful."
 
 # ─────────────────────────────────────────────────────────────────────────────
 # KNOWN GAPS

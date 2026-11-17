@@ -28,6 +28,12 @@ compatibility or live verification of every combination.
 
 ## Klide UI guidelines
 
+The interface uses the native system font stack (San Francisco on macOS).
+The wordmark uses locally bundled Inter through a separate brand font token.
+Monaspace remains the code font. Preserve the existing light and
+dark themes; the Deep Sea palette exploration was rejected. Logo integration
+is deferred. The reference draft is `BRAND_GUIDELINES.md`.
+
 Settings use rounded, grouped panels, following the Machines page and the
 rounded settings reference approved by the user. This is the default Klide
 visual language for new UI and future revisions of existing UI.
