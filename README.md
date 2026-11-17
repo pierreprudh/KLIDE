@@ -2,14 +2,14 @@
   <img src=".github/assets/klide-banner.png" alt="Klide — a workspace for coding agents" width="100%" />
 </p>
 
+<h1 align="center">Your agents. Your models. One workspace.</h1>
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/klide-app-icon-dark.svg" />
     <img src=".github/assets/klide-app-icon-light.svg" alt="Klide app icon" width="96" />
   </picture>
 </p>
-
-<h1 align="center">Your agents. Your models. One workspace.</h1>
 
 <p align="center">
   A local-first coding workspace for macOS.<br />
