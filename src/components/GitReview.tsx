@@ -103,6 +103,9 @@ import { useFlipIndicator } from "../hooks/useFlipIndicator";
 type Props = {
   initialPr?: GitDestination | null;
   workspaceRoot: string | null;
+  /** Set when the review is a conversation's worktree, not the main checkout —
+   *  the header names it so the branch is never read as the project's. */
+  worktreeName?: string;
   gitStatus: GitStatus | null;
   onRefreshGitStatus: () => Promise<void> | void;
   /** Opens a project file in the editor (the diff cards' arrow). */
@@ -1611,7 +1614,7 @@ function BranchMenu({ branches, tags, defaultBranch, current, onSelect, onClose 
   );
 }
 
-export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitStatus, onOpenFile }: Props) {
+export function GitReview({ initialPr, workspaceRoot, worktreeName, gitStatus, onRefreshGitStatus, onOpenFile }: Props) {
   const [log, setLog] = useState<GitLog | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [localStatus, setLocalStatus] = useState<GitStatus | null>(null);
@@ -2072,6 +2075,14 @@ export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitSta
                 <path d="M6 9l6 6 6-6" />
               </svg>
             </button>
+            {worktreeName && (
+              <span
+                style={{ fontSize: 11, color: "var(--fg-subtle)", whiteSpace: "nowrap" }}
+                title={`This conversation runs in the git worktree "${worktreeName}" — this review shows its branch and changes, not the main checkout.`}
+              >
+                worktree {worktreeName}
+              </span>
+            )}
             {(log?.lastFetchMs || logLoading) && (
               <span
                 style={{ fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}

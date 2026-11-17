@@ -926,7 +926,21 @@ function App() {
     return () => registerGitOpener(null);
   }, [openOverlay]);
   useEffect(() => { if (overlay !== "git-review") setGitDestination(null); }, [overlay]);
-  const effectiveGitReviewRoot = gitDestination?.root ?? workspaceRoot;
+  // Git Review opens on the conversation in front of you. When that
+  // conversation runs in its own worktree, the review is that worktree's —
+  // its branch, its changes — not the main checkout's. Focus has one
+  // conversation (and only while it is open); the workbench means the panel
+  // last focused. A PR destination names its own root and wins.
+  const conversationWorkspace = (() => {
+    if (focusBase && !focusChatActive) return null;
+    const panel = !focusBase && focusedPanel
+      ? aiPanels.find((p) => p.id === focusedPanel) ?? aiPanels[0]
+      : aiPanels[0];
+    return panelWorkspace(panel, workspaceRoot, true);
+  })();
+  const gitReviewWorktree = gitDestination ? undefined : conversationWorkspace?.worktreeName;
+  const effectiveGitReviewRoot =
+    gitDestination?.root ?? (gitReviewWorktree ? conversationWorkspace?.root ?? workspaceRoot : workspaceRoot);
   const activityState: Record<ActivityPanel, boolean> = {
     home: overlay === null,
     explorer: overlay === null && (explorerVisible || sidebarSlot2 === "explorer"),
@@ -3670,6 +3684,7 @@ function App() {
                 <GitReview
                   initialPr={gitDestination}
                   workspaceRoot={effectiveGitReviewRoot}
+                  worktreeName={gitReviewWorktree}
                   gitStatus={effectiveGitReviewRoot === workspaceRoot ? gitStatus : null}
                   onRefreshGitStatus={() =>
                     effectiveGitReviewRoot && effectiveGitReviewRoot === workspaceRoot

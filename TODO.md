@@ -6,6 +6,17 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## Git Review follows the conversation's worktree — PR #552, 2026-11-18
+
+- [ ] Dogfood before merge (test 2026-11-19): run the dev app from the PR
+  branch; Focus start page and main-folder conversations open Git Review on the
+  project with no label; a worktree conversation (⌘⇧P › Agent: New Run in
+  Worktree, then the panel focused in the workbench, or resumed in Focus) opens
+  it on that worktree with `worktree <name>` in the header and the worktree's
+  changes; leaving it returns to the main folder. Then merge #552.
+- [ ] Decide whether the right half of a Focus split counts too (today only
+  the left conversation does).
+
 ## Conductor follow-up — product and business line, 2026-11-05
 
 Customer confirmed: solo developers and small teams bringing their own agent
