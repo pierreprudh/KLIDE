@@ -1,8 +1,8 @@
 // "Where it runs" — which Machine a new Focus conversation starts on
 // (docs/REMOTE_MACHINES.md, Q6). The menu itself is Focus's own InlineMenu, the
 // same dropdown as the agent picker beside it: This Mac, then each Remote
-// machine from ~/.klide/machines.json, the chosen row highlighted, nothing
-// else in it. This module is the logic behind that menu.
+// machine from ~/.klide/machines.json, plus connection and management actions.
+// This module is the logic behind that menu.
 //
 // It behaves like the environment switch in the Claude and Codex apps: each
 // project remembers where it last started, readiness is checked in the
@@ -28,21 +28,25 @@ export function useStartStageMachine(): string | null {
 export type WhereItRunsMenu = {
   display: string;
   leading: ReactNode;
-  options: { label: string; value: string; icon: ReactNode; dimmed?: boolean }[];
+  options: { label: string; value: string; icon: ReactNode; dimmed?: boolean; resolve?: { title: string; run: () => void } }[];
   selected: string;
   onSelect: (value: string | number | undefined) => void;
 };
 
-/** Null when no Remote machine is configured — then there is nothing to choose. */
+/** Always available, including the first connection before any machines exist. */
 export function useWhereItRuns({
   workspaceRoot,
   provider,
   onProviderChange,
+  onConnectMachine,
+  onManageMachines,
 }: {
   workspaceRoot: string | null;
   provider: string;
   onProviderChange: (provider: string) => void;
-}): WhereItRunsMenu | null {
+  onConnectMachine: () => void;
+  onManageMachines: () => void;
+}): WhereItRunsMenu {
   const machine = useStartStageMachine();
   const [machines, setMachines] = useState<Machine[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -88,15 +92,14 @@ export function useWhereItRuns({
     for (const m of machines) refreshMachineStatus(m.id, workspaceRoot);
   }, [machines, workspaceRoot]);
 
-  if (machines.length === 0) return null;
   const chosen = machines.find((m) => m.id === machine);
 
-  const blockedReason = (m: Machine): { why: string; fix?: string } | null => {
+  const blockedReason = (m: Machine): { why: string } | null => {
     const check = machineStatusCheck(m.id, workspaceRoot);
     if (check?.state === "failed") return { why: check.error };
     const status = lastKnownStatus(check);
     if (!status || status.ready) return null;
-    return { why: status.caption, fix: status.facts.find((f) => f.fix && f.tone !== "ok" && f.tone !== "quiet")?.fix };
+    return { why: status.caption };
   };
 
   return {
@@ -111,6 +114,8 @@ export function useWhereItRuns({
         icon: <MachineIcon size={14} />,
         dimmed: blockedReason(m) !== null,
       })),
+      { label: "Connect a machine…", value: "action:connect-machine", icon: <MachineIcon size={14} />, resolve: { title: "Connect an SSH machine", run: onConnectMachine } },
+      ...(machines.length ? [{ label: "Manage machines…", value: "action:manage-machines", icon: <MachineIcon size={14} />, resolve: { title: "Open machine settings", run: onManageMachines } }] : []),
     ],
     selected: chosen ? chosen.id : THIS_MAC,
     onSelect: (value) => {
@@ -124,11 +129,10 @@ export function useWhereItRuns({
       if (blocked) {
         // Ask again so the next pick sees a fresh answer once it's fixed.
         refreshMachineStatus(target.id, workspaceRoot, { force: true });
-        const fix = blocked.fix;
         pushToast(`${machineLabel(target)}: ${blocked.why}`, {
           tone: "warn",
           duration: 8000,
-          action: fix ? { label: "Copy fix", run: () => void navigator.clipboard?.writeText(fix) } : undefined,
+          action: { label: "Set up machine", run: onManageMachines },
         });
         return;
       }

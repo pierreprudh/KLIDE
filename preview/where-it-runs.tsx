@@ -2,6 +2,8 @@
 // left edge, IPC mocked. ?state=ready|offline  ?menu=1 opens it  ?click=1 picks
 // klide-box  ?pick=1 starts on it  ?theme=dark|klide-light|…
 //   npx vite --port 1421  →  http://localhost:1421/preview/where-it-runs.html
+import { useState } from "react";
+import { MachinesSection } from "../src/components/settings/machines";
 import ReactDOM from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
@@ -15,13 +17,14 @@ const PICK = params.get("pick") === "1";
 (window as any).__TAURI_INTERNALS__ = {
   transformCallback: () => 0,
   invoke: async (cmd: string) => {
-    if (cmd === "machines_list") return [{ id: "klide-box", sshHost: "klide-box" }];
+    if (cmd === "machines_list") return params.get("state") === "empty" ? [] : [{ id: "klide-box", sshHost: "klide-box" }];
     if (cmd === "machine_check")
       return {
         id: "klide-box", label: "klide-box", sshHost: "klide-box", ready: READY,
         caption: READY ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: READY ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
+        setup: { connection: READY ? "connected" : "offline", host: "ready", claude: "ready", project: "ready" },
       };
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];
     return null;
@@ -34,6 +37,8 @@ const { FocusComposer } = await import("../src/components/FocusMode");
 const { default: ToastHost } = await import("../src/components/ToastHost");
 
 function Page() {
+  const [section, setSection] = useState<string | null>(null);
+  if (section === "machines") return <main style={{ maxWidth: 900, padding: 24, margin: "0 auto" }}><button onClick={() => setSection(null)}>Back to Focus</button><MachinesSection workspaceRoot="/Users/pierre/Documents/Private/pixel-art-editor" /></main>;
   return (
     <div style={{ padding: "160px 40px 40px", background: "var(--bg)", minHeight: "100vh", color: "var(--fg)", boxSizing: "border-box" }}>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
@@ -52,7 +57,7 @@ function Page() {
             onRequireDiffReviewChange: () => {},
             autoApproveCommands: false,
             onAutoApproveCommandsChange: () => {},
-            onOpenSettingsSection: () => {},
+            onOpenSettingsSection: setSection,
             skills: [],
           } as any}
           branch="main"

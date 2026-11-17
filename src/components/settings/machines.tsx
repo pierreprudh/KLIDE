@@ -7,6 +7,7 @@ import { GhostButton, SettingBlock } from "./controls";
 import { MachineIcon, TailscaleIcon, ThisMacIcon } from "../../icons";
 import { CloudIcon } from "./icons";
 import { MachineSetup } from "./MachineSetup";
+import { consumeMachineSetupRequest, subscribeMachineSetup } from "../../machineSetupNavigation";
 import "./machines.css";
 
 type ConnectionKind = "cloud" | "self-hosted" | "tailscale";
@@ -91,7 +92,10 @@ function MachineEditor({ machine, workspaceRoot, onSave, onCancel, busy, connect
   onSave: (machine: Machine, creating: boolean) => Promise<void>; onCancel: () => void; busy: boolean;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
-  useEffect(() => { formRef.current?.scrollIntoView({ block: "nearest" }); }, []);
+  useEffect(() => {
+    formRef.current?.scrollIntoView({ block: "nearest" });
+    formRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+  }, []);
   const [id] = useState(machine?.id ?? `machine-${crypto.randomUUID()}`);
   const [label, setLabel] = useState(machine?.label ?? "");
   const [host, setHost] = useState(machine?.sshHost ?? "");
@@ -129,6 +133,14 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
   const [connection, setConnection] = useState<ConnectionKind>("cloud");
   const cannotAdd = loading || busy || editing !== undefined || !!error;
   function add(kind: ConnectionKind) { setConnection(kind); setEditing(null); }
+  useEffect(() => {
+    const showRequestedSetup = () => {
+      if (consumeMachineSetupRequest()) { setConnection("cloud"); setEditing(null); }
+    };
+    const unsubscribe = subscribeMachineSetup(showRequestedSetup);
+    showRequestedSetup();
+    return unsubscribe;
+  }, []);
   useEffect(() => {
     let live = true;
     setLoading(true);

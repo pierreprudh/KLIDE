@@ -327,6 +327,9 @@ close public SSH with `bootstrap.sh --tailscale-only`.
 ## Managing machines in Settings
 
 Settings › Machines manages the SSH machines in `~/.klide/machines.json`.
+Focus always shows its “Where it runs” picker, even with no saved machines.
+“Connect a machine…” opens the SSH form directly; “Manage machines…” opens
+the saved machine list. An unavailable machine offers “Set up machine”.
 Enter an SSH alias or `user@hostname`; the display name is optional and Klide
 creates the stable ID. Setup can be saved while the machine is switched off.
 Cloud servers and self-hosted Linux computers use the same SSH connection.

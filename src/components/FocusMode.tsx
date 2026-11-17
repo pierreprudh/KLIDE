@@ -1,3 +1,4 @@
+import { requestMachineSetup } from "../machineSetupNavigation";
 import { useWhereItRuns } from "./WhereItRuns";
 import { composerDraftKey, useComposerDraft } from "./ai/composerDraft";
 import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
@@ -1960,7 +1961,11 @@ export function FocusComposer({
   }
 
   const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
-  const whereItRuns = useWhereItRuns({ workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId) });
+  const whereItRuns = useWhereItRuns({
+    workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId),
+    onConnectMachine: () => { requestMachineSetup(); onOpenSettingsSection("machines"); },
+    onManageMachines: () => onOpenSettingsSection("machines"),
+  });
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
@@ -1973,7 +1978,7 @@ export function FocusComposer({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 34 }}>
           {whereItRuns && (
             <div className="klide-where-it-runs">
-              <InlineMenu label="Where it runs" width={196} menuClassName="klide-where-menu" {...whereItRuns} />
+              <InlineMenu label="Where it runs" width={220} menuClassName="klide-where-menu" {...whereItRuns} />
             </div>
           )}
           <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
