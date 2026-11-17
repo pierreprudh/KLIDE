@@ -10,6 +10,29 @@ use std::collections::{HashMap, HashSet};
 #[path = "opencode_v2.rs"]
 mod v2;
 
+/// The only URL a CLI-printed "listening on …" line may name: plain
+/// `http://127.0.0.1:<port>` (or `[::1]`), with an explicit port and no
+/// userinfo, path or query. Rebuilt from the parsed parts, so lookalikes
+/// like `http://127.0.0.1:@evil.com/` (userinfo — the real host is
+/// evil.com) or `http://127.0.0.1.evil.com/` are refused. The CLI's own
+/// stdout is attacker-influenceable (a plugin or tampered binary can
+/// print anything), and the URL is where the per-probe basic-auth
+/// password and the conversation prompt are sent.
+fn loopback_server_origin(raw: &str) -> Option<String> {
+    let url = reqwest::Url::parse(raw).ok()?;
+    if url.scheme() != "http" || url.port().is_none() {
+        return None;
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    match url.host_str() {
+        Some("127.0.0.1") => Some(format!("http://127.0.0.1:{}", url.port().unwrap())),
+        Some("::1") => Some(format!("http://[::1]:{}", url.port().unwrap())),
+        _ => None,
+    }
+}
+
 fn model_variant(model: &str, effort: Option<&str>) -> String {
     let decoded = crate::harness_source::cli_model("opencode", model).unwrap_or_else(|_| model.into());
     if model.starts_with(crate::harness_source::PREFIX) { return decoded; }
@@ -247,8 +270,9 @@ impl Delegate for OpenCode {
 
     fn probe_fetch_url(&self, line: &str) -> Option<String> {
         let url = line.split_once("listening on ")?.1.split_whitespace().next()?;
+        let origin = loopback_server_origin(url)?;
         let path = if line.starts_with("server listening on ") { "/api/command" } else { "/command" };
-        url.starts_with("http://127.0.0.1:").then(|| format!("{}{path}", url.trim_end_matches('/')))
+        Some(format!("{origin}{path}"))
     }
 
     fn parse_probe_body(&self, body: &str) -> Option<CliCommands> {
@@ -689,7 +713,7 @@ impl super::chat_server::ChatServer for OpenCodeServer {
 
     fn listening_url(&self, line: &str) -> Option<String> {
         let url = line.split_once("listening on ")?.1.split_whitespace().next()?;
-        url.starts_with("http://127.0.0.1:").then(|| url.trim_end_matches('/').to_string())
+        loopback_server_origin(url)
     }
 
     /// `run --attach` reads the password from the same env var the server
@@ -1278,6 +1302,28 @@ mod tests {
         assert!(got.runs("init") && got.runs("tdd"));
         assert_eq!(got.descriptions.get("init").map(String::as_str), Some("guided AGENTS.md setup"));
         assert!(!got.descriptions.contains_key("tdd"));
+    }
+
+    #[test]
+    fn probe_url_must_be_plain_loopback_with_explicit_port() {
+        use super::super::chat_server::ChatServer;
+        // Userinfo makes the real host evil.com — the classic bypass of a
+        // starts_with("http://127.0.0.1:") check.
+        assert_eq!(OpenCode.probe_fetch_url("listening on http://127.0.0.1:@evil.com:8080"), None);
+        assert_eq!(OpenCode.probe_fetch_url("listening on http://user:pw@127.0.0.1:1234"), None);
+        // Lookalike hosts, other schemes, no explicit port, paths.
+        assert_eq!(OpenCode.probe_fetch_url("listening on http://127.0.0.1.evil.com:1234"), None);
+        assert_eq!(OpenCode.probe_fetch_url("listening on https://127.0.0.1:1234"), None);
+        assert_eq!(OpenCode.probe_fetch_url("listening on http://127.0.0.1"), None);
+        assert_eq!(OpenCode.probe_fetch_url("listening on http://127.0.0.1:1234/steal"), Some("http://127.0.0.1:1234/command".into()));
+        // A sane line still parses, path rebuilt from the origin only.
+        assert_eq!(
+            OpenCode.probe_fetch_url("listening on http://127.0.0.1:52011/"),
+            Some("http://127.0.0.1:52011/command".to_string())
+        );
+        let server = OpenCodeServer::new(None);
+        assert_eq!(server.listening_url("listening on http://127.0.0.1:@evil.com:4096"), None);
+        assert_eq!(server.listening_url("listening on http://127.0.0.1:4096"), Some("http://127.0.0.1:4096".into()));
     }
 
     #[test]
