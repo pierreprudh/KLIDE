@@ -30,7 +30,14 @@
           ],
           "glass" : true,
           "image-name" : "klide-symbol-centered.svg",
-          "name" : "klide-symbol-centered"
+          "name" : "klide-symbol-centered",
+          "position" : {
+            "scale" : 1.2,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         }
       ],
       "lighting" : "individual",
