@@ -89,8 +89,10 @@ export function TwoToneMark({
  * and it exists because four surfaces used to type the letter K by hand — the
  * app has a logo, so nothing should be spelling its initial.
  */
-export function KlideMark({ size = 13, className }: { size?: number; className?: string }) {
-  return <BrandImage className={className} src="/klide-logo.png" size={size} />;
+export function KlideMark({ size = 13 }: { size?: number }) {
+  // Ink on light themes, paper on dark — the same two fills as the app icon
+  // (`Klide Logo.icon`), switched by the theme rules TwoToneMark already uses.
+  return <TwoToneMark light="/klide-logo-light.svg" dark="/klide-logo-dark.svg" size={size} />;
 }
 
 // Official OpenRouter brand mark (Simple Icons, single path).

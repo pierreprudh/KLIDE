@@ -1,0 +1,59 @@
+{
+  "features" : [
+    "refractivity"
+  ],
+  "fill" : {
+    "solid" : "display-p3:1.00000,0.99268,0.99931,1.00000"
+  },
+  "groups" : [
+    {
+      "blur-material" : null,
+      "hidden" : false,
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "srgb:0.05490,0.05882,0.07059,1.00000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:0.96078,0.96078,0.94902,1.00000"
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "none"
+            }
+          ],
+          "glass" : true,
+          "image-name" : "klide-symbol-centered.svg",
+          "name" : "klide-symbol-centered"
+        }
+      ],
+      "lighting" : "individual",
+      "refractivity" : {
+        "depth" : 0.03046875,
+        "enabled" : true,
+        "strength" : 0.3969921875
+      },
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.3
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
