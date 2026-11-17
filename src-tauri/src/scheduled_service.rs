@@ -172,6 +172,16 @@ fn activate_registration(
     Ok(())
 }
 
+/// A development build shares the installed app's data folder, so it shares
+/// its service label too. Re-pointing that agent at `target/debug/klide` and
+/// back reloads it each time, and macOS shows "can run in the background"
+/// on every reload. A dev build uses the installed app's service as it is;
+/// `KLIDE_DEV_SCHEDULED_SERVICE=1` opts in to testing the registration.
+#[cfg(target_os = "macos")]
+fn leaves_registration_alone() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("KLIDE_DEV_SCHEDULED_SERVICE").is_none()
+}
+
 pub(crate) fn ensure(data: &Path) -> Result<ServiceInfo, String> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -181,6 +191,13 @@ pub(crate) fn ensure(data: &Path) -> Result<ServiceInfo, String> {
     #[cfg(target_os = "macos")]
     {
         use std::ffi::OsStr;
+        if leaves_registration_alone() {
+            let current = status(data);
+            if current.installed {
+                return Ok(current);
+            }
+            return Err("Development builds don't register the background service. Open the installed Klide once, or set KLIDE_DEV_SCHEDULED_SERVICE=1.".into());
+        }
         let _lease = crate::process_lock::exclusive(&data.join("scheduled-install.lock"))?;
         let _dispatch_lease = crate::process_lock::exclusive(&data.join("schedule-dispatch.lock"))?;
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
