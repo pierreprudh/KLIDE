@@ -37,6 +37,7 @@ mockIPC(async (command, args = {}) => {
       installed = true;
       return null;
     }
+    if (command === "machine_discover") return { machines: [], message: "Choose a saved machine or add an SSH address." };
     if (command === "machines_list") return machines;
     if (command === "machine_save") {
       const machine = payload.machine as Machine;

@@ -59,6 +59,7 @@ mod pty;
 mod pty_client;
 mod machine_install;
 mod machine_setup;
+mod machine_discovery;
 #[cfg(unix)]
 mod pty_transport;
 mod pty_frame;
@@ -1381,6 +1382,7 @@ pub fn run() {
             machines::machine_save,
             machines::machine_remove,
             machines::machine_check,
+            machine_discovery::machine_discover,
             machine_install::machine_install_host,
             machine_install::machine_prepare_host,
             machine_setup::machine_setup_spawn,
@@ -1675,6 +1677,7 @@ mod blocking_door_tests {
         ("missions.rs", include_str!("missions.rs")),
         ("pty.rs", include_str!("pty.rs")),
         ("machine_setup.rs", include_str!("machine_setup.rs")),
+        ("machine_discovery.rs", include_str!("machine_discovery.rs")),
         ("machine_install.rs", include_str!("machine_install.rs")),
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),

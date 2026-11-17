@@ -20,6 +20,16 @@ let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-b
   transformCallback: () => 0,
   invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
     if (cmd === "machines_list") return machines;
+    if (cmd === "machine_discover") {
+      if (params.has("discoveryDelay")) await new Promise((resolve) => setTimeout(resolve, 500));
+      if (args.method === "tailscale") return params.has("noTailscale") ? { machines: [], message: "Install Tailscale and connect this Mac to your network, then refresh." } : {
+        machines: [
+          { label: "Linux dev", sshHost: "100.64.0.2", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
+          { label: "Mac mini", sshHost: "100.64.0.3", source: "tailscale", online: true, supported: false, detail: "Linux remote hosts only", machine: null },
+        ], message: "Choose a device on your Tailscale network. SSH is checked next.",
+      };
+      return { machines: machines.map((machine) => ({ label: machine.label ?? machine.id, sshHost: machine.sshHost, source: "saved", online: null, supported: true, detail: "Saved in Klide", machine })), message: args.method === "vpn" ? "Connect your VPN first, then choose or add an SSH address." : "Choose a saved machine or add an SSH address." };
+    }
     if (cmd === "machine_save") {
       if (params.has("failSave")) throw new Error("Could not save machine settings");
       const machine = args.machine as Machine;

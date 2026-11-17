@@ -328,9 +328,15 @@ close public SSH with `bootstrap.sh --tailscale-only`.
 
 Settings › Machines manages the SSH machines in `~/.klide/machines.json`.
 Focus always shows its “Where it runs” picker, even with no saved machines.
-“Add a machine” opens a dedicated dialog with the SSH form and animated
-progress during connection and installation. Machine management stays in
+“Add a machine” opens a dedicated dialog. First choose Tailscale, another
+VPN, or direct SSH; then select a listed device or use “+ Add a machine” for
+manual entry. Connection and installation show animated progress. Machine management stays in
 Settings. An unavailable machine offers “Set up machine”.
+Tailscale discovery reads `tailscale status --json` from the local client
+(with `TAILSCALE_BE_CLI=1` for the macOS app). Other VPNs use saved machines
+and literal Host aliases from `~/.ssh/config`; Klide does not scan those
+networks or configure the VPN. Device online status is not SSH readiness.
+Unsupported remote operating systems remain visible with an explanation.
 Enter an SSH alias or `user@hostname`; the display name is optional and Klide
 creates the stable ID. Setup can be saved while the machine is switched off.
 Cloud servers and self-hosted Linux computers use the same SSH connection.

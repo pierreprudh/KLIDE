@@ -73,3 +73,10 @@ export async function machineInstallHost(id: string, binaryPath?: string): Promi
   await invoke("machine_install_host", { id, binaryPath: binaryPath ?? null });
   for (const listener of listeners) listener();
 }
+
+export type MachineConnectionMethod = "tailscale" | "vpn" | "ssh";
+export type MachineCandidate = { label: string; sshHost: string; source: "tailscale" | "sshConfig" | "saved"; online: boolean | null; supported: boolean; detail: string; machine: Machine | null };
+export type MachineDiscovery = { machines: MachineCandidate[]; message: string };
+export function machineDiscover(method: MachineConnectionMethod): Promise<MachineDiscovery> {
+  return invoke("machine_discover", { method });
+}

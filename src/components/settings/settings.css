@@ -29,6 +29,7 @@
   border-radius: var(--settings-control-radius, 12px);
 }
 .klide-settings-content :is(.klide-button, .klide-field) { min-height: 36px; }
+:is(.klide-settings-content, .klide-settings-group) :is(input.klide-field, textarea.klide-field) { padding-inline: 14px; }
 /* Dropdowns use a subtle chevron; full arrows are reserved for navigation. */
 .klide-settings-content select.klide-field,
 .klide-settings-group select.klide-field {

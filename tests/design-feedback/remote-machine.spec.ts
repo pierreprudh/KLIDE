@@ -2,6 +2,9 @@ import { test, expect } from "@playwright/test";
 
 test("guided setup installs the helper and preserves active-task errors", async ({ page }) => {
   await page.goto("/preview/machines.html?install=1&active=1");
+  await page.getByRole("button", { name: "Edit", exact: true }).first().click();
+  await page.screenshot({ path: "artifacts/design-feedback/machine-settings-inputs.png" });
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Continue setup", exact: true }).first().click();
   await page.getByRole("button", { name: "Install Klide helper only" }).first().click();
   await expect(page.getByRole("alert")).toContainText("Finish the remote host's active sessions");
@@ -19,6 +22,9 @@ test("guided setup installs the helper and preserves active-task errors", async 
 test("offline setup saves an SSH address without exposing a machine ID", async ({ page }) => {
   await page.goto("/preview/machines.html?offline=1");
   await page.getByRole("button", { name: "Add machine", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add a machine" });
+  await dialog.getByRole("button", { name: /Direct SSH/ }).click();
+  await dialog.getByRole("button", { name: "Add a machine", exact: true }).click();
   await page.getByLabel("SSH host", { exact: true }).fill("dev@my-vm");
   await expect(page.getByLabel("Machine ID", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Continue", exact: true }).click();

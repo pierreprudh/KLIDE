@@ -22,3 +22,20 @@
 @keyframes klide-machine-dialog-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .klide-add-machine-dialog { animation: none; } }
 @media (max-width: 600px) { .klide-add-machine-dialog > header { padding: 18px; } .klide-add-machine-body { padding: 20px 18px; } }
+.klide-machine-connections { font-size: 13px; line-height: 1.7; }
+.klide-machine-connections > p { color: var(--fg-subtle); margin: 0 0 18px; }
+.klide-machine-methods, .klide-machine-candidates { display: grid; gap: 10px; }
+.klide-machine-methods > button, .klide-machine-candidates > button { display: flex; align-items: center; gap: 16px; width: 100%; padding: 18px; text-align: left; font: inherit; color: var(--fg); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 14px; cursor: pointer; }
+.klide-machine-methods > button:hover, .klide-machine-candidates > button:hover { background: var(--bg-hover); }
+.klide-machine-methods > button > svg, .klide-machine-candidates > button > svg { flex-shrink: 0; color: var(--fg-subtle); }
+.klide-machine-methods > button > span, .klide-machine-candidates > button > span:first-of-type { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.klide-machine-methods strong, .klide-machine-candidates strong { font-weight: 500; }
+.klide-machine-methods span span, .klide-machine-candidates span span, .klide-machine-candidates code { color: var(--fg-subtle); font-size: 12px; overflow-wrap: anywhere; }
+.klide-machine-candidates { max-height: 320px; overflow: auto; margin-bottom: 18px; }
+.klide-machine-candidates > button:disabled { opacity: .55; cursor: default; }
+.klide-machine-availability { font-size: 11px; color: var(--fg-subtle); }
+.klide-machine-discovery-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
+.klide-machine-discovery-heading h3 { margin: 0; font-size: 15px; font-weight: 500; }
+.klide-machine-dialog-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.klide-machine-dialog-footer > :first-child { margin-right: auto; }
+.klide-machine-manual-add { display: inline-flex; align-items: center; gap: 8px; }
