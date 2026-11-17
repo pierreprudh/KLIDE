@@ -223,7 +223,7 @@ export function RunAvatar({
 // would hit ProviderLogo's fallback circle — render the Klide mark instead.
 export function SourceMark({ source, size = 16 }: { source: RunSource; size?: number }) {
   if (source === "klide") {
-    return <KlideMark className="provider-logo-img" size={size} />;
+    return <KlideMark size={size} />;
   }
   return <ProviderLogo id={source as ProviderId} size={size} />;
 }

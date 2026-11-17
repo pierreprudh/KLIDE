@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { FolderIcon, GitIcon, NewTaskIcon, SettingsIcon } from "../icons";
 import { PixelNature } from "./PixelNature";
 import { SETTINGS, useSetting } from "../settingsStore";
+import { KlideMark } from "./ai/icons";
 
 type Props = {
   recentFolders: string[];
@@ -110,7 +111,8 @@ export function WelcomeScreen({
       <div className="klide-welcome-pane">
         <div className="klide-welcome-content">
           {/* Wordmark */}
-          <div className="klide-welcome-rise klide-welcome-wordmark" style={rise(0)}>
+          <div className="klide-welcome-rise klide-welcome-wordmark" style={{ ...rise(0), display: "flex", alignItems: "center", gap: 8 }}>
+            <KlideMark size={16} />
             Klide
           </div>
 
