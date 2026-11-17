@@ -1,7 +1,5 @@
 import { useLayoutEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "@fontsource/atkinson-hyperlegible/400.css";
-import "@fontsource/atkinson-hyperlegible/700.css";
 import "@fontsource/monaspace-neon/400.css";
 import "@fontsource/monaspace-neon/700.css";
 import "../src/styles/tokens.css";
@@ -65,7 +63,7 @@ async function boot() {
     useLayoutEffect(() => {
       let active = true;
       void (async () => {
-        await Promise.all(['400 14px "Atkinson Hyperlegible"', '700 14px "Atkinson Hyperlegible"', '400 14px "Monaspace Neon"', '700 14px "Monaspace Neon"'].map(font => document.fonts.load(font)));
+        await Promise.all(['400 14px system-ui', '700 14px system-ui', '400 14px "Monaspace Neon"', '700 14px "Monaspace Neon"'].map(font => document.fonts.load(font)));
         await document.fonts.ready;
         await nextPaint();
         if (active && scenarioId === "composer-menu") {

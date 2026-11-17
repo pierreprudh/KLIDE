@@ -256,7 +256,7 @@ Each step is one PR and ends with something checkable on `klide-box`.
    Protocol 3 adds bounded remote replay, remote identity, isolated starts,
    diff reads and idle-upgrade reservation. SSH has no TTY or login prompts.
 4. **Install and upgrade — implemented.** Explicit Settings action downloads
-   the CI artifact for this app's source commit (or takes a selected binary),
+   the public helper for this app's source commit (or takes a selected binary),
    validates the staged binary remotely, refuses active work and replaces
    the idle host. New starts cannot race the upgrade reservation. A detached
    host is started on demand; no always-on systemd service is required for
@@ -327,16 +327,32 @@ close public SSH with `bootstrap.sh --tailscale-only`.
 ## Managing machines in Settings
 
 Settings › Machines manages the SSH machines in `~/.klide/machines.json`.
-Add a stable machine ID, an optional display name, and an SSH alias or
-`user@hostname`. Configure keys, ports and other SSH options in `~/.ssh/config`;
-connect from Terminal once to accept the machine's host key. Cloud servers and
-self-hosted Linux computers use the same SSH connection.
+Enter an SSH alias or `user@hostname`; the display name is optional and Klide
+creates the stable ID. Setup can be saved while the machine is switched off.
+Cloud servers and self-hosted Linux computers use the same SSH connection.
 
-For the open Workspace, the editor can set its Remote checkout path; leaving
-it blank uses `~/code/<workspace name>`. Other Workspace mappings are preserved.
-The repository must already be cloned on the Remote machine. Readiness checks
-show SSH, CLI, login and checkout facts, with commands to copy when setup is
-needed. The currently supported remote Delegate is Claude Code.
+Continue setup guides connection → installation → remote Claude sign-in →
+project → readiness. A native embedded SSH terminal handles host fingerprints,
+key passphrases and sudo prompts. Klide uses `~/.ssh/config` and an unlocked
+key/agent for unattended connections; it does not store SSH passwords or copy
+Mac logins. Changed host keys are never accepted automatically.
+
+The Ubuntu 24.04+ / Debian 13+ x86_64 preparation action installs Git, curl, GitHub CLI,
+WebKitGTK runtime libraries and the official Claude native installer. It then
+downloads the matching Klide helper from public GitHub release assets, validates
+its SHA-256 and installs it over SSH. The Mac needs no GitHub CLI or login.
+The Linux workflow publishes source-specific `host-<commit>` prerelease assets
+only after the remote replay and installer smoke tests pass. Development builds
+without published assets can choose an extracted matching binary under Details.
+“Prepare setup files on this Mac” downloads to the Mac cache without contacting
+the remote machine. It does not report the machine as ready.
+
+For the open Workspace, choose an existing remote checkout path or save a
+new destination and clone the local project's origin. Other Workspace mappings
+are preserved. Private repositories use remote credentials, with an optional
+GitHub sign-in terminal. Existing destinations are never overwritten; local
+files and credential-bearing origin URLs are not copied. The only currently
+supported remote Delegate is Claude Code. Readiness is rechecked after actions.
 
 Saved changes refresh the “Where it runs” picker. Removing a Machine only
 removes its local configuration: remote files and running sessions stay there.
@@ -359,4 +375,4 @@ fresh relay connection, and rejection of a mismatched upgrade without
 interrupting the installed host. Linux smoke tests have bounded deadlines and
 progress diagnostics. The first Linux release binaries compiled, but their
 unflushed relay smoke tests stalled and hit the workflow deadline; those runs
-are not acceptance evidence. The review fixes require a fresh passing run.
+are not acceptance evidence. The corrected Linux workflow run 44116806131 passed both controlled-process smoke tests. Actual Claude and sleep/wake acceptance on the user’s machine remains outstanding.

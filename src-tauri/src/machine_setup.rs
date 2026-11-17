@@ -1,0 +1,201 @@
+//! Fixed, interactive setup actions. SSH owns trust and authentication; no
+//! credentials cross the IPC boundary or get copied from this Mac.
+use portable_pty::CommandBuilder;
+use serde::Deserialize;
+
+// Closing setup must terminate SSH even while its PTY reader is still open.
+// This registry belongs only to setup, never to detached remote Runs.
+static PROCESSES: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<String, Box<dyn portable_pty::ChildKiller + Send + Sync>>,
+    >,
+> = std::sync::LazyLock::new(Default::default);
+
+pub(crate) fn track(id: &str, killer: Box<dyn portable_pty::ChildKiller + Send + Sync>) {
+    PROCESSES.lock().unwrap().insert(id.to_string(), killer);
+}
+pub(crate) fn finished(id: &str) {
+    PROCESSES.lock().unwrap().remove(id);
+}
+
+fn cancel(id: &str) -> Result<(), String> {
+    if let Some(mut child) = PROCESSES
+        .lock()
+        .map_err(|_| "Setup process state unavailable")?
+        .remove(id)
+    {
+        child.kill().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn machine_setup_close(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    crate::blocking::run(move || {
+        use tauri::Manager;
+        cancel(&id)?;
+        app.state::<crate::pty::PtyState>()
+            .shells
+            .lock()
+            .map_err(|_| "Terminal state unavailable")?
+            .remove(&id);
+        Ok(())
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SetupAction {
+    Connect,
+    Prepare,
+    SignIn,
+    GitHub,
+    Clone,
+}
+
+fn script(
+    action: &SetupAction,
+    machine: &crate::machines::Machine,
+    root: Option<&str>,
+) -> Result<String, String> {
+    let body = match action {
+        SetupAction::Connect => "printf 'SSH connected.\\n'; test \"$(uname -sm)\" = 'Linux x86_64' || { echo 'Klide currently requires x86_64 Linux.'; exit 1; }".into(),
+        SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.sh").into(),
+        SetupAction::SignIn => "exec claude auth login".into(),
+        SetupAction::GitHub => "gh auth login --hostname github.com --git-protocol https --web && gh auth setup-git".into(),
+        SetupAction::Clone => {
+            let root = root.ok_or("Open a local project before cloning it remotely")?;
+            let repo = crate::machines::origin_repo(root).ok_or("This project has no origin remote. Choose an existing remote checkout instead.")?;
+            safe_origin(&repo)?;
+            let destination = crate::machines::remote_path_word(&machine.remote_checkout(root));
+            format!("destination={destination}\nif test -e \"$destination\"; then echo 'The destination already exists. Choose it as an existing checkout, or use a different folder.'; exit 1; fi\nmkdir -p -- \"$(dirname -- \"$destination\")\"\ngit clone -- {} \"$destination\"", crate::delegate::shell_quote(&repo))
+        }
+    };
+    Ok(format!(
+        "export PATH=\"$HOME/.local/bin:$PATH\"\nset -e\n{body}"
+    ))
+}
+
+fn safe_origin(repo: &str) -> Result<(), String> {
+    // Only network remotes. In particular, do not copy embedded HTTP credentials
+    // or permit Git's ext transport to execute a local command on the server.
+    let valid = if repo.starts_with("https://") || repo.starts_with("ssh://") {
+        reqwest::Url::parse(repo).ok().is_some_and(|url| {
+            url.host_str().is_some()
+                && url.password().is_none()
+                && (url.scheme() == "ssh" || url.username().is_empty())
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
+    } else {
+        repo.split_once(':').is_some_and(|(host, path)| {
+            host.contains('@')
+                && !host.starts_with('-')
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "@._-".contains(c))
+                && !path.is_empty()
+        })
+    };
+    if !valid || repo.contains(['\n', '\r', '\0']) {
+        return Err("Use an HTTPS or SSH origin without embedded passwords or tokens.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn machine_setup_spawn(
+    app: tauri::AppHandle,
+    id: String,
+    terminal_id: String,
+    action: SetupAction,
+    workspace_root: Option<String>,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    crate::blocking::run(move || {
+        use tauri::Manager;
+        let state = app.state::<crate::pty::PtyState>();
+        let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
+        crate::machines::validate_machine(&machine)?;
+        let remote = format!(
+            "sh -lc {}",
+            crate::delegate::shell_quote(&script(&action, &machine, workspace_root.as_deref())?)
+        );
+        let mut command = CommandBuilder::new("ssh");
+        command.args([
+            "-tt",
+            "-o",
+            "StrictHostKeyChecking=ask",
+            "-o",
+            "AddKeysToAgent=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "--",
+            &machine.ssh_host,
+            &remote,
+        ]);
+        command.env("TERM", "xterm-256color");
+        crate::pty::spawn_machine_setup(app.clone(), &state, terminal_id, command, rows, cols)
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn closing_setup_terminates_its_process_without_closing_other_sessions() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        track(
+            "test-setup-cancel",
+            portable_pty::ChildKiller::clone_killer(&child),
+        );
+        cancel("unrelated-session").unwrap();
+        assert!(child.try_wait().unwrap().is_none());
+        cancel("test-setup-cancel").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let exited = child.try_wait().unwrap().is_some();
+        if !exited {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        assert!(
+            exited,
+            "setup SSH process must terminate when its terminal closes"
+        );
+        cancel("test-setup-cancel").unwrap(); // idempotent cleanup
+    }
+
+    #[test]
+    fn cloning_rejects_credentials_and_executable_transports() {
+        for url in [
+            "https://user:secret@github.com/a/b",
+            "ext::sh evil",
+            "/tmp/repo",
+            "file:///tmp/repo",
+            "https://github.com/a?token=x",
+            "ssh://user:secret@github.com/a/b",
+            "git@host -oProxyCommand=evil:repo",
+            "git@github.com:repo\nexit",
+        ] {
+            assert!(safe_origin(url).is_err(), "{url}");
+        }
+        for url in [
+            "https://github.com/a/b.git",
+            "git@github.com:a/b.git",
+            "ssh://git@github.com/a/b.git",
+            "ssh://git@example.com:2222/a/b.git",
+        ] {
+            assert!(safe_origin(url).is_ok(), "{url}");
+        }
+    }
+}

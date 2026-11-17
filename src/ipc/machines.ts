@@ -24,6 +24,12 @@ export type MachineStatus = {
   caption: string;
   facts: MachineFact[];
   checkout: string | null;
+  setup: {
+    connection: "connected" | "offline" | "needsTrust" | "needsAuthentication";
+    host: "ready" | "outdated" | "missing" | "unknown";
+    claude: "ready" | "needsLogin" | "missing" | "unknown";
+    project: "ready" | "missing" | "unknown" | "notSelected";
+  };
 };
 
 /** The only Delegate the first slice runs remotely (Rust `REMOTE_PROVIDER`). */
@@ -60,7 +66,9 @@ export async function machineRemove(id: string): Promise<Machine[]> {
   return machines;
 }
 
-/** Explicit setup action; omitted binaryPath downloads this revision's CI artifact. */
+export type MachineSetupAction = "connect" | "prepare" | "signIn" | "gitHub" | "clone";
+
+/** Explicit setup action; omitted binaryPath downloads this revision's public helper. */
 export async function machineInstallHost(id: string, binaryPath?: string): Promise<void> {
   await invoke("machine_install_host", { id, binaryPath: binaryPath ?? null });
   for (const listener of listeners) listener();

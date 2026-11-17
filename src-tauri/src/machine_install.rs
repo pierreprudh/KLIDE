@@ -65,28 +65,97 @@ fn ssh(host: &str, script: &str) -> Result<Output, String> {
 }
 
 fn artifact(cache: &Path) -> Result<PathBuf, String> {
-    let gh = crate::cli::resolve_command("gh")
-        .map_err(|error| format!("GitHub CLI is unavailable. Install gh and sign in on this Mac, or choose a downloaded Linux host binary. {error}"))?;
-    let out = run(Command::new(&gh).args(["run", "list", "--repo", "pierreprudh/KLIDE", "--workflow", "linux-host.yml",
-        "--commit", env!("KLIDE_SOURCE_COMMIT"), "--status", "success", "--limit", "1", "--json", "databaseId"]))
-        .map_err(|e| format!("Could not find a matching Linux build. Sign in to gh on this Mac or choose a downloaded host binary. {e}"))?;
-    let runs: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
-    let id = runs[0]["databaseId"].as_u64().ok_or("No Linux host build exists for this app revision. Run the Linux host binary workflow for this revision, or choose its downloaded binary.")?;
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+    static DOWNLOAD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = DOWNLOAD.lock().map_err(|_| "Download lock unavailable")?;
+    let source = env!("KLIDE_SOURCE_COMMIT");
+    if source.len() != 40 || !source.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("This development build has no published Linux helper. Choose a matching downloaded binary in Advanced.".into());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .user_agent("Klide-machine-setup")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let base = format!("https://github.com/pierreprudh/KLIDE/releases/download/host-{source}");
+    let download_error = |e: reqwest::Error| {
+        format!("Could not download the matching Linux helper. Check this Mac’s connection, or choose a downloaded binary in Advanced. {e}")
+    };
+    let mut manifest = String::new();
+    client
+        .get(format!("{base}/klide-linux-x86_64.sha256"))
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(download_error)?
+        .take(1024)
+        .read_to_string(&mut manifest)
+        .map_err(|e| e.to_string())?;
+    let checksum = manifest.split_whitespace().next().unwrap_or("");
+    if checksum.len() != 64 || !checksum.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid Linux helper checksum manifest".into());
+    }
     std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
-    run(Command::new(&gh)
-        .args([
-            "run",
-            "download",
-            &id.to_string(),
-            "--repo",
-            "pierreprudh/KLIDE",
-            "--name",
-            "klide-linux-x86_64",
-            "--clobber",
-            "--dir",
-        ])
-        .arg(cache))?;
-    Ok(cache.join("klide"))
+    let binary = cache.join("klide");
+    if let Ok(mut file) = std::fs::File::open(&binary) {
+        let mut digest = Sha256::new();
+        std::io::copy(&mut file, &mut digest).map_err(|e| e.to_string())?;
+        if format!("{:x}", digest.finalize()).eq_ignore_ascii_case(checksum) {
+            return Ok(binary);
+        }
+    }
+    let temporary = cache.join("klide.download");
+    let result = (|| {
+        let mut response = client
+            .get(format!("{base}/klide-linux-x86_64"))
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(download_error)?;
+        let mut file = std::fs::File::create(&temporary).map_err(|e| e.to_string())?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        let mut size = 0usize;
+        loop {
+            let count = response.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            size += count;
+            if size > 128 * 1024 * 1024 {
+                return Err("Linux helper exceeds the download limit".into());
+            }
+            digest.update(&buffer[..count]);
+            file.write_all(&buffer[..count])
+                .map_err(|e| e.to_string())?;
+        }
+        if !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(checksum) {
+            return Err("Linux helper checksum did not match. Retry the download.".into());
+        }
+        file.sync_all().map_err(|e| e.to_string())?;
+        std::fs::rename(&temporary, &binary).map_err(|e| e.to_string())?;
+        Ok(binary)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    Ok(app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("linux-host")
+        .join(env!("KLIDE_SOURCE_COMMIT")))
+}
+
+/// Download on this Mac only; the saved machine may be switched off.
+#[tauri::command]
+pub async fn machine_prepare_host(app: tauri::AppHandle) -> Result<(), String> {
+    let cache = cache_dir(&app)?;
+    crate::blocking::run(move || artifact(&cache).map(|_| ())).await
 }
 
 /// Stage and validate before replacing anything. The remote advisory lock is
@@ -112,15 +181,10 @@ pub async fn machine_install_host(
     id: String,
     binary_path: Option<String>,
 ) -> Result<(), String> {
-    use tauri::Manager;
-    let cache = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| e.to_string())?
-        .join("linux-host")
-        .join(env!("KLIDE_SOURCE_COMMIT"));
+    let cache = cache_dir(&app)?;
     crate::blocking::run(move || {
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
+        crate::machines::validate_machine(&machine)?;
         let arch = ssh(&machine.ssh_host, "uname -sm")?;
         if String::from_utf8_lossy(&arch.stdout).trim() != "Linux x86_64" {
             return Err("The current host build supports x86_64 Linux machines".into());

@@ -10,7 +10,16 @@ The server runs the agent, keeps its own logins, and stays on. Your Mac only
 connects to it over SSH, through Tailscale (a private network between your
 devices), so the server never exposes SSH to the internet.
 
-Three files:
+For an existing SSH machine, use **Settings › Machines › Add machine**:
+enter its address, continue through connection and installation, sign in to
+Claude on the machine, and choose or clone the remote project. You can save
+the setup while the machine is off. Normal setup downloads a checksum-verified
+matching helper without GitHub CLI on the Mac. Automatic preparation supports
+Ubuntu 24.04+ / Debian 13+ on x86_64; unattended connections use SSH keys.
+
+The scripts below are an optional provisioning path for creating a new server.
+
+Provisioning files:
 
 | File | What it does | Where it runs |
 |---|---|---|

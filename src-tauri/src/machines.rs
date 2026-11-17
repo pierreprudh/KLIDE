@@ -81,7 +81,7 @@ fn read_store(path: &Path) -> Result<Store, String> {
     }
 }
 
-fn validate_machine(machine: &Machine) -> Result<(), String> {
+pub(crate) fn validate_machine(machine: &Machine) -> Result<(), String> {
     if machine.id.is_empty() || !machine.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err("Machine ID must contain only letters, numbers, hyphens or underscores".into());
     }
@@ -234,6 +234,16 @@ pub struct MachineStatus {
     pub facts: Vec<Fact>,
     /// The Remote checkout this workspace maps to.
     pub checkout: Option<String>,
+    pub setup: SetupFacts,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupFacts {
+    pub connection: String,
+    pub host: String,
+    pub claude: String,
+    pub project: String,
 }
 
 fn fact(label: &str, value: impl Into<String>, tone: &'static str, fix: Option<String>) -> Fact {
@@ -253,7 +263,7 @@ fn probe_script(checkout: Option<&str>) -> String {
     if let Some(path) = checkout {
         let word = remote_path_word(path);
         s.push_str(&format!(
-            "if [ -e {word}/.git ]; then echo checkout=yes; \
+            "if [ -e {word}/.git ] && git -C {word} rev-parse --is-inside-work-tree >/dev/null 2>&1; then echo checkout=yes; \
              echo branch=$(git -C {word} branch --show-current); \
              echo dirty=$(git -C {word} status --porcelain | wc -l | tr -d ' '); \
              else echo checkout=no; fi; "
@@ -291,13 +301,15 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         caption: String::new(),
         facts: Vec::new(),
         checkout: checkout.clone(),
+        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
     let out = match output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
         Ok(out) => {
             let err = String::from_utf8_lossy(&out.stderr);
             let why = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no answer").trim().to_string();
-            status.caption = "Not reached — is Tailscale on?".into();
+            status.setup.connection = if err.contains("Host key verification failed") || err.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") { "needsTrust" } else if err.contains("Permission denied") { "needsAuthentication" } else { "offline" }.into();
+            status.caption = match status.setup.connection.as_str() { "needsTrust" => "Confirm SSH connection", "needsAuthentication" => "SSH sign-in needed", _ => "Offline" }.into();
             status.facts.push(fact("Reached", why, "bad", Some(format!("ssh {}", machine.ssh_host))));
             return status;
         }
@@ -308,11 +320,15 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         }
     };
     let p = parse_probe(&out);
+    status.setup.connection = "connected".into();
     let got = |k: &str| p.get(k).map(String::as_str).filter(|v| !v.is_empty());
     status.facts.push(fact("Reached", format!("in {} ms", elapsed_ms(elapsed)), "ok", None));
 
     let mut problems: Vec<&str> = Vec::new();
     let expected = format!("{} {} {}", env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION, env!("KLIDE_SOURCE_COMMIT"));
+    status.setup.host = match got("host") { Some(version) if version == expected => "ready", Some(_) => "outdated", None => "missing" }.into();
+    status.setup.claude = match (got("claude"), got("login")) { (Some(_), Some("true")) => "ready", (Some(_), _) => "needsLogin", _ => "missing" }.into();
+    if checkout.is_some() { status.setup.project = if got("checkout") == Some("yes") { "ready" } else { "missing" }.into(); }
     match got("host") {
         Some(version) if version == expected => status.facts.push(fact("Run host", "Installed · matches this app", "ok", None)),
         Some(version) => {
@@ -375,7 +391,7 @@ fn capitalize(s: &str) -> String {
 
 /// The workspace's `origin` URL, so a missing Remote checkout can say how to
 /// clone it.
-fn origin_repo(workspace_root: &str) -> Option<String> {
+pub(crate) fn origin_repo(workspace_root: &str) -> Option<String> {
     let out = crate::git::cmd::git_in(workspace_root)
         .ok()?
         .args(["remote", "get-url", "origin"])

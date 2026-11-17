@@ -9,11 +9,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,3 +44,16 @@ jobs:
           name: klide-linux-x86_64
           path: src-tauri/target/release/klide
           retention-days: 7
+
+      - name: Publish matching setup helper
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          cp src-tauri/target/release/klide klide-linux-x86_64
+          sha256sum klide-linux-x86_64 > klide-linux-x86_64.sha256
+          tag="host-${SOURCE_COMMIT}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$SOURCE_COMMIT" --prerelease --title "Linux helper ${SOURCE_COMMIT:0:7}" --notes "Matching Klide SSH helper. Published after remote replay and installer smoke tests."
+          fi
+          gh release upload "$tag" klide-linux-x86_64 klide-linux-x86_64.sha256 --clobber

@@ -24,12 +24,13 @@ export async function openScenario(page, baseURL, scenario, theme) {
 
 export async function assertHealthy(page) {
   const facts = await page.evaluate(() => {
-    const fonts = ['400 14px "Atkinson Hyperlegible"', '700 14px "Atkinson Hyperlegible"', '400 14px "Monaspace Neon"', '700 14px "Monaspace Neon"'];
+    const fonts = ['400 14px system-ui', '700 14px system-ui', '400 14px "Monaspace Neon"', '700 14px "Monaspace Neon"'];
     const native = window.__designFeedback.native;
     return {
       rootText: document.getElementById('root').innerText.trim().length,
       fonts: fonts.map(font => ({ font, loaded: document.fonts.check(font) })),
       loadedFamilies: [...document.fonts].filter(f => f.status === 'loaded').map(f => f.family),
+      uiFamily: getComputedStyle(document.querySelector('[aria-label="Design feedback scenario"]')).fontFamily,
       documentOverflow: document.documentElement.scrollWidth > innerWidth + 1,
       nativeCalls: [...new Set(native.calls)].sort(),
       nativeActions: native.actions.map(({ command, payload }) => ({ command, decision: payload.decision, runId: payload.runId, request: payload.request ? { runId: payload.request.runId, retry: payload.request.retry, provider: payload.request.provider, model: payload.request.model } : undefined })),
@@ -38,7 +39,8 @@ export async function assertHealthy(page) {
   });
   expect(facts.rootText, 'Root must not be blank').toBeGreaterThan(10);
   expect(facts.fonts.every(f => f.loaded), 'Required font weights must be loaded').toBe(true);
-  expect(facts.loadedFamilies.some(f => f.includes('Atkinson'))).toBe(true);
+  expect(facts.uiFamily).toMatch(/-apple-system/);
+  expect(facts.uiFamily).not.toMatch(/Inter/);
   expect(facts.loadedFamilies.some(f => f.includes('Monaspace'))).toBe(true);
   expect(facts.documentOverflow, 'Document must not overflow horizontally').toBe(false);
   expect(facts.unexpected, 'Native fixture must cover every boundary').toEqual([]);
