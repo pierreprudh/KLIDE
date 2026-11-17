@@ -12,7 +12,7 @@
 // choosing it. Picking a Remote machine puts the conversation on Claude Code —
 // the one CLI the first slice runs there.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { MachineIcon, ThisMacIcon } from "../icons";
+import { MachineIcon, NewTaskIcon, ThisMacIcon } from "../icons";
 import { machineLabel, machinesList, subscribeMachines, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
 import { restoreStartStageMachine, setStartStageMachine, startStageMachine, subscribeStartStageMachine } from "../conversationMachines";
 import { lastKnownStatus, machineStatusCheck, machineStatusVersion, refreshMachineStatus, subscribeMachineStatus } from "../machineStatus";
@@ -28,7 +28,7 @@ export function useStartStageMachine(): string | null {
 export type WhereItRunsMenu = {
   display: string;
   leading: ReactNode;
-  options: { label: string; value: string; icon: ReactNode; dimmed?: boolean; resolve?: { title: string; run: () => void } }[];
+  options: { label: string; value: string; icon: ReactNode; dimmed?: boolean; resolve?: { title: string; run: () => void; showArrow?: boolean } }[];
   selected: string;
   onSelect: (value: string | number | undefined) => void;
 };
@@ -114,7 +114,7 @@ export function useWhereItRuns({
         icon: <MachineIcon size={14} />,
         dimmed: blockedReason(m) !== null,
       })),
-      { label: "Add a machine…", value: "action:add-machine", icon: <MachineIcon size={14} />, resolve: { title: "Add an SSH machine", run: onAddMachine } },
+      { label: "Add a machine…", value: "action:add-machine", icon: <NewTaskIcon size={14} />, resolve: { title: "Add an SSH machine", run: onAddMachine, showArrow: false } },
     ],
     selected: chosen ? chosen.id : THIS_MAC,
     onSelect: (value) => {

@@ -468,7 +468,7 @@ type MenuOption = {
   /** Turns the row into a way out instead of a choice: it grows a trailing ↗
    *  and clicking anywhere on it runs this rather than selecting the value.
    *  Focus uses it to send keyless providers to Settings → API keys. */
-  resolve?: { title: string; run: () => void };
+  resolve?: { title: string; run: () => void; showArrow?: boolean };
 };
 
 /** Reasoning-effort glyph — the AI panel's reflection-bars language: five
@@ -647,7 +647,7 @@ function InlineMenu({
         icon: o.icon,
         active: o.value === selected,
         dimmed: o.dimmed,
-        leadout: !!o.resolve,
+        leadout: !!o.resolve && o.resolve.showArrow !== false,
         title: o.resolve?.title,
         onPick: () => {
           setOpen(false);
@@ -916,7 +916,7 @@ function InlineMenu({
                     >
                       {o.label}
                     </span>
-                    {o.resolve && (
+                    {o.resolve && o.resolve.showArrow !== false && (
                       <span
                         className="menu-leadout"
                         style={{ flexShrink: 0, display: "grid", placeItems: "center" }}

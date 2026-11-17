@@ -3,7 +3,10 @@ import { test, expect } from "@playwright/test";
 test("first machine can be connected directly from Focus", async ({ page }) => {
   await page.goto("/preview/where-it-runs.html?state=empty&theme=klide-light");
   await page.getByRole("button", { name: "Where it runs", exact: true }).click();
-  await page.getByRole("option", { name: "Add a machine…", exact: true }).click();
+  const addMachine = page.getByRole("option", { name: "Add a machine…", exact: true });
+  await expect(addMachine.locator(".menu-leadout")).toHaveCount(0);
+  await expect(addMachine.locator("svg")).toHaveCount(1);
+  await addMachine.click();
   await expect(page.getByLabel("SSH host", { exact: true })).toBeVisible();
   await expect(page.getByLabel("SSH host", { exact: true })).toBeFocused();
   await expect(page.getByLabel("Machine ID", { exact: true })).toHaveCount(0);
