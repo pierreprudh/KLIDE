@@ -76,7 +76,7 @@ import { relativeTime, isSubsequence } from "./ai/utils";
 import type { Conversation } from "./ai/types";
 import type { ProviderId } from "../agent/types";
 import { providerName } from "../agent/providers";
-import { DotGridLoader, ProviderLogo } from "./ai/icons";
+import { DotGridLoader, KlideMark, ProviderLogo } from "./ai/icons";
 import { conversationMark, makerMark, modelIdentity } from "../modelIdentity";
 import { setConversationDrag } from "../conversationDrag";
 import { useIsConversationRunning } from "../runningConversations";
@@ -491,7 +491,7 @@ function FolderCard({
         title={root ? shortPath(root) : undefined}
         onClick={() => (open ? close(false) : setOpen(true))}
       >
-        <FolderMark name={name} />
+        <span className="klide-rail-app-mark" aria-hidden="true"><KlideMark size={18} /></span>
         <span className="klide-rail-folder-name">{name}</span>
         <SwitcherIcon size={12} />
       </button>
