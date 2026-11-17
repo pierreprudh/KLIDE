@@ -5363,6 +5363,15 @@ button:focus-visible .menu-leadout {
 
 /* A folder's initial on a soft square — the card's only mark, and the
    menu's for every other folder. */
+/* The card's leading mark is the app's own logo; folder initials stay in the menu. */
+.klide-rail-app-mark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
 .klide-rail-folder-mark {
   width: 22px;
   height: 22px;
