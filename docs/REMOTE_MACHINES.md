@@ -328,7 +328,8 @@ close public SSH with `bootstrap.sh --tailscale-only`.
 
 Settings › Machines manages the SSH machines in `~/.klide/machines.json`.
 Focus always shows its “Where it runs” picker, even with no saved machines.
-“Add a machine…” opens the SSH form directly. Machine management stays in
+“Add a machine” opens a dedicated dialog with the SSH form and animated
+progress during connection and installation. Machine management stays in
 Settings. An unavailable machine offers “Set up machine”.
 Enter an SSH alias or `user@hostname`; the display name is optional and Klide
 creates the stable ID. Setup can be saved while the machine is switched off.

@@ -7,7 +7,7 @@ import { GhostButton, SettingBlock } from "./controls";
 import { MachineIcon, TailscaleIcon, ThisMacIcon } from "../../icons";
 import { CloudIcon } from "./icons";
 import { MachineSetup } from "./MachineSetup";
-import { consumeMachineSetupRequest, subscribeMachineSetup } from "../../machineSetupNavigation";
+import { AddMachineDialog } from "../AddMachineDialog";
 import "./machines.css";
 
 type ConnectionKind = "cloud" | "self-hosted" | "tailscale";
@@ -134,14 +134,6 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
   const cannotAdd = loading || busy || editing !== undefined || !!error;
   function add(kind: ConnectionKind) { setConnection(kind); setEditing(null); }
   useEffect(() => {
-    const showRequestedSetup = () => {
-      if (consumeMachineSetupRequest()) { setConnection("cloud"); setEditing(null); }
-    };
-    const unsubscribe = subscribeMachineSetup(showRequestedSetup);
-    showRequestedSetup();
-    return unsubscribe;
-  }, []);
-  useEffect(() => {
     let live = true;
     setLoading(true);
     setError("");
@@ -206,6 +198,7 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
       </article>
     </SettingBlock>
 
-    {editing !== undefined && <MachineEditor key={(editing?.id ?? "new") + workspaceRoot + connection} machine={editing} connection={connection} workspaceRoot={workspaceRoot} onSave={save} onCancel={() => { setEditing(undefined); setError(""); }} busy={busy} />}
+    {editing === null && <AddMachineDialog workspaceRoot={workspaceRoot} onSaved={setMachines} onClose={() => setEditing(undefined)} />}
+    {editing != null && <MachineEditor key={(editing?.id ?? "new") + workspaceRoot + connection} machine={editing} connection={connection} workspaceRoot={workspaceRoot} onSave={save} onCancel={() => { setEditing(undefined); setError(""); }} busy={busy} />}
   </div>;
 }

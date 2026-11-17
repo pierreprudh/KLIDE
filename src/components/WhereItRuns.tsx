@@ -114,7 +114,7 @@ export function useWhereItRuns({
         icon: <MachineIcon size={14} />,
         dimmed: blockedReason(m) !== null,
       })),
-      { label: "Add a machine…", value: "action:add-machine", icon: <NewTaskIcon size={14} />, resolve: { title: "Add an SSH machine", run: onAddMachine, showArrow: false } },
+      { label: "Add a machine", value: "action:add-machine", icon: <NewTaskIcon size={14} />, resolve: { title: "Add an SSH machine", run: onAddMachine, showArrow: false } },
     ],
     selected: chosen ? chosen.id : THIS_MAC,
     onSelect: (value) => {

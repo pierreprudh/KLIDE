@@ -1,4 +1,4 @@
-import { requestMachineSetup } from "../machineSetupNavigation";
+import { AddMachineDialog } from "./AddMachineDialog";
 import { useWhereItRuns } from "./WhereItRuns";
 import { composerDraftKey, useComposerDraft } from "./ai/composerDraft";
 import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
@@ -1615,6 +1615,7 @@ export function FocusComposer({
   const customProviders = useCustomProviders();
   const llamaSetupMode = useLlamaSetupMode();
   const missingDelegateClis = useMissingDelegateClis();
+  const [addMachineOpen, setAddMachineOpen] = useState(false);
   const providerMenuOptions = useMemo(
     () => buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api"), llamaSetupMode, missingDelegateClis),
     [customProviders, keylessProviders, onOpenSettingsSection, llamaSetupMode, missingDelegateClis],
@@ -1963,7 +1964,7 @@ export function FocusComposer({
   const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
   const whereItRuns = useWhereItRuns({
     workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId),
-    onAddMachine: () => { requestMachineSetup(); onOpenSettingsSection("machines"); },
+    onAddMachine: () => setAddMachineOpen(true),
     onOpenMachineSettings: () => onOpenSettingsSection("machines"),
   });
 
@@ -1971,6 +1972,7 @@ export function FocusComposer({
   // bottom-anchored composer.
   return (
     <div className="klide-focus-composer-dock">
+      {addMachineOpen && <AddMachineDialog workspaceRoot={workspaceRoot} onClose={() => setAddMachineOpen(false)} />}
       {((branch && onPingGit) || artifactOutput || whereItRuns) && (
         // The chosen output stands beside the branch tab, not inside it: the
         // tab carries the one git fact, the output is this turn's own. Where
