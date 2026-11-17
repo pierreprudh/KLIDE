@@ -40,7 +40,5 @@
 .klide-machine-dialog-footer > :first-child { margin-right: auto; }
 .klide-machine-manual-add { display: inline-flex; align-items: center; gap: 8px; }
 
-.klide-vpn-brands { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
-.klide-vpn-brand { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; padding: 3px 8px; box-sizing: border-box; border: 1px solid rgb(0 0 0 / 8%); border-radius: 8px; background: #fff; }
-.klide-vpn-brand img { display: block; object-fit: contain; }
-.klide-machine-methods .klide-vpn-brand > span { color: #162146; font-size: 12px; }
+.klide-vpn-brands { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; }
+.klide-vpn-brands img { display: block; width: 24px; height: 24px; object-fit: contain; }

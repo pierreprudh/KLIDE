@@ -35,9 +35,9 @@ export function MachineConnectionPicker({ method, onMethod, onSelect, onManual, 
     <div className="klide-machine-methods">{methods.map((option, index) => <button ref={index === 0 ? first : undefined} key={option.id} type="button" onClick={() => onMethod(option.id)}>
       {option.id === "tailscale" ? <TailscaleIcon size={24} /> : <MachineIcon size={24} />}
       <span><strong>{option.label}</strong><span>{option.description}</span>{option.id === "vpn" && <span className="klide-vpn-brands">
-        <span className="klide-vpn-brand"><img src="/vpn/wireguard.svg" alt="WireGuard" width="100" height="24" /></span>
-        <span className="klide-vpn-brand"><img src="/vpn/zerotier.svg" alt="ZeroTier" width="100" height="24" /></span>
-        <span className="klide-vpn-brand"><img src="/vpn/openvpn.svg" alt="" width="23" height="23" /><span>OpenVPN</span></span>
+        <img src="/vpn/wireguard.svg" alt="WireGuard" title="WireGuard" width="24" height="24" />
+        <img src="/vpn/zerotier.svg" alt="ZeroTier" title="ZeroTier" width="24" height="24" />
+        <img src="/vpn/openvpn.svg" alt="OpenVPN" title="OpenVPN" width="24" height="24" />
       </span>}</span>
     </button>)}</div>
     <div className="klide-machine-dialog-footer"><GhostButton onClick={onClose}>Cancel</GhostButton></div>

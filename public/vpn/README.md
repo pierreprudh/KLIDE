@@ -1,6 +1,8 @@
 # VPN brand assets
 
-Unmodified official logos, bundled locally for the Other VPN option.
+Icon marks from official assets, bundled locally for the Other VPN option.
+WireGuard and ZeroTier wordmarks are omitted; original icon paths and colors
+are preserved.
 
 - wireguard: https://www.wireguard.com/img/wireguard.svg
 - zerotier: https://docs.zerotier.com/img/zerotier-logo.svg
