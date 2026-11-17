@@ -274,13 +274,11 @@ fn ensure_watch(
             if terminal {
                 break;
             }
-            let mut line = String::new();
             loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
+                let line = match crate::pty_wire::read_line_capped(&mut reader) {
+                    Ok(Some(line)) => line,
+                    Ok(None) | Err(_) => break,
+                };
                 let event = serde_json::from_str::<crate::pty_wire::Event>(&line);
                 if let Ok(crate::pty_wire::Event::ChatOperation { operation }) = &event {
                     if operation.run_id == id {

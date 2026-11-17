@@ -21,7 +21,7 @@ use crate::pty_host::{
 };
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, Read, Write};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -114,9 +114,12 @@ fn start_daemon_subscriber(app: tauri::AppHandle) {
             let Some(dir) = app_data_dir(&app) else {
                 break;
             };
-            if let Ok(reader) = pty_client::subscribe(&dir) {
-                for line in reader.lines() {
-                    let Ok(line) = line else { break };
+            if let Ok(mut reader) = pty_client::subscribe(&dir) {
+                loop {
+                    let line = match crate::pty_wire::read_line_capped(&mut reader) {
+                        Ok(Some(line)) => line,
+                        Ok(None) | Err(_) => break,
+                    };
                     if line.trim().is_empty() {
                         continue;
                     }

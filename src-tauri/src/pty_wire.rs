@@ -203,6 +203,50 @@ pub enum Event {
     },
 }
 
+/// Largest line accepted on the ptyd wire, in either direction. Events can
+/// carry tool output, but a line with no newline must not grow without bound:
+/// a peer — or anything that can sit inside the connection — could otherwise
+/// OOM the process, on the daemon side before auth is even checked.
+pub const MAX_WIRE_LINE: usize = 8 * 1024 * 1024;
+
+/// `BufRead::lines`, capped: read one line (without the trailing newline),
+/// `Ok(None)` at EOF. A line longer than [`MAX_WIRE_LINE`] is an
+/// `InvalidData` error; the caller should drop the connection.
+pub fn read_line_capped(
+    reader: &mut impl std::io::BufRead,
+) -> std::io::Result<Option<String>> {
+    read_line_capped_with(reader, MAX_WIRE_LINE)
+}
+
+/// [`read_line_capped`] with an explicit cap, so tests don't need 8 MiB.
+pub fn read_line_capped_with(
+    reader: &mut impl std::io::BufRead,
+    max: usize,
+) -> std::io::Result<Option<String>> {
+    use std::io::{BufRead, Read};
+    let mut buf: Vec<u8> = Vec::new();
+    // `take` bounds the read itself: a bare `read_until` keeps buffering
+    // until a newline or EOF, so a peer that never sends one would grow the
+    // buffer without limit before any length check ran.
+    let limit = max as u64 + 1;
+    reader.by_ref().take(limit).read_until(b'\n', &mut buf)?;
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+    }
+    if buf.len() > max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("wire line exceeds {max} bytes"),
+        ));
+    }
+    Ok(if buf.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&buf).into_owned())
+    })
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -217,6 +261,7 @@ mod tests {
     //! Only the host target is installed here, so these read the source rather
     //! than cross-compiling. They cannot prove a Windows build succeeds; they do
     //! fail if the split is undone.
+    use super::*;
 
     /// Is `src` gated as a whole? Matches the inner attribute as its own line,
     /// so a doc comment that merely *mentions* it doesn't count.
@@ -258,6 +303,32 @@ mod tests {
             !src.contains("use crate::pty_daemon::{"),
             "importing them through the `#![cfg(unix)]` daemon module is the \
              exact break this split removed"
+        );
+    }
+
+    #[test]
+    fn read_line_capped_reads_lines_eof_and_refuses_overlong_lines() {
+        use std::io::Cursor;
+        let mut c = Cursor::new(b"first\nsecond\n".to_vec());
+        assert_eq!(read_line_capped_with(&mut c, 64).unwrap().as_deref(), Some("first"));
+        assert_eq!(read_line_capped_with(&mut c, 64).unwrap().as_deref(), Some("second"));
+        assert_eq!(read_line_capped_with(&mut c, 64).unwrap(), None);
+        // No newline and over the cap: an error, so the caller drops the connection.
+        let mut big = Cursor::new(vec![b'x'; 100]);
+        assert!(read_line_capped_with(&mut big, 64).is_err());
+        // A live peer that never sends a newline: the read stops at the cap
+        // instead of buffering the whole stream.
+        let mut endless = std::io::BufReader::new(std::io::repeat(b'x'));
+        assert!(read_line_capped_with(&mut endless, 64).is_err());
+        // Exactly at the cap is still a line.
+        let mut edge = Cursor::new([vec![b'y'; 64], b"\nnext\n".to_vec()].concat());
+        assert_eq!(read_line_capped_with(&mut edge, 64).unwrap().map(|l| l.len()), Some(64));
+        assert_eq!(read_line_capped_with(&mut edge, 64).unwrap().as_deref(), Some("next"));
+        // No newline but within the cap: EOF tail is returned as-is.
+        let mut tail = Cursor::new(b"tail-no-newline".to_vec());
+        assert_eq!(
+            read_line_capped_with(&mut tail, 64).unwrap().as_deref(),
+            Some("tail-no-newline")
         );
     }
 
