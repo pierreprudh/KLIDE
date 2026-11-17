@@ -299,9 +299,22 @@ pub(super) async fn control(
     control: ChatControl,
 ) -> Result<bool, String> {
     #[cfg(unix)]
-    if let Some(binding) = remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, id)? {
-        let id = id.to_string();
-        return crate::blocking::run(move || remote_machine::control(&binding, &id, control)).await;
+    {
+        let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if let Some(binding) = remote_machine::binding(&base, id)? {
+            let cancelled_setup = matches!(&control, ChatControl::Stop) && dispatch_cancel::cancel(id);
+            let id = id.to_string();
+            return crate::blocking::run(move || {
+                // Start holds this lease through the remote reply. A Stop
+                // racing dispatch cancels setup first, then waits until an
+                // admitted remote owner can receive the Stop reliably.
+                let _lease = crate::process_lock::exclusive(&base.join("remote-runs").join(format!("{id}.lock")))?;
+                match remote_machine::control(&binding, &id, control) {
+                    Err(error) if cancelled_setup && error.starts_with("No known run with id") => Ok(true),
+                    result => result,
+                }
+            }).await;
+        }
     }
     if matches!(&control, ChatControl::Stop) {
         // Setup and slot admission have no Run handle yet. The admitted Run

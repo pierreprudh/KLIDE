@@ -165,8 +165,25 @@ fn relay_io(
         // also watches this EOF to remove event subscriptions.
         let _ = input.shutdown(std::net::Shutdown::Write);
     });
-    io::copy(&mut &connection.stream, target).map_err(|e| format!("relay: {e}"))?;
+    copy_flushed(&mut &connection.stream, target).map_err(|e| format!("relay: {e}"))?;
     Ok(())
+}
+
+fn copy_flushed(source: &mut impl Read, target: &mut impl Write) -> io::Result<()> {
+    let mut bytes = [0u8; 8192];
+    loop {
+        let count = match source.read(&mut bytes) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            return Ok(());
+        }
+        target.write_all(&bytes[..count])?;
+        // stdout is a pipe in SSH. Never wait for its buffer to fill or the
+        // stream to close before delivering a response or live event.
+        target.flush()?;
+    }
 }
 
 #[cfg(test)]
@@ -174,6 +191,41 @@ mod tests {
     use super::*;
     use crate::pty_wire::Response;
     use std::io::{BufRead, BufReader};
+
+    #[test]
+    fn relay_flushes_a_response_while_the_stream_remains_open() {
+        struct Published {
+            pending: Vec<u8>,
+            sender: std::sync::mpsc::Sender<Vec<u8>>,
+        }
+        impl Write for Published {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.pending.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.sender
+                    .send(std::mem::take(&mut self.pending))
+                    .map_err(io::Error::other)
+            }
+        }
+        let (mut writer, mut source) = UnixStream::pair().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            copy_flushed(
+                &mut source,
+                &mut Published {
+                    pending: Vec::new(),
+                    sender,
+                },
+            )
+        });
+        writer.write_all(b"{\"type\":\"pong\"}\n").unwrap();
+        let received = receiver.recv_timeout(Duration::from_secs(2));
+        writer.shutdown(std::net::Shutdown::Write).unwrap();
+        thread.join().unwrap().unwrap();
+        assert_eq!(received.unwrap(), b"{\"type\":\"pong\"}\n");
+    }
 
     struct ChildTransport(&'static str, Duration);
     impl Transport for ChildTransport {

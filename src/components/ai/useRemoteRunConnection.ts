@@ -32,7 +32,7 @@ export function useRemoteRunConnection(machine: string | null, runId: string, on
       if (!payload.connected) wasOffline = true;
       if (payload.connected && wasOffline) { wasOffline = false; reconnect.current(); }
       setError(payload.connected ? null : payload.error || "Reconnecting…");
-    });
+    }).catch(() => () => {});
     void check();
     const interval = window.setInterval(() => { void check(); }, 15000);
     window.addEventListener("online", check);

@@ -342,3 +342,21 @@ Saved changes refresh the “Where it runs” picker. Removing a Machine only
 removes its local configuration: remote files and running sessions stay there.
 Re-adding its original ID reconnects existing Conversations. Saves are atomic;
 an unreadable configuration is reported and cannot be silently overwritten.
+
+## Review follow-up (2026-11-17)
+
+Code review fixed upgrade-lock inheritance into the detached host, explicit
+flushing of relay output, the completion-versus-reconnect snapshot race,
+cancellation racing remote admission, and local/remote ownership races.
+Incremental replay now transfers only the missing tail and merges events that
+arrived while a replay request was in flight. Remote operations requiring the
+Mac (Klide Missions) fail promptly instead of waiting for an absent supervisor.
+An unstarted worktree left by a failed setup can be recovered after its
+repository identity is verified.
+
+`tests/remote-install-smoke.py` exercises the actual installation script,
+fresh relay connection, and rejection of a mismatched upgrade without
+interrupting the installed host. Linux smoke tests have bounded deadlines and
+progress diagnostics. The first Linux release binaries compiled, but their
+unflushed relay smoke tests stalled and hit the workflow deadline; those runs
+are not acceptance evidence. The review fixes require a fresh passing run.

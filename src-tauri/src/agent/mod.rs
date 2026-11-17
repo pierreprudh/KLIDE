@@ -2046,6 +2046,14 @@ async fn start_run(
         .unwrap_or_else(run_id);
     // The id names the transcript file — refuse anything path-shaped.
     validate_run_id(&id)?;
+    #[cfg(unix)]
+    {
+        let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if remote_machine::binding(&base, &id)?.is_some() || request.parent_id.as_deref().map(|parent| remote_machine::binding(&base, parent)).transpose()?.flatten().is_some() {
+            return Err("This conversation belongs to a remote machine. Reopen it to reconnect; local execution is refused.".into());
+        }
+    }
+
     if let Some(history) = request.conversation_history.take() {
         let root = request.workspace_root.clone().ok_or("A workspace is required for imported conversation retrieval.")?;
         let archive_runs = runs_dir.clone();

@@ -69,14 +69,14 @@ fn watched() -> &'static Mutex<HashMap<String, u64>> {
     WATCHED.get_or_init(Default::default)
 }
 
-fn fetch(binding: &Binding, id: &str) -> Result<Vec<AgentEvent>, String> {
+fn fetch(binding: &Binding, id: &str, from: u64) -> Result<Vec<AgentEvent>, String> {
     let mut events = Vec::new();
     loop {
         match query(
             binding,
             &Request::RemoteRead {
                 run_id: id.into(),
-                from_seq: events.len() as u64,
+                from_seq: from + events.len() as u64,
                 limit: 256,
             },
         )? {
@@ -85,7 +85,7 @@ fn fetch(binding: &Binding, id: &str) -> Result<Vec<AgentEvent>, String> {
                 next_seq,
             } => {
                 let count = page.len();
-                if next_seq != (events.len() + count) as u64 {
+                if next_seq != from + (events.len() + count) as u64 {
                     return Err("Invalid remote replay sequence".into());
                 }
                 events.extend(page);
@@ -102,17 +102,33 @@ fn fetch(binding: &Binding, id: &str) -> Result<Vec<AgentEvent>, String> {
 }
 
 fn refresh(binding: &Binding, id: &str) -> Result<Vec<AgentEvent>, String> {
-    let events = fetch(binding, id)?;
+    let from = cache()
+        .lock()
+        .map_err(|_| "Remote replay cache unavailable")?
+        .get(id)
+        .map_or(0, Vec::len);
+    let events = fetch(binding, id, from as u64)?;
     let mut cache = cache()
         .lock()
         .map_err(|_| "Remote replay cache unavailable")?;
     let stored = cache.entry(id.into()).or_default();
-    // An in-flight snapshot may finish after a newer live event. Never lose
-    // the already-received tail of the same append-only transcript.
-    if events.len() > stored.len() {
-        *stored = events;
-    }
+    merge_tail(stored, from, events)?;
     Ok(stored.clone())
+}
+
+fn merge_tail(
+    stored: &mut Vec<AgentEvent>,
+    from: usize,
+    tail: Vec<AgentEvent>,
+) -> Result<(), String> {
+    // The stream can advance while this incremental snapshot is in flight.
+    // Keep its existing prefix and append only events not received live yet.
+    let overlap = stored
+        .len()
+        .checked_sub(from)
+        .ok_or("Remote replay cache was invalidated")?;
+    stored.extend(tail.into_iter().skip(overlap));
+    Ok(())
 }
 
 pub(crate) fn read_all(binding: &Binding, id: &str) -> Result<Vec<AgentEvent>, String> {
@@ -133,11 +149,21 @@ pub(super) async fn start(
     channel: Channel<AgentEvent>,
     machine_id: Option<String>,
 ) -> Result<StartRunResponse, String> {
+    let id = request
+        .run_id
+        .as_deref()
+        .ok_or("A remote conversation needs a stable id")?;
+    validate_run_id(id)?;
+    let dispatch = dispatch_cancel::Dispatch::register(id).map_err(|_| run_host::busy(id))?;
+    let cancel = dispatch.cancel.clone();
+    let _storage_guard = crate::storage::RUN_STORAGE_GATE.lock().await;
     let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
     crate::blocking::run(move || {
+        let _storage_lease = crate::process_lock::exclusive(&base.join("run-storage.lock"))?;
         let id = request.run_id.clone().ok_or("A remote conversation needs a stable id")?;
         validate_run_id(&id)?;
         validate_request(&request)?;
+        if cancel.is_cancelled() { return Err("Cancelled before remote setup".into()); }
         let lock_dir = base.join("remote-runs");
         std::fs::create_dir_all(&lock_dir).map_err(|e| e.to_string())?;
         let _lock = crate::process_lock::exclusive(&lock_dir.join(format!("{id}.lock")))?;
@@ -147,6 +173,9 @@ pub(super) async fn start(
                 binding
             }
             None => {
+                ensure_no_local_history(&app_runs_dir(&app)?, &id)?;
+                if app.state::<AgentSupervisorState>().runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&id)
+                    || daemon_client::statuses(&app)?.contains_key(&id) { return Err(run_host::busy(&id)); }
                 let machine = crate::machines::get(machine_id.as_deref().ok_or("No remote machine selected")?).ok_or("Remote machine is no longer configured")?;
                 let root = request.workspace_root.as_deref().ok_or("Open a project before starting a remote task")?;
                 let binding = Binding { machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root) };
@@ -169,6 +198,7 @@ pub(super) async fn start(
         // machines. The destination uses its own Claude login and transcript.
         request.naming = None; request.eyes = None; request.preferred_models.clear();
         request.delegate_session = None; request.command_allowlist.clear();
+        if cancel.is_cancelled() { return Err("Cancelled before the remote task started".into()); }
         let from = match query(&binding, &Request::RemoteStart { request: Box::new(request), checkout: binding.checkout.clone() }) {
             Ok(Response::ChatStarted { from_seq }) => from_seq,
             Ok(_) => return Err("Unexpected remote start response".into()),
@@ -210,6 +240,22 @@ fn terminal(event: &AgentEvent) -> bool {
         event,
         AgentEvent::RunResult { .. } | AgentEvent::RunError { .. }
     )
+}
+
+fn replay_snapshot(
+    events: Vec<AgentEvent>,
+    next: &mut u64,
+    deliver: &impl Fn(AgentEvent, u64),
+) -> bool {
+    for (seq, event) in events.into_iter().enumerate().skip(*next as usize) {
+        let done = terminal(&event);
+        deliver(event, seq as u64);
+        *next = seq as u64 + 1;
+        if done {
+            return true;
+        }
+    }
+    false
 }
 
 fn ensure_watch(
@@ -258,20 +304,22 @@ fn ensure_watch(
                 // remain buffered; sequence numbers remove the overlap.
                 let events = refresh(&binding, &id)?;
                 connection(true, None);
-                for (seq, event) in events.into_iter().enumerate().skip(next as usize) {
-                    let done = terminal(&event);
-                    deliver(event, seq as u64);
-                    next = seq as u64 + 1;
-                    if done {
-                        return Ok(());
-                    }
+                if replay_snapshot(events, &mut next, &deliver) {
+                    return Ok(());
                 }
                 if matches!(
                     query(&binding, &Request::ChatStatus { run_id: id.clone() })?,
                     Response::ChatStatus { status: None, .. }
                 ) {
-                    // Reachable host + no owner + no terminal transcript is
-                    // an interrupted task, not merely a network disconnect.
+                    // The task may have settled after the first snapshot.
+                    // Its final event was written before owner retirement,
+                    // so read that durable tail before declaring interruption.
+                    let final_events = refresh(&binding, &id)?;
+                    if replay_snapshot(final_events, &mut next, &deliver) {
+                        return Ok(());
+                    }
+                    // A reachable host with no owner and no durable result
+                    // after that second snapshot is an interrupted task.
                     deliver(AgentEvent::RunError { run_id: id.clone(), error: AgentError {
                         code: error_code::RUN_HOST_FAILED.into(),
                         message: "The remote host no longer owns this task and did not record a final result. Inspect its worktree before retrying.".into(),
@@ -322,6 +370,16 @@ fn ensure_watch(
             guard.remove(&id);
         }
     });
+    Ok(())
+}
+
+fn ensure_no_local_history(runs: &Path, id: &str) -> Result<(), String> {
+    if transcript_path(runs, id)
+        .try_exists()
+        .map_err(|e| e.to_string())?
+    {
+        return Err("This conversation already has a local transcript. Start a new remote conversation; moving an existing conversation requires an explicit transfer.".into());
+    }
     Ok(())
 }
 
@@ -394,17 +452,43 @@ pub(crate) fn start_on_host(
             );
         }
     } else {
-        let output = crate::git::cmd::git_in(&checkout)?
-            .args(["worktree", "add", "--detach"])
-            .arg(&root)
-            .arg("HEAD")
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            return Err(format!(
-                "Could not create remote worktree: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+        if root.join(".git").exists() {
+            // A prior setup may have created the worktree but failed before
+            // publishing placement. Recover only an unstarted worktree from
+            // this exact repository; never reinterpret existing Run history.
+            if transcript_path(&runs, &id).exists() {
+                return Err("Remote placement is missing for an existing transcript; restore it before continuing".into());
+            }
+            let common = |dir: &Path| -> Result<PathBuf, String> {
+                let output = crate::git::cmd::git_in(dir)?
+                    .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if !output.status.success() {
+                    return Err("Could not verify the existing remote worktree".into());
+                }
+                PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+                    .canonicalize()
+                    .map_err(|e| e.to_string())
+            };
+            if common(&root)? != common(&checkout)? {
+                return Err(
+                    "The existing worktree belongs to a different remote repository".into(),
+                );
+            }
+        } else {
+            let output = crate::git::cmd::git_in(&checkout)?
+                .args(["worktree", "add", "--detach"])
+                .arg(&root)
+                .arg("HEAD")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "Could not create remote worktree: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
         }
         let base = crate::git::cmd::git_in(&root)?
             .args(["rev-parse", "HEAD"])
@@ -445,7 +529,7 @@ pub(crate) fn start_on_host(
     if let Some(history) = request.conversation_history.take() {
         conversation_search::store_history(&runs, &root, &id, history)?;
     }
-    host.start(request, runs)
+    host.start_remote(request, runs)
 }
 
 pub(crate) fn changes_on_host(data: &Path, id: &str) -> Result<(String, String, String), String> {
@@ -585,6 +669,70 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn delta(text: &str) -> AgentEvent {
+        AgentEvent::AssistantDelta {
+            run_id: "convo".into(),
+            message_id: "message".into(),
+            text: text.into(),
+            thinking: None,
+            ts: 0,
+        }
+    }
+
+    #[test]
+    fn completion_between_snapshot_and_owner_check_is_replayed_as_success() {
+        let seen = Mutex::new(Vec::new());
+        let deliver = |event, seq| seen.lock().unwrap().push((seq, event));
+        let mut next = 1;
+        assert!(!replay_snapshot(
+            vec![delta("old"), delta("current")],
+            &mut next,
+            &deliver
+        ));
+        // The owner retires only after writing this result. The second read
+        // must include it even though the earlier snapshot did not.
+        assert!(replay_snapshot(
+            vec![
+                delta("old"),
+                delta("current"),
+                AgentEvent::RunResult {
+                    run_id: "convo".into(),
+                    result: serde_json::json!({"status":"done"}),
+                    ts: 1,
+                }
+            ],
+            &mut next,
+            &deliver
+        ));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(matches!(seen[1], (2, AgentEvent::RunResult { .. })));
+        assert_eq!(next, 3);
+    }
+
+    #[test]
+    fn incremental_replay_keeps_events_received_while_the_request_was_in_flight() {
+        let mut stored = vec![delta("old"), delta("live")];
+        merge_tail(&mut stored, 1, vec![delta("live"), delta("missed")]).unwrap();
+        assert_eq!(stored.len(), 3);
+        assert!(matches!(&stored[2], AgentEvent::AssistantDelta { text, .. } if text == "missed"));
+        merge_tail(&mut stored, 1, vec![delta("live")]).unwrap();
+        assert_eq!(
+            stored.len(),
+            3,
+            "an older reply cannot truncate the live tail"
+        );
+    }
+
+    #[test]
+    fn a_local_conversation_cannot_be_implicitly_placed_on_a_second_host() {
+        let runs = directory("local-owner");
+        assert!(ensure_no_local_history(&runs, "convo").is_ok());
+        std::fs::write(transcript_path(&runs, "convo"), "existing transcript").unwrap();
+        assert!(ensure_no_local_history(&runs, "convo").is_err());
+        std::fs::remove_dir_all(runs).unwrap();
     }
 
     #[test]

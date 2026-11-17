@@ -101,21 +101,8 @@ fn install_script(staged: &str) -> String {
         env!("KLIDE_SOURCE_COMMIT")
     ));
     format!(
-        r#"set -eu
-export PATH="$HOME/.local/bin:$PATH"
-stage={staged}
-trap 'rm -f "$stage"' EXIT
-chmod 700 "$stage"
-actual=$("$stage" ptyd version)
-[ "$actual" = {expected} ] || {{ echo 'The host binary does not match this app revision' >&2; exit 1; }}
-mkdir -p "$HOME/.klide/run-host"
-exec 9>"$HOME/.klide/run-host/upgrade.lock"
-flock -x 9
-"$stage" ptyd prepare-upgrade --data-dir "$HOME/.klide/run-host"
-mv -f "$stage" "$HOME/.klide/bin/klide"
-trap - EXIT
-"$HOME/.klide/bin/klide" ptyd ensure --data-dir "$HOME/.klide/run-host"
-"#
+        "sh -c {} -- {staged} {expected}",
+        crate::delegate::shell_quote(include_str!("../../scripts/remote-host/install-host.sh"))
     )
 }
 

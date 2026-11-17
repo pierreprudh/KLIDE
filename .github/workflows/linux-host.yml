@@ -35,7 +35,10 @@ jobs:
         env:
           KLIDE_SOURCE_COMMIT: ${{ github.sha }}
       - name: Native remote disconnect and replay smoke test
-        run: python3 tests/remote-machine-smoke.py src-tauri/target/release/klide
+        timeout-minutes: 3
+        run: |
+          timeout 150s python3 -u tests/remote-machine-smoke.py src-tauri/target/release/klide
+          timeout 60s python3 -u tests/remote-install-smoke.py src-tauri/target/release/klide
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: klide-linux-x86_64

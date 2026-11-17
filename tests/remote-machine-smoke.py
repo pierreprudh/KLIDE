@@ -5,6 +5,7 @@ Build the debug klide binary, then run this script with its path. Uses a
 temporary checkout, data dir and fake CLI. It never uses the real Claude login.
 """
 import json
+import faulthandler
 import os
 from pathlib import Path
 import selectors
@@ -36,13 +37,22 @@ class Relay:
                     raise AssertionError("Timed out waiting for relay output")
                 chunk = os.read(self.process.stdout.fileno(), 65536)
                 if not chunk:
-                    raise AssertionError("Relay closed: " + self.process.stderr.read().decode())
+                    if self.process.poll() is None:
+                        self.process.kill()
+                        self.process.wait(timeout=3)
+                    with selectors.DefaultSelector() as errors:
+                        errors.register(self.process.stderr, selectors.EVENT_READ)
+                        detail = os.read(self.process.stderr.fileno(), 8192).decode() if errors.select(.1) else ""
+                    raise AssertionError("Relay closed: " + detail)
                 self.pending += chunk
         line, self.pending = self.pending.split(b"\n", 1)
         return json.loads(line)
 
     def close(self):
-        self.process.stdin.close()
+        try:
+            self.process.stdin.close()
+        except BrokenPipeError:
+            pass
         try:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -51,6 +61,7 @@ class Relay:
 
 
 def main():
+    faulthandler.dump_traceback_later(45)
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else "src-tauri/target/debug/klide").resolve()
     with tempfile.TemporaryDirectory(prefix="klide-native-remote-") as directory:
         root = Path(directory)
@@ -107,16 +118,20 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
                     break
                 assert daemon.poll() is None, "Host exited during startup"
                 time.sleep(.05)
+            print("Checking subscription handshake", flush=True)
             stream = connect()
             stream.send({"type": "subscribe"})
             assert stream.read()["type"] == "subscribed"
             run_id = "native-task"
             spec = {"runId": run_id, "workspaceRoot": "/not/a/remote/path", "mode": "goal", "provider": "claude-code",
                     "model": "default", "initialText": "Say hello slowly", "context": None, "systemPrompt": None}
+            print("Starting controlled remote task", flush=True)
             started = request({"type": "remote_start", "request": spec, "checkout": str(checkout)})
             assert started["type"] == "chat_started", started
             first = []
+            deadline = time.monotonic() + 20
             while not any(e.get("event", {}).get("type") == "assistant_delta" for e in first):
+                assert time.monotonic() < deadline, "No streamed delta within 20 seconds"
                 event = stream.read()
                 first.append(event)
                 assert event.get("event", {}).get("type") != "run_error", event
