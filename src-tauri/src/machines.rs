@@ -81,14 +81,22 @@ fn read_store(path: &Path) -> Result<Store, String> {
     }
 }
 
+/// The one SSH-host rule every ssh invocation shares: an alias or
+/// user@hostname, never an option. Save-time validation alone is not enough
+/// — the store file is plain JSON, and a host like `-oProxyCommand=…` would
+/// otherwise become local command execution when probed or spawned.
+pub(crate) fn validate_ssh_host(host: &str) -> Result<(), String> {
+    if host.is_empty() || host.starts_with('-') || !host.chars().all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c)) {
+        return Err("Enter an SSH alias or user@hostname (configure ports and keys in ~/.ssh/config)".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_machine(machine: &Machine) -> Result<(), String> {
     if machine.id.is_empty() || !machine.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err("Machine ID must contain only letters, numbers, hyphens or underscores".into());
     }
-    let host = &machine.ssh_host;
-    if host.is_empty() || host.starts_with('-') || !host.chars().all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c)) {
-        return Err("Enter an SSH alias or user@hostname (configure ports and keys in ~/.ssh/config)".into());
-    }
+    validate_ssh_host(&machine.ssh_host)?;
     for (root, path) in &machine.checkouts {
         if !root.starts_with('/') || !(path.starts_with('/') || path.starts_with("~/")) || path.contains(['\n', '\r', '\0']) {
             return Err("Checkout mappings need an absolute workspace path and an absolute or ~/ remote path".into());
@@ -204,7 +212,8 @@ pub fn remote_spawn_command(
         remote_path_word(&checkout),
         shell_quote(&program),
     );
-    format!("ssh -t {} {} {}", SSH_OPTS.join(" "), shell_quote(&machine.ssh_host), shell_quote(&remote))
+    // `--` so even an unvalidated host can't be read as an ssh option.
+    format!("ssh -t {} -- {} {}", SSH_OPTS.join(" "), shell_quote(&machine.ssh_host), shell_quote(&remote))
 }
 
 /* ------------------------------------------------------------- readiness */
@@ -284,15 +293,6 @@ fn parse_probe(out: &str) -> BTreeMap<String, String> {
 pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     let checkout = workspace_root.map(|root| machine.remote_checkout(root));
     let started = Instant::now();
-    let output = Command::new("ssh")
-        .args(SSH_OPTS)
-        .arg("-o")
-        .arg("ConnectTimeout=6")
-        .arg(&machine.ssh_host)
-        .arg(probe_script(checkout.as_deref()))
-        .stdin(std::process::Stdio::null())
-        .output();
-    let elapsed = started.elapsed();
     let mut status = MachineStatus {
         id: machine.id.clone(),
         label: machine.label().to_string(),
@@ -303,6 +303,23 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         checkout: checkout.clone(),
         setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
+    // Re-validate at the point of use: the store is plain JSON, and a host
+    // starting with `-` would be read as an ssh option (e.g. ProxyCommand).
+    if let Err(e) = validate_ssh_host(&machine.ssh_host) {
+        status.caption = "Invalid SSH host".into();
+        status.facts.push(fact("Reached", e, "bad", None));
+        return status;
+    }
+    let output = Command::new("ssh")
+        .args(SSH_OPTS)
+        .arg("-o")
+        .arg("ConnectTimeout=6")
+        .arg("--")
+        .arg(&machine.ssh_host)
+        .arg(probe_script(checkout.as_deref()))
+        .stdin(std::process::Stdio::null())
+        .output();
+    let elapsed = started.elapsed();
     let out = match output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
         Ok(out) => {
@@ -452,6 +469,32 @@ mod tests {
     }
 
     #[test]
+    fn ssh_host_rule_is_shared_and_rejects_options() {
+        assert!(validate_ssh_host("klide-box").is_ok());
+        assert!(validate_ssh_host("user@192.0.2.1").is_ok());
+        assert!(validate_ssh_host("[2001:db8::1]").is_ok());
+        for host in ["-oProxyCommand=evil", "-o", ""] {
+            assert!(validate_ssh_host(host).is_err(), "{host}");
+        }
+    }
+
+    #[test]
+    fn remote_spawn_command_separates_host_from_options() {
+        let machine = box_machine();
+        let cmd = remote_spawn_command(&machine, "/Users/me/src/app", "ses_1", "claude", &[]);
+        assert!(cmd.contains(" -- 'klide-box' "), "{cmd}");
+    }
+
+    #[test]
+    fn check_refuses_an_option_host_without_spawning_ssh() {
+        let mut machine = box_machine();
+        machine.ssh_host = "-oProxyCommand=evil".into();
+        let status = check(&machine, None);
+        assert!(!status.ready);
+        assert!(status.facts.iter().any(|f| f.tone == "bad" && f.value.contains("SSH alias")));
+    }
+
+    #[test]
     fn settings_updates_preserve_other_machines_and_refuse_corrupt_stores() {
         let directory = std::env::temp_dir().join(format!("klide-machine-settings-{}-{}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
@@ -496,7 +539,7 @@ mod tests {
         // Strip `ssh … 'host' ` locally exactly as the local shell would: ask sh.
         let words = Command::new("sh")
             .arg("-c")
-            .arg(format!("set -- {}; shift 10; printf '%s' \"$1\"", cmd.trim_start_matches("ssh ")))
+            .arg(format!("set -- {}; shift 11; printf '%s' \"$1\"", cmd.trim_start_matches("ssh ")))
             .output()
             .unwrap();
         let remote = String::from_utf8(words.stdout).unwrap();
