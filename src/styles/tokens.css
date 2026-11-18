@@ -43,17 +43,24 @@
   --accent:       #5A7B4C;
   --accent-soft:  rgba(90, 123, 76, 0.12);
   --accent-hover: #6B8E5A;
+  /* Accent darkened for *text*: small labels in the accent hue must pass
+     4.5:1 (WCAG 1.4.3) and the raw accent only clears 4.44:1 on --bg. */
+  --accent-strong: #537247;
 
   /* Controls */
   --control-primary-bg: #1c1c1c;
   --control-primary-fg: #FFFFFF;
 
-  /* Focus ring (for accessibility on inputs/interactive elements) */
-  --focus-ring:   rgba(90, 123, 76, 0.32);
+  /* Focus ring (for accessibility on inputs/interactive elements). Solid
+     accent: every theme's accent measures >=3:1 on both --bg and
+     --bg-elevated, so the keyboard-focus indicator satisfies WCAG 1.4.11
+     non-text contrast in light and dark themes alike. */
+  --focus-ring:   var(--accent);
 
-  /* Status (muted, not saturated) */
-  --success:      #5A7B4C;
-  --warning:      #B5832E;
+  /* Status (muted, not saturated). Values are tuned to >=4.5:1 on both light
+     surfaces because status colors are also used as text. */
+  --success:      #58794A;
+  --warning:      #916925;
   --danger:       #A8514A;
 
   /* Diff add/remove — the classic code-review green/red (GitHub's), apart
@@ -112,7 +119,7 @@
   --code-keyword: #7A5AF5;
   --code-string:  #2F9E64;
   --code-number:  #C2772E;
-  --code-comment: rgba(28, 28, 28, 0.4);
+  --code-comment: rgba(28, 28, 28, 0.62);
 
   /* Terminal — same family as the canvas, slightly cooler for contrast */
   --terminal-bg:      #FFFFFF;
@@ -264,13 +271,14 @@
   --accent:       #7C9082;
   --accent-soft:  rgba(124, 144, 130, 0.16);
   --accent-hover: #8CA192;
+  /* Muted sage reads only 3.15:1 as text; this darker take clears 4.5:1. */
+  --accent-strong: #5C7052;
 
   --control-primary-bg: #1A1F2E;
   --control-primary-fg: #FFFFFF;
-  --focus-ring:   rgba(124, 144, 130, 0.34);
 
-  --success:      #6E8A76;
-  --warning:      #A8842F;
+  --success:      #5F7765;
+  --warning:      #8A6C27;
   --danger:       #A85B52;
 
   --diff-add:     #1A7F37;
@@ -281,7 +289,7 @@
   --diff-remove-word: rgba(255, 90, 80, 0.30);
   --modal-scrim:  rgba(26, 31, 46, 0.30);
 
-  --code-comment: rgba(26, 31, 46, 0.42);
+  --code-comment: rgba(26, 31, 46, 0.62);
 
   --terminal-bg:      #FFFFFF;
   --terminal-fg:      #1A1F2E;
@@ -321,10 +329,11 @@
   --accent:       #8FAA97;
   --accent-soft:  rgba(143, 170, 151, 0.16);
   --accent-hover: #A0BAA7;
+  /* Already 6.85:1 as text on the elevated surface. */
+  --accent-strong: var(--accent);
 
   --control-primary-bg: #EDEFEC;
   --control-primary-fg: #131512;
-  --focus-ring:   rgba(143, 170, 151, 0.36);
 
   --success:      #8FAA97;
   --warning:      #D0A85C;
@@ -339,7 +348,7 @@
   --bg-panel:     var(--bg-elevated);
   --modal-scrim:  rgba(0, 0, 0, 0.55);
 
-  --code-comment: #6E756F;
+  --code-comment: #79817A;
 
   --terminal-bg:      #0F110E;
   --terminal-fg:      #E5E8E4;
@@ -379,10 +388,16 @@
   --accent:       #8EA2FF;
   --accent-soft:  #242B45;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* Already 7.49:1 as text on the elevated surface. */
+  --accent-strong: var(--accent);
 
-  /* The :root default is near-black at 40% — invisible on a dark surface.
-     Every dark theme owes itself an override. */
-  --code-comment: #6E6C66;
+  /* The :root default is near-black at 62% — invisible on a dark surface.
+     Every dark theme owes itself an override. Status colors likewise need
+     dark-surface values (>=4.5:1) because they are also used as text. */
+  --code-comment: #7F7C75;
+  --success:      #688D57;
+  --warning:      #B5832E;
+  --danger:       #CA6159;
 
   --diff-add:     #3FB950;
   --diff-remove:  #F85149;
@@ -433,8 +448,13 @@
   --accent:       #007ACC;
   --accent-soft:  #04395E;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* VS Code blue lightened for text: the stock accent reads 3.40:1. */
+  --accent-strong: #379BFF;
 
   --code-comment: #6A9955;
+  --success:      #719A5F;
+  --warning:      #B5832E;
+  --danger:       #DE746C;
 
   --diff-add:     #3FB950;
   --diff-remove:  #F85149;
@@ -484,6 +504,8 @@
   --accent:       #0969DA;
   --accent-soft:  #DDF4FF;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* Already 5.19:1 as text on the elevated surface. */
+  --accent-strong: var(--accent);
 
   --control-primary-bg: #1F2328;
   --control-primary-fg: #FFFFFF;
@@ -524,13 +546,14 @@
   --accent:       #2596BE;
   --accent-soft:  rgba(37, 150, 190, 0.12);
   --accent-hover: #1E80A3;
+  /* Cerulean reads 3.14:1 as text; a deeper sea blue clears 4.5:1. */
+  --accent-strong: #16719A;
 
   --control-primary-bg: #1C1B18;
   --control-primary-fg: #FFFFFF;
-  --focus-ring:   rgba(37, 150, 190, 0.32);
 
-  --success:      #3E8A66;
-  --warning:      #AE7B26;
+  --success:      #387E5D;
+  --warning:      #946920;
   --danger:       #B5524B;
 
   --diff-add:     #1A7F37;
@@ -543,7 +566,7 @@
 
   --lane-2: #7FA38A;
 
-  --code-comment: rgba(28, 27, 24, 0.42);
+  --code-comment: rgba(28, 27, 24, 0.62);
 
   --terminal-bg:      #FFFFFF;
   --terminal-fg:      #1C1B18;
@@ -597,8 +620,14 @@
   --accent:       #B58900;
   --accent-soft:  #2E4C3B;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* Solarized yellow lightened for text: the stock accent reads 4.05:1 on
+     the elevated surface. */
+  --accent-strong: #CBA536;
 
-  --code-comment: #657B83;
+  --code-comment: #79949D;
+  --success:      #7AA667;
+  --warning:      #C79033;
+  --danger:       #F4756B;
 
   --diff-add:     #3FB950;
   --diff-remove:  #F85149;
@@ -681,12 +710,12 @@ button:active {
 button:focus-visible,
 select:focus-visible,
 input:focus-visible:not(.klide-cmd-input) {
-  outline: 2px solid var(--accent-soft) !important;
+  outline: 2px solid var(--focus-ring) !important;
   outline-offset: 1px;
 }
 
 textarea:focus-visible:not(.inputarea):not(.xterm-helper-textarea):not(.klide-diff-comment-input):not(.klide-composer-textarea) {
-  outline: 2px solid var(--accent-soft) !important;
+  outline: 2px solid var(--focus-ring) !important;
   outline-offset: 1px;
 }
 
@@ -706,7 +735,7 @@ input.klide-bare-filter:focus-visible {
 [role="tab"]:focus-visible,
 [role="option"]:focus-visible,
 [tabindex]:not([tabindex="-1"]):focus-visible {
-  outline: 2px solid var(--accent-soft);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
   border-radius: var(--radius-sm);
 }
@@ -867,7 +896,7 @@ select.klide-field {
 }
 
 .klide-diff-comment-input::placeholder {
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
 }
 
 .klide-diff-comment-input:focus {
@@ -1723,7 +1752,7 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-welcome {
   --w-fg:          #eef2f8;
   --w-dim:         rgba(238, 242, 248, 0.56);
-  --w-faint:       rgba(238, 242, 248, 0.34);
+  --w-faint:       rgba(238, 242, 248, 0.50);
   --w-ghost:       rgba(238, 242, 248, 0.20);
   --w-glass:       rgba(255, 255, 255, 0.045);
   --w-glass-hover: rgba(255, 255, 255, 0.085);
@@ -1760,7 +1789,7 @@ textarea.klide-diff-comment-input:focus-visible {
 :root[data-theme="cerulean"] .klide-welcome {
   --w-fg:          #1c1c1c;
   --w-dim:         rgba(28, 28, 28, 0.62);
-  --w-faint:       rgba(28, 28, 28, 0.42);
+  --w-faint:       rgba(28, 28, 28, 0.62);
   --w-ghost:       rgba(28, 28, 28, 0.14);
   --w-glass:       rgba(20, 22, 30, 0.045);
   --w-glass-hover: rgba(20, 22, 30, 0.08);
@@ -2190,7 +2219,7 @@ textarea.klide-diff-comment-input:focus-visible {
   font-size: 10.5px;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
   white-space: nowrap;
 }
 
@@ -2207,7 +2236,7 @@ textarea.klide-diff-comment-input:focus-visible {
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.03em;
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
   white-space: nowrap;
 }
 
@@ -4435,7 +4464,7 @@ button:focus-visible .menu-leadout {
    offset keeps the ring inside the scroll container so the top/bottom
    rows aren't clipped by overflow: auto. */
 .klide-explorer-row:focus-visible {
-  outline: 2px solid var(--accent-soft);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -5106,7 +5135,7 @@ button:focus-visible .menu-leadout {
 }
 
 .klide-focus-brand-search::placeholder {
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
 }
 
 .klide-focus-brand-search:focus {
@@ -5305,11 +5334,12 @@ button:focus-visible .menu-leadout {
 
 /* Empty states read as quiet sentences, not as rows. An expanded-but-empty
    project gets the indent but no trunk — a tree line with nothing hanging off
-   it looks unfinished, so the indent alone carries the nesting. */
+   it looks unfinished, so the indent alone carries the nesting. --fg-subtle,
+   not --fg-dim: this is a sentence a person reads, and 12px must pass 4.5:1. */
 .klide-focus-rail-empty {
   margin: 2px 0 6px;
   padding: 0 var(--rail-row-pad);
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -5623,7 +5653,7 @@ button:focus-visible .menu-leadout {
 
 /* The words inside arrive once the field has mostly opened. */
 .klide-rail-search::placeholder {
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
   opacity: 0;
   transition: opacity 200ms var(--rail-search-fade);
 }
@@ -7162,7 +7192,7 @@ input.klide-rail-search:focus-visible {
 }
 
 .klide-cmd-input::placeholder {
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
 }
 
 /* Exempt by name from the global input ring (see `input:focus-visible`):
@@ -7657,6 +7687,40 @@ input.klide-rail-search:focus-visible {
   -webkit-backdrop-filter: var(--composer-blur);
   transform: translateZ(0);
   animation: klide-focus-git-island-in 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+/* The CLI sign-in window: same glass panel as the other Klide dialogs
+   (.klide-skills / .klide-worktrees), sized for a terminal. */
+.klide-login-dialog {
+  width: min(880px, calc(100vw - 80px));
+  height: min(580px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--composer-border);
+  border-radius: 16px;
+  background: var(--composer-glass);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  backdrop-filter: var(--composer-blur);
+  -webkit-backdrop-filter: var(--composer-blur);
+  box-shadow: inset 0 1px 0 var(--panel-highlight), var(--panel-shadow);
+  transform: translateZ(0);
+  animation: klide-cmd-in 250ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.klide-login-dialog .klide-login-head {
+  height: 40px;
+  padding: 0 8px 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 @keyframes klide-worktrees-fade {
@@ -8566,30 +8630,32 @@ input.klide-rail-search:focus-visible {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent);
+  color: var(--accent-strong);
   font-family: var(--font-ui);
   font-size: 10.5px;
   font-weight: 400;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0.55;
   cursor: pointer;
-  transition:
-    opacity var(--motion-slow) var(--ease-soft),
-    color var(--motion-slow) var(--ease-soft);
+  transition: color var(--motion-slow) var(--ease-soft);
 }
 
+/* The label is meaningful text (it names the live review policy), so it
+   carries no opacity dimming — 10.5px text must hold 4.5:1 (WCAG 1.4.3),
+   and both --accent-strong and --fg-subtle clear that on every theme's
+   surfaces (focus-contrast.test.mjs). Hover affordance is an underline
+   rather than a transparency shift, which would break that ratio. */
 .klide-ai-mode-note:hover,
 .klide-ai-mode-note:focus-visible {
-  opacity: 0.92;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* The review rung — the default policy wears the branch label's monochrome,
    leaving the accent to mean "a gate is silenced". */
 .klide-ai-mode-note--muted {
   color: var(--fg-subtle);
-  opacity: 0.38;
 }
 
 /* Each cycle morphs rather than snaps: the leaving label's color eases on the
@@ -8800,7 +8866,6 @@ input.klide-rail-search:focus-visible {
 
 .klide-focus-composer textarea::placeholder {
   color: var(--fg-subtle);
-  opacity: 0.7;
 }
 
 .klide-focus-composer textarea:focus-visible {

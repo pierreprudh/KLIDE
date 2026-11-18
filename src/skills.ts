@@ -359,7 +359,10 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
   };
   let raw: FileSystemSkill[] = [];
   try {
-    raw = await invoke<FileSystemSkill[]>("list_filesystem_skills", { workspaceRoot });
+    // `?? []` for a backend that resolves null (or any non-array) instead of
+    // rejecting: the catch below only covers the rejection path, and a null
+    // result would throw at `raw.map` below as an unhandled rejection.
+    raw = (await invoke<FileSystemSkill[]>("list_filesystem_skills", { workspaceRoot })) ?? [];
   } catch {
     return [];
   }
