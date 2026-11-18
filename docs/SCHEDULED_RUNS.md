@@ -74,8 +74,9 @@ background commands with `read_command_output` when appropriate.
 
 ## Watch CI (event trigger)
 
-Mission Control › Scheduled also holds **Watch CI on my pull requests**, one
-switch per Workspace (`agent/ci_watch.rs`). The scheduled service polls
+Mission Control › Scheduled lists **Watch CI** under Triggers, below the
+schedules, one per Workspace (`agent/ci_watch.rs`). Selecting it shows its
+switch, agent and model in the detail pane and its firings under Run history. The scheduled service polls
 `gh pr list --author @me` every two minutes for each watched Workspace. A check
 that failed *after* the switch was turned on starts one Run per failing commit
 (PR number + head SHA), at most three per poll. A commit never fires twice.
@@ -83,12 +84,12 @@ that failed *after* the switch was turned on starts one Run per failing commit
 The Run is always Plan mode: standalone, read-only, with no command authority,
 whatever the captured template said. Its prompt names the failing checks and
 carries an excerpt of `gh run view --log-failed`, ending at the last
-`##[error]` line and fenced as CI data, not instructions. The model is the
-default at the moment the switch was turned on.
+`##[error]` line and fenced as CI data, not instructions. It runs on the agent and model picked in the detail pane (the composer's
+provider menu and model picker); changing them keeps the watch's start time.
 
 The service posts a macOS notification (via `osascript`, so macOS lists it
 under Script Editor; clicking it does not open Klide yet). The app turns each
-firing into a toast with **Open**, and the row lists recent firings. State is
+firing into a toast with **Open**, and Run history lists recent firings. State is
 `ci-watch.json` in app data, shared by the app and the service under
 `ci-watch.lock`.
 

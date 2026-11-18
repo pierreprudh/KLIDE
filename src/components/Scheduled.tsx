@@ -18,7 +18,7 @@ import { ChevronIcon, ClockIcon, MoreIcon, NewTaskIcon, OpenInEditorIcon, PauseI
 import { ScheduleSelect, type ScheduleSelectOption } from "./ScheduleSelect";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { formatSpan } from "../time";
-import { CiWatchBar } from "./missionControl/CiWatchBar";
+import { CI_WATCH_ID, CiWatchDetail, CiWatchHistory, CiWatchListRow, useCiWatch } from "./missionControl/ciWatch";
 import { agentSourceLabel, useAgentOptions } from "./agentOptions";
 import { scheduledRunInput } from "../agent/scheduledRunInput";
 import "./scheduled.css";
@@ -56,6 +56,8 @@ export function Scheduled(props: Props) {
   const editorOpener = useRef<HTMLButtonElement | null>(null);
   const actionsTrigger = useRef<HTMLButtonElement | null>(null);
   const selected = rows.find(row => row.id === selectedId);
+  const ciWatch = useCiWatch(props.workspaceRoot, props.defaultProvider, props.defaultModel, props.harnessSettings);
+  const ciSelected = selectedId === CI_WATCH_ID && !creating && !!props.workspaceRoot;
 
   useEffect(() => { if (props.initialSelectedId) { setSelectedId(props.initialSelectedId); setCreating(false); setEditing(false); } }, [props.initialSelectedId, props.selectionVersion]);
   useEffect(() => {
@@ -91,11 +93,11 @@ export function Scheduled(props: Props) {
   }, []);
   useEffect(() => { setHistory([]); setMenu(null); }, [selectedId]);
   useEffect(() => {
-    if (!loading && !creating && !rows.some(row => row.id === selectedId) && rows.length) setSelectedId(rows[0].id);
+    if (!loading && !creating && selectedId !== CI_WATCH_ID && !rows.some(row => row.id === selectedId) && rows.length) setSelectedId(rows[0].id);
   }, [rows, loading, creating, selectedId]);
   useEffect(() => {
     let disposed = false;
-    if (selectedId) void scheduleHistory(selectedId).then(rows => { if (!disposed) setHistory(rows); }).catch(e => { if (!disposed) setError(errMessage(e)); });
+    if (selectedId && selectedId !== CI_WATCH_ID) void scheduleHistory(selectedId).then(rows => { if (!disposed) setHistory(rows); }).catch(e => { if (!disposed) setError(errMessage(e)); });
     return () => { disposed = true; };
   }, [selectedId, historyVersion]);
 
@@ -136,7 +138,6 @@ export function Scheduled(props: Props) {
       </button>
     </header>
     {error ? <p className="scheduled-error" role="alert">{error}</p> : null}
-    {props.workspaceRoot ? <CiWatchBar workspaceRoot={props.workspaceRoot} provider={props.defaultProvider} model={props.defaultModel} settings={props.harnessSettings} onOpenRun={props.onOpenRun} /> : null}
     <div className="scheduled-body">
       <nav className="scheduled-pane scheduled-list" aria-label="Schedules">
         <div className="scheduled-pane-heading"><h2>Schedules</h2>{rows.length > 0 && <span>{rows.length}</span>}</div>
@@ -148,6 +149,11 @@ export function Scheduled(props: Props) {
             <span className="scheduled-list-row-top"><strong>{row.name}</strong><span data-failed={row.status === "failed" || undefined}>{statusName(row.status)}</span></span>
             <span className="scheduled-list-row-meta">{cadence(row.intervalMs)}<span aria-hidden="true"> · </span>{workspaceName(row.workspaceRoot)}</span>
           </button>)}
+          {props.workspaceRoot ? <>
+            <div className="scheduled-pane-heading scheduled-subheading"><h2>Triggers</h2></div>
+            <CiWatchListRow watch={ciWatch} project={workspaceName(props.workspaceRoot)} current={ciSelected}
+              onSelect={() => { setSelectedId(CI_WATCH_ID); setCreating(false); setEditing(false); setError(null); setMenu(null); }} />
+          </> : null}
         </div>
         <div className="scheduled-local" title={service?.error ?? "The local service works with Klide closed. Your Mac must be awake and you must be logged in. Permissions wait until you reopen Klide."}>
           <ClockIcon size={12} /><span>{!service ? "Checking local service…" : service.installed && service.running && service.compatible ? "This Mac · service running" : service.error ? "Local service needs attention" : "Local service not enabled"}</span>
@@ -157,7 +163,7 @@ export function Scheduled(props: Props) {
         </div>
       </nav>
       <main className="scheduled-pane scheduled-detail">
-        {selected ? <>
+        {ciSelected ? <CiWatchDetail watch={ciWatch} project={workspaceName(props.workspaceRoot)} /> : selected ? <>
           <div className="scheduled-detail-heading">
             <h2>{selected.name}</h2>
             <div className="scheduled-toolbar">
@@ -192,9 +198,9 @@ export function Scheduled(props: Props) {
         </> : <div className="scheduled-empty"><strong>{loading ? "Loading schedules…" : "No schedules yet"}</strong><p>Choose New schedule to get started.</p></div>}
       </main>
       <aside className="scheduled-pane scheduled-history" aria-label="Run history">
-        <div className="scheduled-pane-heading"><h2>Run history</h2>{history.length > 0 && <span>{history.length}</span>}</div>
+        <div className="scheduled-pane-heading"><h2>Run history</h2>{ciSelected ? (ciWatch.info?.fired.length ? <span>{ciWatch.info.fired.length}</span> : null) : history.length > 0 && <span>{history.length}</span>}</div>
         <div className="scheduled-history-scroll klide-scroll-slim">
-          {!history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
+          {ciSelected ? <CiWatchHistory watch={ciWatch} onOpenRun={props.onOpenRun} /> : !history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
             <button type="button" aria-label={`Open Run · ${shortWhen(run.startedAt)} · ${statusName(run.status)}`}
               title={`Scheduled ${when(run.scheduledAt)}${run.finishedAt ? ` · Finished ${when(run.finishedAt)}` : ""}`} onClick={() => props.onOpenRun(run.runId)}>
               <span className="scheduled-history-top"><time dateTime={new Date(run.startedAt).toISOString()}>{shortWhen(run.startedAt)}</time><span data-failed={run.status === "failed" || undefined}>{statusName(run.status)}</span></span>

@@ -239,19 +239,12 @@
   .scheduled-select-menu, .scheduled-select-header > * { transition: none !important; animation: none !important; }
 }
 
-/* Watch CI — one rounded group under the header. */
-.ci-watch { margin: 0 20px 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 20px; background: var(--bg-panel); flex-shrink: 0; }
-.ci-watch-row { display: flex; align-items: flex-start; gap: 16px; }
-.ci-watch-text { flex: 1; min-width: 0; }
-.ci-watch-text h2 { margin: 0 0 4px; font-size: 13px; font-weight: 500; color: var(--fg-strong); }
-.ci-watch-text p { margin: 0; font-size: 12px; color: var(--fg-muted); line-height: 1.5; }
-.ci-watch-agent { display: flex; align-items: center; gap: 4px; margin-top: 10px; margin-left: -6px; min-width: 0; }
-.ci-watch-status { margin-left: auto; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
-.ci-watch-error { margin: 8px 0 0; font-size: 12px; color: var(--danger); }
-.ci-watch-fired { list-style: none; margin: 12px 0 0; padding: 8px 0 0; border-top: 1px solid var(--border); display: grid; gap: 2px; }
-.ci-watch-fired li { display: flex; align-items: center; gap: 10px; min-height: 30px; font-size: 12px; }
-.ci-watch-pr { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
-.ci-watch-checks { flex: 1; min-width: 0; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ci-watch-when { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-.ci-watch-open { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: 12px; background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
-.ci-watch-open:hover { background: var(--bg-hover); }
+/* Watch CI — a Triggers row in the list, settings in the detail pane. */
+.scheduled-subheading { margin-top: 8px; padding: 0 8px; }
+.ci-watch-agent { display: flex; align-items: center; gap: 4px; margin: 10px 0 0 -6px; min-width: 0; }
+.ci-watch-pr { font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-watch-checks { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-history li > button:disabled { cursor: default; opacity: 1; }
+.scheduled-history li > button:disabled:hover { background: transparent; }
+.scheduled-history-top > span:last-child { flex-shrink: 0; white-space: nowrap; }
+.scheduled-history-top > .ci-watch-pr { font-size: 12px; color: var(--fg); }

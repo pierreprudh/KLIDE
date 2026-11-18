@@ -19,9 +19,19 @@ const fired = (n: number, title: string, checks: string[], ago: number, error: s
     : { enabled: true, provider: "anthropic", model: "claude-sonnet-5-5", enabledAt: now - 3600e3, lastPollAt: now - 50e3, lastError: null,
         fired: [fired(552, "Pin dependency audit to high", ["Frontend tests and build"], 4 * 60e3), fired(548, "Rail: hold agent groups", ["Rust tests", "Rust on windows-latest"], 3 * 3600e3), fired(541, "Sandbox network card", ["Review"], 26 * 3600e3, "Add an Anthropic key in Settings")] }) : [],
 };
-const { CiWatchBar } = await import("../src/components/missionControl/CiWatchBar");
+const sched = (id: string, name: string, interval: number | null) => ({ id, revision: 1, target: { kind: "local" }, name, runId: null, activeRunId: null, text: "Review open TODOs and summarize", provider: "claude-code", model: "default", mode: "plan", workspaceRoot: "/Users/pierre/KLIDE", dueAt: now + 3600e3, intervalMs: interval, status: "pending", error: null });
+const realInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, a: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+(window as unknown as { __TAURI_INTERNALS__: { invoke: unknown } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args: unknown) => {
+  if (cmd === "agent_schedule_list") return [sched("a", "Morning triage", 86_400_000), sched("b", "Weekly dependency check", 604_800_000)];
+  if (cmd === "agent_schedule_service_status") return { supported: true, installed: true, running: true, compatible: true, pid: 1, error: null };
+  if (cmd === "agent_schedule_history") return [];
+  return realInvoke(cmd, args);
+};
+const { Scheduled } = await import("../src/components/Scheduled");
+const { CI_WATCH_ID } = await import("../src/components/missionControl/ciWatch");
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <div className="scheduled-page" style={{ background: "var(--bg-panel)", minHeight: "100vh", paddingTop: 16 }}>
-    <CiWatchBar workspaceRoot="/Users/pierre/KLIDE" provider="anthropic" model="claude-sonnet-5-5" settings={{} as never} onOpenRun={() => {}} />
+  <div style={{ height: "100vh", display: "flex", background: "var(--bg-panel)" }}>
+    <Scheduled workspaceRoot="/Users/pierre/KLIDE" defaultProvider="anthropic" defaultModel="claude-sonnet-5-5" harnessSettings={{} as never}
+      initialSelectedId={params.get("select") ?? CI_WATCH_ID} onShowRuns={() => {}} onOpenRun={() => {}} />
   </div>,
 );
