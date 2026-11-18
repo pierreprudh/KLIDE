@@ -7,6 +7,8 @@ pub(crate) struct Lease {
 pub(crate) fn exclusive(path: &Path) -> Result<Lease, String> {
     lock(path, false)?.ok_or("Could not acquire the process lease".into())
 }
+/// Non-blocking on every host: `Ok(None)` when another process holds it.
+
 pub(crate) fn try_exclusive(path: &Path) -> Result<Option<Lease>, String> {
     lock(path, true)
 }
