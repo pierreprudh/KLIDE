@@ -9,7 +9,7 @@ import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon, UndoIcon } from "../.
 import { gitStatusMarkForLetter } from "../../gitStatusMark";
 import { ChangedFileLabel } from "../ChangedFileLabel";
 import { ConfirmButton } from "../ConfirmButton";
-import { formatBytes } from "../settings/storage";
+import { formatBytes } from "../../bytes";
 import { Z } from "../../zLayers";
 import "./completionCard.css";
 

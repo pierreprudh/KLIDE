@@ -23,6 +23,15 @@ export function RemoteRunChanges(props: ComponentProps<typeof RemoteRunChangesIm
   return <Suspense fallback={null}><RemoteRunChangesImpl {...props} /></Suspense>;
 }
 
+// The sign-in dialog hosts a Delegate terminal, so it carries xterm with it.
+const DelegateLoginModalImpl = lazy(() =>
+  import("./settings/DelegateLoginModal").then((m) => ({ default: m.DelegateLoginModal })),
+);
+
+export function DelegateLoginModal(props: ComponentProps<typeof DelegateLoginModalImpl>) {
+  return <Suspense fallback={null}><DelegateLoginModalImpl {...props} /></Suspense>;
+}
+
 export function SpreadsheetViewer(props: ComponentProps<typeof SpreadsheetViewerImpl>) {
   return <Suspense fallback={<div role="status" style={{ position: "fixed", right: 24, bottom: 24, zIndex: 9999 }}>Opening spreadsheet…</div>}><SpreadsheetViewerImpl {...props} /></Suspense>;
 }
