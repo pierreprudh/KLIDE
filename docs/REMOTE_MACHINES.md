@@ -16,11 +16,28 @@ in `CONTEXT.md`.
    Use an SSH alias for custom keys and ports.
 2. In Focus, open **Where it runs › + Add a machine**. Choose Tailscale,
    another VPN or Direct SSH, then choose a device or enter `user@hostname`.
-   SSH confirms the fingerprint and authenticates in the setup terminal.
+   Klide shows a fingerprint confirmation and password or key-passphrase field when needed.
    Background connections need an unlocked key or SSH agent.
+   Use the destination account's username, which can differ from this Mac's.
+   Enter it in **Remote username**, beside **SSH host**. IP addresses cannot
+   continue with an empty username; configured SSH aliases can use their own
+   account. Pasting `user@hostname` fills both fields.
+   If connection fails, edit **SSH host** in the same setup view and retry.
+   A Mac's Remote Login must allow that account; a reachable Tailscale device
+   does not establish SSH access. The popup keeps a fixed frame, with longer
+   device lists split into pages instead of a scrolling setup window.
+   For a Mac or Linux machine that has not authorized this Mac, choose
+   **Enable background access** and enter the remote account's password in
+   the password field. Klide authorizes an existing default public SSH
+   key, or creates an Ed25519 identity when none exists, without replacing
+   existing keys or remote access. It then reconnects; unlock an encrypted
+   key if asked. Private keys stay on this Mac; SSH handles the password
+   without Klide storing it.
 3. Continue through **Install**, **Sign in** and **Project**. Klide detects
-   the destination OS and processor, downloads its checksum-verified helper
-   from the source-specific `host-<commit>` release, and copies it with SFTP.
+   the destination OS and processor, then copies the matching helper with SFTP.
+   A Mac destination with the same processor can use this app's own executable
+   after checking its exact version, protocol and source identity. Other
+   targets download a checksum-verified helper from `host-<commit>` releases.
    No GitHub CLI is needed on the Mac. Advanced setup accepts a matching
    downloaded binary. The helper checks the exact package/protocol/source
    signature and refuses to replace a host with active work.
@@ -65,8 +82,9 @@ resumes; Stop owns that process tree without killing unrelated applications.
 
 The **Native host binaries** workflow builds and smoke-tests every target.
 Windows helpers use the `remote-host` Cargo feature for console stdio and a
-static CRT in release builds. A source-specific release is published only
-after every target passes. Each merge to main builds and publishes matching
+static CRT in release builds. Only helpers that passed their own target's
+checks are published; a failed target cannot suppress the successful ones.
+Each merge to main builds and publishes matching
 release helpers automatically; manual dispatch can publish a development
 revision too. Desktop app signing/notarization is a separate
 release task; these are SSH helpers, not desktop installers.
@@ -161,7 +179,7 @@ work and leaves logins there.
 - **Ubuntu Server**, prepared with `scripts/remote-host/bootstrap.sh`; the same
   script serves a rented server (`cloud-init.yaml`) or a home PC (`--home`).
 - **SSH only through Tailscale.** No public SSH.
-- **Machine logins stay on the machine.** Klide never copies a key or a CLI
+- **Machine logins stay on the machine.** Klide never copies a private key or a CLI
   login to it.
 - **Remote checkout cloned once, a worktree per Run.**
 - **One Remote machine** for the first slice.
@@ -381,10 +399,30 @@ creates the stable ID. Setup can be saved while the machine is switched off.
 Cloud servers and self-hosted Linux computers use the same SSH connection.
 
 Continue setup guides connection → installation → remote Claude sign-in →
-project → readiness. A native embedded SSH terminal handles host fingerprints,
-key passphrases and sudo prompts. Klide uses `~/.ssh/config` and an unlocked
+project → readiness. Setup runs in the background. Host fingerprints,
+passwords, key passphrases and common confirmations use form controls; Claude
+and GitHub sign-in offer a browser button and code field. **Show details**
+opens read-only logs. An unrecognized interactive prompt offers an explicit
+**Open interactive prompt** action; it never opens a terminal automatically. Klide uses `~/.ssh/config` and an unlocked
 key/agent for unattended connections; it does not store SSH passwords or copy
 Mac logins. Changed host keys are never accepted automatically.
+
+The popup and Settings use the same setup controls. Completed steps remain
+clickable on a ready machine, so connection details, installation, sign-in and
+the project can be revisited. Later steps remain unavailable until their
+prerequisites are verified. Switching steps saves the current connection or
+project edit, and **Save for later** saves before closing. Settings uses the
+same separate SSH host and remote username fields, follows popup saves, and
+preserves unfinished edits when another machine changes. Rename, advanced
+details and removing saved machines remain in Settings.
+
+A logo checklist shows SSH, the Klide helper, Claude Code, GitHub and the
+project. Remote checks refresh during connected setup actions, distinguishing
+installed tools from validated sign-ins. GitHub is optional and does not block
+Claude tasks. A running installer or sign-in keeps its current panel while
+checklist facts update, so a successful intermediate check cannot cancel it.
+An animated marker follows the current step along the checklist rail and
+respects reduced-motion preferences.
 
 The Ubuntu 24.04+ / Debian 13+ x86_64 preparation action installs Git, curl, GitHub CLI,
 WebKitGTK runtime libraries and the official Claude native installer. It then
@@ -399,7 +437,7 @@ the remote machine. It does not report the machine as ready.
 For the open Workspace, choose an existing remote checkout path or save a
 new destination and clone the local project's origin. Other Workspace mappings
 are preserved. Private repositories use remote credentials, with an optional
-GitHub sign-in terminal. Existing destinations are never overwritten; local
+GitHub sign-in step. Existing destinations are never overwritten; local
 files and credential-bearing origin URLs are not copied. The only currently
 supported remote Delegate is Claude Code. Readiness is rechecked after actions.
 

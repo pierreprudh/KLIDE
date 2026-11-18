@@ -2,6 +2,7 @@
 //! credentials cross the IPC boundary or get copied from this Mac.
 use portable_pty::CommandBuilder;
 use serde::Deserialize;
+mod ssh_key;
 
 // Closing setup must terminate SSH even while its PTY reader is still open.
 // This registry belongs only to setup, never to detached remote Runs.
@@ -48,6 +49,7 @@ pub async fn machine_setup_close(app: tauri::AppHandle, id: String) -> Result<()
 #[serde(rename_all = "camelCase")]
 pub enum SetupAction {
     Connect,
+    Authorize,
     Prepare,
     SignIn,
     GitHub,
@@ -65,6 +67,7 @@ fn script(
     }
     let body = match action {
         SetupAction::Connect => "echo SSH connected".into(),
+        SetupAction::Authorize => return Err("SSH authorization must use a local public key".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.sh").into(),
         SetupAction::SignIn => "exec claude auth login".into(),
         SetupAction::GitHub => {
@@ -94,6 +97,7 @@ fn windows_script(
     use crate::remote_platform::{ps_path, ps_quote, WINDOWS_PATH};
     let body=match action {
         SetupAction::Connect => "Write-Output 'SSH connected'".into(),
+        SetupAction::Authorize => return Err("Use an existing authorized SSH key for Windows machines".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.ps1").into(),
         SetupAction::SignIn => "& claude auth login; exit $LASTEXITCODE".into(),
         SetupAction::GitHub => "& gh auth login --hostname github.com --git-protocol https --web; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & gh auth setup-git; exit $LASTEXITCODE".into(),
@@ -145,6 +149,7 @@ pub async fn machine_setup_spawn(
     workspace_root: Option<String>,
     rows: u16,
     cols: u16,
+    target: Option<crate::remote_platform::HostTarget>,
 ) -> Result<(), String> {
     crate::blocking::run(move || {
         use tauri::Manager;
@@ -154,6 +159,14 @@ pub async fn machine_setup_spawn(
         let remote = if matches!(action, SetupAction::Connect) {
             // Trust/authentication must happen before any batch-mode probe.
             "echo SSH connected".to_string()
+        } else if matches!(action, SetupAction::Authorize) {
+            let os = target.map(|target| target.os).unwrap_or_default();
+            if os == crate::remote_platform::HostOs::Windows {
+                return Err("Use an existing authorized SSH key for Windows machines".into());
+            }
+            let home = crate::cli::home_dir_path().ok_or("Could not find your SSH directory")?;
+            let key = ssh_key::local_public_key(&home.join(".ssh"))?;
+            os.command(&ssh_key::authorization_script(&key)?)
         } else {
             let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
             os.command(&script(&action, &machine, workspace_root.as_deref(), os)?)

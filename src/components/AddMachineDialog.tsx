@@ -1,15 +1,16 @@
 import { lazy, Suspense, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { CloseIcon } from "../icons";
-import type { Machine } from "../ipc/machines";
+import type { Machine, MachineConnectionMethod } from "../ipc/machines";
 import { MachineSetupWaiting } from "./settings/MachineSetupWaiting";
 import "./settings/machineSetupDialog.css";
 
 const AddMachineForm = lazy(() => import("./settings/AddMachineForm"));
 
 /** The shell opens immediately; SSH setup and the terminal load inside it. */
-export function AddMachineDialog({ workspaceRoot, onClose, onSaved }: {
+export function AddMachineDialog({ workspaceRoot, onClose, onSaved, initialMethod }: {
   workspaceRoot: string | null; onClose: () => void; onSaved?: (machines: Machine[]) => void;
+  initialMethod?: MachineConnectionMethod;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
@@ -19,6 +20,6 @@ export function AddMachineDialog({ workspaceRoot, onClose, onSaved }: {
   }, []);
   return createPortal(<dialog ref={dialog} className="klide-add-machine-dialog" aria-labelledby="klide-add-machine-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
     <header><h2 id="klide-add-machine-title">Add a machine</h2><button type="button" className="klide-add-machine-close" aria-label="Close add machine" onClick={onClose}><CloseIcon size={18} /></button></header>
-    <div className="klide-add-machine-body"><Suspense fallback={<MachineSetupWaiting>Opening machine setup</MachineSetupWaiting>}><AddMachineForm workspaceRoot={workspaceRoot} onClose={onClose} onSaved={onSaved} /></Suspense></div>
+    <div className="klide-add-machine-body"><Suspense fallback={<MachineSetupWaiting>Opening machine setup</MachineSetupWaiting>}><AddMachineForm workspaceRoot={workspaceRoot} onClose={onClose} onSaved={onSaved} initialMethod={initialMethod} /></Suspense></div>
   </dialog>, document.body);
 }

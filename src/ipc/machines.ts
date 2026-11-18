@@ -31,6 +31,7 @@ export type MachineStatus = {
     connection: "connected" | "offline" | "needsTrust" | "needsAuthentication" | "unsupported";
     host: "ready" | "outdated" | "missing" | "unknown";
     claude: "ready" | "needsLogin" | "missing" | "unknown";
+    github?: "ready" | "needsLogin" | "missing" | "unknown";
     project: "ready" | "missing" | "unknown" | "notSelected";
   };
 };
@@ -69,7 +70,7 @@ export async function machineRemove(id: string): Promise<Machine[]> {
   return machines;
 }
 
-export type MachineSetupAction = "connect" | "prepare" | "signIn" | "gitHub" | "clone";
+export type MachineSetupAction = "connect" | "authorize" | "prepare" | "signIn" | "gitHub" | "clone";
 
 /** Explicit setup action; omitted binaryPath downloads this revision's public helper. */
 export async function machineInstallHost(id: string, binaryPath?: string): Promise<void> {

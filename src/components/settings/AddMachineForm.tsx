@@ -6,13 +6,16 @@ import { MachineConnectionPicker } from "./MachineConnectionPicker";
 import { MachineSetup } from "./MachineSetup";
 import { MachineSetupWaiting } from "./MachineSetupWaiting";
 import { GhostButton } from "./controls";
+import { MachineSshFields } from "./MachineSshFields";
+import { canConnectSshAddress } from "./machineSshAddress";
 import "./machines.css";
 
-export default function AddMachineForm({ workspaceRoot, onClose, onSaved }: {
+export default function AddMachineForm({ workspaceRoot, onClose, onSaved, initialMethod }: {
   workspaceRoot: string | null; onClose: () => void; onSaved?: (machines: Machine[]) => void;
+  initialMethod?: MachineConnectionMethod;
 }) {
   const [id] = useState(() => `machine-${crypto.randomUUID()}`);
-  const [method, setMethod] = useState<MachineConnectionMethod | null>(null);
+  const [method, setMethod] = useState<MachineConnectionMethod | null>(initialMethod ?? null);
   const [enteringHost, setEnteringHost] = useState(false);
   const [host, setHost] = useState("");
   const [label, setLabel] = useState("");
@@ -42,7 +45,7 @@ export default function AddMachineForm({ workspaceRoot, onClose, onSaved }: {
     setHost(candidate.sshHost); setLabel(candidate.label); setEnteringHost(true);
   }
   async function save() {
-    if (saving) return;
+    if (saving || !canConnectSshAddress(host)) return;
     setSaving(true); setError("");
     const next: Machine = { id, label: label.trim() || host.trim(), sshHost: host.trim(), checkouts: {} };
     try {
@@ -68,15 +71,22 @@ export default function AddMachineForm({ workspaceRoot, onClose, onSaved }: {
     setMachine(next); onSaved?.(machines);
     refreshMachineStatus(next.id, workspaceRoot, { force: true });
   }
+  async function connection(sshHost: string) {
+    if (!machine) return;
+    const next = { ...machine, sshHost };
+    const machines = await machineSave(next, false);
+    setMachine(next); onSaved?.(machines);
+    refreshMachineStatus(next.id, workspaceRoot, { force: true });
+  }
   return <>
     {!machine && !enteringHost ? <MachineConnectionPicker method={method} onMethod={setMethod} onSelect={choose} onManual={() => { setHost(""); setLabel(""); setError(""); setEnteringHost(true); }} onClose={onClose} /> : !machine ? <form className="klide-add-machine-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <p>{method === "tailscale" ? "Enter the Tailscale name or IP and your remote username." : method === "vpn" ? "Enter the machine’s private address while your VPN is connected." : "Connect a Linux machine over SSH to run tasks while your Mac is off."}</p>
-      <label>SSH host<input ref={input} className="klide-field" required value={host} onChange={(event) => setHost(event.target.value)} disabled={saving} placeholder="user@hostname or SSH alias" autoCapitalize="none" spellCheck={false} /></label>
+      <p>{method === "tailscale" ? "Enter the Tailscale name or IP and your remote username." : method === "vpn" ? "Enter the machine’s private address while your VPN is connected." : "Connect a Mac, Windows or Linux machine over SSH to run tasks while your Mac is off."}</p>
+      <MachineSshFields inputRef={input} value={host} onChange={setHost} disabled={saving} />
       <label>Display name (optional)<input className="klide-field" value={label} onChange={(event) => setLabel(event.target.value)} disabled={saving} placeholder="My server" /></label>
       <p>Use your existing SSH keys and config. You can save the setup even if the machine is offline.</p>
       {saving && <MachineSetupWaiting>Saving your machine</MachineSetupWaiting>}
-      <footer><GhostButton disabled={saving} onClick={() => { setError(""); setEnteringHost(false); }}>Back</GhostButton><GhostButton onClick={onClose}>Cancel</GhostButton><button className="klide-button klide-button-secondary" type="submit" disabled={saving}>Continue</button></footer>
-    </form> : checking && !status ? <MachineSetupWaiting>Checking SSH connection to {machine.sshHost}</MachineSetupWaiting> : <MachineSetup key={machine.id} machine={machine} status={status} checking={checking} workspaceRoot={workspaceRoot} onCheck={() => setRevision((value) => value + 1)} onInstall={install} onProject={project} onClose={onClose} />}
+      <footer><GhostButton disabled={saving} onClick={() => { setError(""); setEnteringHost(false); }}>Back</GhostButton><GhostButton onClick={onClose}>Cancel</GhostButton><button className="klide-button klide-button-secondary" type="submit" disabled={saving || !canConnectSshAddress(host)}>Continue</button></footer>
+    </form> : checking && !status ? <MachineSetupWaiting>Checking SSH connection to {machine.sshHost}</MachineSetupWaiting> : <MachineSetup key={machine.id} machine={machine} status={status} checking={checking} workspaceRoot={workspaceRoot} onCheck={() => setRevision((value) => value + 1)} onInstall={install} onProject={project} onConnection={connection} onClose={onClose} />}
     {error && <p className="klide-add-machine-error" role="alert">{error}</p>}
   </>;
 }

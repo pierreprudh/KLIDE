@@ -30,6 +30,7 @@ export type WhereItRunsMenu = {
   leading: ReactNode;
   options: { label: string; value: string; icon: ReactNode; dimmed?: boolean; resolve?: { title: string; run: () => void; showArrow?: boolean } }[];
   selected: string;
+  onOpen: () => void;
   onSelect: (value: string | number | undefined) => void;
 };
 
@@ -98,7 +99,8 @@ export function useWhereItRuns({
     const check = machineStatusCheck(m.id, workspaceRoot);
     if (check?.state === "failed") return { why: check.error };
     const status = lastKnownStatus(check);
-    if (!status || status.ready) return null;
+    if (!status) return { why: "Checking SSH connection…" };
+    if (status.ready) return null;
     return { why: status.caption };
   };
 
@@ -117,6 +119,7 @@ export function useWhereItRuns({
       { label: "Add a machine", value: "action:add-machine", icon: <NewTaskIcon size={14} />, resolve: { title: "Add an SSH machine", run: onAddMachine, showArrow: false } },
     ],
     selected: chosen ? chosen.id : THIS_MAC,
+    onOpen: () => { for (const m of machines) refreshMachineStatus(m.id, workspaceRoot, { force: true }); },
     onSelect: (value) => {
       if (value === THIS_MAC || value === undefined) {
         setStartStageMachine(null, workspaceRoot);

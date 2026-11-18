@@ -1,21 +1,24 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { machineCheck, machineInstallHost, machineLabel, machineRemove, machineSave, machinesList, type Machine, type MachineStatus } from "../../ipc/machines";
+import { machineCheck, machineInstallHost, machineLabel, machineRemove, machineSave, machinesList, subscribeMachines, type Machine, type MachineStatus, type MachineConnectionMethod } from "../../ipc/machines";
 import { open } from "@tauri-apps/plugin-dialog";
 import { errMessage } from "../../errors";
 import { refreshMachineStatus } from "../../machineStatus";
 import { GhostButton, SettingBlock } from "./controls";
-import { MachineIcon, TailscaleIcon, ThisMacIcon } from "../../icons";
+import { DeleteIcon, MachineIcon, TailscaleIcon, ThisMacIcon } from "../../icons";
 import { CloudIcon } from "./icons";
 import { MachineSetup } from "./MachineSetup";
 import { AddMachineDialog } from "../AddMachineDialog";
+import { MachineSshFields } from "./MachineSshFields";
+import { canConnectSshAddress } from "./machineSshAddress";
 import "./machines.css";
 
 type ConnectionKind = "cloud" | "self-hosted" | "tailscale";
 
-function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, initiallyOpen, onProject }: {
+function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, initiallyOpen, onProject, onConnection }: {
   machine: Machine; workspaceRoot: string | null; onEdit: () => void;
   onRemove: () => Promise<void>; disabled: boolean; initiallyOpen: boolean;
   onProject: (path: string) => Promise<void>;
+  onConnection: (host: string) => Promise<void>;
 }) {
   const [setupOpen, setSetupOpen] = useState(initiallyOpen);
   const [status, setStatus] = useState<MachineStatus | null>(null);
@@ -27,6 +30,7 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
   const [revision, setRevision] = useState(0);
+  const checkout = machine.checkouts?.[workspaceRoot ?? ""];
   useEffect(() => {
     let live = true;
     setChecking(true);
@@ -36,7 +40,7 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
       .catch((reason) => { if (live) { setError(errMessage(reason)); setStatus(null); } })
       .finally(() => { if (live) setChecking(false); });
     return () => { live = false; };
-  }, [machine.id, workspaceRoot, revision]);
+  }, [machine.id, machine.sshHost, checkout, workspaceRoot, revision]);
   const caption = error || (checking ? "Checking…" : status?.ready ? "Ready" : status?.caption ?? "Not checked");
   function check() { setRevision((r) => r + 1); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }
   async function install(chooseFile = false): Promise<boolean> {
@@ -57,12 +61,15 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
       <div className="klide-machine-name"><h3>{machineLabel(machine)}</h3><code>{machine.sshHost}</code></div>
       <span className="klide-machine-state" data-tone={error ? "bad" : checking ? "quiet" : status?.ready ? "ok" : "warn"} role="status">{caption}</span>
       <div className="klide-machine-row-actions">
-        <button type="button" className="klide-button klide-button-ghost" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen((open) => !open)}>{detailsOpen ? "Hide details" : "Details"}</button>
-        <GhostButton disabled={disabled} onClick={onEdit}>Edit</GhostButton>
         <GhostButton disabled={disabled || installing} onClick={() => setSetupOpen((open) => !open)}>{setupOpen ? "Hide setup" : status?.ready ? "Manage" : "Continue setup"}</GhostButton>
+        <button type="button" className="klide-button klide-button-ghost klide-machine-delete-button" aria-label="Delete machine" title="Delete machine" disabled={disabled || installing} onClick={() => setConfirmRemove(true)}><DeleteIcon size={16} /></button>
       </div>
     </div>
-    {setupOpen && <MachineSetup machine={machine} status={status} checking={checking || installing} workspaceRoot={workspaceRoot} onCheck={check} onInstall={() => install()} onProject={onProject} onClose={() => setSetupOpen(false)} />}
+    {confirmRemove && <div className="klide-machine-delete-confirm klide-machine-confirm" role="alert">
+      Delete {machineLabel(machine)} from Klide? This removes the saved connection. Files and tasks on the remote machine are kept.
+      <div className="klide-machine-actions"><GhostButton disabled={disabled || installing} onClick={() => { void onRemove(); }}>Delete machine</GhostButton><GhostButton disabled={disabled} onClick={() => setConfirmRemove(false)}>Cancel</GhostButton></div>
+    </div>}
+    {setupOpen && <><MachineSetup machine={machine} status={status} checking={checking || installing} workspaceRoot={workspaceRoot} onCheck={check} onInstall={() => install()} onProject={onProject} onConnection={onConnection} onClose={() => setSetupOpen(false)} /><div className="klide-machine-management-actions"><GhostButton disabled={disabled || installing} onClick={onEdit}>Edit machine</GhostButton><button type="button" className="klide-button klide-button-ghost" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen((open) => !open)}>{detailsOpen ? "Hide advanced details" : "Advanced details"}</button></div></>}
     {installError && <p className="klide-machine-message" role="alert">{installError}</p>}
     <div id={detailsId} hidden={!detailsOpen} className="klide-machine-details">
       <div className="klide-machine-details-body">
@@ -77,11 +84,6 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
           {fact.fix && <div className="klide-machine-fix"><code>{fact.fix}</code><GhostButton onClick={() => { void navigator.clipboard.writeText(fact.fix!).catch((reason) => setError(errMessage(reason))); }}>Copy fix</GhostButton></div>}
         </div>)}
         {status?.checkout && <div className="klide-machine-fact"><span>Remote checkout</span><code>{status.checkout}</code></div>}
-        <div className="klide-machine-remove"><GhostButton disabled={disabled} onClick={() => setConfirmRemove(true)}>Remove</GhostButton></div>
-        {confirmRemove && <div className="klide-machine-confirm" role="alert">
-          Remove this machine from Klide? Remote files and running sessions stay there. Re-add ID <code>{machine.id}</code> to reconnect existing conversations.
-          <div className="klide-machine-actions"><GhostButton disabled={disabled} onClick={() => { void onRemove(); }}>Remove machine</GhostButton><GhostButton disabled={disabled} onClick={() => setConfirmRemove(false)}>Cancel</GhostButton></div>
-        </div>}
       </div>
     </div>
   </article>;
@@ -103,6 +105,7 @@ function MachineEditor({ machine, workspaceRoot, onSave, onCancel, busy, connect
   return <SettingBlock title={machine ? "Edit machine" : "Add machine"}>
     <form ref={formRef} className="klide-machine-form" onSubmit={(event) => {
       event.preventDefault();
+      if (!canConnectSshAddress(host)) return;
       const checkouts = { ...machine?.checkouts };
       if (workspaceRoot) {
         if (checkout.trim()) checkouts[workspaceRoot] = checkout.trim();
@@ -111,13 +114,13 @@ function MachineEditor({ machine, workspaceRoot, onSave, onCancel, busy, connect
       void onSave({ id: id.trim(), label: label.trim() || host.trim(), sshHost: host.trim(), checkouts }, !machine);
     }}>
       {!machine && <div className="klide-machine-form-context">{connection === "tailscale" ? <><TailscaleIcon size={22} /><span>Connect over Tailscale</span></> : connection === "cloud" ? <><CloudIcon /><span>Connect a cloud machine</span></> : <><MachineIcon size={22} /><span>Connect a self-hosted machine</span></>}</div>}
-      <label>{connection === "tailscale" ? "Tailscale SSH address" : "SSH host"}<input className="klide-field" style={{ display: "block", width: "100%" }} required disabled={busy} value={host} onChange={(e) => setHost(e.target.value)} placeholder={connection === "tailscale" ? "user@100.64.1.2 or user@machine-name" : "my-server or user@hostname"} /></label>
+      <MachineSshFields value={host} onChange={setHost} disabled={busy} />
       <label>Display name (optional)<input className="klide-field" style={{ display: "block", width: "100%" }} disabled={busy} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My server" /></label>
       {connection === "tailscale" && <p className="klide-machine-hint">Connect this Mac and the remote machine to your Tailscale network, then enter the machine’s Tailscale IP or name. Klide connects using SSH.</p>}
       <p className="klide-machine-hint">Use an SSH alias from ~/.ssh/config for custom ports and keys. The next steps guide you through connection, installation and sign-in. You can save this setup while the machine is offline.</p>
       <details><summary>Advanced</summary>{machine && <p>Machine ID: <code>{id}</code></p>}
       {workspaceRoot ? <label>Remote checkout for {workspaceRoot}<input className="klide-field" style={{ display: "block", width: "100%" }} disabled={busy} value={checkout} onChange={(e) => setCheckout(e.target.value)} placeholder={`~/code/${workspaceRoot.split("/").filter(Boolean).pop()}`} /><span>Leave blank to use ~/code/&lt;workspace name&gt;. You can clone it during setup.</span></label> : <p>Open a workspace to configure its remote checkout.</p>}</details>
-      <div style={{ display: "flex", gap: 8 }}><button type="submit" className="klide-button klide-button-secondary" disabled={busy}>{busy ? "Saving…" : machine ? "Save changes" : "Continue"}</button><GhostButton disabled={busy} onClick={onCancel}>Cancel</GhostButton></div>
+      <div style={{ display: "flex", gap: 8 }}><button type="submit" className="klide-button klide-button-secondary" disabled={busy || !canConnectSshAddress(host)}>{busy ? "Saving…" : machine ? "Save changes" : "Continue"}</button><GhostButton disabled={busy} onClick={onCancel}>Cancel</GhostButton></div>
     </form>
   </SettingBlock>;
 }
@@ -131,8 +134,10 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
   const [setupMachine, setSetupMachine] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [connection, setConnection] = useState<ConnectionKind>("cloud");
+  const [initialMethod, setInitialMethod] = useState<MachineConnectionMethod | undefined>();
   const cannotAdd = loading || busy || editing !== undefined || !!error;
-  function add(kind: ConnectionKind) { setConnection(kind); setEditing(null); }
+  useEffect(() => subscribeMachines(() => setReload((value) => value + 1)), []);
+  function add(kind?: ConnectionKind) { setConnection(kind ?? "cloud"); setInitialMethod(kind === "tailscale" ? "tailscale" : kind ? "ssh" : undefined); setEditing(null); }
   useEffect(() => {
     let live = true;
     setLoading(true);
@@ -159,7 +164,7 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
     finally { setBusy(false); }
   }
   return <div className="klide-machines">
-    <SettingBlock title="Your machines" action={<GhostButton disabled={cannotAdd} onClick={() => add("cloud")}>Add machine</GhostButton>}>
+    <SettingBlock title="Your machines" action={<GhostButton disabled={cannotAdd} onClick={() => add()}>Add machine</GhostButton>}>
       <p className="klide-machine-intro">Choose where your agents work. Your files and logins stay on each machine.</p>
       <div className="klide-machine-list">
         <div className="klide-machine-row klide-machine-local">
@@ -167,7 +172,7 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
           <div className="klide-machine-name"><h3>This Mac</h3><span>Your local workspace</span></div>
           <span className="klide-machine-state" data-tone="quiet">Local</span>
         </div>
-        {machines.map((machine) => <MachineDetails key={JSON.stringify(machine) + workspaceRoot} machine={machine} workspaceRoot={workspaceRoot} initiallyOpen={setupMachine === machine.id} onProject={async (path) => { if (!workspaceRoot) return; setSetupMachine(machine.id); await save({ ...machine, checkouts: { ...machine.checkouts, [workspaceRoot]: path } }, false); }} onEdit={() => { setConnection("cloud"); setEditing(machine); }} onRemove={() => remove(machine.id)} disabled={busy || editing !== undefined} />)}
+        {machines.map((machine) => <MachineDetails key={machine.id + workspaceRoot} machine={machine} workspaceRoot={workspaceRoot} initiallyOpen={setupMachine === machine.id} onProject={async (path) => { if (!workspaceRoot) return; setMachines(await machineSave({ ...machine, checkouts: { ...machine.checkouts, [workspaceRoot]: path } }, false)); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }} onConnection={async (sshHost) => { setMachines(await machineSave({ ...machine, sshHost }, false)); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }} onEdit={() => { setConnection("cloud"); setEditing(machine); }} onRemove={() => remove(machine.id)} disabled={busy || editing !== undefined} />)}
         {loading && <p className="klide-machine-message" role="status">Loading machines…</p>}
         {!loading && !error && machines.length === 0 && <p className="klide-machine-message">No remote machines connected yet.</p>}
       </div>
@@ -198,7 +203,7 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
       </article>
     </SettingBlock>
 
-    {editing === null && <AddMachineDialog workspaceRoot={workspaceRoot} onSaved={setMachines} onClose={() => setEditing(undefined)} />}
+    {editing === null && <AddMachineDialog workspaceRoot={workspaceRoot} onSaved={setMachines} onClose={() => setEditing(undefined)} initialMethod={initialMethod} />}
     {editing != null && <MachineEditor key={(editing?.id ?? "new") + workspaceRoot + connection} machine={editing} connection={connection} workspaceRoot={workspaceRoot} onSave={save} onCancel={() => { setEditing(undefined); setError(""); }} busy={busy} />}
   </div>;
 }

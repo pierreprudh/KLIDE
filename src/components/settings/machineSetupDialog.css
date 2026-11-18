@@ -3,14 +3,55 @@
 @keyframes klide-machine-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .klide-machine-spinner { animation: none; border-style: dotted; } }
 
-.klide-add-machine-dialog { width: min(600px, calc(100vw - 40px)); max-height: min(800px, calc(100dvh - 48px)); padding: 0; color: var(--fg); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 16px 60px rgb(0 0 0 / 14%); overflow: auto; animation: klide-machine-dialog-in 140ms ease-out; }
+.klide-add-machine-dialog { width: min(600px, calc(100vw - 40px)); height: min(640px, calc(100dvh - 48px)); max-height: none; box-sizing: border-box; padding: 0; color: var(--fg); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 16px 60px rgb(0 0 0 / 14%); overflow: hidden; animation: klide-machine-dialog-in 140ms ease-out; }
+.klide-add-machine-dialog[open] { display: flex; flex-direction: column; }
 .klide-add-machine-dialog::backdrop { background: rgb(0 0 0 / 18%); backdrop-filter: blur(3px); }
-.klide-add-machine-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 26px; border-bottom: 1px solid var(--border); }
+.klide-add-machine-dialog > header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 26px; border-bottom: 1px solid var(--border); }
 .klide-add-machine-dialog h2 { margin: 0; font-size: 18px; font-weight: 600; }
 .klide-add-machine-close { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--fg-subtle); cursor: pointer; }
 .klide-add-machine-close:hover { background: var(--bg-hover); }
-.klide-add-machine-body { padding: 24px 26px; }
-.klide-add-machine-dialog .klide-machine-setup { margin: 0; border: 0; padding: 0; }
+.klide-add-machine-body { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; padding: 20px 26px; }
+.klide-add-machine-dialog .klide-machine-setup { display: grid; flex: 1; grid-template-columns: 172px minmax(0, 1fr); gap: 18px; min-height: 0; margin: 0; border: 0; padding: 0; line-height: 1.5; }
+.klide-machine-setup-pane { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.klide-machine-checklist { display: grid; align-content: start; gap: 6px; padding: 0; margin: 0; list-style: none; }
+.klide-machine-checklist-nav { position: relative; align-self: start; min-width: 0; padding-left: 8px; }
+.klide-machine-checklist-track { position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; border-radius: 2px; background: var(--border); }
+.klide-machine-step-marker { position: absolute; left: 0; top: 0; width: 3px; border-radius: 3px; background: var(--fg); transition: transform 180ms ease-out, height 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .klide-machine-step-marker { transition: none; } }
+.klide-machine-checklist button { display: grid; grid-template-columns: 20px minmax(0, 1fr) 12px; align-items: center; gap: 8px; width: 100%; padding: 10px 7px; border: 0; border-radius: 10px; background: transparent; color: var(--fg); text-align: left; cursor: pointer; font: inherit; }
+.klide-machine-checklist [aria-current="step"] > button { background: var(--bg-hover); }
+.klide-machine-checklist button:disabled { cursor: default; }
+.klide-machine-checklist-logo { display: grid; place-items: center; }
+.klide-machine-github-logo { display: block; width: 18px; height: 18px; background: currentColor; -webkit-mask: url('/github-invertocat.svg') center / contain no-repeat; mask: url('/github-invertocat.svg') center / contain no-repeat; }
+.klide-machine-checklist-copy { display: grid; gap: 3px; min-width: 0; }
+.klide-machine-checklist-copy strong { font-size: 12px; font-weight: 500; }
+.klide-machine-checklist-copy > span { font-size: 10px; line-height: 1.4; color: var(--fg-subtle); }
+.klide-machine-checklist-state { display: grid; place-items: center; color: var(--success); }
+.klide-machine-checklist .klide-machine-spinner { width: 11px; height: 11px; flex-basis: 11px; }
+.klide-machine-pending-dot { width: 7px; height: 7px; border: 1px solid var(--border); border-radius: 50%; }
+.klide-machine-checklist [data-state="waiting"] .klide-machine-checklist-copy { opacity: .6; }
+.klide-machine-actions[hidden] { display: none; }
+.klide-machine-setup-copy > .klide-button { justify-self: start; }
+.klide-machine-setup-copy .klide-machine-actions { align-items: center; gap: 8px; }
+.klide-machine-setup-copy .klide-machine-actions > .klide-button:first-child {
+  border-color: var(--control-primary-bg);
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+}
+.klide-machine-setup-copy .klide-machine-actions + .klide-button {
+  border-color: transparent;
+  color: var(--fg-subtle);
+}
+.klide-machine-setup-footer { align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid var(--border); }
+.klide-machine-setup-footer > .klide-button { flex-shrink: 0; }
+.klide-add-machine-dialog .klide-machine-steps { flex-shrink: 0; margin: 0; }
+.klide-add-machine-dialog .klide-machine-setup-copy { display: grid; flex-shrink: 0; gap: 10px; }
+.klide-add-machine-dialog .klide-machine-setup :is(h3, p) { margin: 0; overflow-wrap: anywhere; }
+.klide-add-machine-dialog .klide-machine-setup h3 { font-size: 15px; font-weight: 600; }
+.klide-add-machine-dialog .klide-machine-actions { margin: 0; }
+.klide-add-machine-dialog .klide-machine-setup-footer { flex-shrink: 0; margin-top: auto; }
+.klide-add-machine-dialog .klide-machine-terminal { flex: 1; min-height: 100px; height: 0; margin: 0; padding: 10px 12px; }
+.klide-add-machine-dialog .klide-machine-waiting { padding: 0; }
 .klide-add-machine-form { display: grid; gap: 20px; font-size: 13px; }
 .klide-add-machine-form p { margin: 0; color: var(--fg-subtle); line-height: 1.7; }
 .klide-add-machine-form label { display: grid; gap: 7px; }
@@ -22,8 +63,10 @@
 @keyframes klide-machine-dialog-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .klide-add-machine-dialog { animation: none; } }
 @media (max-width: 600px) { .klide-add-machine-dialog > header { padding: 18px; } .klide-add-machine-body { padding: 20px 18px; } }
-.klide-machine-connections { font-size: 13px; line-height: 1.7; }
+.klide-machine-connections { display: flex; flex: 1; flex-direction: column; min-height: 0; font-size: 13px; line-height: 1.7; }
 .klide-machine-connections > p { color: var(--fg-subtle); margin: 0 0 18px; }
+.klide-machine-discovery { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.klide-machine-discovery > p { flex-shrink: 0; color: var(--fg-subtle); margin: 0 0 12px; }
 .klide-machine-methods, .klide-machine-candidates { display: grid; gap: 10px; }
 .klide-machine-methods > button, .klide-machine-candidates > button { display: flex; align-items: center; gap: 16px; width: 100%; padding: 18px; text-align: left; font: inherit; color: var(--fg); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 14px; cursor: pointer; }
 .klide-machine-methods > button:hover, .klide-machine-candidates > button:hover { background: var(--bg-hover); }
@@ -31,16 +74,45 @@
 .klide-machine-methods > button > span, .klide-machine-candidates > button > span:first-of-type { display: grid; gap: 3px; flex: 1; min-width: 0; }
 .klide-machine-methods strong, .klide-machine-candidates strong { font-weight: 500; }
 .klide-machine-methods span span, .klide-machine-candidates span span, .klide-machine-candidates code { color: var(--fg-subtle); font-size: 12px; overflow-wrap: anywhere; }
-.klide-machine-candidates { max-height: 320px; overflow: auto; margin-bottom: 18px; }
+.klide-machine-candidates { margin-bottom: 12px; }
+.klide-machine-candidates > button { padding: 12px 14px; line-height: 1.5; }
+.klide-machine-pages { display: flex; align-items: center; justify-content: center; gap: 14px; color: var(--fg-subtle); font-size: 12px; }
 .klide-machine-candidates > button:disabled, .klide-machine-candidates > button[data-online="false"] { opacity: .45; }
 .klide-machine-candidates > button:disabled { cursor: default; }
 .klide-machine-availability { width: 9px; height: 9px; flex: 0 0 9px; box-sizing: border-box; border-radius: 50%; border: 1.5px dashed var(--fg-subtle); background: transparent; }
 .klide-machine-availability[data-online="true"] { border: 1.5px solid var(--success); background: var(--success); }
 .klide-machine-discovery-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
 .klide-machine-discovery-heading h3 { margin: 0; font-size: 15px; font-weight: 500; }
-.klide-machine-dialog-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.klide-machine-dialog-footer { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 10px; margin-top: auto; padding-top: 16px; }
+.klide-machine-discovery .klide-machine-pages { flex-shrink: 0; margin-top: auto; }
+.klide-machine-ssh-fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 12px; }
+.klide-machine-ssh-fields label { display: grid; gap: 6px; min-width: 0; font-size: 13px; }
+.klide-machine-ssh-fields input.klide-field { width: 100%; box-sizing: border-box; min-width: 0; min-height: 40px; padding: 10px 14px; border-radius: 12px; }
+.klide-machine-session { display: flex; flex-direction: column; flex: 1; gap: 10px; min-height: 0; margin-top: 12px; }
+.klide-machine-session-card { display: grid; align-content: center; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); }
+.klide-machine-session-card form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.klide-machine-session-card label { display: grid; gap: 7px; font-size: 13px; }
+.klide-machine-session-card input { min-width: 0; box-sizing: border-box; padding: 10px 14px; border-radius: 12px; }
+.klide-machine-session-card :is(h4, p) { margin: 0; }
+.klide-machine-session-card h4 { font-size: 14px; font-weight: 600; }
+.klide-machine-session-card p { font-size: 12px; line-height: 1.5; color: var(--fg-subtle); }
+.klide-machine-session-card form > button { grid-column: 2; grid-row: 1; }
+.klide-machine-session-card form > p { grid-column: 1 / -1; grid-row: 2; }
+.klide-machine-session-tools { display: flex; justify-content: flex-end; }
+.klide-machine-log { flex: 1; height: 0; min-height: 100px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; margin: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--fg-subtle); font: 11px/1.5 var(--font-mono); }
+.klide-machine-fingerprint { font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.klide-machine-browser-signin { display: grid; justify-items: start; gap: 8px; }
+.klide-add-machine-dialog .klide-machine-session { margin: 0; }
+.klide-add-machine-dialog .klide-machine-session[data-details="true"] { min-height: 150px; }
 .klide-machine-dialog-footer > :first-child { margin-right: auto; }
 .klide-machine-manual-add { display: inline-flex; align-items: center; gap: 8px; }
 
 .klide-vpn-brands { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; }
 .klide-vpn-brands img { display: block; width: 24px; height: 24px; object-fit: contain; }
+@media (max-height: 620px) {
+  .klide-add-machine-dialog > header { padding-block: 12px; }
+  .klide-add-machine-body { padding-block: 14px; }
+  .klide-add-machine-dialog .klide-machine-setup, .klide-add-machine-dialog .klide-machine-setup-copy { gap: 8px; }
+  .klide-machine-methods > button, .klide-machine-candidates > button { padding: 10px 14px; }
+  .klide-machine-connections > p { margin-bottom: 10px; }
+}
