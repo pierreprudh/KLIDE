@@ -25,6 +25,7 @@ let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-b
       if (args.method === "tailscale") return params.has("noTailscale") ? { machines: [], message: "Install Tailscale and connect this Mac to your network, then refresh." } : {
         machines: [
           { label: "Linux dev", sshHost: "100.64.0.2", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
+          { label: "Build server", sshHost: "100.64.0.4", source: "tailscale", online: false, supported: true, detail: "Tailscale · SSH check required", machine: null },
           { label: "Mac mini", sshHost: "100.64.0.3", source: "tailscale", online: true, supported: false, detail: "Linux remote hosts only", machine: null },
         ], message: "Choose a device on your Tailscale network. SSH is checked next.",
       };
