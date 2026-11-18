@@ -640,7 +640,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
         }
         Request::RemoteRead { run_id, from_seq, limit } => {
             match crate::agent::remote_machine::read_on_host(&state.data_dir, &run_id, from_seq, limit) {
-                Ok((events, next_seq)) => Response::RemoteEvents { events, next_seq },
+                Ok((events, next_seq, more)) => Response::RemoteEvents { events, next_seq, more },
                 Err(message) => Response::Err { message },
             }
         }

@@ -136,7 +136,7 @@ pub enum ChatControl {
 pub enum Response {
     RemoteIdentity { source: String },
     RemoteChanges { diff: String, status: String, worktree: String },
-    RemoteEvents { events: Vec<crate::agent::types::AgentEvent>, next_seq: u64 },
+    RemoteEvents { events: Vec<crate::agent::types::AgentEvent>, next_seq: u64, #[serde(default)] more: bool },
     ChatStarted { from_seq: u64 },
     ChatOperations { operations: Vec<ChatOperation> },
     Pong {
