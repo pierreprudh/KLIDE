@@ -396,11 +396,11 @@ The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordin
 
 Klide is under active development. The recorded 2026-10-26 baseline passed 1,753 frontend tests, the production build/bundle-split check, and the Rust suite outside the sandbox. Earlier v0.5 records cover PTY integration and release-bundle boot verification; these are dated results, not a fresh check of every change. Automated checks do not replace the live acceptance work below. Ad-hoc signed Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs the Open Anyway step above.
 
-The latest recorded release is **0.6.12** (2026-11-18). See [the changelog](CHANGELOG.md) for what each cut contains.
+The latest recorded release is **0.7.0** (2026-11-18). See [the changelog](CHANGELOG.md) for what each cut contains.
 
 Recent cuts, each under the name it shipped with:
 
-- **0.6.12 — Remote Machines, Safety, Workers** (2026-11-18) — native Remote conversations over SSH with Tailscale discovery and host install on Linux, macOS and Windows; the macOS command sandbox, approved project hooks and restricted untrusted folders; worker setup, validation, Merge / Discard and a 15-worker queue; Delegate sub-agent trays; the calmer sidebar, Library and Scheduled; Design mode; sixteen more hosted APIs; Git Review on cards
+- **0.7.0 — Remote Machines, Safety, Workers** (2026-11-18) — native Remote conversations over SSH with Tailscale discovery and host install on Linux, macOS and Windows; the macOS command sandbox, approved project hooks and restricted untrusted folders; worker setup, validation, Merge / Discard and a 15-worker queue; Delegate sub-agent trays; the calmer sidebar, Library and Scheduled; Design mode; sixteen more hosted APIs; Git Review on cards
 - **0.6.11 — Any Intelligence, Caching, Copilot** (2026-10-26) — Claude Code, Codex, and OpenCode on Klide's API keys, local and self-hosted endpoints, and Nous Portal without changing the agent; prompt caching end to end and Rust-owned compaction for every Run; GitHub Copilot as a CLI agent; background workers; Auto routing rungs; conversations in SQLite; dropped PDFs read; `/btw` side questions
 - **0.6.10** (2026-10-13) — Amp, Cursor, Factory, and Hermes as CLI providers with official marks; Hermes on any API, local, or self-hosted source; harness/model independence recorded as a product principle
 - **0.6.9 — OpenCode 2** (2026-10-12) — native answer and reasoning streaming, durable recovery, session resume, native commands, complete model discovery, provider commands first in the `/` menu

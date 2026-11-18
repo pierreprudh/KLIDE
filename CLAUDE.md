@@ -503,9 +503,9 @@ behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
 / Refuse; the webview only picks a surface.
 
-### Where the product is (v0.6.12 released 2026-11-18)
+### Where the product is (v0.7.0 released 2026-11-18)
 
-0.6.12 shipped Library (Memory / Skills / Foundations), the Sections / Agent
+0.7.0 shipped Library (Memory / Skills / Foundations), the Sections / Agent
 conversation sidebar, Scheduled under Mission Control, worker setup/checkCommand
 and merge/discard controls, Delegate sub-agent trays, Design mode (`⌘⇧D`),
 Settings → Machines with Tailscale discovery and native Remote conversations
@@ -518,7 +518,7 @@ v0.5 closed on 2026-07-21, and the v0.6 line has cut five patch releases:
 v0.6.1 — Subscriptions and Reach (2026-08-23), v0.6.2 — Memory, Routing,
 Recovery (2026-09-11), v0.6.3 — Coordination and Documents (2026-09-12),
 v0.6.4 — Workers, Connectors, Visuals (2026-09-20), and v0.6.5 — Shells,
-Watchers, Links (2026-09-23). The patch line then ran to 0.6.12 (2026-11-18): `/goal` checks that fail end the run, Memory proposes lessons (0.6.6); llama.cpp at 16k + Llama app + the local benchmark (0.6.7); Sight, shared admission/crash recovery for app and background runs, the Memory inbox (0.6.8); OpenCode 2 (0.6.9); Amp / Cursor / Factory / Hermes as CLI providers and Hermes on any source (0.6.10); any agent on any intelligence, prompt caching + Rust compaction, Copilot, background workers, Auto rungs, the SQLite conversation store, PDF drop and `/btw` side questions (0.6.11, 2026-10-26); Remote machines, the command sandbox + hooks + workspace trust, worker validation and the sidebar rework (0.6.12, 2026-11-18).
+Watchers, Links (2026-09-23). The patch line then ran to 0.6.11 (2026-10-26): `/goal` checks that fail end the run, Memory proposes lessons (0.6.6); llama.cpp at 16k + Llama app + the local benchmark (0.6.7); Sight, shared admission/crash recovery for app and background runs, the Memory inbox (0.6.8); OpenCode 2 (0.6.9); Amp / Cursor / Factory / Hermes as CLI providers and Hermes on any source (0.6.10); any agent on any intelligence, prompt caching + Rust compaction, Copilot, background workers, Auto rungs, the SQLite conversation store, PDF drop and `/btw` side questions (0.6.11, 2026-10-26). v0.7.0 (2026-11-18) opened the next line: Remote machines, the command sandbox + hooks + workspace trust, worker validation and the sidebar rework.
 Mission Control is the operations surface for Harness runs and Delegate runs;
 review evidence, worktree fleets, mission chaining, subagents, advisor
 escalation and two-agent races are shipped; `auto` resolves to one concrete
@@ -535,7 +535,7 @@ Release work still owed from v0.5.1: full race/restart/merge dogfooding, the
 first signed/notarized macOS bundle (what ships today is ad-hoc signed), and
 Windows/Linux validation.
 
-The product milestone is still v0.6, dependable orchestration: Missions as
+The dependable-orchestration goals started in v0.6 carry into the v0.7 line: Missions as
 outcomes, visible budget and capacity, capability-based worker routing,
 automatic validation contracts, and broader durable Remote execution. Local persistent scheduling is already
 implemented under Mission Control → Scheduled; do not describe it as parked.
@@ -572,10 +572,10 @@ append-only writes, and both the Mission log and the run Transcript go through
 it — a torn final line is tolerated and reported, interior corruption is an
 error, never a silent skip (2026-08-04 review).
 
-Still open for v0.6 proper: budget/capacity controls in the dispatch path
+Still open from the v0.6 orchestration goals: budget/capacity controls in the dispatch path
 (`budgetLedger.ts` / `capacityPlanner.ts` exist as models), capability-based
 routing without hard-coded provider brands, automatic validation contracts,
-and the native Remote transport / machine transfer. Local scheduled Runs and
+and Remote machine transfer (native Remote conversations shipped in 0.7.0). Local scheduled Runs and
 eligible background subscription conversations already have persistent hosts.
 
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
