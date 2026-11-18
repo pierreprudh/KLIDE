@@ -72,6 +72,26 @@ headless host retains its existing limits: Klide-native nested subagents and
 `run_command(notifyOnExit)` observer follow-ups are refused; use ordinary
 background commands with `read_command_output` when appropriate.
 
+## Watch CI (event trigger)
+
+Mission Control › Scheduled also holds **Watch CI on my pull requests**, one
+switch per Workspace (`agent/ci_watch.rs`). The scheduled service polls
+`gh pr list --author @me` every two minutes for each watched Workspace. A check
+that failed *after* the switch was turned on starts one Run per failing commit
+(PR number + head SHA), at most three per poll. A commit never fires twice.
+
+The Run is always Plan mode: standalone, read-only, with no command authority,
+whatever the captured template said. Its prompt names the failing checks and
+carries an excerpt of `gh run view --log-failed`, ending at the last
+`##[error]` line and fenced as CI data, not instructions. The model is the
+default at the moment the switch was turned on.
+
+The service posts a macOS notification (via `osascript`, so macOS lists it
+under Script Editor; clicking it does not open Klide yet). The app turns each
+firing into a toast with **Open**, and the row lists recent firings. State is
+`ci-watch.json` in app data, shared by the app and the service under
+`ci-watch.lock`.
+
 ## Controls and recovery
 
 Run now starts a fresh occurrence without moving a repeating schedule's next

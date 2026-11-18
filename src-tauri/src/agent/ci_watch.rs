@@ -328,6 +328,7 @@ async fn fire(
     let root = watch.workspace_root.clone();
     let runs: Vec<u64> = {
         let mut ids: Vec<u64> = pr.checks.iter().filter_map(|(_, url)| actions_run_id(url)).collect();
+        ids.sort_unstable();
         ids.dedup();
         ids.truncate(2);
         ids

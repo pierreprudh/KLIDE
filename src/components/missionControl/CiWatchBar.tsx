@@ -11,7 +11,7 @@ import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import type { HarnessSettings } from "../../settingsStore";
 import { modelLabel } from "../ai/ModelPicker";
-import { scheduledRunInput } from "../Scheduled";
+import { scheduledRunInput } from "../../agent/scheduledRunInput";
 import { Toggle } from "../settings/controls";
 import { relativeTime } from "../../time";
 import { errMessage } from "../../errors";

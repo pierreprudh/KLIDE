@@ -7,17 +7,13 @@ import { createListenerScope } from "../tauriEvents";
 import { createSchedule, updateSchedule, listSchedules, scheduleAction, scheduleHistory, localScheduleTime, mergeScheduleRows, scheduleServiceStatus, enableScheduleService, type ScheduleService, type Schedule, type ScheduledRun } from "../agent/schedules";
 import { stopAgentRun } from "../agent/client";
 import { PROVIDER_CATALOG, isAutoProvider, providerDefinition, providerName } from "../agent/providers";
-import type { AgentMode, ProviderId, StartAgentRunInput } from "../agent/types";
+import type { AgentMode, ProviderId } from "../agent/types";
 import type { HarnessSettings } from "../settingsStore";
 import { listProviderModels } from "../ipc/aiProviders";
 import { ProviderLogo } from "./ai/icons";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { routedSelection } from "../agent/harnessSource";
 import { switchModelForProvider } from "./ai/rememberedModel";
-import { buildSystemPrompt } from "./ai/system-prompt";
-import { allFavModels } from "../favModels";
-import { enabledRunSkills, loadFilesystemSkills, loadSkills, mergeFilesystemSkills } from "../skills";
-import { readWorkspaceTextFile } from "../workspaceFs";
 import { errMessage } from "../errors";
 import { ChevronIcon, ClockIcon, MoreIcon, NewTaskIcon, OpenInEditorIcon, PauseIcon, PlayIcon } from "../icons";
 import { ScheduleSelect, type ScheduleSelectOption } from "./ScheduleSelect";
@@ -25,6 +21,7 @@ import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { useCustomProviders } from "../hooks/useCustomProviders";
 import { formatSpan } from "../time";
 import { CiWatchBar } from "./missionControl/CiWatchBar";
+import { scheduledRunInput } from "../agent/scheduledRunInput";
 import "./scheduled.css";
 
 type Props = {
@@ -44,30 +41,6 @@ const shortWhen = (ms: number) => new Date(ms).toLocaleString(undefined, { month
 const workspaceName = (root: string | null) => root?.split(/[\\/]/).filter(Boolean).pop() ?? "Workspace";
 const statusName = (status: Schedule["status"]) => ({ pending: "Scheduled", dispatching: "Starting", running: "Running", completed: "Completed", failed: "Failed", paused: "Paused", cancelled: "Cancelled" })[status];
 const cadence = (ms: number | null) => ms === null ? "Once" : ms === 3_600_000 ? "Every hour" : ms === 86_400_000 ? "Every 24 hours" : ms === 604_800_000 ? "Every 7 days" : `Every ${ms / 60_000} minutes`;
-
-/** The Run a saved trigger starts from — the same system prompt, skills and
- *  harness settings a conversation in that Workspace would get. Shared by
- *  schedules and the CI watch. */
-export async function scheduledRunInput({ root, provider, model, mode, text, settings }: { root: string; provider: ProviderId; model: string; mode: AgentMode; text: string; settings: HarnessSettings }): Promise<StartAgentRunInput> {
-  const [skills, rules] = await Promise.all([
-    loadFilesystemSkills(root).then(scanned => mergeFilesystemSkills(loadSkills(), scanned)),
-    (async () => {
-      for (const name of ["AGENTS.md", "CLAUDE.md"]) {
-        try { return (await readWorkspaceTextFile(root, name)).slice(0, 6000).trim(); } catch { /* Try the next convention. */ }
-      }
-      return "";
-    })(),
-  ]);
-  return {
-    workspaceRoot: root, provider, model, mode, text, attachments: [],
-    systemPrompt: buildSystemPrompt(root, true, skills, mode, mode !== "chat", rules, settings, model, provider),
-    skills: enabledRunSkills(skills), maxParallelTools: settings.maxParallelTools,
-    requireDiffReview: true, maxTurns: settings.maxTurns, commandTimeoutSecs: settings.commandTimeoutSecs,
-    testAfterEditCommand: settings.testAfterEditCommand,
-    numCtx: settings.contextWindows?.[model], reflectionLevel: settings.reflectionLevels?.[model],
-    preferredModels: isAutoProvider(provider) ? allFavModels() : undefined,
-  };
-}
 
 export function Scheduled(props: Props) {
   const [rows, setRows] = useState<Schedule[]>([]);

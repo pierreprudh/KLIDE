@@ -81,10 +81,6 @@ export function watchScheduleStatus(): () => void {
     }
     const runId = f.runId;
     runIds.add(runId);
-    publishKlideConvo({
-      id: runId, title: `CI failed · #${f.prNumber} ${f.prTitle}`, status: "running", provider: f.provider as Schedule["provider"], model: f.model,
-      cwd: f.workspaceRoot, branch: null, messages: [], updatedMs: Date.now(),
-    });
     notify(`CI failed on #${f.prNumber} ${f.prTitle} — Kit is looking into it`, {
       tone: "warn", duration: 0,
       provider: f.provider,
