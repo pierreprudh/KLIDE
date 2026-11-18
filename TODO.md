@@ -13,7 +13,7 @@ them.
   `scripts/audit-dependencies.mjs`. See `docs/DEPENDENCY_AUDIT.md`. Production
   and unrelated high/critical advisories remain blocked.
 
-## Remote machines — native hosts and deployment, 2026-11-18
+## Remote machines — native hosts and deployment, 2026-11-19
 
 Implemented in [PR #557](https://github.com/pierreprudh/KLIDE/pull/557):
 macOS (Apple silicon and Intel) and native Windows x86_64 over OpenSSH.
@@ -30,7 +30,26 @@ must pass before merge; physical-machine acceptance remains separate.
   OpenSSH detachment, private socket auth and owned process-tree cleanup.
 - [x] Automatically publish matching, checksum-verified helper assets after
   each main merge with **Native host binaries** (`.github/workflows/linux-host.yml`);
-  require native acceptance on every target before publishing.
+  require each published target to pass its own native checks. A failed target
+  does not block verified helpers for the other platforms.
+- [x] Merge guided setup in [PR #571](https://github.com/pierreprudh/KLIDE/pull/571):
+  shared popup / Settings controls, form-based SSH authentication and background
+  access, fixed-size popup, left logo checklist with live facts and a moving
+  progress marker, revisitable steps, confirmed deletion and dimmed unavailable
+  machines. Matching Macs can reuse the verified app executable as their helper.
+- [ ] Complete app-only setup acceptance on the real Mac mini, then native
+  Windows OpenSSH: fingerprint / password / key prompts → install → Claude and
+  optional GitHub sign-in → choose or clone a project. Exercise retries, saved
+  setup, connection edits and removal in both the popup and Settings; verify
+  the checklist and footer remain visible in light / dark and small windows.
+- [ ] Verify setup recovery on real hosts: interrupted installation or sign-in,
+  lost SSH, missing helper assets and outdated helpers. Retry must preserve
+  saved settings and existing access, and must not restart an active operation
+  when live readiness facts change.
+- [ ] Document one reliable local test / update path: start `tauri dev` from
+  the intended checkout, verify its served revision, and fully quit old app
+  instances before testing a rebuilt installed app. An older dev server must
+  not be mistaken for the merged build.
 - [ ] Finish desktop distribution: signed/notarized Mac app and signed
   Windows installer. Helper binaries are separate from desktop installers.
 - [ ] Clean physical-machine acceptance: install → sign in → launch a real
