@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.6.12 (2026-11-18) — Remote Machines, Safety, Workers
+## 0.7.0 (2026-11-18) — Remote Machines, Safety, Workers
 
 - **Remote machines.** Settings › Machines discovers Tailscale peers and SSH aliases before manual setup; Klide installs its host on a Linux, macOS or Windows machine over SSH, and a conversation placed there runs natively — remote worktrees, streamed controls, durable replay, reconnection and remote diff inspection. Claude Code in tmux over SSH remains available.
 - **Safety.** Commands nobody read run in a macOS Seatbelt sandbox (no network beyond loopback unless Settings opens it); project hooks in `.klide/hooks.json` run only once allowed; an untrusted folder opens restricted, and every `git` Klide starts goes through one hardened launcher; connector tools need per-tool approval.
