@@ -16,6 +16,28 @@ import tempfile
 import time
 
 
+def wait_for_exit(pid, timeout=5):
+    """Wait on an owned host before Windows removes its mapped executable."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x00100000, False, pid)
+    if not handle:
+        assert ctypes.get_last_error() == 87, ctypes.WinError(ctypes.get_last_error())
+        return
+    try:
+        assert kernel.WaitForSingleObject(handle, int(timeout * 1000)) == 0, "Host did not exit"
+    finally:
+        kernel.CloseHandle(handle)
+
+
 class Relay:
     def __init__(self, binary, data, env):
         command = [str(binary), "ptyd", "connect", "--ensure", "--data-dir", str(data)]
@@ -104,6 +126,7 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
             daemon = subprocess.Popen([str(binary), "ptyd", "--data-dir", str(data)], stdin=subprocess.DEVNULL,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, start_new_session=True)
         relays = []
+        host_pid = None
 
         def connect():
             relay = Relay(binary, data, env)
@@ -124,6 +147,7 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
                     break
                 assert daemon.poll() is None, "Host exited during startup"
                 time.sleep(.05)
+            host_pid = request({"type": "ping"})["pid"]
             print("Checking subscription handshake", flush=True)
             stream = connect()
             stream.send({"type": "subscribe"})
@@ -209,10 +233,9 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
                     daemon.wait()
             else:
                 request({"type": "shutdown"})
-                # The host releases Windows worktree handles asynchronously.
-                for _ in range(100):
-                    if not (data / "ptyd.endpoint").exists(): break
-                    time.sleep(.05)
+                if host_pid:
+                    wait_for_exit(host_pid)
+
 
 
 if __name__ == "__main__":

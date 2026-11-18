@@ -1,7 +1,7 @@
 //! The `ptyd` wire vocabulary: one [`Request`] per line in, one [`Response`]
 //! line back, and [`Event`]s pushed to subscribed connections.
 //!
-//! Shared by Unix domain sockets, authenticated Windows loopback endpoints,
+//! Shared by Unix domain sockets, private Windows filesystem sockets,
 //! and SSH stdio relays. Keeping the vocabulary portable lets clients replay
 //! the same durable transcript regardless of the host operating system.
 
@@ -330,7 +330,7 @@ mod tests {
              its three calls on every target"
         );
         // Each entry point now has one portable implementation: both Unix sockets
-        // and the Windows authenticated loopback endpoint use the same wire.
+        // and the Windows private local socket use the same wire.
         for call in ["pub fn request(", "pub fn ensure_daemon(", "pub fn subscribe("] {
             assert_eq!(
                 src.matches(call).count(),

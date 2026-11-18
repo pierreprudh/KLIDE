@@ -3,6 +3,7 @@
 param([Parameter(Mandatory=$true)][string]$Binary)
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandArgumentPassing = 'Standard'
+$env:PATH = "$env:WINDIR\System32\OpenSSH;$env:PATH"
 $server = "$env:WINDIR\System32\OpenSSH\sshd.exe"
 if (!(Test-Path $server)) { Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null }
 if (!(Test-Path $server)) { throw 'Native Windows acceptance requires the OpenSSH Server Windows capability.' }
@@ -15,6 +16,22 @@ $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
 if ($LASTEXITCODE -ne 0) { throw 'Host key generation failed' }
 & ssh-keygen -q -t ed25519 -N '' -f "$root/client"
 if ($LASTEXITCODE -ne 0) { throw 'Client key generation failed' }
+# Match production OpenSSH host-key ACLs: only SYSTEM and Administrators.
+# The runner temp directory otherwise inherits permissions sshd rejects.
+$administrators = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+$system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().User
+function Set-KeyAcl([string]$path, $owner, $identities) {
+    $acl = [Security.AccessControl.FileSecurity]::new()
+    $acl.SetOwner($owner)
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($identity in $identities) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity,'FullControl','Allow'))
+    }
+    Set-Acl -LiteralPath $path -AclObject $acl
+}
+Set-KeyAcl "$root/host" $administrators @($administrators,$system)
+Set-KeyAcl "$root/client" $user @($user,$administrators,$system)
 @"
 Port $port
 ListenAddress 127.0.0.1

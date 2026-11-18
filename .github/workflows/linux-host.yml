@@ -106,6 +106,7 @@ jobs:
           cargo test --lib --manifest-path src-tauri/Cargo.toml process_lock::
           cargo test --lib --manifest-path src-tauri/Cargo.toml durable::
           cargo test --lib --manifest-path src-tauri/Cargo.toml delegate::child::windows_job::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml pty_daemon::windows_tests::
       - name: Package helper and checksum
         shell: python
         env:

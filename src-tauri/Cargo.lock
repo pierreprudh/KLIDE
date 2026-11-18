@@ -2439,6 +2439,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "tokio-util",
+ "uds_windows",
  "windows-sys 0.61.2",
  "zip",
 ]

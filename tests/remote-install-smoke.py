@@ -73,6 +73,8 @@ def main():
             assert relay.read()["type"] == "ok"
         finally:
             relay.close()
+            if pid and os.name == "nt":
+                smoke.wait_for_exit(pid)
             if pid and os.name != "nt":
                 try:
                     os.kill(pid, 15)

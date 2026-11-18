@@ -22,8 +22,8 @@
 //!   what proves a client is us. `nc -U` still works for debugging if you
 //!   paste the auth line first.
 //!
-//! Unix uses private domain sockets; Windows uses an authenticated loopback
-//! endpoint in an ACL-protected user directory and OpenSSH job breakaway.
+//! Both platforms use private filesystem sockets; Windows protects its
+//! socket directory with an ACL and detaches with OpenSSH job breakaway.
 
 
 
@@ -36,9 +36,7 @@ use std::io::{BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as HostListener, UnixStream as HostStream};
 #[cfg(windows)]
-use std::net::TcpListener as HostListener;
-#[cfg(windows)]
-pub(crate) use std::net::TcpStream as HostStream;
+use uds_windows::{UnixListener as HostListener, UnixStream as HostStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -59,7 +57,6 @@ pub fn protocol_version() -> u32 { crate::pty_wire::PROTOCOL_VERSION }
 /// approach — a short per-user directory under the system temp dir, with the
 /// data dir folded into the filename as a hash so different data dirs (dev
 /// vs prod, tests) get distinct daemons.
-#[cfg(unix)]
 pub fn socket_path(data_dir: &Path) -> PathBuf {
     // FNV-1a, inlined: `DefaultHasher` is randomly seeded per process, so it
     // cannot name a rendezvous point two processes must agree on.
@@ -83,18 +80,30 @@ pub fn socket_dir() -> PathBuf {
 }
 
 #[cfg(windows)]
-pub fn socket_path(data_dir: &Path) -> PathBuf { data_dir.join("ptyd.endpoint") }
-#[cfg(windows)]
-pub fn socket_dir() -> PathBuf { crate::cli::home_dir_path().unwrap_or_else(std::env::temp_dir).join(".klide/sockets") }
+pub fn socket_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE").map(PathBuf::from)
+        .or_else(crate::cli::home_dir_path).unwrap_or_else(std::env::temp_dir).join(".klide/sockets")
+}
 
-pub(crate) fn connect_socket(data_dir: &Path) -> Result<HostStream, String> {
-    #[cfg(unix)] { HostStream::connect(socket_path(data_dir)).map_err(|e|format!("connect: {e}")) }
-    #[cfg(windows)] {
-        let text=std::fs::read_to_string(socket_path(data_dir)).map_err(|e|format!("connect: {e}"))?;
-        let address=text.trim().parse::<std::net::SocketAddr>().map_err(|_|"connect: invalid local endpoint")?;
-        if address.ip()!=std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) { return Err("connect: refused non-loopback host endpoint".into()); }
-        HostStream::connect_timeout(&address,std::time::Duration::from_secs(5)).map_err(|e|format!("connect: {e}"))
-    }
+pub(crate) fn connect_socket(data_dir: &Path) -> Result<HostStream,String> {
+    HostStream::connect(socket_path(data_dir)).map_err(|e|format!("connect: {e}"))
+}
+
+/// Private socket pair for Windows SSH pipes. A shared TCP port could be
+/// claimed by another account before accept; this namespace is user-only.
+#[cfg(windows)]
+pub(crate) fn stream_pair() -> Result<(HostStream,HostStream),String> {
+    use base64::Engine;
+    let directory=socket_dir(); secure_host_directory(&directory)?;
+    let mut nonce=[0u8;12]; getrandom::fill(&mut nonce).map_err(|e|e.to_string())?;
+    let path=directory.join(format!("r-{}.sock",base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce)));
+    let result=(||{
+        let listener=HostListener::bind(&path).map_err(|e|e.to_string())?;
+        let stream=HostStream::connect(&path).map_err(|e|e.to_string())?;
+        let (peer,_)=listener.accept().map_err(|e|e.to_string())?;
+        Ok((stream,peer))
+    })();
+    let _=std::fs::remove_file(path); result
 }
 
 /// The shared secret a client must present as its first request line. Lives
@@ -345,10 +354,16 @@ pub fn bind_socket(data_dir: &Path) -> Result<HostListener, String> {
 #[cfg(windows)]
 pub fn bind_socket(data_dir: &Path) -> Result<HostListener,String> {
     secure_host_directory(data_dir)?;
-    if connect_socket(data_dir).is_ok() { return Err("another ptyd is already serving this directory".into()); }
-    let listener=HostListener::bind((std::net::Ipv4Addr::LOCALHOST,0)).map_err(|e|e.to_string())?;
-    crate::durable::write_atomic_private(&socket_path(data_dir),listener.local_addr().map_err(|e|e.to_string())?.to_string().as_bytes())?;
-    Ok(listener)
+    secure_host_directory(&socket_dir())?;
+    let path=socket_path(data_dir);
+    match HostListener::bind(&path) {
+        Ok(listener)=>Ok(listener),
+        Err(error)=>{
+            if HostStream::connect(&path).is_ok() {return Err("another ptyd is already serving this directory".into());}
+            let _=std::fs::remove_file(&path);
+            HostListener::bind(&path).map_err(|_|format!("Cannot bind the private Windows socket {path:?}: {error}"))
+        }
+    }
 }
 
 /// Entry point for `klide ptyd --data-dir <dir>`. Never returns: serves until
@@ -1115,5 +1130,27 @@ mod tests {
             }
             _ => panic!("expected snapshot"),
         }
+    }
+}
+
+#[cfg(all(test,windows))]
+mod windows_tests {
+    use super::*;
+    #[test]
+    fn private_windows_socket_refuses_missing_auth_and_accepts_the_local_client() {
+        let data=std::env::temp_dir().join(format!("klide-private-socket-{}",crate::agent::transcripts::run_id()));
+        let listener=bind_socket(&data).unwrap();
+        let state=new_state(data.clone(),ensure_token(&data).unwrap());
+        let server=std::thread::spawn(move||{
+            for _ in 0..2 {let (stream,_)=listener.accept().unwrap();handle_client(stream,state.clone());}
+        });
+        let mut raw=HostStream::connect(socket_path(&data)).unwrap();
+        raw.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        writeln!(raw,"{{\"type\":\"ping\"}}").unwrap();
+        let reply=crate::pty_wire::read_line_capped(&mut BufReader::new(raw)).unwrap().unwrap();
+        assert!(matches!(serde_json::from_str::<Response>(&reply).unwrap(),Response::Err{..}));
+        assert!(matches!(crate::pty_client::request(&data,&Request::Ping).unwrap(),Response::Pong{..}));
+        server.join().unwrap();
+        std::fs::remove_file(socket_path(&data)).unwrap();std::fs::remove_dir_all(data).unwrap();
     }
 }

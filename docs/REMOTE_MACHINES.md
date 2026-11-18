@@ -55,8 +55,9 @@ ARM64 helpers are not published yet. Claude installation follows the official
 Command Line Tools are unavailable in an SSH session, setup explains what to
 install on the destination before retrying.
 
-Unix hosts use private domain sockets. Windows uses a loopback-only endpoint
-and token under a directory restricted to the current Windows identity. The
+Unix hosts use private domain sockets. Windows uses native filesystem sockets
+and a token under directories restricted to the current Windows identity. No
+TCP port is exposed for local host IPC. The
 host requests OpenSSH job breakaway and disconnects all inherited stdio. An
 older server that refuses breakaway fails setup explicitly. Each Windows
 Claude process starts suspended, enters its own kill-on-close job, then

@@ -2,8 +2,6 @@
 //! local socket; its relay reads the token on the destination, never the Mac.
 use crate::pty_wire::Request;
 use std::io::{self, Read, Write};
-#[cfg(windows)]
-use std::net::TcpStream as HostStream;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 #[cfg(unix)]
@@ -11,6 +9,8 @@ use std::os::unix::net::UnixStream as HostStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
+#[cfg(windows)]
+use uds_windows::UnixStream as HostStream;
 
 pub(crate) trait Transport {
     fn connect(&self) -> Result<Connection, String>;
@@ -116,11 +116,7 @@ impl Connection {
 
     #[cfg(windows)]
     pub(super) fn child(mut command: Command, timeout: Duration) -> Result<Self, String> {
-        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .map_err(|e| e.to_string())?;
-        let stream = HostStream::connect(listener.local_addr().map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let (mut peer, _) = listener.accept().map_err(|e| e.to_string())?;
+        let (stream, mut peer) = crate::pty_daemon::stream_pair()?;
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
