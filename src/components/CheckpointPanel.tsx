@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { relativeTime } from "../time";
 import { listCheckpoints, revertCheckpoint, revertRunCheckpoints } from "../agent/client";
 import type { CheckpointEntry } from "../agent/types";
@@ -113,6 +113,7 @@ function QuietAction({
   disabled,
   onClick,
   size = 11,
+  confirmLabel,
 }: {
   icon?: ReactNode;
   label: string;
@@ -123,15 +124,34 @@ function QuietAction({
   disabled?: boolean;
   onClick?: () => void;
   size?: number;
+  /** When set, the first click only arms the action — the label swaps to this
+   *  and the second click within 3s fires. Destructive actions confirm inline
+   *  instead of via a blocking window.confirm. */
+  confirmLabel?: string;
 }) {
+  const [armed, setArmed] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(() => () => { if (timer.current !== null) window.clearTimeout(timer.current); }, []);
   const inactive = !!disabled || !!busy;
-  const restColor = busy && danger ? "var(--danger)" : "var(--fg-subtle)";
+  const shown = busy ? busyLabel : armed ? (confirmLabel ?? label) : label;
+  const restColor = (busy || armed) && danger ? "var(--danger)" : "var(--fg-subtle)";
   return (
     <button
-      onClick={onClick}
+      onClick={() => {
+        if (inactive || !onClick) return;
+        if (confirmLabel && !armed) {
+          setArmed(true);
+          timer.current = window.setTimeout(() => setArmed(false), 3000);
+          return;
+        }
+        if (timer.current !== null) window.clearTimeout(timer.current);
+        setArmed(false);
+        onClick();
+      }}
+      onBlur={() => { if (timer.current !== null) window.clearTimeout(timer.current); setArmed(false); }}
       disabled={inactive}
-      title={label}
-      aria-label={label}
+      title={shown}
+      aria-label={shown}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -154,7 +174,7 @@ function QuietAction({
       }}
     >
       {icon}
-      {showLabel && (busy ? busyLabel : label)}
+      {showLabel && shown}
     </button>
   );
 }
@@ -189,9 +209,8 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   }, [load]);
 
   async function handleRevert(entry: CheckpointEntry) {
-    // Match the bulk/turn paths: confirm before an overwrite that can't be
-    // undone. Single-file revert was the one destructive path without a guard.
-    if (!window.confirm(`Revert ${entry.path} to its checkpoint? This overwrites the current file and can't be undone.`)) return;
+    // The button is a two-step confirm (see QuietAction's confirmLabel), so an
+    // overwrite that can't be undone is guarded before we get here.
     setReverting(entry.toolCallId);
     try {
       await revertCheckpoint(runId, entry.toolCallId);
@@ -206,7 +225,6 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   }
 
   async function handleRevertAll() {
-    if (!window.confirm(`Revert all ${entries.length} remaining file change${entries.length === 1 ? "" : "s"} for this run?`)) return;
     setRevertingAll(true);
     setError(null);
     try {
@@ -223,7 +241,6 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   }
 
   async function handleRevertTurn(turn: number, group: CheckpointEntry[]) {
-    if (!window.confirm(`Revert ${group.length} file change${group.length === 1 ? "" : "s"} from turn ${turn}?`)) return;
     setRevertingTurn(turn);
     setError(null);
     try {
@@ -306,6 +323,7 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
               <QuietAction
                 icon={revertGlyphSmall}
                 label="Revert turn"
+                confirmLabel={`Revert ${group.length}?`}
                 danger
                 size={10}
                 busy={revertingTurn === turn}
@@ -318,6 +336,7 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
                 <QuietAction
                   icon={revertGlyphSmall}
                   label="Revert all"
+                  confirmLabel={`Revert all ${entries.length}?`}
                   busyLabel="Reverting…"
                   danger
                   size={10}
@@ -417,6 +436,7 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
                         icon={RevertGlyph}
                         label="Revert file"
                         showLabel={false}
+                        confirmLabel="Revert?"
                         danger
                         busy={rowBusy}
                         disabled={revertingAll || revertingTurn !== null}

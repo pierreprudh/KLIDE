@@ -7,6 +7,7 @@ import { fileMatchRank } from "../fileSearch";
 import { SearchIcon } from "../icons";
 import { Kbd } from "./Kbd";
 import { FileTypeIcon } from "./fileMarks";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 type CommandItem = {
   id: string;
@@ -105,6 +106,8 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
   const [files, setFiles] = useState<FileItem[]>([]);
   const [filesLoaded, setFilesLoaded] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, true);
 
   const isCommandMode = query.startsWith(">");
   const searchQuery = isCommandMode ? query.slice(1).trimStart() : query;
@@ -273,8 +276,10 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
       }}
     >
       <div
+        ref={dialogRef}
         className="klide-cmd"
         role="dialog"
+        aria-modal="true"
         aria-label={isCommandMode ? "Commands" : "Go to file"}
         data-sized={sized || undefined}
         data-ready={ready || undefined}

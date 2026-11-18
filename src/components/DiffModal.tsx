@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { diffLines, Change } from "diff";
 import { Z } from "../zLayers";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 export type PendingEdit = {
   path: string;
@@ -37,6 +38,8 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
   // Keyboard affordances: Escape rejects (matches the other modals), and the
   // primary action takes initial focus so a keyboard user has a clear start.
   const applyRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, true);
   useEffect(() => {
     applyRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
@@ -51,6 +54,7 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       onClick={onReject}

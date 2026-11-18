@@ -41,3 +41,20 @@ describe("readable rail/tab information", () => {
     });
   }
 });
+
+describe("non-text and status contrast", () => {
+  for (const theme of ["klide-light", "sage-garden", "sage-garden-dark", "cursor-dark", "vscode-dark", "github-light", "cerulean", "solarized-dark"]) {
+    it(`${theme}: accent (focus ring + icons) >=3:1, status colors and code comments >=4.5:1`, () => {
+      const t = tokens(theme), bg = color(t["--bg"]);
+      for (const surface of ["--bg", "--bg-elevated"]) {
+        // The shared :focus-visible rule outlines with --focus-ring = var(--accent).
+        expect(contrast(color(t["--accent"]), composite(color(t[surface]), bg)), `${theme} accent on ${surface}`).toBeGreaterThanOrEqual(3);
+        // Status colors are also used as text.
+        for (const token of ["--success", "--warning", "--danger"]) {
+          expect(contrast(color(t[token]), composite(color(t[surface]), bg)), `${theme} ${token} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+      expect(contrast(color(t["--code-comment"]), color(t["--editor-bg"])), `${theme} code-comment on editor-bg`).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});

@@ -320,6 +320,8 @@ export function AnchoredWorkbench(props: Props) {
               current={sidePanelWidth}
               onChange={(w) => onPanelWidthChange("explorer", clamp(w, 200, 520))}
               onDragging={setResizing}
+              min={200}
+              max={520}
             />
           </div>
           <ColumnSurface>{renderEditor()}</ColumnSurface>
@@ -330,6 +332,8 @@ export function AnchoredWorkbench(props: Props) {
                 current={aiPanelWidth}
                 onChange={(w) => onPanelWidthChange("ai", clamp(w, 300, 620))}
                 onDragging={setResizing}
+                min={300}
+                max={620}
               />
               <ColumnSurface>{renderAi()}</ColumnSurface>
             </>
@@ -342,6 +346,8 @@ export function AnchoredWorkbench(props: Props) {
             <TerminalSplitter
               current={terminalHeight}
               onChange={(h) => onPanelHeightChange("terminal", clamp(h, 140, 460))}
+              min={140}
+              max={460}
             />
             <ColumnSurface>
               <TerminalPanel
@@ -419,6 +425,8 @@ function SideSplitter({
   current,
   onChange,
   onDragging,
+  min,
+  max,
 }: {
   side: "left" | "right";
   current: number;
@@ -426,6 +434,8 @@ function SideSplitter({
   /** Reports the start and end of a drag, so the host can pause any width
    *  transition that would otherwise trail the pointer. */
   onDragging?: (dragging: boolean) => void;
+  min: number;
+  max: number;
 }) {
   // The column itself is 1px so the layout hairline stays crisp. A 1px-wide
   // drag target is impossible to hit, so we overlay a wider invisible hit zone
@@ -454,12 +464,31 @@ function SideSplitter({
 
   const lineRef = useRef<HTMLDivElement>(null);
 
+  // Keyboard equivalent of the drag: same clamp as the call site.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.key === "PageUp" || e.key === "PageDown" ? 48 : 16;
+    let next: number | null = null;
+    if (e.key === "ArrowLeft") next = side === "left" ? current - step : current + step;
+    else if (e.key === "ArrowRight") next = side === "left" ? current + step : current - step;
+    else if (e.key === "PageUp" || e.key === "PageDown") next = side === "left" ? current + (e.key === "PageDown" ? step : -step) : current - (e.key === "PageDown" ? step : -step);
+    else if (e.key === "Home") next = min;
+    else if (e.key === "End") next = max;
+    if (next === null) return;
+    e.preventDefault();
+    onChange(clamp(next, min, max));
+  };
+
   return (
     <div
       ref={lineRef}
       role="separator"
       aria-orientation="vertical"
       aria-label={`Resize ${side} panel`}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={Math.round(current)}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
       style={{
         background: "var(--border)",
         position: "relative",
@@ -492,15 +521,37 @@ function SideSplitter({
 function TerminalSplitter({
   current,
   onChange,
+  min = 140,
+  max = 460,
 }: {
   current: number;
   onChange: (next: number) => void;
+  min?: number;
+  max?: number;
 }) {
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.key === "PageUp" || e.key === "PageDown" ? 48 : 16;
+    let next: number | null = null;
+    if (e.key === "ArrowUp") next = current - step;
+    else if (e.key === "ArrowDown") next = current + step;
+    else if (e.key === "PageUp") next = current - step;
+    else if (e.key === "PageDown") next = current + step;
+    else if (e.key === "Home") next = min;
+    else if (e.key === "End") next = max;
+    if (next === null) return;
+    e.preventDefault();
+    onChange(clamp(next, min, max));
+  };
   return (
     <div
       role="separator"
       aria-orientation="horizontal"
       aria-label="Resize terminal"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={Math.round(current)}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
       onMouseDown={(e) => {
         e.preventDefault();
         const startY = e.clientY;

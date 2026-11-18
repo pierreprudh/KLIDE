@@ -1178,7 +1178,8 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
   const [showTools, setShowTools] = useState(true);
   const [showProcessNotes, setShowProcessNotes] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   // The revealed blocks sit inline next to the turns they belong to — often
@@ -1202,19 +1203,19 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
     if (preloaded) {
       setMessages(preloaded);
       setLoading(false);
-      setError(false);
+      setError(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    setError(false);
+    setError(null);
     setMessages([]);
     fetchRunMessages(run)
       .then((rows) => {
         if (!cancelled) setMessages(rows);
       })
-      .catch(() => {
-        if (!cancelled) setError(true);
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error && err.message ? err.message : "Unknown error");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -1222,7 +1223,7 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
     return () => {
       cancelled = true;
     };
-  }, [run.id, run.path, run.source, preloaded]);
+  }, [run.id, run.path, run.source, preloaded, reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1243,7 +1244,26 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
   // large). Draw the turn stack rather than a one-line "Loading…", so the
   // messages fade into place they already occupy.
   if (loading) return <TranscriptSkeleton />;
-  if (error) return <div style={muted}>Couldn't read this session.</div>;
+  if (error) return (
+    <div style={{ ...muted, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <span>Couldn't read this session{error ? ` — ${error}` : "."}</span>
+      <button
+        type="button"
+        onClick={() => setReloadKey((k) => k + 1)}
+        style={{
+          fontSize: 12,
+          color: "var(--fg)",
+          background: "var(--bg-hover)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          padding: "2px 10px",
+          cursor: "pointer",
+        }}
+      >
+        Retry
+      </button>
+    </div>
+  );
   if (messages.length === 0) return <div style={muted}>No readable messages.</div>;
 
   const conversationItems = compactConversationMessages(messages, { preserveTurns: true });

@@ -57,6 +57,24 @@ export function SplitPane({ top, bottom, defaultSplit, minPane = 80 }: Props) {
     document.body.style.userSelect = "none";
   }, []);
 
+  // Keyboard equivalent of the drag: the same clamp as the pointer path.
+  const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const h = el.getBoundingClientRect().height;
+    if (h <= 0) return;
+    const step = e.key === "PageUp" || e.key === "PageDown" ? 80 : 16;
+    let next: number | null = null;
+    if (e.key === "ArrowUp" || e.key === "PageUp") next = topHeight - step;
+    else if (e.key === "ArrowDown" || e.key === "PageDown") next = topHeight + step;
+    else if (e.key === "Home") next = minPane;
+    else if (e.key === "End") next = Math.max(0, h - minPane);
+    if (next === null) return;
+    e.preventDefault();
+    if (h < minPane * 2) setTopHeight(Math.max(0, Math.min(next, h - minPane)));
+    else setTopHeight(Math.max(minPane, Math.min(next, h - minPane)));
+  }, [topHeight, minPane]);
+
   useEffect(() => {
     if (!dragging.current) return;
     const el = containerRef.current;
@@ -94,6 +112,13 @@ export function SplitPane({ top, bottom, defaultSplit, minPane = 80 }: Props) {
       <div
         ref={dividerRef}
         onMouseDown={onMouseDown}
+        onKeyDown={onKeyDown}
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize panes"
+        aria-valuemin={minPane}
+        aria-valuenow={Math.round(topHeight)}
+        tabIndex={0}
         style={{
           flexShrink: 0,
           height: 5,
