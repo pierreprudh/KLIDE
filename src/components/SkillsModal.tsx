@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSlidingHighlight } from "../hooks/useSlidingHighlight";
+import { useModalFocus } from "../hooks/useModalFocus";
 import { Z } from "../zLayers";
 import { notify } from "../toast";
 import { listConnectors, type Connector } from "../ipc/connectors";
@@ -167,6 +168,8 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
   }, [tools, query]);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, open && !embedded);
   useEffect(() => {
     if (open) searchRef.current?.focus();
   }, [open]);
@@ -227,6 +230,7 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
 
   const body = (
       <div
+        ref={dialogRef}
         className="klide-skills"
         data-embedded={embedded || undefined}
         role={embedded ? "region" : "dialog"}

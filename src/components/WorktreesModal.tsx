@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Z } from "../zLayers";
 import { CloseIcon, GitIcon, ReplayIcon } from "../icons";
 import type { WorktreeInfo } from "../worktrees";
 import { gitWorktreeList, gitWorktreeMerge, gitWorktreeRemove } from "../ipc/git";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 // Worktrees — the fleet's review/merge surface. Lists the repo's git
 // worktrees and lets you open one in a pinned AI panel, merge its branch back
@@ -31,6 +32,8 @@ export function WorktreesModal({ open, workspaceRoot, onOpenWorktree, onNotice, 
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyPath, setBusyPath] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, open);
 
   const refresh = useCallback(async () => {
     if (!workspaceRoot) return;
@@ -104,6 +107,7 @@ export function WorktreesModal({ open, workspaceRoot, onOpenWorktree, onNotice, 
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Worktrees"

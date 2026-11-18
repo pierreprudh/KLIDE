@@ -40,6 +40,8 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, drag
   return (
     <div
       className="chrome-enter"
+      role="tablist"
+      aria-label="Open editors"
       // Like a Mac toolbar, the strip's empty run drags the window; tabs are
       // their own event targets and keep their clicks.
       data-tauri-drag-region={dragsWindow ? true : undefined}
@@ -75,6 +77,23 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, drag
           )}
           <div
             onClick={() => onSelect(i)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(i); return; }
+              if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); onClose(i); return; }
+              const strip = e.currentTarget.parentElement;
+              const tabEls = strip ? Array.from(strip.querySelectorAll<HTMLElement>('[role="tab"]')) : [];
+              const at = tabEls.indexOf(e.currentTarget);
+              let next = -1;
+              if (e.key === "ArrowRight") next = (at + 1) % tabEls.length;
+              else if (e.key === "ArrowLeft") next = (at - 1 + tabEls.length) % tabEls.length;
+              else if (e.key === "Home") next = 0;
+              else if (e.key === "End") next = tabEls.length - 1;
+              if (next >= 0 && tabEls.length > 0) { e.preventDefault(); onSelect(next); tabEls[next]?.focus(); }
+            }}
+            role="tab"
+            id={`klide-tab-${i}`}
+            aria-selected={isActive}
+            tabIndex={isActive ? 0 : -1}
             title={relative}
             data-active={isActive}
             className="klide-tab klide-tab-raised"
@@ -162,7 +181,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, drag
               <span
                 style={{
                   flex: "0 1 auto",
-                  color: "var(--fg-dim)",
+                  color: "var(--fg-subtle)",
                   fontSize: 11,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
@@ -184,8 +203,8 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, drag
               className="klide-tab-close"
               style={{
                 color: "var(--fg-subtle)",
-                width: 18,
-                height: 18,
+                width: 24,
+                height: 24,
                 flexShrink: 0,
                 display: "grid",
                 placeItems: "center",

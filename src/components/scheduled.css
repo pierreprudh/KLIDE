@@ -51,15 +51,15 @@
 }
 .scheduled-pane-heading { height: 36px; padding: 0 14px; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .scheduled-pane-heading h2, .scheduled-detail h3 { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-.scheduled-pane-heading > span { color: var(--fg-dim); font-size: 11px; }
+.scheduled-pane-heading > span { color: var(--fg-subtle); font-size: 11px; }
 .scheduled-list-scroll, .scheduled-history-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 6px 6px; }
 .scheduled-list-row { display: grid; gap: 6px; width: 100%; padding: 12px 8px; border: none; border-radius: var(--radius-md); text-align: left; background: transparent; color: var(--fg); }
 .scheduled-list-row:hover, .scheduled-list-row[aria-current] { background: var(--bg-hover); }
 .scheduled-list-row-top, .scheduled-history-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
 .scheduled-list-row-top strong { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scheduled-list-row-top > span { font-size: 10px; color: var(--fg-dim); flex-shrink: 0; }
+.scheduled-list-row-top > span { font-size: 10px; color: var(--fg-subtle); flex-shrink: 0; }
 .scheduled-list-row-meta { font-size: 11px; color: var(--fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scheduled-local { display: flex; align-items: center; gap: 6px; margin-top: auto; min-height: 34px; padding: 0 14px; font-size: 10px; color: var(--fg-dim); flex-shrink: 0; }
+.scheduled-local { display: flex; align-items: center; gap: 6px; margin-top: auto; min-height: 34px; padding: 0 14px; font-size: 10px; color: var(--fg-subtle); flex-shrink: 0; }
 .scheduled-service-enable { margin-left: auto; border: 0; background: transparent; padding: 3px; color: var(--fg); font-size: 11px; }
 .scheduled-service-enable:hover { text-decoration: underline; }
 .scheduled-detail-heading { min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 14px 8px 20px; flex-shrink: 0; box-sizing: border-box; }
@@ -71,7 +71,7 @@
 .scheduled-timing { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: 12px; line-height: 1.6; }
 .scheduled-timing > span:first-child { color: var(--fg-subtle); }
 .scheduled-timing time { color: var(--fg-strong); }
-.scheduled-cadence { color: var(--fg-dim); margin-left: 4px; }
+.scheduled-cadence { color: var(--fg-subtle); margin-left: 4px; }
 .scheduled-context { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--fg-subtle); font-size: 11px; margin-top: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 .scheduled-detail h3 { margin: 30px 0 12px; color: var(--fg-subtle); }
 .scheduled-instructions { font-size: 13px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -85,7 +85,7 @@
 .scheduled-history li > button:hover { background: var(--bg-hover); }
 .scheduled-history-top time { font-size: 12px; }
 .scheduled-history-top > span { font-size: 10px; color: var(--fg-subtle); }
-.scheduled-history-bottom { display: flex; justify-content: space-between; color: var(--fg-dim); font-size: 11px; }
+.scheduled-history-bottom { display: flex; justify-content: space-between; color: var(--fg-subtle); font-size: 11px; }
 .scheduled-history-bottom svg { opacity: 0; transition: opacity var(--motion-fast) var(--ease-out); }
 .scheduled-history button:hover svg, .scheduled-history button:focus-visible svg { opacity: 1; }
 .scheduled-history-error { color: var(--fg-subtle); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
@@ -144,7 +144,7 @@
 .scheduled-task-row select, .scheduled-task-row input { width: auto; max-width: 65%; min-width: 0; padding: 7px 2px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-strong); text-align: right; }
 .scheduled-task-row input:not([type="datetime-local"]) { flex: 1; }
 .scheduled-task-row select { cursor: pointer; text-overflow: ellipsis; }
-.scheduled-task-row input::placeholder { color: var(--fg-dim); }
+.scheduled-task-row input::placeholder { color: var(--fg-subtle); }
 .scheduled-task-hint { margin: 8px 0 0; color: var(--fg-subtle); font-size: var(--fs-xs); line-height: 1.6; }
 .scheduled-task-advanced { border-top: 1px solid var(--border); padding-top: 14px; }
 .scheduled-task-advanced summary { display: flex; align-items: center; gap: 8px; padding: 0; list-style: none; cursor: pointer; color: var(--fg-subtle); font-size: var(--fs-xs); }

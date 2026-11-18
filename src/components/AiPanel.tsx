@@ -9,7 +9,8 @@ import { SideQuestionText } from "./ai/SideQuestionText";
 import { SideQuestionResize } from "./ai/SideQuestionResize";
 import "./ai/sideQuestions.css";
 import { sideQuestionDirective, sideQuestionModel, sideQuestionContext } from "./ai/sideQuestions";
-import { useMissingDelegateClis } from "../hooks/useMissingDelegateClis";
+import { useMissingDelegateClis, useSignedOutDelegates } from "../hooks/useMissingDelegateClis";
+import { DelegateLoginModal } from "./settings/DelegateLoginModal";
 import { useRemoteRunConnection } from "./ai/useRemoteRunConnection";
 import { appendMissionReports } from "./ai/missionReports";
 import { MissionLibrary } from "./missionControl/MissionLibrary";
@@ -65,6 +66,7 @@ import {
 } from "../reflectionLevels";
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { usePresence } from "../hooks/usePresence";
+import { useModalFocus } from "../hooks/useModalFocus";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
 import { errMessage, providerFailureMessage } from "../errors";
@@ -1280,6 +1282,8 @@ export function AiPanel({
   const [fileDragOver, setFileDragOver] = useState(false);
   // A conversation image opened full-size (data URI), or null when closed.
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  useModalFocus(lightboxRef, !!lightboxImage);
   // Design mode belongs to this conversation: its review is sent here. Mounted
   // on first open and then only hidden, so an unsent review survives closing.
   const [designOpen, setDesignOpen] = useState(false);
@@ -1735,7 +1739,13 @@ export function AiPanel({
   // canvas hosts their session the same way a panel does, and they are the one
   // route that runs on a subscription instead of an API key.
   const providerGroupsForSurface = providerGroups;
-  const missingDelegateClis = useMissingDelegateClis(providerOpen, providerGroups.flatMap((group) => group.items.filter((item) => isDelegateProvider(item.id)).map((item) => item.id)));
+  const delegateIdsInMenu = providerGroups.flatMap((group) => group.items.filter((item) => isDelegateProvider(item.id)).map((item) => item.id));
+  const missingDelegateClis = useMissingDelegateClis(providerOpen, delegateIdsInMenu);
+  // Installed but not signed in: the row gets a "Log in" hint that opens the
+  // CLI's own login in a popup terminal instead of selecting a provider that
+  // would fail on send.
+  const { signedOut: signedOutClis, refresh: refreshDelegateAuth } = useSignedOutDelegates(providerOpen, delegateIdsInMenu);
+  const [loginFor, setLoginFor] = useState<string | null>(null);
   // Hosted ("API") providers that have no key configured — badged in the picker
   // so a missing key is visible *before* selecting + sending, not after a failed
   // run. Populated when the menu opens.
@@ -2524,7 +2534,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     const paths = Array.from(new Set([...runChangedPathsRef.current, ...files]));
     const count = paths.length;
     if (count === 0 || reverting) return;
-    if (!window.confirm(`Undo ${count} file change${count === 1 ? "" : "s"} this run made?`)) return;
+    // The Undo button on the result card is a two-step ConfirmButton, so this
+    // path is only reached on the second click.
     setReverting(true);
     try {
       await revertRunCheckpoints(currentId);
@@ -4163,6 +4174,15 @@ This user request requires workspace inspection. Before answering, you MUST call
   // menu state, trigger ref, and provider mutation path never drift.
   const providerControl = (
     <div style={{ position: "relative", minWidth: 0, textTransform: "none", letterSpacing: 0 }}>
+      {loginFor ? (
+        <DelegateLoginModal
+          providerId={loginFor as ProviderId}
+          title={providerName(loginFor as ProviderId)}
+          workspaceRoot={workspaceRoot}
+          onClose={() => setLoginFor(null)}
+          onExited={refreshDelegateAuth}
+        />
+      ) : null}
       <button ref={providerTriggerRef} onClick={() => (providerOpen ? closeProviderMenu() : openProviderMenu())}
         title={isLocalProvider ? (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · not reachable`) : isDelegateProvider(provider) ? (connected ? `${providerName(provider)} · CLI available` : `${providerName(provider)} · check CLI install/auth`) : (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · check API key`)}
         aria-label={`Provider: ${providerName(provider)}`}
@@ -4193,6 +4213,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   // instead of selecting a provider that would fail on send.
                   const keyless = keylessProviders.has(item.id);
                   const missingCli = missingDelegateClis.has(item.id);
+                  const signedOutCli = signedOutClis.has(item.id);
                   const routesToSettings = keyless && !!onOpenSettingsSection;
                   return {
                     id: item.id,
@@ -4201,9 +4222,17 @@ This user request requires workspace inspection. Before answering, you MUST call
                     active: item.id === provider,
                     dimmed: keyless || missingCli,
                     leadout: routesToSettings,
-                    title: missingCli ? `${item.name} CLI is not installed` : keyless ? `${item.name} has no API key — open Settings` : undefined,
+                    hint: signedOutCli ? "Log in" : undefined,
+                    title: missingCli
+                      ? `${item.name} CLI is not installed`
+                      : signedOutCli
+                        ? `${item.name} is installed but not signed in — click to log in`
+                        : keyless
+                          ? `${item.name} has no API key — open Settings`
+                          : undefined,
                     onPick: () => {
                       if (routesToSettings) { closeProviderMenu(); onOpenSettingsSection?.("api"); return; }
+                      if (signedOutCli) { closeProviderMenu(); setLoginFor(item.id); return; }
                       selectProvider(item.id);
                     },
                   };
@@ -4225,6 +4254,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     )}
     {lightboxImage && createPortal(
       <div
+        ref={lightboxRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="Image preview"
@@ -4492,7 +4523,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     {p}
                   </button>
                 ))}
-                <div style={{ marginTop: 4, fontSize: 11, color: "var(--fg-dim)" }}>Type <b style={{ fontWeight: 600, color: "var(--fg-subtle)" }}>@</b> to attach a file · <b style={{ fontWeight: 600, color: "var(--fg-subtle)" }}>/</b> for commands</div>
+                <div style={{ marginTop: 4, fontSize: 11, color: "var(--fg-subtle)" }}>Type <b style={{ fontWeight: 600 }}>@</b> to attach a file · <b style={{ fontWeight: 600 }}>/</b> for commands</div>
                 <div
                   style={{
                     display: "flex",
@@ -4501,7 +4532,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     gap: 12,
                     marginTop: 8,
                     fontSize: 11,
-                    color: "var(--fg-dim)",
+                    color: "var(--fg-subtle)",
                   }}
                 >
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>

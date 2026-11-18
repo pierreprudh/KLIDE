@@ -3360,6 +3360,9 @@ function App() {
     { id: "open-folder", label: "File: Open Folder…", shortcut: "⌘O", action: () => { openFolderDialog(); setPaletteOpen(false); } },
     { id: "close-folder", label: "File: Switch Project (Welcome)", action: () => { closeFolder(); setPaletteOpen(false); } },
     { id: "close-tab", label: "View: Close Tab", shortcut: "⌘W", action: () => { if (activeIdx >= 0) closeTab(activeIdx); setPaletteOpen(false); } },
+    { id: "next-tab", label: "View: Next Tab", shortcut: "⌘Tab", action: () => { if (tabs.length > 1) setActiveIdx((i) => (i + 1) % tabs.length); setPaletteOpen(false); } },
+    { id: "prev-tab", label: "View: Previous Tab", shortcut: "⌘⇧Tab", action: () => { if (tabs.length > 1) setActiveIdx((i) => (i - 1 + tabs.length) % tabs.length); setPaletteOpen(false); } },
+    { id: "toggle-sidebar", label: "View: Toggle Sidebar", shortcut: "⌘B", action: () => { setSetting(SETTINGS.railCollapsed, !getSetting(SETTINGS.railCollapsed)); setPaletteOpen(false); } },
     { id: "find", label: "Edit: Find in Files", shortcut: "⌘⇧F", action: () => { setSearchVisible((v) => !v); setPaletteOpen(false); } },
     { id: "terminal-toggle", label: "Terminal: Toggle", shortcut: "⌘`", action: () => { setTerminalVisible((v) => !v); setPaletteOpen(false); } },
     // The rail no longer carries an AI row, so this is the way to put the panel
@@ -3456,6 +3459,7 @@ function App() {
       autoTheme={autoTheme}
       onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
       onResetLayout={resetPanelLayout}
+      onOpenRuns={() => openOverlay("runs")}
       showLayoutControls={overlay === null}
       foldedEditor={
         surface.kind === "workbench" &&

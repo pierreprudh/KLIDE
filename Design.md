@@ -71,8 +71,8 @@ colors:
                               # one that only sets `accent` inherits this sage and flashes green on hover.
                               # Themes without a hand-tuned value derive it — color-mix(accent 88%, fg-strong).
   # Status
-  success:        "#5A7B4C"   # Same as accent — quiet and consistent
-  warning:        "#B5832E"   # Warm amber, not red
+  success:        "#58794A"   # A hair darker than accent so it also passes 4.5:1 as text
+  warning:        "#916925"   # Warm amber, not red — dark enough for 4.5:1 as text
   danger:         "#A8514A"   # Muted brick, not bright red
   # Inset shadow signature (for dark CTAs)
   inset-highlight: "rgba(255, 255, 255, 0.20)"   # Top-edge white line
