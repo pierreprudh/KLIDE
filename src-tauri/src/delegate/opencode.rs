@@ -12,7 +12,7 @@ mod v2;
 
 /// The only URL a CLI-printed "listening on …" line may name: plain
 /// `http://127.0.0.1:<port>` (or `[::1]`), with an explicit port and no
-/// userinfo, path or query. Rebuilt from the parsed parts, so lookalikes
+/// userinfo. Any path or query is dropped: the origin is rebuilt from the parsed parts, so lookalikes
 /// like `http://127.0.0.1:@evil.com/` (userinfo — the real host is
 /// evil.com) or `http://127.0.0.1.evil.com/` are refused. The CLI's own
 /// stdout is attacker-influenceable (a plugin or tampered binary can
@@ -26,9 +26,12 @@ fn loopback_server_origin(raw: &str) -> Option<String> {
     if !url.username().is_empty() || url.password().is_some() {
         return None;
     }
-    match url.host_str() {
-        Some("127.0.0.1") => Some(format!("http://127.0.0.1:{}", url.port().unwrap())),
-        Some("::1") => Some(format!("http://[::1]:{}", url.port().unwrap())),
+    // The parsed host is normalized (IPv4 spellings like `0x7f.1` read as
+    // 127.0.0.1) and an IPv6 host keeps its brackets: "[::1]".
+    let port = url.port()?;
+    match url.host_str()? {
+        "127.0.0.1" => Some(format!("http://127.0.0.1:{port}")),
+        "[::1]" => Some(format!("http://[::1]:{port}")),
         _ => None,
     }
 }
@@ -1324,6 +1327,8 @@ mod tests {
         let server = OpenCodeServer::new(None);
         assert_eq!(server.listening_url("listening on http://127.0.0.1:@evil.com:4096"), None);
         assert_eq!(server.listening_url("listening on http://127.0.0.1:4096"), Some("http://127.0.0.1:4096".into()));
+        assert_eq!(server.listening_url("listening on http://[::1]:4096/"), Some("http://[::1]:4096".into()));
+        assert_eq!(server.listening_url("listening on http://localhost:4096"), None);
     }
 
     #[test]
