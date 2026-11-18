@@ -88,3 +88,58 @@ impl Job {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn dropping_a_delegate_stops_its_descendants_and_preserves_other_processes() {
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+        let path = std::env::temp_dir().join(format!(
+            "klide-job-{}.pid",
+            crate::agent::transcripts::run_id()
+        ));
+        let script=format!("$p=[Diagnostics.ProcessStartInfo]::new('powershell.exe','-NoProfile -Command Start-Sleep -Seconds 30'); $p.UseShellExecute=$false; $p.CreateNoWindow=$true; $child=[Diagnostics.Process]::Start($p); [IO.File]::WriteAllText({},$child.Id.ToString()); Start-Sleep -Seconds 30",crate::remote_platform::ps_quote(&path.to_string_lossy()));
+        let mut command = tokio::process::Command::new("powershell.exe");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let child = super::super::Child::spawn(&mut command).unwrap();
+        let mut unrelated = tokio::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let pid = loop {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(pid) = text.parse::<u32>() {
+                    break pid;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Delegate did not create its child"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        // Keep a handle to this exact descendant across cancellation. No PID
+        // reuse can make this assertion accidentally inspect another process.
+        let descendant = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(!descendant.is_null());
+        let descendant = unsafe { OwnedHandle::from_raw_handle(descendant) };
+        drop(child);
+        assert_eq!(
+            unsafe { WaitForSingleObject(descendant.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0
+        );
+        assert!(unrelated.try_wait().unwrap().is_none());
+        unrelated.kill().await.unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+}

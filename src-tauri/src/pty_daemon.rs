@@ -405,8 +405,15 @@ fn daemon_main_impl(data_dir: PathBuf, scheduled_data: Option<PathBuf>) -> ! {
     // Idle exit: with nothing hosted and nobody attached for IDLE_EXIT_MS,
     // remove the socket and leave. The app respawns us on demand.
     if let Some(app_data) = scheduled_data {
-        crate::agent::command_env::warm();
-        crate::agent::schedules::start_service(app_data, state.chats.clone());
+        #[cfg(unix)] {
+            crate::agent::command_env::warm();
+            crate::agent::schedules::start_service(app_data, state.chats.clone());
+        }
+        #[cfg(windows)] {
+            let _=app_data;
+            eprintln!("Scheduled services are not available on native Windows yet");
+            std::process::exit(1);
+        }
     } else {
         let state = state.clone();
         std::thread::spawn(move || loop {

@@ -269,13 +269,13 @@ mod tests {
             "pty_client is imported unconditionally by pty.rs; it must present \
              its three calls on every target"
         );
-        // A stub per public entry point, so `pty.rs` keeps compiling and simply
-        // falls back to the in-process host.
+        // Each entry point now has one portable implementation: both Unix sockets
+        // and the Windows authenticated loopback endpoint use the same wire.
         for call in ["pub fn request(", "pub fn ensure_daemon(", "pub fn subscribe("] {
             assert_eq!(
                 src.matches(call).count(),
-                2,
-                "{call} needs a unix implementation and a cfg(not(unix)) stub"
+                1,
+                "{call} must have one portable implementation"
             );
         }
     }

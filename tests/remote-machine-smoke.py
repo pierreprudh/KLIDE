@@ -18,8 +18,15 @@ import time
 
 class Relay:
     def __init__(self, binary, data, env):
+        command = [str(binary), "ptyd", "connect", "--ensure", "--data-dir", str(data)]
+        if env.get("KLIDE_SMOKE_SSH_CONFIG"):
+            import base64
+            quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+            script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $env:PATH=" + quote(env["PATH"]) + "; & " + quote(binary) + " ptyd connect --ensure --data-dir " + quote(data) + "; exit $LASTEXITCODE"
+            encoded = base64.b64encode(script.encode("utf-16-le")).decode()
+            command = ["ssh", "-F", env["KLIDE_SMOKE_SSH_CONFIG"], "native-smoke", "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + encoded]
         self.process = subprocess.Popen(
-            [str(binary), "ptyd", "connect", "--ensure", "--data-dir", str(data)],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
         )
         self.lines = queue.Queue()
@@ -92,8 +99,10 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
             (commands / "claude.cmd").write_text('@echo off\n"' + sys.executable + '" -u "' + str(claude) + '" %*\n')
         env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"])
         data = root / "host"
-        daemon = subprocess.Popen([str(binary), "ptyd", "--data-dir", str(data)], stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+        daemon = None
+        if not env.get("KLIDE_SMOKE_SSH_CONFIG"):
+            daemon = subprocess.Popen([str(binary), "ptyd", "--data-dir", str(data)], stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, start_new_session=True)
         relays = []
 
         def connect():
@@ -110,7 +119,7 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
             return reply
 
         try:
-            for _ in range(100):
+            for _ in range(100) if daemon else []:
                 if (data / "ptyd.token").exists():
                     break
                 assert daemon.poll() is None, "Host exited during startup"
@@ -191,12 +200,19 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
         finally:
             for relay in relays:
                 relay.close()
-            daemon.terminate()
-            try:
-                daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                daemon.kill()
-                daemon.wait()
+            if daemon:
+                daemon.terminate()
+                try:
+                    daemon.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    daemon.kill()
+                    daemon.wait()
+            else:
+                request({"type": "shutdown"})
+                # The host releases Windows worktree handles asynchronously.
+                for _ in range(100):
+                    if not (data / "ptyd.endpoint").exists(): break
+                    time.sleep(.05)
 
 
 if __name__ == "__main__":

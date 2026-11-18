@@ -283,7 +283,7 @@ mod tests {
             Ok(Response::Pong { pid: 42, .. })
         ));
         let transport = ChildTransport(
-            "IFS= read -r line; case $line in *subscribe*) printf '%s\\n' '{\"type\":\"subscribed\"}' '{\"type\":\"test_event\"}';; *) exit 1;; esac",
+            "IFS= read -r line; case $line in *subscribe*) printf '%s\\n' '{\"type\":\"subscribed\"}' '{\"type\":\"test_event\"}'; IFS= read -r ignored;; *) exit 1;; esac",
             Duration::from_secs(2),
         );
         let mut reader = crate::pty_client::subscribe_on(&transport).unwrap();

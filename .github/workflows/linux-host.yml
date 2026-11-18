@@ -8,6 +8,7 @@ on:
       - 'src-tauri/**'
       - 'scripts/remote-host/**'
       - 'tests/remote-*-smoke.py'
+      - 'tests/windows-openssh-smoke.ps1'
       - '.github/workflows/linux-host.yml'
 
 permissions:
@@ -63,11 +64,17 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
           python -u tests/remote-machine-smoke.py "$binary"
           python -u tests/remote-install-smoke.py "$binary"
+      - name: Native Windows over OpenSSH
+        if: runner.os == 'Windows'
+        timeout-minutes: 4
+        shell: pwsh
+        run: ./tests/windows-openssh-smoke.ps1 -Binary "src-tauri/target/$env:PROFILE/klide.exe"
       - name: Target and kernel-lock tests
         shell: bash
         run: |
           cargo test --lib --manifest-path src-tauri/Cargo.toml remote_platform::
           cargo test --lib --manifest-path src-tauri/Cargo.toml process_lock::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml delegate::child::windows_job::
       - name: Package helper and checksum
         shell: python
         env:
