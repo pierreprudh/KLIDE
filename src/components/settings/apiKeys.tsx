@@ -660,7 +660,6 @@ export const BalanceDonut = memo(function BalanceDonut({
         }
       }}
       style={{
-        flex: 1,
         minWidth: 0,
         display: "flex",
         flexDirection: "column",
@@ -725,6 +724,7 @@ export const BalanceDonut = memo(function BalanceDonut({
             color: "var(--fg-subtle)",
             fontFamily: "var(--font-mono)",
             fontSize: 11,
+            whiteSpace: "nowrap",
             cursor: "pointer",
           }}
         >
@@ -872,17 +872,11 @@ export function ProviderBalanceBlock() {
     setSelected((cur) => (cur === id ? null : id));
   }, []);
 
-  // Order by name, but providers with spend float to the front.
-  const ordered = useMemo(
-    () =>
-      [...API_KEY_PROVIDERS].sort((a, b) => {
-        const ua = (usedByProvider[a.id] ?? 0) > 0 ? 1 : 0;
-        const ub = (usedByProvider[b.id] ?? 0) > 0 ? 1 : 0;
-        if (ua !== ub) return ub - ua;
-        return a.title.localeCompare(b.title);
-      }),
-    [usedByProvider],
-  );
+  // Order by name, but providers with spend, then with a top-up, lead.
+  const ordered = useMemo(() => {
+    const weight = (id: string) => ((usedByProvider[id] ?? 0) > 0 ? 2 : 0) + (budgets[id] != null ? 1 : 0);
+    return [...API_KEY_PROVIDERS].sort((a, b) => weight(b.id) - weight(a.id) || a.title.localeCompare(b.title));
+  }, [usedByProvider, budgets]);
 
   const hostedIds = API_KEY_PROVIDERS.map((p) => p.id);
   const selProvider = selected ? API_KEY_PROVIDERS.find((p) => p.id === selected) ?? null : null;
@@ -930,8 +924,8 @@ export function ProviderBalanceBlock() {
   return (
     <Panel>
       <div style={{ position: "relative", padding: "16px 14px 18px" }}>
-        {/* Donut row */}
-        <div style={{ display: "flex", gap: 6 }}>
+        {/* Donut grid — wraps, so every provider keeps a readable width. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(112px, 1fr))", gap: 6 }}>
           {ordered.map((p) => (
             <BalanceDonut
               key={p.id}
