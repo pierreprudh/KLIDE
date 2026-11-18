@@ -4,17 +4,21 @@
 // failed log and proposes a fix, on the agent and model picked here. Nothing
 // is edited until you open the Run.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ciWatchGet, ciWatchSet, type CiWatchFired, type CiWatchInfo } from "../../ipc/ciWatch";
-import { isAutoProvider } from "../../agent/providers";
+import { isAutoProvider, providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import type { HarnessSettings } from "../../settingsStore";
 import { listProviderModels } from "../../ipc/aiProviders";
 import { ModelPicker } from "../ai/ModelPicker";
 import { switchModelForProvider } from "../ai/rememberedModel";
-import { ScheduleSelect } from "../ScheduleSelect";
-import { agentSourceLabel, useAgentOptions } from "../agentOptions";
+import { InlineMenu, buildProviderOptions, useKeylessProviders } from "../FocusMode";
+import { ProviderLogo } from "../ai/icons";
+import { useCustomProviders } from "../../hooks/useCustomProviders";
+import { useLlamaSetupMode } from "../../hooks/useLlamaSetupMode";
+import { useMissingDelegateClis } from "../../hooks/useMissingDelegateClis";
+import { openSettingsSection } from "../../settingsNavigation";
 import { scheduledRunInput } from "../../agent/scheduledRunInput";
 import { Toggle } from "../settings/controls";
 import { relativeTime } from "../../time";
@@ -35,7 +39,15 @@ export function CiWatchBar({ workspaceRoot, provider: defaultProvider, model: de
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const agentOptions = useAgentOptions(provider);
+  // The composer's own menu: same groups, same "needs a key" rows.
+  const customProviders = useCustomProviders();
+  const keylessProviders = useKeylessProviders();
+  const llamaSetupMode = useLlamaSetupMode();
+  const missingDelegateClis = useMissingDelegateClis();
+  const providerOptions = useMemo(
+    () => buildProviderOptions(customProviders, keylessProviders, () => openSettingsSection("api"), llamaSetupMode, missingDelegateClis),
+    [customProviders, keylessProviders, llamaSetupMode, missingDelegateClis],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -93,12 +105,15 @@ export function CiWatchBar({ workspaceRoot, provider: defaultProvider, model: de
       <span aria-busy={busy}><Toggle checked={on} onChange={v => { if (!busy) void save(v); }} label="Watch CI on my pull requests" /></span>
     </div>
     <div className="ci-watch-agent">
-      <div className="ci-watch-provider" title={`${agentSourceLabel(provider)} · ${provider}`}>
-        <ScheduleSelect label="Subscription / provider" value={provider} options={agentOptions} searchable compact disabled={busy} portalContainer={null} onChange={next => pickProvider(next as ProviderId)} />
-      </div>
-      <div className="ci-watch-model" role="group" aria-label="Model">
-        <ModelPicker provider={provider} model={model} availableModels={models} onChange={pickModel} direction="down" bareHover disabled={busy} />
-      </div>
+      <InlineMenu
+        label="Provider"
+        display={providerName(provider)}
+        leading={<ProviderLogo id={provider} size={13} />}
+        options={providerOptions}
+        selected={provider}
+        onSelect={v => { if (!busy && typeof v === "string" && !v.startsWith("__heading_")) pickProvider(v as ProviderId); }}
+      />
+      <ModelPicker provider={provider} model={model} availableModels={models} onChange={pickModel} direction="down" disabled={busy} />
       {status ? <span className="ci-watch-status">{status}</span> : null}
     </div>
     {info?.lastError ? <p className="ci-watch-error" role="alert">{info.lastError}</p> : null}

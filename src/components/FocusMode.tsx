@@ -1040,6 +1040,34 @@ function effortOptionsFor(levels: readonly string[]): MenuOption[] {
 type StarterKind = "explore" | "build" | "review" | "fix" | "resume";
 
 /** Exported for `preview/home-cards.tsx`, which draws the real cards in a browser tab. */
+/** Keyed providers with no saved key — the menu greys them with a
+ *  "needs a key" row. Shared by the composer and Watch CI. */
+export function useKeylessProviders(): ReadonlySet<string> {
+  const [keylessProviders, setKeylessProviders] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(
+      KEYED_PROVIDERS.map(async (item) => {
+        try {
+          const status = await readProviderKeyStatus(item.id);
+          return status.hasKey ? null : item.id;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((probed) => {
+      if (!cancelled) setKeylessProviders(new Set(probed.filter((id): id is ProviderId => !!id)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return keylessProviders;
+}
+
 export const STARTERS: { title: string; sub: string; prompt: string; kind: StarterKind }[] = [
   {
     title: "Explore the codebase",
@@ -1580,28 +1608,7 @@ export function FocusComposer({
   // opening Settings unmounts Focus, so coming back re-probes and a provider
   // you just configured stops reading as keyless. A failed probe leaves the
   // row alone rather than quieting a provider that might work.
-  const [keylessProviders, setKeylessProviders] = useState<ReadonlySet<string>>(
-    () => new Set<string>(),
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all(
-      KEYED_PROVIDERS.map(async (item) => {
-        try {
-          const status = await readProviderKeyStatus(item.id);
-          return status.hasKey ? null : item.id;
-        } catch {
-          return null;
-        }
-      }),
-    ).then((probed) => {
-      if (!cancelled) setKeylessProviders(new Set(probed.filter((id): id is ProviderId => !!id)));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const keylessProviders = useKeylessProviders();
 
   // Self-hosted endpoints, from the shared store — it refreshes on mount and
   // republishes on add/rename/remove, so the stack here matches Settings
