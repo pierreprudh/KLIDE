@@ -341,6 +341,10 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
         Err(err) => {
             let why = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no answer").trim().to_string();
+            if err.starts_with("Unsupported remote") || err.starts_with("This remote architecture") {
+                status.setup.connection="unsupported".into(); status.caption=err.clone();
+                status.facts.push(fact("System",err,"bad",None)); return status;
+            }
             status.setup.connection = if err.contains("Host key verification failed") || err.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") { "needsTrust" } else if err.contains("Permission denied") { "needsAuthentication" } else { "offline" }.into();
             status.caption = match status.setup.connection.as_str() { "needsTrust" => "Confirm SSH connection", "needsAuthentication" => "SSH sign-in needed", _ => "Offline" }.into();
             status.facts.push(fact("Reached", why, "bad", Some(format!("ssh {}", machine.ssh_host))));

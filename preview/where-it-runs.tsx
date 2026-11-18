@@ -44,12 +44,12 @@ let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-b
       if (params.has("delay")) await new Promise((resolve) => setTimeout(resolve, 1500));
       const machine = machines.find((m) => m.id === args.id)!;
       return {
-        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: READY && !params.has("needsInstall"),
+        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: READY && !params.has("needsInstall") && !params.has("unsupported"),
         target: { os: params.get("system") ?? "linux", arch: params.get("system") === "macos" ? "aarch64" : "x86_64" },
-        caption: READY ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
+        caption: params.has("unsupported") ? "This remote architecture does not have a published helper yet" : READY ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: READY ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
-        setup: { connection: READY ? "connected" : "offline", host: params.has("needsInstall") ? "missing" : "ready", claude: params.has("needsInstall") ? "missing" : "ready", project: "ready" },
+        setup: { connection: params.has("unsupported") ? "unsupported" : READY ? "connected" : "offline", host: params.has("needsInstall") ? "missing" : "ready", claude: params.has("needsInstall") ? "missing" : "ready", project: "ready" },
       };
     }
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];

@@ -71,10 +71,9 @@ pub(crate) fn detect_target(host: &str) -> Result<crate::remote_platform::HostTa
     let first = ssh(host, "uname -sm");
     match &first {
         Ok(out) => {
-            if let Ok(target) =
-                crate::remote_platform::parse_system(&String::from_utf8_lossy(&out.stdout))
-            {
-                return Ok(target);
+            let system = String::from_utf8_lossy(&out.stdout);
+            if matches!(system.split_whitespace().next(), Some("Linux" | "Darwin")) {
+                return crate::remote_platform::parse_system(&system);
             }
         }
         Err(error)
@@ -288,13 +287,16 @@ pub fn install_main(destination: &Path, data_dir: &Path, expected: &str) -> i32 
         if actual != expected {
             return Err("The host binary does not match this app revision".into());
         }
+        eprintln!("Waiting for installation access");
         let _lease = crate::process_lock::exclusive(&data_dir.join("upgrade.lock"))?;
+        eprintln!("Checking the existing Run host");
         if crate::pty_daemon::prepare_upgrade_main(data_dir) != 0 {
             return Err("The existing Run host could not be safely stopped".into());
         }
         // The endpoint can disappear just before the old process releases its
         // executable and ownership lease. Wait for the process, not a delay.
         let owner = crate::process_lock::exclusive(&data_dir.join("daemon-owner.lock"))?;
+        eprintln!("Installing the matching helper");
         let stage = std::env::current_exe().map_err(|e| e.to_string())?;
         let temporary = destination.with_extension("installing");
         std::fs::copy(&stage, &temporary).map_err(|e| e.to_string())?;
@@ -320,16 +322,19 @@ pub fn install_main(destination: &Path, data_dir: &Path, expected: &str) -> i32 
             }
         }
         drop(owner);
+        eprintln!("Starting the Run host");
         let status = Command::new(destination)
             .arg("ptyd")
             .arg("ensure")
             .arg("--data-dir")
             .arg(data_dir)
+            .stdin(std::process::Stdio::null())
             .status()
             .map_err(|e| e.to_string())?;
         if !status.success() {
             return Err("The installed Run host could not start".into());
         }
+        eprintln!("Run host ready");
         Ok(())
     })();
     match result {

@@ -28,7 +28,7 @@ export type MachineStatus = {
   facts: MachineFact[];
   checkout: string | null;
   setup: {
-    connection: "connected" | "offline" | "needsTrust" | "needsAuthentication";
+    connection: "connected" | "offline" | "needsTrust" | "needsAuthentication" | "unsupported";
     host: "ready" | "outdated" | "missing" | "unknown";
     claude: "ready" | "needsLogin" | "missing" | "unknown";
     project: "ready" | "missing" | "unknown" | "notSelected";

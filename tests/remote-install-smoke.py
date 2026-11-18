@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the actual installer and reconnect to the daemon it spawned."""
 import os
+import faulthandler
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ spec.loader.exec_module(smoke)
 
 
 def main():
+    faulthandler.dump_traceback_later(45)
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else "src-tauri/target/debug/klide").resolve()
     installer = Path(__file__).resolve().parents[1] / "scripts/remote-host/install-host.sh"
     signature = subprocess.check_output([str(binary), "ptyd", "version"], text=True).strip()
@@ -33,6 +35,7 @@ def main():
             if os.name == "nt":
                 return [str(stage), "ptyd", "install", "--expected", expected, "--destination", str(installed), "--data-dir", str(root / ".klide/run-host")]
             return ["sh", str(installer), str(stage), expected]
+        print("Installing the staged native helper", flush=True)
         result = subprocess.run(install(staged, signature), env=env,
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr

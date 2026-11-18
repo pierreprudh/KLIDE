@@ -145,15 +145,7 @@ fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn spawn_daemon(data_dir: &Path) -> Result<(),String> {
-    use std::os::windows::process::CommandExt;
-    // Modern Windows OpenSSH permits job breakaway. Refuse rather than
-    // silently start a host that will die with the SSH session if it does not.
-    std::process::Command::new(std::env::current_exe().map_err(|e|e.to_string())?)
-        .arg("ptyd").arg("--data-dir").arg(data_dir)
-        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-        .creation_flags(0x01000000 | 0x00000200 | 0x00000008)
-        .spawn().map_err(|e|format!("Cannot detach the Run host from Windows OpenSSH. Ensure the SSH server allows job breakaway: {e}"))?;
-    Ok(())
+    crate::windows_detach::spawn(data_dir)
 }
 
 /// Open the event stream: a connection upgraded with `subscribe`, handed back

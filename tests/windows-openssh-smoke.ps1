@@ -72,6 +72,7 @@ try {
     $env:KLIDE_SMOKE_SSH_CONFIG = "$root/client_config"
     & python -u tests/remote-machine-smoke.py $Binary
     if ($LASTEXITCODE -ne 0) { throw 'Windows OpenSSH disconnect/replay acceptance failed' }
+    Write-Output 'SSH runtime acceptance complete; starting installer acceptance'
     # Exercise the actual native installer from an SSH session as well. A
     # direct CI-shell launch is intentionally refused by its outer job policy.
     function Quote-Literal([string]$value) { return "'" + $value.Replace("'", "''") + "'" }

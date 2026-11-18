@@ -232,9 +232,12 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
                     daemon.kill()
                     daemon.wait()
             else:
+                print("Stopping the detached SSH host", flush=True)
                 request({"type": "shutdown"})
+                print("Host shutdown acknowledged", flush=True)
                 if host_pid:
                     wait_for_exit(host_pid)
+                print("Host cleanup complete", flush=True)
 
 
 

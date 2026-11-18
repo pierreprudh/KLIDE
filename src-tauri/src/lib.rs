@@ -59,6 +59,8 @@ mod pty;
 mod pty_client;
 pub mod machine_install;
 mod remote_platform;
+#[cfg(windows)]
+mod windows_detach;
 mod machine_setup;
 mod machine_discovery;
 mod pty_transport;

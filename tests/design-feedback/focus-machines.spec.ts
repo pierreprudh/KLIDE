@@ -154,3 +154,17 @@ test("offline setup downloads the chosen native helper without reaching the mach
   expect(await page.evaluate(() => (window as any).__MACHINE_PREPARED_TARGET__)).toEqual({ os: "macos", arch: "aarch64" });
   await expect(dialog.getByLabel("Machine system")).toHaveCSS("padding-left", "14px");
 });
+
+test("unsupported architectures show their limit instead of an offline installation loop", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?state=empty&system=windows&unsupported=1");
+  await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+  await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+  await enterManualSsh(page);
+  const dialog = page.getByRole("dialog", { name: "Add a machine" });
+  await dialog.getByLabel("SSH host", { exact: true }).fill("dev@arm-machine");
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "Machine not supported yet" })).toBeVisible();
+  await expect(dialog.getByRole("alert")).toHaveText("This remote architecture does not have a published helper yet");
+  await expect(dialog.getByRole("button", { name: "Install and continue" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Prepare setup files on this Mac" })).toHaveCount(0);
+});

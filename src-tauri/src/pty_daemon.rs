@@ -73,9 +73,7 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
 /// shell that is not contained.
 #[cfg(unix)]
 pub fn socket_dir() -> PathBuf {
-    let uid = std::fs::metadata(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
-        .map(|m| std::os::unix::fs::MetadataExt::uid(&m))
-        .unwrap_or(0);
+    let uid = unsafe { libc::geteuid() };
     std::env::temp_dir().join(format!("klide-{uid}"))
 }
 
@@ -86,7 +84,25 @@ pub fn socket_dir() -> PathBuf {
 }
 
 pub(crate) fn connect_socket(data_dir: &Path) -> Result<HostStream,String> {
+    #[cfg(unix)] {
+        use std::os::unix::fs::{MetadataExt,FileTypeExt};
+        validate_socket_directory(&socket_dir()).map_err(|e|format!("connect: {e}"))?;
+        let meta=std::fs::symlink_metadata(socket_path(data_dir)).map_err(|e|format!("connect: {e}"))?;
+        if !meta.file_type().is_socket() || meta.uid()!=unsafe {libc::geteuid()} {
+            return Err("connect: refusing an untrusted local socket".into());
+        }
+    }
     HostStream::connect(socket_path(data_dir)).map_err(|e|format!("connect: {e}"))
+}
+
+#[cfg(unix)]
+fn validate_socket_directory(path: &Path) -> Result<(),String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta=std::fs::symlink_metadata(path).map_err(|e|e.to_string())?;
+    if !meta.file_type().is_dir() || meta.uid()!=unsafe {libc::geteuid()} || meta.mode() & 0o077 != 0 {
+        return Err("The local socket directory must belong to this user and be private".into());
+    }
+    Ok(())
 }
 
 /// Private socket pair for Windows SSH pipes. A shared TCP port could be
@@ -322,31 +338,34 @@ impl PtyEventSink for BroadcastSink {
 pub fn bind_socket(data_dir: &Path) -> Result<HostListener, String> {
     std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
     let path = socket_path(data_dir);
-    if let Some(parent) = path.parent() {
-        // 0700: the socket rendezvous dir is per-user, like tmux's.
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        let _ =
-            std::fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let parent=path.parent().ok_or("Missing socket directory")?;
+    use std::os::unix::fs::{DirBuilderExt,MetadataExt};
+    match std::fs::DirBuilder::new().mode(0o700).create(parent) {
+        Ok(())=>{}, Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>{}, Err(e)=>return Err(e.to_string()),
     }
-    let restrict = |listener: HostListener| {
-        // 0600 on the socket file itself — connect() checks write permission,
-        // so this is a second fence in front of the token handshake.
-        let _ =
-            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
-        listener
+    // Reject a precreated directory or symlink owned by another account.
+    let meta=std::fs::symlink_metadata(parent).map_err(|e|e.to_string())?;
+    if !meta.file_type().is_dir() || meta.uid()!=unsafe {libc::geteuid()} {return Err("Untrusted socket directory owner".into());}
+    std::fs::set_permissions(parent,std::os::unix::fs::PermissionsExt::from_mode(0o700)).map_err(|e|e.to_string())?;
+    validate_socket_directory(parent)?;
+    let restrict=|listener:HostListener|->Result<HostListener,String>{
+        std::fs::set_permissions(&path,std::os::unix::fs::PermissionsExt::from_mode(0o600)).map_err(|e|e.to_string())?;
+        Ok(listener)
     };
     match HostListener::bind(&path) {
-        Ok(listener) => Ok(restrict(listener)),
+        Ok(listener) => restrict(listener),
         Err(bind_err) => {
-            // The file exists. A live daemon accepts connections; a stale
-            // file refuses them and is safe to remove and rebind.
+            // A precreated endpoint must not impersonate this user after a
+            // reboot cleared the private temp directory.
+            use std::os::unix::fs::FileTypeExt;
+            let meta=std::fs::symlink_metadata(&path).map_err(|e|e.to_string())?;
+            if !meta.file_type().is_socket() || meta.uid()!=unsafe {libc::geteuid()} {return Err("Untrusted socket endpoint".into());}
             if HostStream::connect(&path).is_ok() {
                 return Err(format!("another ptyd is already serving {path:?}"));
             }
             let _ = std::fs::remove_file(&path);
             HostListener::bind(&path)
-                .map(restrict)
-                .map_err(|_| bind_err.to_string())
+                .map_err(|_| bind_err.to_string()).and_then(restrict)
         }
     }
 }
@@ -765,6 +784,21 @@ mod tests {
     use super::*;
     use std::io::BufRead;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn socket_directories_must_be_private_owned_directories_without_symlinks() {
+        use std::os::unix::fs::{PermissionsExt,symlink};
+        let path=std::env::temp_dir().join(format!("klide-directory-{}",crate::agent::transcripts::run_id()));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(validate_socket_directory(&path).is_ok());
+        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(validate_socket_directory(&path).is_err());
+        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let target=path.with_extension("target"); std::fs::rename(&path,&target).unwrap();
+        symlink(&target,&path).unwrap(); assert!(validate_socket_directory(&path).is_err());
+        std::fs::remove_file(path).unwrap(); std::fs::remove_dir(target).unwrap();
+    }
 
     #[test]
     fn published_token_is_complete_before_a_client_reads_it() {
