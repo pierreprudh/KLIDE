@@ -169,6 +169,12 @@ pub struct AgentRunHandle {
     /// this Run as the loop would. `None` between turns and for every
     /// provider whose tools Klide dispatches itself.
     pub out_of_band: std::sync::Mutex<Option<permission_relay::OutOfBandPort>>,
+    /// Cross-process admission lease for this run id (`<runs_dir>/run-locks/
+    /// <id>.lock`), taken by `run_host::admit` and held until the handle is
+    /// retired, so the app, `klide ptyd` and `klide scheduled` cannot admit
+    /// the same conversation concurrently. The kernel releases it if the
+    /// owning process crashes.
+    pub _lease: Option<crate::process_lock::Lease>,
 }
 
 pub struct AgentSupervisorState {
@@ -2054,6 +2060,10 @@ async fn start_run(
         }
     }
 
+    // Register the cancel token before any setup work, so a Stop landing in
+    // this pre-admission window fences at `run_host::admit` instead of
+    // erroring and letting the run start anyway.
+    let _dispatch = dispatch_cancel::Dispatch::register(&id).map_err(|_| run_host::busy(&id))?;
     if let Some(history) = request.conversation_history.take() {
         let root = request.workspace_root.clone().ok_or("A workspace is required for imported conversation retrieval.")?;
         let archive_runs = runs_dir.clone();
@@ -6038,6 +6048,7 @@ pub(crate) mod test_support {
             trust: permission::TrustMemory::default(),
             subject: permission::GateSubject::for_mode(AgentMode::Goal),
             out_of_band: Mutex::new(None),
+            _lease: None,
         }
     }
 

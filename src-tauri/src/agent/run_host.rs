@@ -105,6 +105,14 @@ pub(super) fn admit(
     guard: impl FnOnce() -> Result<(), String>,
 ) -> Result<Admitted, String> {
     validate_run_id(id)?;
+    // Cross-process admission: the per-run lease lives in the handle, so the
+    // app, `klide ptyd` and `klide scheduled` cannot claim the same
+    // conversation at once — whichever host holds the lease owns the run.
+    // try_exclusive never blocks: a held lease means another process owns it.
+    let lease = crate::process_lock::try_exclusive(
+        &runs_dir.join("run-locks").join(format!("{id}.lock")),
+    )?
+    .ok_or_else(|| busy(id))?;
     let cancel = dispatch_cancel::token(id).unwrap_or_default();
     if cancel.is_cancelled() {
         return Err("Cancelled before the worker started.".into());
@@ -137,6 +145,7 @@ pub(super) fn admit(
             trust: permission::TrustMemory::default(),
             subject: permission::GateSubject::from_request(request),
             out_of_band: Mutex::new(None),
+            _lease: Some(lease),
         },
     );
     Ok(Admitted { cancel, prior_events })
@@ -479,6 +488,30 @@ mod tests {
         assert!(admitted.cancel.is_cancelled());
         assert!(live.cancel.is_cancelled());
         assert!(runs.lock().unwrap()["dispatch-admit-live"].cancel.is_cancelled());
+    }
+
+    #[test]
+    fn admit_refuses_a_run_whose_cross_process_lease_another_host_holds() {
+        let dir = sandbox("lease-held");
+        let runs = Mutex::new(HashMap::new());
+        // Another process (ptyd / scheduled) holds the per-run lock for this id.
+        let other = crate::process_lock::exclusive(&dir.join("run-locks").join("leased-run.lock")).unwrap();
+        let err = match admit(&runs, &dir, "leased-run", &request("openai"), || Ok(())) {
+            Err(e) => e,
+            Ok(_) => panic!("admission must refuse a lease held by another host"),
+        };
+        assert!(err.contains("already active"), "{err}");
+        assert!(runs.lock().unwrap().is_empty());
+        // Once the other host releases, admission succeeds and the handle
+        // itself holds the lease until retirement.
+        drop(other);
+        let admitted = admit(&runs, &dir, "leased-run", &request("openai"), || Ok(())).unwrap();
+        drop(admitted);
+        let handle_lease_held = crate::process_lock::try_exclusive(&dir.join("run-locks").join("leased-run.lock")).unwrap().is_none();
+        assert!(handle_lease_held, "the admitted handle holds the per-run lease");
+        runs.lock().unwrap().remove("leased-run");
+        let admitted = admit(&runs, &dir, "leased-run", &request("openai"), || Ok(())).unwrap();
+        assert!(!admitted.cancel.is_cancelled());
     }
 
     #[test]

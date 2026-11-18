@@ -11,7 +11,8 @@ pub(crate) fn exclusive(path: &Path) -> Result<Lease, String> {
     lock(path, false)?.ok_or("Could not acquire the process lease".into())
 }
 
-#[cfg(unix)]
+/// Non-blocking: `Ok(None)` when another holder has it. Off unix this is a
+/// no-op lease, like `exclusive`.
 pub(crate) fn try_exclusive(path: &Path) -> Result<Option<Lease>, String> {
     lock(path, true)
 }
