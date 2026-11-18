@@ -3511,7 +3511,6 @@ function App() {
                   updatePanelRect("terminal", { ...panelLayout.terminal, h });
                 }
               }}
-              availableAiModels={modelsByPanel[DEFAULT_AI_PANEL_ID] ?? [aiModel]}
               explorerVisible={explorerVisible}
               onExplorerVisibleChange={setExplorerVisible}
               explorerFloating={explorerFloating}
