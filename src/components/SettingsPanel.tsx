@@ -26,7 +26,8 @@ import { PROVIDER_DOCS } from "../agent/providerResources";
 import { openExternal } from "../externalLink";
 import type { AgentMode, ProviderId } from "../agent/types";
 import { toolCatalog, type ToolCatalogEntry } from "../agent/tools";
-import { PROVIDER_GROUPS, DEFAULT_MODELS } from "../agent/providers";
+import { PROVIDER_GROUPS, DEFAULT_MODELS, CLI_DEFAULT_MODEL, defaultModelForProvider } from "../agent/providers";
+import { rememberModelForProvider, switchModelForProvider } from "./ai/rememberedModel";
 import { ModelPicker } from "./ai/ModelPicker";
 import { advisorDefaultModel, resolveAdvisor } from "../agent/advisor";
 import { refreshCustomCli, type CustomCli } from "../customCli";
@@ -77,7 +78,7 @@ import { ConnectorsSection } from "./settings/connectors";
 import { GatewayBlock } from "./settings/gateway";
 import { LocalServerRow } from "./settings/localServers";
 import { SubscriptionAccounts } from "./settings/subscriptionAccounts";
-import { DELEGATES, type DelegateId } from "../delegates";
+import { DELEGATES, isDelegateId, type DelegateId } from "../delegates";
 import { CliVersionsBlock } from "./settings/cliVersions";
 import { StatsSection } from "./settings/stats";
 import { StorageSection } from "./settings/storage";
@@ -115,7 +116,6 @@ type Props = {
   panelLayout: { explorer?: { w: number }; ai?: { rect: { w: number } }[]; terminal?: { h: number } };
   onPanelWidthChange: (panel: "explorer" | "ai", width: number) => void;
   onPanelHeightChange: (panel: "terminal", height: number) => void;
-  availableAiModels: string[];
   explorerVisible: boolean;
   onExplorerVisibleChange: (visible: boolean) => void;
   explorerFloating: boolean;
@@ -449,7 +449,6 @@ export function SettingsPanel({
   panelLayout,
   onPanelWidthChange,
   onPanelHeightChange,
-  availableAiModels,
   explorerVisible,
   onExplorerVisibleChange,
   explorerFloating,
@@ -473,7 +472,6 @@ export function SettingsPanel({
   const [editorLineNumbers, onEditorLineNumbersChange] = useSetting(SETTINGS.editorLineNumbers);
   const [editorWordWrap, onEditorWordWrapChange] = useSetting(SETTINGS.editorWordWrap);
   const [editorMinimap, onEditorMinimapChange] = useSetting(SETTINGS.editorMinimap);
-  const [aiModel, onAiModelChange] = useSetting(SETTINGS.aiModel);
   const [requireDiffReview, onRequireDiffReviewChange] = useSetting(SETTINGS.requireDiffReview);
   const [stopAfterRejection, onStopAfterRejectionChange] = useSetting(SETTINGS.stopAfterRejection);
   const [harnessSettings, onHarnessSettingsChange] = useSetting(SETTINGS.harnessSettings);
@@ -494,6 +492,36 @@ export function SettingsPanel({
   const [settingsProvider, setSettingsProvider] = useState<ProviderId>(
     () => (localStorage.getItem("klide.provider") as ProviderId) || "ollama"
   );
+  // The model row belongs to the provider picked above — its own list and its
+  // remembered pick (`klide.model.<provider>`), the one a new conversation on
+  // that provider opens on. Not the open chat's model, which may be another
+  // provider's.
+  const [aiModel, setAiModel] = useState(() => switchModelForProvider(settingsProvider));
+  const [providerModels, setProviderModels] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const picked = switchModelForProvider(settingsProvider);
+    setAiModel(picked);
+    setProviderModels([]);
+    listProviderModels(settingsProvider)
+      .then((names) => {
+        if (cancelled) return;
+        const next = names.length > 0 ? [...names] : [defaultModelForProvider(settingsProvider)].filter(Boolean);
+        if (isDelegateId(settingsProvider) && !next.includes(CLI_DEFAULT_MODEL)) next.unshift(CLI_DEFAULT_MODEL);
+        if (picked && !next.includes(picked)) next.unshift(picked);
+        setProviderModels(next);
+      })
+      .catch(() => {
+        if (!cancelled) setProviderModels([picked]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsProvider]);
+  const onAiModelChange = (model: string) => {
+    rememberModelForProvider(settingsProvider, model);
+    setAiModel(model);
+  };
 
   const [activeSection, setActiveSection] = useState<SectionId>(
     isSectionId(initialSection) ? initialSection : "general"
@@ -1539,14 +1567,14 @@ export function SettingsPanel({
                 <Panel>
                   <Row
                     title="AI model"
-                    description="Model used by the active provider for chat and agent runs."
+                    description="The model a new conversation on this provider starts on."
                     control={
                       <div className="klide-settings-model-choice">
                       <span aria-hidden="true"><ProviderLogo id={settingsProvider} size={16} /></span>
                       <Select
                         value={aiModel}
                         onChange={onAiModelChange}
-                        options={availableAiModels.length > 0 ? availableAiModels : [aiModel]}
+                        options={providerModels.length > 0 ? providerModels : [aiModel]}
                         label="AI model"
                       />
                       </div>

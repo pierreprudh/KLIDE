@@ -13,7 +13,8 @@ Object.assign(window, { __TAURI_INTERNALS__: {
   invoke: async (command: string, args: Record<string, string> = {}) => {
     switch (command) {
       case "custom_cli_list": case "custom_provider_list": case "connectors_list": case "connectors_discover":
-      case "cli_versions": case "ai_provider_models": case "ai_provider_model_meta": case "app_storage_dirs":
+      case "ai_provider_models": return args.provider === "codex" ? ["gpt-5.5-codex", "gpt-5.4-mini"] : [];
+      case "cli_versions": case "ai_provider_model_meta": case "app_storage_dirs":
       case "app_storage_conversations": case "machines_list": return [];
       case "app_user_info": return { username: "Alex", hostname: "MacBook" };
       case "accounts_list": return { present: true, accounts: [{ name: "Personal", active: true, savedMs: 0, identity: { email: "alex@example.com" } }] };
@@ -42,7 +43,7 @@ const noop = () => {};
 createRoot(document.getElementById("root")!).render(<SettingsPanel
   aiVisible terminalVisible explorerVisible explorerFloating={false}
   onAiVisibleChange={noop} onTerminalVisibleChange={noop} onExplorerVisibleChange={noop} onExplorerFloatingChange={noop}
-  panelLayout={{}} onPanelWidthChange={noop} onPanelHeightChange={noop} availableAiModels={[]} customLayouts={[]}
+  panelLayout={{}} onPanelWidthChange={noop} onPanelHeightChange={noop} customLayouts={[]}
   onCustomLayoutsChange={noop} onApplyLayout={noop} initialSection={params.get("section") ?? "general"}
   workspaceRoot="/Users/alex/app" onBack={noop}
 />);
