@@ -473,7 +473,7 @@ type MenuOption = {
 
 /** Reasoning-effort glyph — the AI panel's reflection-bars language: five
  *  bars, filled up to the chosen level; Auto shows them all at rest. */
-function EffortBars({ level, size = 16 }: { level: number; size?: number }) {
+export function EffortBars({ level, size = 16 }: { level: number; size?: number }) {
   const heights = [5, 7, 9, 11, 13];
   return (
     <svg width={size} height={size * 0.875} viewBox="0 0 16 14" aria-hidden>
@@ -538,7 +538,7 @@ function ContextGaugeIcon({ size = 15 }: { size?: number }) {
  *  design as the ModelPicker dropdown: glass card, framed-icon header with a
  *  caption, hairline dividers, icon rows with the accent-tint active state.
  *  Portalled to <body> so no ancestor clip can swallow it. */
-function InlineMenu({
+export function InlineMenu({
   label,
   display,
   options,
@@ -721,12 +721,12 @@ function InlineMenu({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 5,
-          height: 24,
+          gap: 6,
+          height: 26,
           border: "1px solid transparent",
-          background: open ? "var(--bg-hover)" : "transparent",
-          padding: "0 5px",
-          borderRadius: "var(--radius-sm)",
+          background: open || hover ? "var(--bg-hover)" : "transparent",
+          padding: "0 9px 0 8px",
+          borderRadius: 12,
           fontSize: 11,
           fontWeight: 500,
           fontFamily: mono ? "var(--font-mono)" : "inherit",
@@ -2160,7 +2160,6 @@ export function FocusComposer({
               model={model}
               availableModels={models}
               disabled={false}
-              bareHover
               onChange={(nextModel) => {
                 rememberModelForProvider(provider, nextModel);
                 onModelChange(nextModel);
