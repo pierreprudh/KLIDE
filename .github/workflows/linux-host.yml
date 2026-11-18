@@ -3,6 +3,8 @@ name: Native host binaries
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
   pull_request:
     paths:
       - 'src-tauri/**'
@@ -12,8 +14,8 @@ on:
       - '.github/workflows/linux-host.yml'
 
 concurrency:
-  group: native-host-${{ github.ref }}
-  cancel-in-progress: true
+  group: native-host-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -37,7 +39,7 @@ jobs:
     env:
       PYTHONUTF8: "1"
       KLIDE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      PROFILE: ${{ github.event_name == 'workflow_dispatch' && 'release' || 'debug' }}
+      PROFILE: ${{ github.event_name == 'pull_request' && 'debug' || 'release' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -89,6 +91,7 @@ jobs:
         shell: bash
         run: |
           cargo test --lib --manifest-path src-tauri/Cargo.toml remote_platform::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml agent::remote_machine::tests::
           cargo test --lib --manifest-path src-tauri/Cargo.toml process_lock::
           cargo test --lib --manifest-path src-tauri/Cargo.toml delegate::child::windows_job::
           cargo test --lib --manifest-path src-tauri/Cargo.toml pty_daemon::windows_tests::
@@ -128,7 +131,7 @@ jobs:
           retention-days: 7
 
   publish:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

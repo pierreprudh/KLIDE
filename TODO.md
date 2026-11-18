@@ -28,8 +28,9 @@ must pass before merge; physical-machine acceptance remains separate.
 - [x] Add native Linux / both Mac architectures / Windows CI. Gate helper
   publication on runtime replay and installer checks; Windows also tests real
   OpenSSH detachment, private socket auth and owned process-tree cleanup.
-- [ ] Publish matching helper assets for each shipped app revision with
-  **Native host binaries** (`.github/workflows/linux-host.yml`).
+- [x] Automatically publish matching, checksum-verified helper assets after
+  each main merge with **Native host binaries** (`.github/workflows/linux-host.yml`);
+  require native acceptance on every target before publishing.
 - [ ] Finish desktop distribution: signed/notarized Mac app and signed
   Windows installer. Helper binaries are separate from desktop installers.
 - [ ] Clean physical-machine acceptance: install → sign in → launch a real

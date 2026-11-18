@@ -66,7 +66,9 @@ resumes; Stop owns that process tree without killing unrelated applications.
 The **Native host binaries** workflow builds and smoke-tests every target.
 Windows helpers use the `remote-host` Cargo feature for console stdio and a
 static CRT in release builds. A source-specific release is published only
-after every target passes. Desktop app signing/notarization is a separate
+after every target passes. Each merge to main builds and publishes matching
+release helpers automatically; manual dispatch can publish a development
+revision too. Desktop app signing/notarization is a separate
 release task; these are SSH helpers, not desktop installers.
 
 Keep the destination awake. SSH disconnects do not stop a task; remote sleep
