@@ -259,6 +259,7 @@ pub struct SetupFacts {
     pub connection: String,
     pub host: String,
     pub claude: String,
+    pub github: String,
     pub project: String,
 }
 
@@ -269,13 +270,15 @@ fn fact(label: &str, value: impl Into<String>, tone: &'static str, fix: Option<S
 /// The probe one SSH round trip runs. Each line is `key=value`; nothing in it
 /// prints a secret (`claude auth status` reports a method, not a token).
 fn probe_script(checkout: Option<&str>) -> String {
-    let mut s = String::from(
-        "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
-         echo host=$(\"$HOME/.klide/bin/klide\" ptyd version 2>/dev/null); \
-         echo claude=$(claude --version 2>/dev/null | head -n1); \
-         echo login=$(claude auth status 2>/dev/null | tr -d ' \\n' | grep -o '\"loggedIn\":[a-z]*' | cut -d: -f2); \
-         echo gh=$(gh auth status 2>&1 | grep -o 'account [^ ]*' | head -n1 | cut -d' ' -f2); ",
-    );
+    let mut s = String::from(r#"export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";
+         echo host=$("$HOME/.klide/bin/klide" ptyd version 2>/dev/null);
+         echo claude=$(claude --version 2>/dev/null | head -n1);
+         echo login=$(claude auth status 2>/dev/null | tr -d ' \n' | grep -o '"loggedIn":[a-z]*' | cut -d: -f2);
+         echo ghVersion=$(gh --version 2>/dev/null | head -n1);
+         if gh_status=$(gh auth status 2>&1); then
+           gh_account=$(printf '%s' "$gh_status" | grep -o 'account [^ ]*' | head -n1 | cut -d' ' -f2);
+           echo gh=${gh_account:-authenticated};
+         fi; "#);
     if let Some(path) = checkout {
         let word = remote_path_word(path);
         s.push_str(&format!(
@@ -290,7 +293,7 @@ fn probe_script(checkout: Option<&str>) -> String {
 
 fn windows_probe(checkout: Option<&str>) -> String {
     use crate::remote_platform::{WINDOWS_PATH, ps_path};
-    let mut script = format!("{WINDOWS_PATH} $ErrorActionPreference='Continue'; if (Test-Path -LiteralPath (Join-Path $HOME '.klide/bin/klide.exe')) {{ Write-Output ('host='+(& (Join-Path $HOME '.klide/bin/klide.exe') ptyd version)) }}; if (Get-Command claude -ErrorAction SilentlyContinue) {{ Write-Output ('claude='+(& claude --version | Select-Object -First 1)); try {{ $auth=(& claude auth status 2>$null | Out-String | ConvertFrom-Json); Write-Output ('login='+$auth.loggedIn.ToString().ToLowerInvariant()) }} catch {{}} }}; if (Get-Command gh -ErrorAction SilentlyContinue) {{ & gh auth status *> $null; if ($LASTEXITCODE -eq 0) {{ Write-Output 'gh=authenticated' }} }};");
+    let mut script = format!("{WINDOWS_PATH} $ErrorActionPreference='Continue'; if (Test-Path -LiteralPath (Join-Path $HOME '.klide/bin/klide.exe')) {{ Write-Output ('host='+(& (Join-Path $HOME '.klide/bin/klide.exe') ptyd version)) }}; if (Get-Command claude -ErrorAction SilentlyContinue) {{ Write-Output ('claude='+(& claude --version | Select-Object -First 1)); try {{ $auth=(& claude auth status 2>$null | Out-String | ConvertFrom-Json); Write-Output ('login='+$auth.loggedIn.ToString().ToLowerInvariant()) }} catch {{}} }}; if (Get-Command gh -ErrorAction SilentlyContinue) {{ Write-Output ('ghVersion='+(& gh --version | Select-Object -First 1)); & gh auth status *> $null; if ($LASTEXITCODE -eq 0) {{ Write-Output 'gh=authenticated' }} }};");
     if let Some(checkout)=checkout {
         script.push_str(&format!("$p={}; if (Test-Path -LiteralPath (Join-Path $p '.git')) {{ & git -C $p rev-parse --is-inside-work-tree *> $null; if ($LASTEXITCODE -eq 0) {{ Write-Output 'checkout=yes'; Write-Output ('branch='+(& git -C $p branch --show-current)); Write-Output ('dirty='+(@(& git -C $p status --porcelain).Count)) }} else {{ Write-Output 'checkout=no' }} }} else {{ Write-Output 'checkout=no' }}",ps_path(checkout)));
     }
@@ -319,7 +322,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         facts: Vec::new(),
         target: None,
         checkout: checkout.clone(),
-        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
+        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), github: "unknown".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
     // Re-validate at the point of use: the store is plain JSON, and a host
     // starting with `-` would be read as an ssh option (e.g. ProxyCommand).
@@ -360,6 +363,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     let expected = format!("{} {} {}", env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION, env!("KLIDE_SOURCE_COMMIT"));
     status.setup.host = match got("host") { Some(version) if version == expected => "ready", Some(_) => "outdated", None => "missing" }.into();
     status.setup.claude = match (got("claude"), got("login")) { (Some(_), Some("true")) => "ready", (Some(_), _) => "needsLogin", _ => "missing" }.into();
+    status.setup.github = match (got("ghVersion"), got("gh")) { (_, Some(_)) => "ready", (Some(_), _) => "needsLogin", _ => "missing" }.into();
     if checkout.is_some() { status.setup.project = if got("checkout") == Some("yes") { "ready" } else { "missing" }.into(); }
     match got("host") {
         Some(version) if version == expected => status.facts.push(fact("Run host", "Installed · matches this app", "ok", None)),
@@ -385,7 +389,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     }
     match got("gh") {
         Some(account) => status.facts.push(fact("GitHub", format!("gh · {account}"), "ok", None)),
-        None => status.facts.push(fact("GitHub", "gh not logged in", "quiet", Some(format!("ssh -t {} 'gh auth login && gh auth setup-git'", machine.ssh_host)))),
+        None => status.facts.push(fact("GitHub", got("ghVersion").map(|version| format!("{version} · not signed in")).unwrap_or_else(|| "GitHub CLI not installed".into()), "quiet", Some(format!("ssh -t {} 'gh auth login && gh auth setup-git'", machine.ssh_host)))),
     }
     if let Some(path) = checkout.as_deref() {
         if got("checkout") == Some("yes") {
@@ -458,6 +462,29 @@ pub async fn machine_check(id: String, workspace_root: Option<String>) -> Result
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn github_probe_distinguishes_installation_from_rejected_login() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("klide-gh-probe-{}", crate::agent::transcripts::run_id()));
+        let bin = root.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let claude = bin.join("claude");
+        std::fs::write(&claude, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let gh = bin.join("gh");
+        for (login, expected) in [("echo 'Failed to log into account expired-user'; exit 1", None), ("echo 'Logged in to github.com account valid-user'; exit 0", Some("valid-user"))] {
+            std::fs::write(&gh, format!("#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo 'gh version fixture'; exit 0; fi\n{login}\n")).unwrap();
+            std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let result = std::process::Command::new("sh").args(["-c", &super::probe_script(None)]).env("HOME", &root).env("PATH", "/usr/bin:/bin").output().unwrap();
+            assert!(result.status.success());
+            let fields = super::parse_probe(&String::from_utf8_lossy(&result.stdout));
+            assert_eq!(fields.get("ghVersion").map(String::as_str), Some("gh version fixture"));
+            assert_eq!(fields.get("gh").map(String::as_str), expected);
+        }
+        assert!(super::windows_probe(None).contains("ghVersion="));
+        std::fs::remove_dir_all(root).unwrap();
+    }
     use super::*;
 
     fn box_machine() -> Machine {

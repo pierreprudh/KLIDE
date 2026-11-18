@@ -19,12 +19,15 @@ export function MachineConnectionPicker({ method, onMethod, onSelect, onManual, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const [page, setPage] = useState(0);
+  const pageSize = 2;
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (!method) first.current?.focus(); }, [method]);
   useEffect(() => {
     if (!method) return;
     let live = true;
     setLoading(true); setResult(null); setError("");
+    setPage(0);
     machineDiscover(method).then((value) => { if (live) setResult(value); })
       .catch((reason) => { if (live) setError(errMessage(reason)); })
       .finally(() => { if (live) setLoading(false); });
@@ -43,13 +46,15 @@ export function MachineConnectionPicker({ method, onMethod, onSelect, onManual, 
     <div className="klide-machine-dialog-footer"><GhostButton onClick={onClose}>Cancel</GhostButton></div>
   </div>;
   return <div className="klide-machine-connections">
+    <div className="klide-machine-discovery">
     <div className="klide-machine-discovery-heading"><h3>{method === "tailscale" ? "Machines on Tailscale" : method === "vpn" ? "Available machines" : "Available SSH machines"}</h3><GhostButton disabled={loading} onClick={() => setRevision((value) => value + 1)}>Refresh</GhostButton></div>
     {loading && <MachineSetupWaiting>{method === "tailscale" ? "Looking for Tailscale devices" : "Reading saved SSH machines"}</MachineSetupWaiting>}
     {error && <p role="alert" className="klide-add-machine-error">{error}</p>}
-    {result && <><p>{result.message}</p><div className="klide-machine-candidates">{result.machines.map((candidate) => <button type="button" key={candidate.sshHost} data-online={candidate.online ?? undefined} disabled={!candidate.supported} onClick={() => onSelect(candidate)}>
+    {result && <><p>{result.message}</p><div className="klide-machine-candidates">{result.machines.slice(page * pageSize, (page + 1) * pageSize).map((candidate) => <button type="button" key={candidate.sshHost} data-online={candidate.online ?? undefined} disabled={!candidate.supported} onClick={() => onSelect(candidate)}>
       <MachineIcon size={20} /><span><strong>{candidate.label}</strong><code>{candidate.sshHost}</code><span>{candidate.detail}</span></span>
       {candidate.online !== null && <span className="klide-machine-availability" data-online={candidate.online} role="img" aria-label={candidate.online ? "Online" : "Offline"} title={candidate.online ? "Online" : "Offline"} />}
-    </button>)}</div>{!result.machines.length && <p>No machines found yet. You can add one by address.</p>}</>}
+    </button>)}</div>{result.machines.length > pageSize && <nav className="klide-machine-pages" aria-label="Device pages"><GhostButton disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</GhostButton><span>{page + 1} / {Math.ceil(result.machines.length / pageSize)}</span><GhostButton disabled={(page + 1) * pageSize >= result.machines.length} onClick={() => setPage((value) => value + 1)}>Next</GhostButton></nav>}{!result.machines.length && <p>No machines found yet. You can add one by address.</p>}</>}
+    </div>
     <div className="klide-machine-dialog-footer"><GhostButton onClick={() => onMethod(null)}>Back</GhostButton><button type="button" className="klide-button klide-button-secondary klide-machine-manual-add" onClick={onManual}><NewTaskIcon size={15} />Add a machine</button></div>
   </div>;
 }

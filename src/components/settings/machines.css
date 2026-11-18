@@ -6,6 +6,10 @@
 .klide-machines .klide-settings-heading { margin-bottom: 18px; font-size: 18px; }
 .klide-machines .klide-button { border-radius: var(--settings-control-radius, 12px); min-height: 36px; padding-inline: 14px; }
 .klide-machine-row-actions { display: flex; gap: 8px; align-items: center; }
+.klide-machine-management-actions { display: flex; gap: 8px; padding: 0 26px 20px 74px; }
+.klide-machines .klide-machine-delete-button { display: grid; place-items: center; width: 36px; min-width: 36px; padding: 0; color: var(--fg-subtle); }
+.klide-machines .klide-machine-delete-button:hover { color: var(--danger); }
+.klide-machine-delete-confirm.klide-machine-confirm { margin: 0 26px 20px; }
 .klide-machine-entry { border-top: 1px solid var(--border); }
 .klide-machine-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(0, auto) auto; align-items: center; gap: 16px; padding: 24px 26px; }
 .klide-machine-local { grid-template-columns: 32px minmax(0, 1fr) auto; }
@@ -26,7 +30,6 @@
 .klide-machine-fact > :first-child { color: var(--fg-subtle); }
 .klide-machine-fix { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg); }
 .klide-machine-fix code { min-width: 0; font: 11px var(--font-mono); overflow-wrap: anywhere; }
-.klide-machine-remove { margin-top: 12px; }
 .klide-machine-confirm { padding: 16px; margin-top: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.7; }
 .klide-machine-actions { display: flex; gap: 8px; margin-top: 12px; }
 .klide-machine-message { padding: 0 22px 12px; color: var(--fg-subtle); font-size: 12px; }
@@ -48,6 +51,7 @@
 .klide-machine-form-context { display: flex; gap: 10px; align-items: center; font-weight: 600; font-size: 14px; color: var(--fg-strong); padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .klide-machine-hint { margin: 0; color: var(--fg-subtle); line-height: 1.7; }
 @media (max-width: 700px) {
+  .klide-machine-management-actions { padding: 0 16px 20px 52px; }
   .klide-machine-row { padding: 16px; gap: 10px; grid-template-columns: 26px minmax(0, 1fr) auto; }
   .klide-machine-row > .klide-machine-state { grid-column: 2; grid-row: 2; text-align: left; max-width: none; }
   .klide-machine-local > .klide-machine-state { grid-column: 3; grid-row: 1; }
@@ -60,9 +64,12 @@
   .klide-machine-option > button { grid-column: 2; justify-self: start; }
 }
 .klide-machine-setup { margin: 0 26px 24px 74px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 13px; line-height: 1.7; }
+.klide-machines .klide-machine-setup { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 20px; }
 .klide-machine-setup p { color: var(--fg-subtle); max-width: 72ch; }
 .klide-machine-steps { display: flex; gap: 16px; list-style: none; padding: 0; margin: 0 0 20px; flex-wrap: wrap; color: var(--fg-subtle); font-size: 12px; }
 .klide-machine-steps [aria-current="step"] { color: var(--fg-strong); font-weight: 600; border-bottom: 2px solid var(--fg-strong); }
+.klide-machine-steps button { padding: 2px 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.klide-machine-steps button:disabled { opacity: .45; cursor: default; }
 .klide-machine-setup .klide-machine-actions { flex-wrap: wrap; }
 .klide-machine-terminal { height: 280px; padding: 12px; margin-top: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--terminal-bg); overflow: hidden; }
 .klide-machine-project { display: grid; gap: 6px; max-width: 520px; }
@@ -73,3 +80,4 @@
 @media (max-width: 700px) { .klide-machine-setup { margin: 0 16px 20px; } }
 
 .klide-machine-project select.klide-field { padding: 10px 14px; border-radius: 12px; min-height: 40px; }
+.klide-machine-project input.klide-field { padding: 10px 14px; border-radius: 12px; min-height: 40px; }

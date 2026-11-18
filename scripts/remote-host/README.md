@@ -13,8 +13,9 @@ devices), so the server never exposes SSH to the internet.
 For an existing SSH machine, use **Settings › Machines › Add machine**:
 enter its address, continue through connection and installation, sign in to
 Claude on the machine, and choose or clone the remote project. You can save
-the setup while the machine is off. Normal setup downloads a checksum-verified
-matching helper without GitHub CLI on the Mac. Preparation supports Ubuntu
+the setup while the machine is off. Same-architecture Macs can use the app's
+own matching executable; other targets download a checksum-verified helper.
+Neither path needs GitHub CLI on the client Mac. Preparation supports Ubuntu
 24.04+ / Debian 13+ x86_64, macOS on Apple silicon or Intel, and native Windows
 x86_64 over OpenSSH. Windows uses PowerShell and Git for Windows, without WSL.
 Unattended connections use SSH keys. See the native target details in
