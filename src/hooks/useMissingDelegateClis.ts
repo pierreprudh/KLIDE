@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DELEGATE_IDS } from "../delegates";
 import { readSubscriptionStatus } from "../ipc/aiProviders";
 
@@ -29,4 +29,34 @@ export function useMissingDelegateClis(active = true, ids: readonly string[] = D
     };
   }, [active, key]);
   return missing;
+}
+
+// The other half of the same probe: the CLI is installed but not signed in.
+// Those rows stay selectable-looking — the fix is one click away (the login
+// modal), so they get a "Log in" hint rather than the dimmed treatment.
+export function useSignedOutDelegates(
+  active = true,
+  ids: readonly string[] = DELEGATE_IDS,
+): { signedOut: ReadonlySet<string>; refresh: () => void } {
+  const [signedOut, setSignedOut] = useState<ReadonlySet<string>>(() => new Set());
+  const key = ids.join("\n");
+  const refresh = useCallback(() => {
+    void Promise.all(key.split("\n").filter(Boolean).map(async (id) => {
+      try {
+        const status = await readSubscriptionStatus(id);
+        return status.installed && !status.connected ? id : null;
+      } catch {
+        return null;
+      }
+    })).then((results) => {
+      setSignedOut(new Set(results.filter((id): id is string => id !== null)));
+    });
+  }, [key]);
+  useEffect(() => {
+    if (!active) return;
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [active, refresh]);
+  return { signedOut, refresh };
 }
