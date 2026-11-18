@@ -489,13 +489,16 @@ pub async fn ci_watch_set(
     }
     crate::blocking::run(move || {
         mutate(&data, |s| {
+            // Changing the model keeps the watch's start: failures it already
+            // let pass stay passed.
+            let since = s.watches.iter().find(|w| w.workspace_root == workspace_root).map(|w| w.enabled_at);
             s.watches.retain(|w| w.workspace_root != workspace_root);
             if let Some(mut request) = request {
                 request.workspace_root = Some(workspace_root.clone());
                 s.watches.push(Watch {
                     workspace_root: workspace_root.clone(),
                     request,
-                    enabled_at: transcripts::now_ms(),
+                    enabled_at: since.unwrap_or_else(transcripts::now_ms),
                     last_poll_at: None,
                     last_error: None,
                 });

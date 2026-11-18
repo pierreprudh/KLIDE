@@ -6,11 +6,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { createListenerScope } from "../tauriEvents";
 import { createSchedule, updateSchedule, listSchedules, scheduleAction, scheduleHistory, localScheduleTime, mergeScheduleRows, scheduleServiceStatus, enableScheduleService, type ScheduleService, type Schedule, type ScheduledRun } from "../agent/schedules";
 import { stopAgentRun } from "../agent/client";
-import { PROVIDER_CATALOG, isAutoProvider, providerDefinition, providerName } from "../agent/providers";
+import { isAutoProvider, providerName } from "../agent/providers";
 import type { AgentMode, ProviderId } from "../agent/types";
 import type { HarnessSettings } from "../settingsStore";
 import { listProviderModels } from "../ipc/aiProviders";
-import { ProviderLogo } from "./ai/icons";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { routedSelection } from "../agent/harnessSource";
 import { switchModelForProvider } from "./ai/rememberedModel";
@@ -18,9 +17,9 @@ import { errMessage } from "../errors";
 import { ChevronIcon, ClockIcon, MoreIcon, NewTaskIcon, OpenInEditorIcon, PauseIcon, PlayIcon } from "../icons";
 import { ScheduleSelect, type ScheduleSelectOption } from "./ScheduleSelect";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
-import { useCustomProviders } from "../hooks/useCustomProviders";
 import { formatSpan } from "../time";
 import { CiWatchBar } from "./missionControl/CiWatchBar";
+import { agentSourceLabel, useAgentOptions } from "./agentOptions";
 import { scheduledRunInput } from "../agent/scheduledRunInput";
 import "./scheduled.css";
 
@@ -229,17 +228,11 @@ function ScheduleEditor({ schedule, onSaved, onCancel, returnFocusTo, ...props }
   const fieldId = useId();
   const dueDate = new Date(due);
   const validDate = Number.isFinite(dueDate.getTime());
-  const sourceGroup = providerDefinition(provider)?.group;
-  const sourceLabel = sourceGroup === "subscription" ? "Subscription" : sourceGroup === "local" ? "Local model" : sourceGroup === "routed" ? "Automatic" : "API provider";
+  const sourceLabel = agentSourceLabel(provider);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone.replace(/_/g, " ");
   const [dialog, setDialog] = useState<HTMLDialogElement | null>(null);
   const returnFocus = useRef(returnFocusTo ?? document.activeElement);
-  const customProviders = useCustomProviders();
-  const agentOptions: ScheduleSelectOption[] = [
-    ...[{ id: "subscription", name: "Subscriptions", description: "Uses the agent’s saved login" }, { id: "hosted", name: "API providers", description: "Uses saved API credentials" }, { id: "local", name: "Local models", description: "Runs on this Mac" }, { id: "routed", name: "Automatic", description: "Chooses a model for the task" }].flatMap(group => PROVIDER_CATALOG.filter(row => row.group === group.id).map(row => ({ value: row.id, label: row.name, group: group.name, description: group.description, icon: <ProviderLogo id={row.id} size={18} /> }))),
-    ...customProviders.map(row => ({ value: row.id, label: row.label, group: "Self-hosted", description: "Your configured endpoint", icon: <ProviderLogo id={row.id as ProviderId} size={18} /> })),
-  ];
-  if (!agentOptions.some(option => option.value === provider)) agentOptions.unshift({ value: provider, label: providerName(provider), icon: <ProviderLogo id={provider} size={18} /> });
+  const agentOptions = useAgentOptions(provider);
   const repeatOptions: ScheduleSelectOption[] = [
     { value: "0", label: "Once", description: "One run at the chosen time" },
     { value: "3600000", label: "Every hour", description: "Repeats every 60 minutes" },

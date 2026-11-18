@@ -14,10 +14,10 @@ const fired = (n: number, title: string, checks: string[], ago: number, error: s
 });
 (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
   transformCallback: (cb: unknown) => cb,
-  invoke: async (cmd: string) => cmd === "ci_watch_get" ? (OFF
+  invoke: async (cmd: string) => cmd === "list_provider_models" || cmd === "ai_list_models" ? ["claude-sonnet-5-5", "claude-opus-5-5"] : cmd === "ci_watch_get" ? (OFF
     ? { enabled: false, provider: null, model: null, enabledAt: null, lastPollAt: null, lastError: null, fired: [] }
     : { enabled: true, provider: "anthropic", model: "claude-sonnet-5-5", enabledAt: now - 3600e3, lastPollAt: now - 50e3, lastError: null,
-        fired: [fired(552, "Pin dependency audit to high", ["Frontend tests and build"], 4 * 60e3), fired(548, "Rail: hold agent groups", ["Rust tests", "Rust on windows-latest"], 3 * 3600e3), fired(541, "Sandbox network card", ["Review"], 26 * 3600e3, "Add an Anthropic key in Settings")] }) : null,
+        fired: [fired(552, "Pin dependency audit to high", ["Frontend tests and build"], 4 * 60e3), fired(548, "Rail: hold agent groups", ["Rust tests", "Rust on windows-latest"], 3 * 3600e3), fired(541, "Sandbox network card", ["Review"], 26 * 3600e3, "Add an Anthropic key in Settings")] }) : [],
 };
 const { CiWatchBar } = await import("../src/components/missionControl/CiWatchBar");
 ReactDOM.createRoot(document.getElementById("root")!).render(
