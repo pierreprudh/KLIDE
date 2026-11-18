@@ -503,23 +503,22 @@ behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
 / Refuse; the webview only picks a surface.
 
-### Where the product is (v0.6.11 released; main reviewed 2026-11-13)
+### Where the product is (v0.6.12 released 2026-11-18)
 
-The release version remains 0.6.11; `main` contains unreleased additions:
-Library (Memory / Skills / Foundations), the Sections / Agent conversation
-sidebar, Scheduled under Mission Control, worker setup/checkCommand and
-merge/discard controls, Delegate sub-agent trays, Design mode (`⌘⇧D`),
-Settings → Machines with Claude Code over SSH/tmux, approved project hooks,
-and default-on macOS containment for unreviewed native commands. The Remote
-picker is implemented; native Remote Run transport and integrated Remote
-file/diff review remain planned. See README and the feature guides for scope.
-
+0.6.12 shipped Library (Memory / Skills / Foundations), the Sections / Agent
+conversation sidebar, Scheduled under Mission Control, worker setup/checkCommand
+and merge/discard controls, Delegate sub-agent trays, Design mode (`⌘⇧D`),
+Settings → Machines with Tailscale discovery and native Remote conversations
+over SSH (host installed on Linux / macOS / Windows; Claude Code over SSH/tmux
+still offered), approved project hooks, workspace trust, and default-on macOS
+containment for unreviewed native commands. See README and the feature guides
+for scope.
 
 v0.5 closed on 2026-07-21, and the v0.6 line has cut five patch releases:
 v0.6.1 — Subscriptions and Reach (2026-08-23), v0.6.2 — Memory, Routing,
 Recovery (2026-09-11), v0.6.3 — Coordination and Documents (2026-09-12),
 v0.6.4 — Workers, Connectors, Visuals (2026-09-20), and v0.6.5 — Shells,
-Watchers, Links (2026-09-23). The patch line then ran to 0.6.11 (2026-10-26): `/goal` checks that fail end the run, Memory proposes lessons (0.6.6); llama.cpp at 16k + Llama app + the local benchmark (0.6.7); Sight, shared admission/crash recovery for app and background runs, the Memory inbox (0.6.8); OpenCode 2 (0.6.9); Amp / Cursor / Factory / Hermes as CLI providers and Hermes on any source (0.6.10); any agent on any intelligence, prompt caching + Rust compaction, Copilot, background workers, Auto rungs, the SQLite conversation store, PDF drop and `/btw` side questions (0.6.11, 2026-10-26).
+Watchers, Links (2026-09-23). The patch line then ran to 0.6.12 (2026-11-18): `/goal` checks that fail end the run, Memory proposes lessons (0.6.6); llama.cpp at 16k + Llama app + the local benchmark (0.6.7); Sight, shared admission/crash recovery for app and background runs, the Memory inbox (0.6.8); OpenCode 2 (0.6.9); Amp / Cursor / Factory / Hermes as CLI providers and Hermes on any source (0.6.10); any agent on any intelligence, prompt caching + Rust compaction, Copilot, background workers, Auto rungs, the SQLite conversation store, PDF drop and `/btw` side questions (0.6.11, 2026-10-26); Remote machines, the command sandbox + hooks + workspace trust, worker validation and the sidebar rework (0.6.12, 2026-11-18).
 Mission Control is the operations surface for Harness runs and Delegate runs;
 review evidence, worktree fleets, mission chaining, subagents, advisor
 escalation and two-agent races are shipped; `auto` resolves to one concrete
