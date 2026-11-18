@@ -8339,7 +8339,7 @@ input.klide-rail-search:focus-visible {
   height: 280px;
   flex-shrink: 0;
   transform: translateY(-64px);
-  fill: color-mix(in srgb, var(--fg-strong) 3.5%, var(--editor-bg));
+  fill: color-mix(in srgb, var(--fg-strong) 2.5%, var(--editor-bg));
 }
 
 .klide-focus-imprint-shade {
@@ -8417,8 +8417,8 @@ input.klide-rail-search:focus-visible {
   box-shadow:
     inset 0 1px 0 var(--panel-highlight),
     inset 0 0 0 0.5px color-mix(in srgb, var(--panel-highlight) 60%, transparent),
-    0 1px 2px color-mix(in srgb, var(--fg-strong) 4%, transparent),
-    0 12px 32px -12px color-mix(in srgb, var(--fg-strong) 10%, transparent);
+    0 1px 2px color-mix(in srgb, var(--fg-strong) 3%, transparent),
+    0 12px 32px -12px color-mix(in srgb, var(--fg-strong) 6%, transparent);
   animation: klide-focus-card-in 520ms var(--ease-soft) calc(150ms + var(--focus-card-delay, 0ms)) both;
   transition:
     transform 260ms var(--ease-out),
@@ -8454,8 +8454,8 @@ input.klide-rail-search:focus-visible {
   box-shadow:
     inset 0 1px 0 var(--panel-highlight),
     inset 0 0 0 0.5px color-mix(in srgb, var(--panel-highlight) 60%, transparent),
-    0 1px 2px color-mix(in srgb, var(--fg-strong) 5%, transparent),
-    0 18px 40px -14px color-mix(in srgb, var(--fg-strong) 14%, transparent);
+    0 1px 2px color-mix(in srgb, var(--fg-strong) 4%, transparent),
+    0 18px 40px -14px color-mix(in srgb, var(--fg-strong) 9%, transparent);
 }
 
 .klide-focus-home-card:active {
