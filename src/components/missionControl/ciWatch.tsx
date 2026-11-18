@@ -103,7 +103,7 @@ export function CiWatchListRow({ watch, project, current, onSelect }: { watch: C
   </button>;
 }
 
-export function CiWatchDetail({ watch, project }: { watch: CiWatch; project: string }) {
+export function CiWatchDetail({ watch, project }: { watch: CiWatch; project: string | null }) {
   const customProviders = useCustomProviders();
   const keylessProviders = useKeylessProviders();
   const llamaSetupMode = useLlamaSetupMode();
@@ -113,6 +113,8 @@ export function CiWatchDetail({ watch, project }: { watch: CiWatch; project: str
     [customProviders, keylessProviders, llamaSetupMode, missingDelegateClis],
   );
   const { info } = watch;
+  // A watch belongs to a project; without one there is nothing to switch on.
+  if (!project) return <div className="scheduled-empty"><strong>{CI_WATCH_TITLE}</strong><p>Open a project to watch its pull requests.</p></div>;
   return <>
     <div className="scheduled-detail-heading">
       <h2>{CI_WATCH_TITLE}</h2>

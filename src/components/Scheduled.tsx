@@ -57,7 +57,7 @@ export function Scheduled(props: Props) {
   const actionsTrigger = useRef<HTMLButtonElement | null>(null);
   const selected = rows.find(row => row.id === selectedId);
   const ciWatch = useCiWatch(props.workspaceRoot, props.defaultProvider, props.defaultModel, props.harnessSettings);
-  const ciSelected = selectedId === CI_WATCH_ID && !creating && !!props.workspaceRoot;
+  const ciSelected = selectedId === CI_WATCH_ID && !creating;
 
   useEffect(() => { if (props.initialSelectedId) { setSelectedId(props.initialSelectedId); setCreating(false); setEditing(false); } }, [props.initialSelectedId, props.selectionVersion]);
   useEffect(() => {
@@ -149,11 +149,9 @@ export function Scheduled(props: Props) {
             <span className="scheduled-list-row-top"><strong>{row.name}</strong><span data-failed={row.status === "failed" || undefined}>{statusName(row.status)}</span></span>
             <span className="scheduled-list-row-meta">{cadence(row.intervalMs)}<span aria-hidden="true"> · </span>{workspaceName(row.workspaceRoot)}</span>
           </button>)}
-          {props.workspaceRoot ? <>
-            <div className="scheduled-pane-heading scheduled-subheading"><h2>Triggers</h2></div>
-            <CiWatchListRow watch={ciWatch} project={workspaceName(props.workspaceRoot)} current={ciSelected}
-              onSelect={() => { setSelectedId(CI_WATCH_ID); setCreating(false); setEditing(false); setError(null); setMenu(null); }} />
-          </> : null}
+          <div className="scheduled-pane-heading scheduled-subheading"><h2>Triggers</h2></div>
+          <CiWatchListRow watch={ciWatch} project={props.workspaceRoot ? workspaceName(props.workspaceRoot) : "No project"} current={ciSelected}
+            onSelect={() => { setSelectedId(CI_WATCH_ID); setCreating(false); setEditing(false); setError(null); setMenu(null); }} />
         </div>
         <div className="scheduled-local" title={service?.error ?? "The local service works with Klide closed. Your Mac must be awake and you must be logged in. Permissions wait until you reopen Klide."}>
           <ClockIcon size={12} /><span>{!service ? "Checking local service…" : service.installed && service.running && service.compatible ? "This Mac · service running" : service.error ? "Local service needs attention" : "Local service not enabled"}</span>
@@ -163,7 +161,7 @@ export function Scheduled(props: Props) {
         </div>
       </nav>
       <main className="scheduled-pane scheduled-detail">
-        {ciSelected ? <CiWatchDetail watch={ciWatch} project={workspaceName(props.workspaceRoot)} /> : selected ? <>
+        {ciSelected ? <CiWatchDetail watch={ciWatch} project={props.workspaceRoot ? workspaceName(props.workspaceRoot) : null} /> : selected ? <>
           <div className="scheduled-detail-heading">
             <h2>{selected.name}</h2>
             <div className="scheduled-toolbar">
