@@ -49,10 +49,11 @@ jobs:
           key: native-host-${{ env.PROFILE }}
           cache-on-failure: true
       - name: Tauri system packages
+        timeout-minutes: 10
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libssl-dev \
             libxdo-dev pkg-config
       - name: Build console-capable native helper
@@ -84,6 +85,15 @@ jobs:
           if ($dependencies -match '(?i)(VCRUNTIME|MSVCP|CONCRT)[^ ]*\.dll|WebView2Loader\.dll') {
             throw 'The SSH helper must not depend on an unbundled VC runtime or WebView2 loader DLL'
           }
+      - name: Target and kernel-lock tests
+        shell: bash
+        run: |
+          cargo test --lib --manifest-path src-tauri/Cargo.toml remote_platform::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml process_lock::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml delegate::child::windows_job::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml pty_daemon::windows_tests::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml windows_detach::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml durable::
       - name: Native disconnect and replay
         timeout-minutes: 4
         shell: bash
@@ -99,15 +109,6 @@ jobs:
         timeout-minutes: 4
         shell: pwsh
         run: ./tests/windows-openssh-smoke.ps1 -Binary "src-tauri/target/$env:PROFILE/klide.exe"
-      - name: Target and kernel-lock tests
-        shell: bash
-        run: |
-          cargo test --lib --manifest-path src-tauri/Cargo.toml remote_platform::
-          cargo test --lib --manifest-path src-tauri/Cargo.toml process_lock::
-          cargo test --lib --manifest-path src-tauri/Cargo.toml delegate::child::windows_job::
-          cargo test --lib --manifest-path src-tauri/Cargo.toml pty_daemon::windows_tests::
-          cargo test --lib --manifest-path src-tauri/Cargo.toml windows_detach::
-          cargo test --lib --manifest-path src-tauri/Cargo.toml durable::
       - name: Package helper and checksum
         shell: python
         env:

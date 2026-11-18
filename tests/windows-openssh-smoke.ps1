@@ -88,7 +88,7 @@ try {
     $checksum = (Get-FileHash -LiteralPath $nativeBinary -Algorithm SHA256).Hash
     $python = (Get-Command python).Source
     $installerTest = (Resolve-Path tests/remote-install-smoke.py).Path
-    $script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(`$false); `$env:PYTHONUTF8='1'; `$env:PATH=" + (Quote-Literal $env:PATH) + "; `$helper=Join-Path `$HOME " + (Quote-Literal $remoteStage) + "; if ((Get-FileHash -LiteralPath `$helper -Algorithm SHA256).Hash -ne " + (Quote-Literal $checksum) + ") { throw 'SFTP changed the helper bytes' }; Write-Output 'PASS: SFTP transfers the native helper byte for byte'; & " + (Quote-Literal $python) + " -u " + (Quote-Literal $installerTest) + " `$helper; exit `$LASTEXITCODE"
+    $script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(`$false); `$env:PYTHONUTF8='1'; `$helper=Join-Path `$HOME " + (Quote-Literal $remoteStage) + "; if ((Get-FileHash -LiteralPath `$helper -Algorithm SHA256).Hash -ne " + (Quote-Literal $checksum) + ") { throw 'SFTP changed the helper bytes' }; Write-Output 'PASS: SFTP transfers the native helper byte for byte'; & " + (Quote-Literal $python) + " -u " + (Quote-Literal $installerTest) + " `$helper; exit `$LASTEXITCODE"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     & ssh -F "$root/client_config" native-smoke "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
     if ($LASTEXITCODE -ne 0) { throw 'Windows OpenSSH installer acceptance failed' }
