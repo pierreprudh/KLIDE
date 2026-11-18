@@ -293,7 +293,7 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
   return (
     <>
       {recap}
-      <div ref={scrollRef} className="klide-scroll-slim" style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative" }}>
+      <div ref={scrollRef} className="klide-scroll-slim" style={{ flex: 1, minHeight: 0, marginTop: 12, overflow: "auto", position: "relative" }}>
         <DiffView
           key={diffKey}
           blocks={blocks}
@@ -301,6 +301,8 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open, files, onClos
           fileCounts={fileCounts}
           imageDiffs={imageDiffs}
           inset={false}
+          flush
+          stickyBackdrop="var(--bg)"
           onOpenFile={onOpenFile}
           onLineComment={(c) => void sendLineComment(c)}
           commentActionLabel="Send to agent"

@@ -352,13 +352,18 @@ type DiffViewProps = {
    *  stays in view without sideways scrolling. Same tints, markers and word
    *  highlights. */
   compact?: boolean;
+  /** The colour behind the cards. When set, each file's header sticks to
+   *  the top of the host's scroller as a rounded card top, and this colour
+   *  fills its corners so rows scrolling under don't show through. */
+  stickyBackdrop?: string;
 };
 
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment, commentActionLabel, onOpenFile, inset = true, flush = false, compact = false }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment, commentActionLabel, onOpenFile, inset = true, flush = false, compact = false, stickyBackdrop }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
+  const sticky = stickyBackdrop != null;
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Line-comment selection: block indices, anchor→head (⇧-click moves head).
   const [sel, setSel] = useState<{ anchor: number; head: number } | null>(null);
@@ -525,13 +530,19 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
           <section
             key={card.key}
             data-diff-path={card.path ?? undefined}
-            style={{ marginTop: flush && cardIndex === 0 ? 0 : 12, border: "1px solid var(--border)", borderRadius: "var(--radius-xl)", background: "var(--bg-elevated)", overflow: "hidden" }}
+            style={{ marginTop: flush && cardIndex === 0 ? 0 : 12, border: "1px solid var(--border)", borderRadius: "var(--radius-xl)", background: "var(--bg-elevated)", overflow: sticky ? "visible" : "hidden" }}
           >
             {card.path != null && (
+              <div style={sticky ? { position: "sticky", top: 0, zIndex: 1, margin: "-1px -1px 0", background: stickyBackdrop } : undefined}>
               <div
                 onClick={() => toggleFileCollapsed(card.path!)}
                 title={collapsed ? "Expand file" : "Collapse file"}
-                style={{ height: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", borderBottom: collapsed ? "none" : "1px solid var(--border)", cursor: "pointer", userSelect: "none" }}
+                style={{
+                  height: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", cursor: "pointer", userSelect: "none",
+                  ...(sticky
+                    ? { border: "1px solid var(--border)", borderRadius: collapsed ? "var(--radius-xl)" : "var(--radius-xl) var(--radius-xl) 0 0", background: "var(--bg-elevated)" }
+                    : { borderBottom: collapsed ? "none" : "1px solid var(--border)" }),
+                }}
               >
                 <span style={{ display: "inline-flex", flexShrink: 0 }}><FileTypeIcon name={card.path.split("/").pop() ?? card.path} size={14} /></span>
                 <span title={mark?.title} style={{ color: mark?.color ?? "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -560,10 +571,11 @@ export function DiffView({ blocks, limit, fileCounts, imageDiffs, onLineComment,
                 )}
                 <ChevronIcon open={!collapsed} size={11} style={{ color: "var(--fg-dim)", flexShrink: 0 }} />
               </div>
+              </div>
             )}
             {image && !collapsed && <ImageDiffView key={card.path} path={card.path!} image={image} />}
             {!image && card.rows.length > 0 && (
-              <div className="klide-scroll-slim" style={{ overflowX: "auto", padding: "4px 0" }}>
+              <div className="klide-scroll-slim" style={{ overflowX: "auto", padding: "4px 0", borderRadius: sticky ? "0 0 calc(var(--radius-xl) - 1px) calc(var(--radius-xl) - 1px)" : undefined }}>
                 <div style={{ width: compact ? "auto" : "max-content", minWidth: "100%" }}>{card.rows}</div>
               </div>
             )}
