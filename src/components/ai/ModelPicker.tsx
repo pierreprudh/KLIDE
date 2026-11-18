@@ -367,7 +367,7 @@ function StandardModelPicker({
       style={
         fluid
           ? { position: "relative", flex: 1, minWidth: 0 }
-          : { position: "relative", flex: "0 1 112px", minWidth: 64, maxWidth: 138 }
+          : { position: "relative", flex: "0 1 156px", minWidth: 72, maxWidth: 196 }
       }
     >
       <button
@@ -389,9 +389,9 @@ function StandardModelPicker({
           justifyContent: fluid ? "flex-start" : "flex-end",
           gap: 5,
           width: "100%",
-          height: 24,
-          padding: "0 16px 0 2px",
-          borderRadius: "var(--radius-sm)",
+          height: 26,
+          padding: "0 22px 0 8px",
+          borderRadius: 12,
           border: "1px solid transparent",
           background: open ? "var(--bg-hover)" : "transparent",
           boxShadow: "none",
@@ -414,6 +414,13 @@ function StandardModelPicker({
           e.currentTarget.style.color = "var(--fg-subtle)";
         }}
       >
+        {/* The model's own mark leads its name — the same resolver the menu
+            rows use, falling back to the Provider's logo. */}
+        {model ? (
+          <span aria-hidden="true" style={{ display: "flex", flexShrink: 0 }}>
+            {resolveModelLogo(model, 13) ?? <ProviderLogo id={provider} size={13} />}
+          </span>
+        ) : null}
         <span
           style={{
             minWidth: 0,
@@ -782,7 +789,7 @@ function SectionLabel({ children }: { children: string }) {
 
 function DropdownChevron({ rotated }: { rotated: boolean }) {
   return <ChevronIcon size={12} style={{
-    position: "absolute", right: 3, flexShrink: 0, color: "var(--fg-dim)",
+    position: "absolute", right: 7, flexShrink: 0, color: "var(--fg-dim)",
     transform: rotated ? "rotate(180deg)" : "none",
     transition: "transform var(--motion-fast) var(--ease-out)",
   }} />;
