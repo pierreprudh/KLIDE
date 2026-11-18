@@ -45,6 +45,7 @@ KbdInteractiveAuthentication no
 AuthenticationMethods publickey
 UseDNS no
 LogLevel VERBOSE
+Subsystem sftp "$($env:WINDIR.Replace('\','/'))/System32/OpenSSH/sftp-server.exe"
 "@ | Set-Content -Encoding ascii "$root/sshd_config"
 $public = (Get-Content "$root/host.pub").Split(' ')
 "[127.0.0.1]:$port $($public[0]) $($public[1])" | Set-Content -Encoding ascii "$root/known_hosts"
@@ -76,15 +77,28 @@ try {
     # Exercise the actual native installer from an SSH session as well. A
     # direct CI-shell launch is intentionally refused by its outer job policy.
     function Quote-Literal([string]$value) { return "'" + $value.Replace("'", "''") + "'" }
+    $remoteStage = '.klide/bin/klide-acceptance-' + [guid]::NewGuid().ToString('N') + '.exe'
+    $preparation = '$ErrorActionPreference="Stop"; New-Item -ItemType Directory -Force -Path (Join-Path $HOME ".klide/bin") | Out-Null; exit 0'
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($preparation))
+    & ssh -F "$root/client_config" native-smoke "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the Windows helper upload directory' }
+    $nativeBinary = (Resolve-Path $Binary).Path
+    & scp -F "$root/client_config" $nativeBinary "native-smoke:$remoteStage"
+    if ($LASTEXITCODE -ne 0) { throw 'Native Windows SFTP upload failed' }
+    $checksum = (Get-FileHash -LiteralPath $nativeBinary -Algorithm SHA256).Hash
     $python = (Get-Command python).Source
     $installerTest = (Resolve-Path tests/remote-install-smoke.py).Path
-    $nativeBinary = (Resolve-Path $Binary).Path
-    $script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(`$false); `$env:PYTHONUTF8='1'; `$env:PATH=" + (Quote-Literal $env:PATH) + "; & " + (Quote-Literal $python) + " -u " + (Quote-Literal $installerTest) + " " + (Quote-Literal $nativeBinary) + "; exit `$LASTEXITCODE"
+    $script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(`$false); `$env:PYTHONUTF8='1'; `$env:PATH=" + (Quote-Literal $env:PATH) + "; `$helper=Join-Path `$HOME " + (Quote-Literal $remoteStage) + "; if ((Get-FileHash -LiteralPath `$helper -Algorithm SHA256).Hash -ne " + (Quote-Literal $checksum) + ") { throw 'SFTP changed the helper bytes' }; Write-Output 'PASS: SFTP transfers the native helper byte for byte'; & " + (Quote-Literal $python) + " -u " + (Quote-Literal $installerTest) + " `$helper; exit `$LASTEXITCODE"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     & ssh -F "$root/client_config" native-smoke "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
     if ($LASTEXITCODE -ne 0) { throw 'Windows OpenSSH installer acceptance failed' }
 } finally {
     Remove-Item Env:KLIDE_SMOKE_SSH_CONFIG -ErrorAction SilentlyContinue
+    if ($remoteStage) {
+        $cleanup = 'Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath (Join-Path $HOME ' + (Quote-Literal $remoteStage) + ')'
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanup))
+        & ssh -F "$root/client_config" native-smoke "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
+    }
     Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
     & sc.exe delete $name | Out-Null
     if (Test-Path "$root/server.log") { Get-Content "$root/server.log" }

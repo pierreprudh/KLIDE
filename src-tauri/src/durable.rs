@@ -195,7 +195,17 @@ fn repair_torn_tail(path: &Path, file: &fs::File) -> Result<(), String> {
         }
         end = start;
     }
-    file.set_len(keep)
+    // Windows append-only handles deliberately lack FILE_WRITE_DATA, which
+    // SetEndOfFile requires. The sidecar lease still excludes other writers.
+    #[cfg(windows)]
+    let truncate_handle = fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("Could not open {path:?} for tail repair: {e}"))?;
+    #[cfg(not(windows))]
+    let truncate_handle = file;
+    truncate_handle
+        .set_len(keep)
         .map_err(|e| format!("Could not trim torn tail of {path:?}: {e}"))?;
     eprintln!("klide: {path:?} ended in a torn line; trimmed it before appending.");
     Ok(())
