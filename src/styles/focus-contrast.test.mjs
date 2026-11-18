@@ -9,7 +9,13 @@ function declarations(block) {
 const defaults = declarations(css.match(/:root\s*\{([\s\S]*?)\n\}/)[1]);
 function tokens(theme) {
   const block = css.match(new RegExp(`:root\\[data-theme="${theme}"\\][^{]*\\{([^}]+)\\}`));
-  return { ...defaults, ...declarations(block?.[1] ?? "") };
+  const merged = { ...defaults, ...declarations(block?.[1] ?? "") };
+  // A theme may point one token at another (`--accent-strong: var(--accent)`);
+  // resolve one level so contrast checks read the real value.
+  for (const [key, value] of Object.entries(merged)) {
+    if (value.startsWith("var(")) merged[key] = merged[value.slice(4, -1).trim()];
+  }
+  return merged;
 }
 function color(value) {
   if (value.startsWith("#")) return [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16)).concat(1);
@@ -49,8 +55,9 @@ describe("non-text and status contrast", () => {
       for (const surface of ["--bg", "--bg-elevated"]) {
         // The shared :focus-visible rule outlines with --focus-ring = var(--accent).
         expect(contrast(color(t["--accent"]), composite(color(t[surface]), bg)), `${theme} accent on ${surface}`).toBeGreaterThanOrEqual(3);
-        // Status colors are also used as text.
-        for (const token of ["--success", "--warning", "--danger"]) {
+        // Status colors are also used as text, and --accent-strong is the
+        // accent as text (review-mode note label) — same 4.5:1 bar.
+        for (const token of ["--success", "--warning", "--danger", "--accent-strong"]) {
           expect(contrast(color(t[token]), composite(color(t[surface]), bg)), `${theme} ${token} on ${surface}`).toBeGreaterThanOrEqual(4.5);
         }
       }

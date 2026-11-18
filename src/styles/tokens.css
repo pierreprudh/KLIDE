@@ -43,6 +43,9 @@
   --accent:       #5A7B4C;
   --accent-soft:  rgba(90, 123, 76, 0.12);
   --accent-hover: #6B8E5A;
+  /* Accent darkened for *text*: small labels in the accent hue must pass
+     4.5:1 (WCAG 1.4.3) and the raw accent only clears 4.44:1 on --bg. */
+  --accent-strong: #537247;
 
   /* Controls */
   --control-primary-bg: #1c1c1c;
@@ -268,6 +271,8 @@
   --accent:       #7C9082;
   --accent-soft:  rgba(124, 144, 130, 0.16);
   --accent-hover: #8CA192;
+  /* Muted sage reads only 3.15:1 as text; this darker take clears 4.5:1. */
+  --accent-strong: #5C7052;
 
   --control-primary-bg: #1A1F2E;
   --control-primary-fg: #FFFFFF;
@@ -324,6 +329,8 @@
   --accent:       #8FAA97;
   --accent-soft:  rgba(143, 170, 151, 0.16);
   --accent-hover: #A0BAA7;
+  /* Already 6.85:1 as text on the elevated surface. */
+  --accent-strong: var(--accent);
 
   --control-primary-bg: #EDEFEC;
   --control-primary-fg: #131512;
@@ -381,6 +388,8 @@
   --accent:       #8EA2FF;
   --accent-soft:  #242B45;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* Already 7.49:1 as text on the elevated surface. */
+  --accent-strong: var(--accent);
 
   /* The :root default is near-black at 62% — invisible on a dark surface.
      Every dark theme owes itself an override. Status colors likewise need
@@ -439,6 +448,8 @@
   --accent:       #007ACC;
   --accent-soft:  #04395E;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* VS Code blue lightened for text: the stock accent reads 3.40:1. */
+  --accent-strong: #379BFF;
 
   --code-comment: #6A9955;
   --success:      #719A5F;
@@ -493,6 +504,8 @@
   --accent:       #0969DA;
   --accent-soft:  #DDF4FF;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* Already 5.19:1 as text on the elevated surface. */
+  --accent-strong: var(--accent);
 
   --control-primary-bg: #1F2328;
   --control-primary-fg: #FFFFFF;
@@ -533,6 +546,8 @@
   --accent:       #2596BE;
   --accent-soft:  rgba(37, 150, 190, 0.12);
   --accent-hover: #1E80A3;
+  /* Cerulean reads 3.14:1 as text; a deeper sea blue clears 4.5:1. */
+  --accent-strong: #16719A;
 
   --control-primary-bg: #1C1B18;
   --control-primary-fg: #FFFFFF;
@@ -605,6 +620,9 @@
   --accent:       #B58900;
   --accent-soft:  #2E4C3B;
   --accent-hover: color-mix(in srgb, var(--accent) 88%, var(--fg-strong));
+  /* Solarized yellow lightened for text: the stock accent reads 4.05:1 on
+     the elevated surface. */
+  --accent-strong: #CBA536;
 
   --code-comment: #79949D;
   --success:      #7AA667;
@@ -5316,11 +5334,12 @@ button:focus-visible .menu-leadout {
 
 /* Empty states read as quiet sentences, not as rows. An expanded-but-empty
    project gets the indent but no trunk — a tree line with nothing hanging off
-   it looks unfinished, so the indent alone carries the nesting. */
+   it looks unfinished, so the indent alone carries the nesting. --fg-subtle,
+   not --fg-dim: this is a sentence a person reads, and 12px must pass 4.5:1. */
 .klide-focus-rail-empty {
   margin: 2px 0 6px;
   padding: 0 var(--rail-row-pad);
-  color: var(--fg-dim);
+  color: var(--fg-subtle);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -7670,6 +7689,40 @@ input.klide-rail-search:focus-visible {
   animation: klide-focus-git-island-in 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
+/* The CLI sign-in window: same glass panel as the other Klide dialogs
+   (.klide-skills / .klide-worktrees), sized for a terminal. */
+.klide-login-dialog {
+  width: min(880px, calc(100vw - 80px));
+  height: min(580px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--composer-border);
+  border-radius: 16px;
+  background: var(--composer-glass);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  backdrop-filter: var(--composer-blur);
+  -webkit-backdrop-filter: var(--composer-blur);
+  box-shadow: inset 0 1px 0 var(--panel-highlight), var(--panel-shadow);
+  transform: translateZ(0);
+  animation: klide-cmd-in 250ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.klide-login-dialog .klide-login-head {
+  height: 40px;
+  padding: 0 8px 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
 @keyframes klide-worktrees-fade {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -8577,30 +8630,32 @@ input.klide-rail-search:focus-visible {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent);
+  color: var(--accent-strong);
   font-family: var(--font-ui);
   font-size: 10.5px;
   font-weight: 400;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0.55;
   cursor: pointer;
-  transition:
-    opacity var(--motion-slow) var(--ease-soft),
-    color var(--motion-slow) var(--ease-soft);
+  transition: color var(--motion-slow) var(--ease-soft);
 }
 
+/* The label is meaningful text (it names the live review policy), so it
+   carries no opacity dimming — 10.5px text must hold 4.5:1 (WCAG 1.4.3),
+   and both --accent-strong and --fg-subtle clear that on every theme's
+   surfaces (focus-contrast.test.mjs). Hover affordance is an underline
+   rather than a transparency shift, which would break that ratio. */
 .klide-ai-mode-note:hover,
 .klide-ai-mode-note:focus-visible {
-  opacity: 0.92;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* The review rung — the default policy wears the branch label's monochrome,
    leaving the accent to mean "a gate is silenced". */
 .klide-ai-mode-note--muted {
   color: var(--fg-subtle);
-  opacity: 0.38;
 }
 
 /* Each cycle morphs rather than snaps: the leaving label's color eases on the
