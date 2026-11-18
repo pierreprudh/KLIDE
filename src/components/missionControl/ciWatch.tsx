@@ -57,6 +57,13 @@ export function useCiWatch(workspaceRoot: string | null, defaultProvider: Provid
     return () => { disposed = true; clearInterval(timer); scope.dispose(); };
   }, [workspaceRoot]);
 
+  // Off, the pickers follow the composer's choice; on, they show the watch's.
+  useEffect(() => {
+    if (info?.enabled) return;
+    setProvider(defaultProvider);
+    setModel(defaultModel);
+  }, [defaultProvider, defaultModel, info?.enabled]);
+
   useEffect(() => {
     let disposed = false;
     setModels([]);
