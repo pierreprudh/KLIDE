@@ -8,6 +8,7 @@ import { canOpenConversation, openConversation } from "./conversationNavigation"
 import { notify } from "./toast";
 import { errMessage } from "./errors";
 import { openSchedule } from "./scheduleNavigation";
+import type { CiWatchFired } from "./ipc/ciWatch";
 
 const runIds = new Set<string>();
 export function isScheduledRun(id: string): boolean { return runIds.has(id); }
@@ -69,6 +70,27 @@ export function watchScheduleStatus(): () => void {
   };
   const registration = listen<Schedule>("schedule:changed", e => apply(e.payload));
   scope.add(registration);
+  // A CI watch firing (agent/ci_watch.rs) is the same kind of Run: started by
+  // the service, no Stored conversation, opened through the scheduled-run door.
+  scope.add(listen<CiWatchFired>("ci-watch:fired", ({ payload: f }) => {
+    if (stopped) return;
+    const where = f.workspaceRoot.split(/[\\/]/).filter(Boolean).pop() ?? "";
+    if (!f.runId) {
+      notify(`CI failed on #${f.prNumber} ${where} — couldn't start a Run: ${f.error ?? "unknown error"}`, { tone: "error" });
+      return;
+    }
+    const runId = f.runId;
+    runIds.add(runId);
+    publishKlideConvo({
+      id: runId, title: `CI failed · #${f.prNumber} ${f.prTitle}`, status: "running", provider: f.provider as Schedule["provider"], model: f.model,
+      cwd: f.workspaceRoot, branch: null, messages: [], updatedMs: Date.now(),
+    });
+    notify(`CI failed on #${f.prNumber} ${f.prTitle} — Kit is looking into it`, {
+      tone: "warn", duration: 0,
+      provider: f.provider,
+      action: { label: "Open", run: () => { openConversation(runId); } },
+    });
+  }));
   void registration.then(() => listSchedules()).then(rows => {
     for (const row of rows) apply(row);
   }).catch(error => { if (!stopped) notify(`Couldn't restore schedules: ${errMessage(error)}`, { tone: "error" }); });

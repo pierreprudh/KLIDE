@@ -24,6 +24,7 @@ import { ScheduleSelect, type ScheduleSelectOption } from "./ScheduleSelect";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { useCustomProviders } from "../hooks/useCustomProviders";
 import { formatSpan } from "../time";
+import { CiWatchBar } from "./missionControl/CiWatchBar";
 import "./scheduled.css";
 
 type Props = {
@@ -43,6 +44,30 @@ const shortWhen = (ms: number) => new Date(ms).toLocaleString(undefined, { month
 const workspaceName = (root: string | null) => root?.split(/[\\/]/).filter(Boolean).pop() ?? "Workspace";
 const statusName = (status: Schedule["status"]) => ({ pending: "Scheduled", dispatching: "Starting", running: "Running", completed: "Completed", failed: "Failed", paused: "Paused", cancelled: "Cancelled" })[status];
 const cadence = (ms: number | null) => ms === null ? "Once" : ms === 3_600_000 ? "Every hour" : ms === 86_400_000 ? "Every 24 hours" : ms === 604_800_000 ? "Every 7 days" : `Every ${ms / 60_000} minutes`;
+
+/** The Run a saved trigger starts from — the same system prompt, skills and
+ *  harness settings a conversation in that Workspace would get. Shared by
+ *  schedules and the CI watch. */
+export async function scheduledRunInput({ root, provider, model, mode, text, settings }: { root: string; provider: ProviderId; model: string; mode: AgentMode; text: string; settings: HarnessSettings }): Promise<StartAgentRunInput> {
+  const [skills, rules] = await Promise.all([
+    loadFilesystemSkills(root).then(scanned => mergeFilesystemSkills(loadSkills(), scanned)),
+    (async () => {
+      for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+        try { return (await readWorkspaceTextFile(root, name)).slice(0, 6000).trim(); } catch { /* Try the next convention. */ }
+      }
+      return "";
+    })(),
+  ]);
+  return {
+    workspaceRoot: root, provider, model, mode, text, attachments: [],
+    systemPrompt: buildSystemPrompt(root, true, skills, mode, mode !== "chat", rules, settings, model, provider),
+    skills: enabledRunSkills(skills), maxParallelTools: settings.maxParallelTools,
+    requireDiffReview: true, maxTurns: settings.maxTurns, commandTimeoutSecs: settings.commandTimeoutSecs,
+    testAfterEditCommand: settings.testAfterEditCommand,
+    numCtx: settings.contextWindows?.[model], reflectionLevel: settings.reflectionLevels?.[model],
+    preferredModels: isAutoProvider(provider) ? allFavModels() : undefined,
+  };
+}
 
 export function Scheduled(props: Props) {
   const [rows, setRows] = useState<Schedule[]>([]);
@@ -139,6 +164,7 @@ export function Scheduled(props: Props) {
       </button>
     </header>
     {error ? <p className="scheduled-error" role="alert">{error}</p> : null}
+    {props.workspaceRoot ? <CiWatchBar workspaceRoot={props.workspaceRoot} provider={props.defaultProvider} model={props.defaultModel} settings={props.harnessSettings} onOpenRun={props.onOpenRun} /> : null}
     <div className="scheduled-body">
       <nav className="scheduled-pane scheduled-list" aria-label="Schedules">
         <div className="scheduled-pane-heading"><h2>Schedules</h2>{rows.length > 0 && <span>{rows.length}</span>}</div>
@@ -271,25 +297,7 @@ function ScheduleEditor({ schedule, onSaved, onCancel, returnFocusTo, ...props }
     try {
       const dueAt = new Date(due).getTime();
       if (!Number.isFinite(dueAt) || dueAt <= Date.now()) throw new Error("Choose a future start time");
-      const settings = props.harnessSettings;
-      const [skills, rules] = await Promise.all([
-        loadFilesystemSkills(root).then(scanned => mergeFilesystemSkills(loadSkills(), scanned)),
-        (async () => {
-          for (const name of ["AGENTS.md", "CLAUDE.md"]) {
-            try { return (await readWorkspaceTextFile(root, name)).slice(0, 6000).trim(); } catch { /* Try the next convention. */ }
-          }
-          return "";
-        })(),
-      ]);
-      const input: StartAgentRunInput = {
-        workspaceRoot: root, provider, model, mode, text, attachments: [],
-        systemPrompt: buildSystemPrompt(root, true, skills, mode, mode !== "chat", rules, settings, model, provider),
-        skills: enabledRunSkills(skills), maxParallelTools: settings.maxParallelTools,
-        requireDiffReview: true, maxTurns: settings.maxTurns, commandTimeoutSecs: settings.commandTimeoutSecs,
-        testAfterEditCommand: settings.testAfterEditCommand,
-        numCtx: settings.contextWindows?.[model], reflectionLevel: settings.reflectionLevels?.[model],
-        preferredModels: isAutoProvider(provider) ? allFavModels() : undefined,
-      };
+      const input = await scheduledRunInput({ root, provider, model, mode, text, settings: props.harnessSettings });
       const saved = schedule ? await updateSchedule(schedule.id, input, dueAt, Number(interval) || null, name.trim() || text.trim().split("\n")[0].slice(0, 80)) : await createSchedule(input, dueAt, Number(interval) || null, name.trim() || text.trim().split("\n")[0].slice(0, 80));
       if (alive.current) onSaved(saved);
     } catch (e) { if (alive.current) setError(errMessage(e)); }

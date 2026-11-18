@@ -119,7 +119,7 @@ fn gh_bin() -> String {
         .clone()
 }
 
-fn gh_output(workspace_root: &str, args: &[&str]) -> Result<String, String> {
+pub(crate) fn gh_output(workspace_root: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(gh_bin());
     command.args(args);
     apply_account_env(&mut command);

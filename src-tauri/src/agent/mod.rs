@@ -37,6 +37,7 @@ pub fn code_mode_set(enabled: bool) -> Result<CodeModeStatus, String> {
 pub(crate) mod command_env;
 mod observers;
 pub(crate) mod schedules;
+pub(crate) mod ci_watch;
 pub(crate) mod workers;
 pub(crate) mod worker_slots;
 mod attention;
