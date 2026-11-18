@@ -14,7 +14,10 @@ export type Machine = {
 
 export type MachineFact = { label: string; value: string; tone: MachineFactTone; fix?: string };
 
+export type HostTarget = { os: "linux" | "macos" | "windows"; arch: "x86_64" | "aarch64" };
+
 export type MachineStatus = {
+  target?: HostTarget | null;
   id: string;
   label: string;
   sshHost: string;
@@ -25,7 +28,7 @@ export type MachineStatus = {
   facts: MachineFact[];
   checkout: string | null;
   setup: {
-    connection: "connected" | "offline" | "needsTrust" | "needsAuthentication";
+    connection: "connected" | "offline" | "needsTrust" | "needsAuthentication" | "unsupported";
     host: "ready" | "outdated" | "missing" | "unknown";
     claude: "ready" | "needsLogin" | "missing" | "unknown";
     project: "ready" | "missing" | "unknown" | "notSelected";

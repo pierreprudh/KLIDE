@@ -8,44 +8,68 @@ import json
 import faulthandler
 import os
 from pathlib import Path
-import selectors
+import queue
+import threading
 import subprocess
 import sys
 import tempfile
 import time
 
 
+def wait_for_exit(pid, timeout=5):
+    """Wait on an owned host before Windows removes its mapped executable."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x00100000, False, pid)
+    if not handle:
+        assert ctypes.get_last_error() == 87, ctypes.WinError(ctypes.get_last_error())
+        return
+    try:
+        assert kernel.WaitForSingleObject(handle, int(timeout * 1000)) == 0, "Host did not exit"
+    finally:
+        kernel.CloseHandle(handle)
+
+
 class Relay:
     def __init__(self, binary, data, env):
+        command = [str(binary), "ptyd", "connect", "--ensure", "--data-dir", str(data)]
+        if env.get("KLIDE_SMOKE_SSH_CONFIG"):
+            import base64
+            quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+            script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $env:PATH=" + quote(env["PATH"]) + "; & " + quote(binary) + " ptyd connect --ensure --data-dir " + quote(data) + "; exit $LASTEXITCODE"
+            encoded = base64.b64encode(script.encode("utf-16-le")).decode()
+            command = ["ssh", "-F", env["KLIDE_SMOKE_SSH_CONFIG"], "native-smoke", "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + encoded]
         self.process = subprocess.Popen(
-            [str(binary), "ptyd", "connect", "--ensure", "--data-dir", str(data)],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
         )
-        self.pending = b""
+        self.lines = queue.Queue()
+        def read_lines():
+            for line in self.process.stdout:
+                self.lines.put(line)
+            self.lines.put(None)
+        threading.Thread(target=read_lines, daemon=True).start()
 
     def send(self, request):
         self.process.stdin.write(json.dumps(request).encode() + b"\n")
         self.process.stdin.flush()
 
     def read(self, timeout=15):
-        deadline = time.monotonic() + timeout
-        with selectors.DefaultSelector() as selector:
-            selector.register(self.process.stdout, selectors.EVENT_READ)
-            while b"\n" not in self.pending:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
-                    raise AssertionError("Timed out waiting for relay output")
-                chunk = os.read(self.process.stdout.fileno(), 65536)
-                if not chunk:
-                    if self.process.poll() is None:
-                        self.process.kill()
-                        self.process.wait(timeout=3)
-                    with selectors.DefaultSelector() as errors:
-                        errors.register(self.process.stderr, selectors.EVENT_READ)
-                        detail = os.read(self.process.stderr.fileno(), 8192).decode() if errors.select(.1) else ""
-                    raise AssertionError("Relay closed: " + detail)
-                self.pending += chunk
-        line, self.pending = self.pending.split(b"\n", 1)
+        try:
+            line = self.lines.get(timeout=timeout)
+        except queue.Empty:
+            raise AssertionError("Timed out waiting for relay output")
+        if line is None:
+            self.process.wait(timeout=3)
+            raise AssertionError("Relay closed: " + self.process.stderr.read().decode(errors="replace"))
         return json.loads(line)
 
     def close(self):
@@ -74,7 +98,7 @@ def main():
         subprocess.run(["git", "-C", str(checkout), "commit", "-qm", "fixture"], check=True)
         commands = root / "commands"
         commands.mkdir()
-        claude = commands / "claude"
+        claude = commands / ("fake_claude.py" if os.name == "nt" else "claude")
         claude.write_text("""#!/usr/bin/env python3
 import json, os, sys, time
 if '--version' in sys.argv:
@@ -93,11 +117,16 @@ emit({'type':'assistant','message':{'content':[{'type':'text','text':'controlled
 emit({'type':'result','subtype':'success','result':'controlled task completed','num_turns':1})
 """)
         claude.chmod(0o700)
-        env = dict(os.environ, PATH=str(commands) + ":" + os.environ["PATH"])
+        if os.name == "nt":
+            (commands / "claude.cmd").write_text('@echo off\n"' + sys.executable + '" -u "' + str(claude) + '" %*\n')
+        env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"])
         data = root / "host"
-        daemon = subprocess.Popen([str(binary), "ptyd", "--data-dir", str(data)], stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+        daemon = None
+        if not env.get("KLIDE_SMOKE_SSH_CONFIG"):
+            daemon = subprocess.Popen([str(binary), "ptyd", "--data-dir", str(data)], stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, start_new_session=True)
         relays = []
+        host_pid = None
 
         def connect():
             relay = Relay(binary, data, env)
@@ -113,11 +142,12 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
             return reply
 
         try:
-            for _ in range(100):
+            for _ in range(100) if daemon else []:
                 if (data / "ptyd.token").exists():
                     break
                 assert daemon.poll() is None, "Host exited during startup"
                 time.sleep(.05)
+            host_pid = request({"type": "ping"})["pid"]
             print("Checking subscription handshake", flush=True)
             stream = connect()
             stream.send({"type": "subscribe"})
@@ -147,7 +177,7 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
             assert replay["type"] == "remote_events", replay
             assert any(e["type"] == "assistant_delta" for e in replay["events"]), replay
             started_event = next(e for e in replay["events"] if e["type"] == "run_started")
-            assert started_event["cwd"] == str(data / "worktrees" / run_id), started_event
+            assert Path(started_event["cwd"]).resolve() == (data / "worktrees" / run_id).resolve(), started_event
             stream = connect()
             stream.send({"type": "subscribe"})
             assert stream.read()["type"] == "subscribed"
@@ -168,7 +198,7 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
                     assert event["event"]["type"] == "run_result", event
                     break
             assert saw_live
-            print("PASS: launch → disconnect every client → replay → resume ordered streaming → completion")
+            print("PASS: launch -> disconnect every client -> replay -> resume ordered streaming -> completion")
             stream.close()
             relays.remove(stream)
             # A fresh process can recover a settled result without any GUI state.
@@ -194,12 +224,21 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
         finally:
             for relay in relays:
                 relay.close()
-            daemon.terminate()
-            try:
-                daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                daemon.kill()
-                daemon.wait()
+            if daemon:
+                daemon.terminate()
+                try:
+                    daemon.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    daemon.kill()
+                    daemon.wait()
+            else:
+                print("Stopping the detached SSH host", flush=True)
+                request({"type": "shutdown"})
+                print("Host shutdown acknowledged", flush=True)
+                if host_pid:
+                    wait_for_exit(host_pid)
+                print("Host cleanup complete", flush=True)
+
 
 
 if __name__ == "__main__":

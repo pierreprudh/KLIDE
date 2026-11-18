@@ -307,7 +307,6 @@ pub(super) async fn control(
     id: &str,
     control: ChatControl,
 ) -> Result<bool, String> {
-    #[cfg(unix)]
     {
         let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if let Some(binding) = remote_machine::binding(&base, id)? {
@@ -347,7 +346,6 @@ pub(super) async fn control(
 
 /// Live status of `id` wherever it runs, or `None` when no host holds it.
 pub(super) async fn state(app: &tauri::AppHandle, id: &str) -> Result<RunState, String> {
-    #[cfg(unix)]
     if let Some(binding) = remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, id)? {
         return remote_machine::state(app, id, binding).await;
     }

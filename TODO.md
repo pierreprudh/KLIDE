@@ -13,29 +13,31 @@ them.
   `scripts/audit-dependencies.mjs`. See `docs/DEPENDENCY_AUDIT.md`. Production
   and unrelated high/critical advisories remain blocked.
 
-## Remote machines — cross-platform deployment next, 2026-11-18
+## Remote machines — native hosts and deployment, 2026-11-18
 
-Parked for the next session: make remote execution and distribution ready for
-macOS and Windows, beyond the current x86_64 Linux host support.
+Implemented in [PR #557](https://github.com/pierreprudh/KLIDE/pull/557):
+macOS (Apple silicon and Intel) and native Windows x86_64 over OpenSSH.
+Windows uses native processes and PowerShell; WSL is not required. Native CI
+must pass before merge; physical-machine acceptance remains separate.
 
-- [ ] macOS remote hosts (including Mac mini): build matching arm64 and
-  x86_64 helpers; support installation, remote CLI login and a detached
-  lifecycle that survives the client disconnecting.
-- [ ] Windows remote hosts: decide and label native Windows versus WSL
-  support; implement and verify OpenSSH setup, process ownership, IPC,
-  Windows paths and shell quoting. Do not advertise native Windows support
-  based only on a WSL/Linux test.
-- [ ] Make discovery, readiness and the guided installer choose the matching
-  OS/architecture artifacts, dependencies and upgrade path. Enable each host
-  platform only after its acceptance checks pass.
-- [ ] Prepare macOS and Windows distribution: CI artifact matrix, signed and
-  notarized Mac app, signed Windows installer, and published matching helper
-  assets with checksums.
-- [ ] Clean-machine acceptance per platform: install → sign in → launch a
-  real task → disconnect/turn off the client → reconnect and replay/live
-  stream → Stop; verify upgrade refusal during active work and define host
-  sleep/reboot recovery. The outstanding real Linux-host acceptance remains
-  required too.
+- [x] Implement matching macOS helpers, prerequisite setup and a detached host.
+- [x] Implement native Windows OpenSSH setup, private authenticated sockets,
+  kernel process leases, process-tree cancellation and Windows path quoting.
+- [x] Select matching OS/architecture artifacts in discovery, readiness and the
+  guided installer; cache a chosen helper while the destination is offline.
+- [x] Add native Linux / both Mac architectures / Windows CI. Gate helper
+  publication on runtime replay and installer checks; Windows also tests real
+  OpenSSH detachment, private socket auth and owned process-tree cleanup.
+- [x] Automatically publish matching, checksum-verified helper assets after
+  each main merge with **Native host binaries** (`.github/workflows/linux-host.yml`);
+  require native acceptance on every target before publishing.
+- [ ] Finish desktop distribution: signed/notarized Mac app and signed
+  Windows installer. Helper binaries are separate from desktop installers.
+- [ ] Clean physical-machine acceptance: install → sign in → launch a real
+  task → turn off the client → reconnect and replay/live stream → Stop;
+  verify active-upgrade refusal and host sleep/reboot behavior. Real Linux
+  `klide-box` acceptance remains open too.
+- [ ] Add native Windows ARM64 and Linux ARM64 helper builds after acceptance.
 
 ## Conductor follow-up — product and business line, 2026-11-05
 

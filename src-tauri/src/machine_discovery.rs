@@ -134,9 +134,9 @@ fn tailscale_peers(value: &serde_json::Value, saved: &[Machine]) -> Result<Vec<C
                     ssh_host: host.into(),
                     source: "tailscale",
                     online: peer["Online"].as_bool(),
-                    supported: os.is_empty() || os == "linux",
-                    detail: if !os.is_empty() && os != "linux" {
-                        "Linux remote hosts only".into()
+                    supported: os.is_empty() || matches!(os.to_ascii_lowercase().as_str(), "linux" | "macos" | "windows"),
+                    detail: if !os.is_empty() && !matches!(os.to_ascii_lowercase().as_str(), "linux" | "macos" | "windows") {
+                        "No native SSH helper for this operating system".into()
                     } else {
                         "Tailscale · SSH check required".into()
                     },
@@ -211,7 +211,7 @@ pub async fn machine_discover(method: ConnectionMethod) -> Result<Discovery, Str
             let binary = [Some(std::path::PathBuf::from("/Applications/Tailscale.app/Contents/MacOS/Tailscale")), crate::cli::home_dir_path().map(|home| home.join("Applications/Tailscale.app/Contents/MacOS/Tailscale"))].into_iter().flatten().find(|path| path.is_file()).map(|path| path.to_string_lossy().into_owned()).or_else(|| crate::cli::resolve_command("tailscale").ok());
             let Some(binary) = binary else { return Ok(Discovery { machines: vec![], message: "Install Tailscale and connect this Mac to your network, then refresh. You can also add a Tailscale address manually.".into() }); };
             return Ok(match tailscale_status(&binary).and_then(|value| tailscale_peers(&value, &saved)) {
-                Ok(machines) => Discovery { machines, message: "Choose a device on your Tailscale network. The remote machine still needs SSH and a compatible Linux system.".into() },
+                Ok(machines) => Discovery { machines, message: "Choose a device on your Tailscale network. The remote machine still needs SSH and a supported OS and architecture.".into() },
                 Err(message) => Discovery { machines: vec![], message },
             });
         }
@@ -242,13 +242,17 @@ mod tests {
         let value = serde_json::json!({"BackendState":"Running", "Self":{"HostName":"this-mac"}, "Peer":{
             "a":{"HostName":"linux", "OS":"linux", "TailscaleIPs":["100.64.0.2"], "Online":true},
             "b":{"HostName":"mini", "OS":"macOS", "TailscaleIPs":["100.64.0.3"], "Online":false},
+            "w":{"HostName":"windows", "OS":"windows", "TailscaleIPs":["100.64.0.4"], "Online":false},
+            "d":{"HostName":"phone", "OS":"android", "TailscaleIPs":["100.64.0.5"], "Online":false},
             "c":{"HostName":"invalid", "TailscaleIPs":["-oProxyCommand=bad"]}
         }});
         let peers = tailscale_peers(&value, &[saved]).unwrap();
-        assert_eq!(peers.len(), 2);
+        assert_eq!(peers.len(), 4);
         assert_eq!(peers[0].machine.as_ref().unwrap().id, "dev");
-        assert!(!peers[1].supported);
-        assert_eq!(peers[1].online, Some(false));
+        let mini=peers.iter().find(|p|p.label=="mini").unwrap();
+        assert!(mini.supported); assert_eq!(mini.online,Some(false));
+        assert!(peers.iter().find(|p|p.label=="windows").unwrap().supported);
+        assert!(!peers.iter().find(|p|p.label=="phone").unwrap().supported);
         assert!(tailscale_peers(&serde_json::json!({"BackendState":"NeedsLogin"}), &[]).is_err());
     }
 }

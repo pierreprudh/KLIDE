@@ -12,7 +12,7 @@ import "../src/styles/tokens.css";
 
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.theme = params.get("theme") ?? "dark";
-const READY = params.get("state") !== "offline";
+const READY = params.get("state") !== "offline" && !params.has("offline");
 const PICK = params.get("pick") === "1";
 
 let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-box", sshHost: "klide-box" }];
@@ -25,7 +25,10 @@ let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-b
       if (args.method === "tailscale") return params.has("noTailscale") ? { machines: [], message: "Install Tailscale and connect this Mac to your network, then refresh." } : {
         machines: [
           { label: "Linux dev", sshHost: "100.64.0.2", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
-          { label: "Mac mini", sshHost: "100.64.0.3", source: "tailscale", online: true, supported: false, detail: "Linux remote hosts only", machine: null },
+          { label: "Build server", sshHost: "100.64.0.4", source: "tailscale", online: false, supported: true, detail: "Tailscale · SSH check required", machine: null },
+          { label: "Mac mini", sshHost: "100.64.0.3", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
+          { label: "Windows PC", sshHost: "100.64.0.5", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
+          { label: "Phone", sshHost: "100.64.0.6", source: "tailscale", online: true, supported: false, detail: "No native SSH helper for this operating system", machine: null },
         ], message: "Choose a device on your Tailscale network. SSH is checked next.",
       };
       return { machines: machines.map((machine) => ({ label: machine.label ?? machine.id, sshHost: machine.sshHost, source: "saved", online: null, supported: true, detail: "Saved in Klide", machine })), message: args.method === "vpn" ? "Connect your VPN first, then choose or add an SSH address." : "Choose a saved machine or add an SSH address." };
@@ -36,15 +39,17 @@ let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-b
       machines = [...machines.filter((m) => m.id !== machine.id), machine];
       return machines;
     }
+    if (cmd === "machine_prepare_host") { (window as any).__MACHINE_PREPARED_TARGET__ = args.target; return null; }
     if (cmd === "machine_check") {
       if (params.has("delay")) await new Promise((resolve) => setTimeout(resolve, 1500));
       const machine = machines.find((m) => m.id === args.id)!;
       return {
-        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: READY,
-        caption: READY ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
+        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: READY && !params.has("needsInstall") && !params.has("unsupported"),
+        target: { os: params.get("system") ?? "linux", arch: params.get("system") === "macos" ? "aarch64" : "x86_64" },
+        caption: params.has("unsupported") ? "This remote architecture does not have a published helper yet" : READY ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: READY ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
-        setup: { connection: READY ? "connected" : "offline", host: "ready", claude: "ready", project: "ready" },
+        setup: { connection: params.has("unsupported") ? "unsupported" : READY ? "connected" : "offline", host: params.has("needsInstall") ? "missing" : "ready", claude: params.has("needsInstall") ? "missing" : "ready", project: "ready" },
       };
     }
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];

@@ -5,7 +5,6 @@ use crate::pty_wire::{ChatControl, Event, Request, Response};
 use std::io::BufRead;
 use std::sync::OnceLock;
 
-pub(crate) const HOST_BINARY: &str = "~/.klide/bin/klide";
 pub(crate) const HOST_DATA: &str = "~/.klide/run-host";
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -13,6 +12,8 @@ pub(crate) struct Binding {
     pub machine_id: String,
     pub ssh_host: String,
     pub checkout: String,
+    #[serde(default)]
+    pub os: crate::remote_platform::HostOs,
 }
 
 fn binding_path(base: &Path, id: &str) -> Result<PathBuf, String> {
@@ -33,7 +34,8 @@ pub(crate) fn binding(base: &Path, id: &str) -> Result<Option<Binding>, String> 
 fn transport(binding: &Binding) -> crate::pty_transport::Ssh<'_> {
     crate::pty_transport::Ssh {
         host: &binding.ssh_host,
-        binary: HOST_BINARY,
+        binary: binding.os.binary(),
+        os: binding.os,
         data_dir: HOST_DATA,
     }
 }
@@ -70,27 +72,43 @@ fn watched() -> &'static Mutex<HashMap<String, u64>> {
 }
 
 fn fetch(binding: &Binding, id: &str, from: u64) -> Result<Vec<AgentEvent>, String> {
-    let mut events = Vec::new();
-    loop {
-        match query(
+    fetch_pages(from, |sequence| {
+        query(
             binding,
             &Request::RemoteRead {
                 run_id: id.into(),
-                from_seq: from + events.len() as u64,
+                from_seq: sequence,
                 limit: 256,
             },
-        )? {
+        )
+    })
+}
+
+fn fetch_pages(
+    from: u64,
+    mut page: impl FnMut(u64) -> Result<Response, String>,
+) -> Result<Vec<AgentEvent>, String> {
+    let mut events = Vec::new();
+    loop {
+        match page(from + events.len() as u64)? {
             Response::RemoteEvents {
-                events: page,
+                events: tail,
                 next_seq,
+                more,
             } => {
-                let count = page.len();
+                let count = tail.len();
                 if next_seq != from + (events.len() + count) as u64 {
                     return Err("Invalid remote replay sequence".into());
                 }
-                events.extend(page);
-                if count < 256 {
+                events.extend(tail);
+                // Byte-limited pages can be short while retaining more history.
+                // Stop at the captured tail rather than chasing an active stream.
+                // Legacy hosts lack `more` and use exactly 256 records per page.
+                if !more && count < 256 {
                     return Ok(events);
+                }
+                if count == 0 {
+                    return Err("Remote replay did not advance".into());
                 }
             }
             _ => return Err(
@@ -178,7 +196,7 @@ pub(super) async fn start(
                     || daemon_client::statuses(&app)?.contains_key(&id) { return Err(run_host::busy(&id)); }
                 let machine = crate::machines::get(machine_id.as_deref().ok_or("No remote machine selected")?).ok_or("Remote machine is no longer configured")?;
                 let root = request.workspace_root.as_deref().ok_or("Open a project before starting a remote task")?;
-                let binding = Binding { machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root) };
+                let binding = Binding { os: crate::machine_install::detect_target(&machine.ssh_host)?.os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root) };
                 // Persist before sending: a dropped start response must never
                 // allow a later retry to silently create a local writer.
                 crate::durable::write_atomic_private(&binding_path(&base, &id)?, &serde_json::to_vec(&binding).map_err(|e| e.to_string())?)?;
@@ -563,8 +581,10 @@ pub(crate) fn changes_on_host(data: &Path, id: &str) -> Result<(String, String, 
         .filter(|path| !path.is_empty())
         .collect();
     for path in paths.iter().take(32) {
-        use std::os::unix::ffi::OsStrExt;
-        let path = std::ffi::OsStr::from_bytes(path);
+        #[cfg(unix)]
+        let path = { use std::os::unix::ffi::OsStrExt; std::ffi::OsStr::from_bytes(path) };
+        #[cfg(windows)]
+        let path = std::ffi::OsStr::new(std::str::from_utf8(path).map_err(|_|"Git returned an invalid Windows path")?);
         if std::fs::symlink_metadata(root.join(path))
             .map_err(|e| e.to_string())?
             .len()
@@ -583,7 +603,7 @@ pub(crate) fn changes_on_host(data: &Path, id: &str) -> Result<(String, String, 
                 "--no-ext-diff",
                 "--no-textconv",
                 "--",
-                "/dev/null",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
             ])
             .arg(path)
             .output()
@@ -639,20 +659,33 @@ pub(crate) fn read_on_host(
     id: &str,
     from: u64,
     limit: usize,
-) -> Result<(Vec<AgentEvent>, u64), String> {
+) -> Result<(Vec<AgentEvent>, u64, bool), String> {
     validate_run_id(id)?;
     let events = read_events(&data.join("runs"), id)?;
     let start = usize::try_from(from).map_err(|_| "Invalid remote sequence")?;
     if start > events.len() {
         return Err("Remote transcript is shorter than the requested sequence".into());
     }
-    let events: Vec<_> = events
-        .into_iter()
-        .skip(start)
-        .take(limit.clamp(1, 256))
-        .collect();
+    let total = events.len();
+    let mut page = Vec::new();
+    let mut bytes = 0;
+    // Reserve framing space, including the response tag, cursor and newline.
+    let maximum = crate::pty_wire::MAX_WIRE_LINE.saturating_sub(1024);
+    let budget = maximum / 2;
+    for event in events.into_iter().skip(start).take(limit.clamp(1, 256)) {
+        let size = serde_json::to_vec(&event).map_err(|e| e.to_string())?.len() + 1;
+        if size > maximum {
+            return Err("A remote transcript record exceeds the replay transport limit".into());
+        }
+        if !page.is_empty() && bytes + size > budget {
+            break;
+        }
+        bytes += size;
+        page.push(event);
+    }
+    let events = page;
     let next = from + events.len() as u64;
-    Ok((events, next))
+    Ok((events, next, next < total as u64))
 }
 
 #[cfg(test)]
@@ -739,6 +772,7 @@ mod tests {
         let path = binding_path(&base, "convo").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let placed = Binding {
+            os: crate::remote_platform::HostOs::Linux,
             machine_id: "box".into(),
             ssh_host: "my-box".into(),
             checkout: "~/code/project".into(),
@@ -771,13 +805,60 @@ mod tests {
             )
             .unwrap();
         }
-        let (page, next) = read_on_host(&data, "convo", 0, usize::MAX).unwrap();
-        assert_eq!((page.len(), next), (256, 256));
-        let (page, next) = read_on_host(&data, "convo", next, 256).unwrap();
-        assert_eq!((page.len(), next), (4, 260));
+        let (page, next, more) = read_on_host(&data, "convo", 0, usize::MAX).unwrap();
+        assert_eq!((page.len(), next, more), (256, 256, true));
+        let (page, next, more) = read_on_host(&data, "convo", next, 256).unwrap();
+        assert_eq!((page.len(), next, more), (4, 260, false));
         assert!(read_on_host(&data, "convo", 261, 256).is_err());
         assert!(read_on_host(&data, "../private", 0, 256).is_err());
         std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn byte_bounded_replay_pages_do_not_truncate_the_durable_history() {
+        let data = directory("large-replay");
+        let runs = data.join("runs");
+        std::fs::create_dir_all(&runs).unwrap();
+        let text = "x".repeat(crate::pty_wire::MAX_WIRE_LINE / 3);
+        for seq in 0..3 {
+            append_event(&runs, "convo", seq, &delta(&text)).unwrap();
+        }
+        let mut calls = 0;
+        let events = fetch_pages(0, |from| {
+            calls += 1;
+            let (events, next_seq, more) = read_on_host(&data, "convo", from, 256)?;
+            assert!(events.len() <= 1, "A page must stop at the byte budget");
+            let reply = Response::RemoteEvents {
+                events,
+                next_seq,
+                more,
+            };
+            assert!(serde_json::to_vec(&reply).unwrap().len() < crate::pty_wire::MAX_WIRE_LINE);
+            Ok(reply)
+        })
+        .unwrap();
+        assert_eq!(
+            (events.len(), calls),
+            (3, 3),
+            "Short pages are not the end of history"
+        );
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn replay_returns_at_the_snapshot_tail_while_a_task_keeps_streaming() {
+        let mut calls = 0;
+        let events = fetch_pages(0, |from| {
+            calls += 1;
+            assert_eq!(calls, 1, "Do not chase new output forever");
+            Ok(Response::RemoteEvents {
+                events: vec![delta("live")],
+                next_seq: from + 1,
+                more: false,
+            })
+        })
+        .unwrap();
+        assert_eq!(events.len(), 1);
     }
 
     #[test]

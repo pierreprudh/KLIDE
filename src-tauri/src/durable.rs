@@ -41,7 +41,12 @@ pub fn write_atomic_new(dest: &Path, bytes: &[u8]) -> Result<(), String> {
     write_atomic_inner(dest, bytes, false, true)
 }
 
-fn write_atomic_inner(dest: &Path, bytes: &[u8], private: bool, create_new: bool) -> Result<(), String> {
+fn write_atomic_inner(
+    dest: &Path,
+    bytes: &[u8],
+    private: bool,
+    create_new: bool,
+) -> Result<(), String> {
     let parent = dest
         .parent()
         .ok_or_else(|| format!("{dest:?} has no parent directory"))?;
@@ -131,8 +136,15 @@ fn append(path: &Path, line: &str, sync: bool) -> Result<(), String> {
     if !existed {
         set_private(path);
     }
-    // Every append holds the file's flock across repair + write, so a repair
-    // can never trim a line another appender is still writing.
+    // Windows byte-range locks also reject reads through other handles.
+    // Keep readers free to replay while serializing writers on a sidecar.
+    #[cfg(windows)]
+    let _append_lease = crate::process_lock::exclusive(&path.with_file_name(format!(
+        ".{}.append.lock",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    )))?;
+    // Unix retains the inode flock used by existing hosts across repair and
+    // append; Windows holds the portable sidecar lease for the same scope.
     lock_exclusive(&file)?;
     let result = (|| {
         repair_torn_tail(path, &file)?;
@@ -183,7 +195,17 @@ fn repair_torn_tail(path: &Path, file: &fs::File) -> Result<(), String> {
         }
         end = start;
     }
-    file.set_len(keep)
+    // Windows append-only handles deliberately lack FILE_WRITE_DATA, which
+    // SetEndOfFile requires. The sidecar lease still excludes other writers.
+    #[cfg(windows)]
+    let truncate_handle = fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("Could not open {path:?} for tail repair: {e}"))?;
+    #[cfg(not(windows))]
+    let truncate_handle = file;
+    truncate_handle
+        .set_len(keep)
         .map_err(|e| format!("Could not trim torn tail of {path:?}: {e}"))?;
     eprintln!("klide: {path:?} ended in a torn line; trimmed it before appending.");
     Ok(())
@@ -200,11 +222,14 @@ fn read_exact_at(path: &Path, offset: u64, buf: &mut [u8]) -> Result<(), String>
 
 #[cfg(not(unix))]
 fn read_exact_at(path: &Path, offset: u64, buf: &mut [u8]) -> Result<(), String> {
-    let raw = fs::read(path).map_err(|e| format!("Could not read {path:?}: {e}"))?;
-    let start = (offset as usize).min(raw.len());
-    let end = (start + buf.len()).min(raw.len());
-    buf[..end - start].copy_from_slice(&raw[start..end]);
-    Ok(())
+    use std::io::{Read, Seek, SeekFrom};
+    let mut handle = fs::File::open(path).map_err(|e| format!("Could not open {path:?}: {e}"))?;
+    handle
+        .seek(SeekFrom::Start(offset))
+        .map_err(|e| format!("Could not seek {path:?}: {e}"))?;
+    handle
+        .read_exact(buf)
+        .map_err(|e| format!("Could not read {path:?}: {e}"))
 }
 
 #[cfg(unix)]
@@ -280,6 +305,36 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn concurrent_appenders_repair_once_and_preserve_every_complete_record() {
+        let dir = tmp_dir("concurrent-append");
+        let path = dir.join("events.jsonl");
+        fs::write(&path, b"torn").unwrap();
+        let threads: Vec<_> = (0..4)
+            .map(|writer| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for row in 0..50 {
+                        append_line_unsynced(&path, &format!("{writer}:{row}")).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        let lines: std::collections::BTreeSet<_> = text.lines().collect();
+        assert_eq!(lines.len(), 200);
+        assert_eq!(text.lines().count(), 200);
+        for writer in 0..4 {
+            for row in 0..50 {
+                assert!(lines.contains(format!("{writer}:{row}").as_str()));
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

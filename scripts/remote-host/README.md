@@ -1,6 +1,6 @@
 # Remote host setup
 
-How to get a Linux server Klide can run agents on. This prepares the machine
+How to set up a machine Klide can run agents on. This prepares the machine
 only. In Klide, Settings › Machines installs the matching native Run host
 over SSH; the machine picker starts a streaming task that can survive the
 Mac disconnecting. See `docs/REMOTE_MACHINES.md` for setup, verification and
@@ -14,10 +14,13 @@ For an existing SSH machine, use **Settings › Machines › Add machine**:
 enter its address, continue through connection and installation, sign in to
 Claude on the machine, and choose or clone the remote project. You can save
 the setup while the machine is off. Normal setup downloads a checksum-verified
-matching helper without GitHub CLI on the Mac. Automatic preparation supports
-Ubuntu 24.04+ / Debian 13+ on x86_64; unattended connections use SSH keys.
+matching helper without GitHub CLI on the Mac. Preparation supports Ubuntu
+24.04+ / Debian 13+ x86_64, macOS on Apple silicon or Intel, and native Windows
+x86_64 over OpenSSH. Windows uses PowerShell and Git for Windows, without WSL.
+Unattended connections use SSH keys. See the native target details in
+[Remote machines](../../docs/REMOTE_MACHINES.md).
 
-The scripts below are an optional provisioning path for creating a new server.
+The scripts below are an optional Linux provisioning path for creating a new server.
 
 Provisioning files:
 

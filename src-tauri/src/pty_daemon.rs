@@ -22,11 +22,10 @@
 //!   what proves a client is us. `nc -U` still works for debugging if you
 //!   paste the auth line first.
 //!
-//! Unix-only (macOS today): the socket, and the daemon's survival across the
-//! parent exiting, both lean on Unix process semantics. Windows would need a
-//! named-pipe transport — out of scope for this slice.
+//! Both platforms use private filesystem sockets; Windows protects its
+//! socket directory with an ACL and detaches with OpenSSH job breakaway.
 
-#![cfg(unix)]
+
 
 use crate::pty_host::{PtyEventSink, PtyExitOutcome, SessionHost, SpawnSpec};
 // The wire vocabulary lives in a module that is NOT unix-gated, so `pty.rs` can
@@ -34,7 +33,10 @@ use crate::pty_host::{PtyEventSink, PtyExitOutcome, SessionHost, SpawnSpec};
 pub use crate::pty_wire::{Event, Request, Response};
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener as HostListener, UnixStream as HostStream};
+#[cfg(windows)]
+use uds_windows::{UnixListener as HostListener, UnixStream as HostStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -69,11 +71,55 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
 /// The per-user folder every daemon socket lives in. The command sandbox
 /// closes it: a contained command that could connect here could ask for a
 /// shell that is not contained.
+#[cfg(unix)]
 pub fn socket_dir() -> PathBuf {
-    let uid = std::fs::metadata(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
-        .map(|m| std::os::unix::fs::MetadataExt::uid(&m))
-        .unwrap_or(0);
+    let uid = unsafe { libc::geteuid() };
     std::env::temp_dir().join(format!("klide-{uid}"))
+}
+
+#[cfg(windows)]
+pub fn socket_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE").map(PathBuf::from)
+        .or_else(crate::cli::home_dir_path).unwrap_or_else(std::env::temp_dir).join(".klide/sockets")
+}
+
+pub(crate) fn connect_socket(data_dir: &Path) -> Result<HostStream,String> {
+    #[cfg(unix)] {
+        use std::os::unix::fs::{MetadataExt,FileTypeExt};
+        validate_socket_directory(&socket_dir()).map_err(|e|format!("connect: {e}"))?;
+        let meta=std::fs::symlink_metadata(socket_path(data_dir)).map_err(|e|format!("connect: {e}"))?;
+        if !meta.file_type().is_socket() || meta.uid()!=unsafe {libc::geteuid()} {
+            return Err("connect: refusing an untrusted local socket".into());
+        }
+    }
+    HostStream::connect(socket_path(data_dir)).map_err(|e|format!("connect: {e}"))
+}
+
+#[cfg(unix)]
+fn validate_socket_directory(path: &Path) -> Result<(),String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta=std::fs::symlink_metadata(path).map_err(|e|e.to_string())?;
+    if !meta.file_type().is_dir() || meta.uid()!=unsafe {libc::geteuid()} || meta.mode() & 0o077 != 0 {
+        return Err("The local socket directory must belong to this user and be private".into());
+    }
+    Ok(())
+}
+
+/// Private socket pair for Windows SSH pipes. A shared TCP port could be
+/// claimed by another account before accept; this namespace is user-only.
+#[cfg(windows)]
+pub(crate) fn stream_pair() -> Result<(HostStream,HostStream),String> {
+    use base64::Engine;
+    let directory=socket_dir(); secure_host_directory(&directory)?;
+    let mut nonce=[0u8;12]; getrandom::fill(&mut nonce).map_err(|e|e.to_string())?;
+    let path=directory.join(format!("r-{}.sock",base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce)));
+    let result=(||{
+        let listener=HostListener::bind(&path).map_err(|e|e.to_string())?;
+        let stream=HostStream::connect(&path).map_err(|e|e.to_string())?;
+        let (peer,_)=listener.accept().map_err(|e|e.to_string())?;
+        Ok((stream,peer))
+    })();
+    let _=std::fs::remove_file(path); result
 }
 
 /// The shared secret a client must present as its first request line. Lives
@@ -138,7 +184,7 @@ pub fn prepare_upgrade_main(data_dir: &Path) -> i32 {
 
 /// Manual transport acceptance, without starting a Run or replacing a host.
 pub fn ping_remote_main(host: &str, binary: &str, data_dir: &str) -> i32 {
-    let transport = crate::pty_transport::Ssh { host, binary, data_dir };
+    let transport = crate::pty_transport::Ssh { host, binary, data_dir, os: if binary.ends_with(".exe") { crate::remote_platform::HostOs::Windows } else { crate::remote_platform::HostOs::Linux } };
     match crate::pty_client::request_on(&transport, &Request::Ping) {
         Ok(Response::Pong { version, protocol, build, pid }) => {
             if version != env!("CARGO_PKG_VERSION") || protocol != crate::pty_wire::PROTOCOL_VERSION {
@@ -159,6 +205,7 @@ pub fn ping_remote_main(host: &str, binary: &str, data_dir: &str) -> i32 {
 /// 0600. Reusing the file keeps a restarting daemon compatible with clients
 /// that read it moments earlier.
 pub fn ensure_token(data_dir: &Path) -> Result<String, String> {
+    secure_host_directory(data_dir)?;
     let path = token_path(data_dir);
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let existing = existing.trim().to_string();
@@ -175,6 +222,18 @@ pub fn ensure_token(data_dir: &Path) -> Result<String, String> {
     // private token, so a client cannot authenticate with a just-created empty file.
     crate::durable::write_atomic_private(&path, token.as_bytes())?;
     Ok(token)
+}
+
+fn secure_host_directory(data_dir: &Path) -> Result<(),String> {
+    std::fs::create_dir_all(data_dir).map_err(|e|e.to_string())?;
+    #[cfg(windows)] {
+        // Restrict inheritance before publishing any authentication secret.
+        // A failed ACL operation must never leave an unauthenticated host.
+        let script=format!("$ErrorActionPreference='Stop'; $p={}; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=[Security.AccessControl.DirectorySecurity]::new(); $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); $rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl", crate::remote_platform::ps_quote(&data_dir.to_string_lossy()));
+        let output=std::process::Command::new("powershell.exe").args(["-NoLogo","-NoProfile","-NonInteractive","-Command",&script]).output().map_err(|e|format!("Secure host directory: {e}"))?;
+        if !output.status.success() {return Err(format!("Cannot secure the host directory: {}",String::from_utf8_lossy(&output.stderr)));}
+    }
+    Ok(())
 }
 
 /// One request line from a client. Field names/shapes mirror the Tauri
@@ -275,34 +334,53 @@ impl PtyEventSink for BroadcastSink {
 /// Bind the daemon socket, reclaiming a stale socket file (daemon crashed or
 /// was SIGKILLed — the file outlives the listener). Errs when another daemon
 /// genuinely answers on it.
-pub fn bind_socket(data_dir: &Path) -> Result<UnixListener, String> {
+#[cfg(unix)]
+pub fn bind_socket(data_dir: &Path) -> Result<HostListener, String> {
     std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
     let path = socket_path(data_dir);
-    if let Some(parent) = path.parent() {
-        // 0700: the socket rendezvous dir is per-user, like tmux's.
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        let _ =
-            std::fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let parent=path.parent().ok_or("Missing socket directory")?;
+    use std::os::unix::fs::{DirBuilderExt,MetadataExt};
+    match std::fs::DirBuilder::new().mode(0o700).create(parent) {
+        Ok(())=>{}, Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>{}, Err(e)=>return Err(e.to_string()),
     }
-    let restrict = |listener: UnixListener| {
-        // 0600 on the socket file itself — connect() checks write permission,
-        // so this is a second fence in front of the token handshake.
-        let _ =
-            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
-        listener
+    // Reject a precreated directory or symlink owned by another account.
+    let meta=std::fs::symlink_metadata(parent).map_err(|e|e.to_string())?;
+    if !meta.file_type().is_dir() || meta.uid()!=unsafe {libc::geteuid()} {return Err("Untrusted socket directory owner".into());}
+    std::fs::set_permissions(parent,std::os::unix::fs::PermissionsExt::from_mode(0o700)).map_err(|e|e.to_string())?;
+    validate_socket_directory(parent)?;
+    let restrict=|listener:HostListener|->Result<HostListener,String>{
+        std::fs::set_permissions(&path,std::os::unix::fs::PermissionsExt::from_mode(0o600)).map_err(|e|e.to_string())?;
+        Ok(listener)
     };
-    match UnixListener::bind(&path) {
-        Ok(listener) => Ok(restrict(listener)),
+    match HostListener::bind(&path) {
+        Ok(listener) => restrict(listener),
         Err(bind_err) => {
-            // The file exists. A live daemon accepts connections; a stale
-            // file refuses them and is safe to remove and rebind.
-            if UnixStream::connect(&path).is_ok() {
+            // A precreated endpoint must not impersonate this user after a
+            // reboot cleared the private temp directory.
+            use std::os::unix::fs::FileTypeExt;
+            let meta=std::fs::symlink_metadata(&path).map_err(|e|e.to_string())?;
+            if !meta.file_type().is_socket() || meta.uid()!=unsafe {libc::geteuid()} {return Err("Untrusted socket endpoint".into());}
+            if HostStream::connect(&path).is_ok() {
                 return Err(format!("another ptyd is already serving {path:?}"));
             }
             let _ = std::fs::remove_file(&path);
-            UnixListener::bind(&path)
-                .map(restrict)
-                .map_err(|_| bind_err.to_string())
+            HostListener::bind(&path)
+                .map_err(|_| bind_err.to_string()).and_then(restrict)
+        }
+    }
+}
+
+#[cfg(windows)]
+pub fn bind_socket(data_dir: &Path) -> Result<HostListener,String> {
+    secure_host_directory(data_dir)?;
+    secure_host_directory(&socket_dir())?;
+    let path=socket_path(data_dir);
+    match HostListener::bind(&path) {
+        Ok(listener)=>Ok(listener),
+        Err(error)=>{
+            if HostStream::connect(&path).is_ok() {return Err("another ptyd is already serving this directory".into());}
+            let _=std::fs::remove_file(&path);
+            HostListener::bind(&path).map_err(|_|format!("Cannot bind the private Windows socket {path:?}: {error}"))
         }
     }
 }
@@ -331,6 +409,9 @@ pub fn scheduled_launch_agent(data: &Path, executable: &Path, path: &str) -> (St
 }
 
 fn daemon_main_impl(data_dir: PathBuf, scheduled_data: Option<PathBuf>) -> ! {
+    let _owner=match crate::process_lock::try_exclusive(&data_dir.join("daemon-owner.lock")) {
+        Ok(Some(owner))=>owner, Ok(None)=>std::process::exit(0), Err(error)=>{eprintln!("Cannot claim Run host: {error}");std::process::exit(1);}
+    };
     let listener = match bind_socket(&data_dir) {
         Ok(l) => l,
         Err(e) => {
@@ -358,8 +439,15 @@ fn daemon_main_impl(data_dir: PathBuf, scheduled_data: Option<PathBuf>) -> ! {
     // Idle exit: with nothing hosted and nobody attached for IDLE_EXIT_MS,
     // remove the socket and leave. The app respawns us on demand.
     if let Some(app_data) = scheduled_data {
-        crate::agent::command_env::warm();
-        crate::agent::schedules::start_service(app_data, state.chats.clone());
+        #[cfg(unix)] {
+            crate::agent::command_env::warm();
+            crate::agent::schedules::start_service(app_data, state.chats.clone());
+        }
+        #[cfg(windows)] {
+            let _=app_data;
+            eprintln!("Scheduled services are not available on native Windows yet");
+            std::process::exit(1);
+        }
     } else {
         let state = state.clone();
         std::thread::spawn(move || loop {
@@ -387,7 +475,7 @@ fn daemon_main_impl(data_dir: PathBuf, scheduled_data: Option<PathBuf>) -> ! {
 
 /// Accept loop, separated from [`daemon_main`] so tests can serve on a temp
 /// socket inside the test process.
-pub fn serve(listener: UnixListener, state: Arc<DaemonState>) {
+pub fn serve(listener: HostListener, state: Arc<DaemonState>) {
     for conn in listener.incoming() {
         let Ok(stream) = conn else { continue };
         let state = state.clone();
@@ -395,7 +483,7 @@ pub fn serve(listener: UnixListener, state: Arc<DaemonState>) {
     }
 }
 
-fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
+fn handle_client(stream: HostStream, state: Arc<DaemonState>) {
     let Ok(read_half) = stream.try_clone() else {
         return;
     };
@@ -515,7 +603,7 @@ fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
     }
 }
 
-fn respond(writer: &mut UnixStream, response: &Response) -> std::io::Result<()> {
+fn respond(writer: &mut HostStream, response: &Response) -> std::io::Result<()> {
     let line = serde_json::to_string(response)
         .unwrap_or_else(|e| format!("{{\"type\":\"err\",\"message\":\"serialize: {e}\"}}"));
     writeln!(writer, "{line}")
@@ -552,7 +640,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
         }
         Request::RemoteRead { run_id, from_seq, limit } => {
             match crate::agent::remote_machine::read_on_host(&state.data_dir, &run_id, from_seq, limit) {
-                Ok((events, next_seq)) => Response::RemoteEvents { events, next_seq },
+                Ok((events, next_seq, more)) => Response::RemoteEvents { events, next_seq, more },
                 Err(message) => Response::Err { message },
             }
         }
@@ -691,11 +779,26 @@ pub fn test_state(data_dir: PathBuf) -> Arc<DaemonState> {
     new_state(data_dir, token)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::io::BufRead;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn socket_directories_must_be_private_owned_directories_without_symlinks() {
+        use std::os::unix::fs::{PermissionsExt,symlink};
+        let path=std::env::temp_dir().join(format!("klide-directory-{}",crate::agent::transcripts::run_id()));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(validate_socket_directory(&path).is_ok());
+        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(validate_socket_directory(&path).is_err());
+        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let target=path.with_extension("target"); std::fs::rename(&path,&target).unwrap();
+        symlink(&target,&path).unwrap(); assert!(validate_socket_directory(&path).is_err());
+        std::fs::remove_file(path).unwrap(); std::fs::remove_dir(target).unwrap();
+    }
 
     #[test]
     fn published_token_is_complete_before_a_client_reads_it() {
@@ -756,12 +859,12 @@ mod tests {
         }
 
         /// A raw connection with no auth line — for the refusal tests.
-        fn connect_unauthed(&self) -> (BufReader<UnixStream>, UnixStream) {
-            let stream = UnixStream::connect(socket_path(&self.dir)).expect("connect");
+        fn connect_unauthed(&self) -> (BufReader<HostStream>, HostStream) {
+            let stream = HostStream::connect(socket_path(&self.dir)).expect("connect");
             (BufReader::new(stream.try_clone().unwrap()), stream)
         }
 
-        fn connect(&self) -> (BufReader<UnixStream>, UnixStream) {
+        fn connect(&self) -> (BufReader<HostStream>, HostStream) {
             let (reader, mut writer) = self.connect_unauthed();
             let auth = Request::Auth {
                 token: ensure_token(&self.dir).unwrap(),
@@ -955,7 +1058,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir_all(socket_path(&dir).parent().unwrap()).unwrap();
         // A socket file with no listener behind it (daemon was SIGKILLed).
-        drop(UnixListener::bind(socket_path(&dir)).unwrap());
+        drop(HostListener::bind(socket_path(&dir)).unwrap());
         assert!(socket_path(&dir).exists());
         let listener = bind_socket(&dir);
         assert!(listener.is_ok(), "stale socket is removed and rebound");
@@ -1061,5 +1164,27 @@ mod tests {
             }
             _ => panic!("expected snapshot"),
         }
+    }
+}
+
+#[cfg(all(test,windows))]
+mod windows_tests {
+    use super::*;
+    #[test]
+    fn private_windows_socket_refuses_missing_auth_and_accepts_the_local_client() {
+        let data=std::env::temp_dir().join(format!("klide-private-socket-{}",crate::agent::transcripts::run_id()));
+        let listener=bind_socket(&data).unwrap();
+        let state=new_state(data.clone(),ensure_token(&data).unwrap());
+        let server=std::thread::spawn(move||{
+            for _ in 0..2 {let (stream,_)=listener.accept().unwrap();handle_client(stream,state.clone());}
+        });
+        let mut raw=HostStream::connect(socket_path(&data)).unwrap();
+        raw.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        writeln!(raw,"{{\"type\":\"ping\"}}").unwrap();
+        let reply=crate::pty_wire::read_line_capped(&mut BufReader::new(raw)).unwrap().unwrap();
+        assert!(matches!(serde_json::from_str::<Response>(&reply).unwrap(),Response::Err{..}));
+        assert!(matches!(crate::pty_client::request(&data,&Request::Ping).unwrap(),Response::Pong{..}));
+        server.join().unwrap();
+        std::fs::remove_file(socket_path(&data)).unwrap();std::fs::remove_dir_all(data).unwrap();
     }
 }

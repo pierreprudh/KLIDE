@@ -5,25 +5,40 @@
 //! Clean descendants before killing/reaping the CLI, while parentage still
 //! proves ownership. macOS uses libproc directly (no shell, filesystem scan,
 //! or blocking `ps` subprocess on the runtime). Other Unix hosts get group
-//! cleanup; Windows retains Tokio's immediate-child backstop.
+//! cleanup. Windows starts each CLI suspended, assigns its process tree to a
+//! kill-on-close job, then resumes it. Stop closes only that owned job.
 use std::ops::{Deref, DerefMut};
 use tokio::process::{Child as TokioChild, Command};
 
-pub(super) struct Child(TokioChild);
+#[cfg(windows)]
+#[path = "windows_job.rs"]
+mod windows_job;
+
+pub(super) struct Child(TokioChild, #[cfg(windows)] windows_job::Job);
 
 impl Child {
     pub fn spawn(command: &mut Command) -> std::io::Result<Self> {
         #[cfg(unix)]
         command.process_group(0);
-        command.kill_on_drop(true).spawn().map(Self)
+        #[cfg(unix)]
+        { command.kill_on_drop(true).spawn().map(Self) }
+        #[cfg(windows)]
+        {
+            let job=windows_job::Job::new()?;
+            // Assign before the CLI can create any descendants.
+            command.creation_flags(0x00000004 | 0x00000200);
+            let mut child=command.kill_on_drop(true).spawn()?;
+            if let Err(error)=job.attach_and_resume(&child) { let _=child.start_kill(); return Err(error); }
+            Ok(Self(child,job))
+        }
     }
 
     fn stop_tree(&mut self) {
         // Tokio clears id after wait/try_wait reaps the child. Never signal a
         // remembered pid after that: it could already belong to somebody else.
         let Some(pid) = self.0.id() else { return };
-        #[cfg(not(unix))]
-        let _ = pid;
+        #[cfg(windows)]
+        { let _=pid; self.1.terminate(); }
         #[cfg(target_os = "macos")]
         macos::stop_descendants(pid as libc::pid_t);
         #[cfg(unix)]

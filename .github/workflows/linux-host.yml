@@ -1,20 +1,45 @@
-# Remote machines, plan step 0 (docs/REMOTE_MACHINES.md): build the `klide`
-# binary on an Ubuntu runner so a Linux box can run `klide ptyd` without a
-# Rust toolchain or WebKitGTK headers of its own. The box still needs the
-# runtime libraries (libwebkit2gtk-4.1-0, libgtk-3-0t64): ptyd starts before
-# Tauri, but the dynamic linker loads them at launch. Manual, not per push.
-name: Linux host binary
+# Native SSH hosts. Publish a revision only after all target smoke tests pass.
+name: Native host binaries
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - 'scripts/remote-host/**'
+      - 'tests/remote-*-smoke.py'
+      - 'tests/windows-openssh-smoke.ps1'
+      - '.github/workflows/linux-host.yml'
+
+concurrency:
+  group: native-host-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: klide-linux-x86_64
+          - runner: macos-15
+            asset: klide-macos-aarch64
+          - runner: macos-15-intel
+            asset: klide-macos-x86_64
+          - runner: windows-2025
+            asset: klide-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    env:
+      PYTHONUTF8: "1"
+      KLIDE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      PROFILE: ${{ github.event_name == 'pull_request' && 'debug' || 'release' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -23,37 +48,107 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
+          key: native-host-${{ env.PROFILE }}
+          cache-on-failure: true
       - name: Tauri system packages
+        timeout-minutes: 10
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libssl-dev \
             libxdo-dev pkg-config
-      # ptyd needs no frontend; the window half is never opened on the box.
-      - run: mkdir -p dist
-      - run: cargo build --release --bin klide --manifest-path src-tauri/Cargo.toml
-        env:
-          KLIDE_SOURCE_COMMIT: ${{ github.sha }}
-      - name: Native remote disconnect and replay smoke test
-        timeout-minutes: 3
+      - name: Build console-capable native helper
+        shell: bash
         run: |
-          timeout 150s python3 -u tests/remote-machine-smoke.py src-tauri/target/release/klide
-          timeout 60s python3 -u tests/remote-install-smoke.py src-tauri/target/release/klide
+          mkdir -p dist
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          # SSH installs a single Windows executable, without an MSI that
+          # could install the Visual C++ runtime alongside it.
+          if [ "$RUNNER_OS" = Windows ] && [ "$PROFILE" = release ]; then
+            export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C target-feature=+crt-static"
+            cargo build --target x86_64-pc-windows-msvc --bin klide --features remote-host --manifest-path src-tauri/Cargo.toml "${flags[@]}"
+            mkdir -p src-tauri/target/release
+            cp src-tauri/target/x86_64-pc-windows-msvc/release/klide.exe src-tauri/target/release/klide.exe
+          else
+            cargo build --bin klide --features remote-host --manifest-path src-tauri/Cargo.toml "${flags[@]}"
+          fi
+      - name: Check standalone Windows dependencies
+        if: runner.os == 'Windows' && env.PROFILE == 'release'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $dumpbin = & $vswhere -latest -products '*' -find 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe' | Select-Object -First 1
+          if (!$dumpbin) { throw 'Cannot inspect native Windows helper dependencies' }
+          $dependencies = & $dumpbin /DEPENDENTS src-tauri/target/release/klide.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the Windows helper' }
+          $dependencies
+          if ($dependencies -match '(?i)(VCRUNTIME|MSVCP|CONCRT)[^ ]*\.dll|WebView2Loader\.dll') {
+            throw 'The SSH helper must not depend on an unbundled VC runtime or WebView2 loader DLL'
+          }
+      - name: Target and kernel-lock tests
+        shell: bash
+        run: |
+          cargo test --lib --manifest-path src-tauri/Cargo.toml remote_platform::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml agent::remote_machine::tests::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml process_lock::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml delegate::child::windows_job::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml pty_daemon::windows_tests::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml windows_detach::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml durable::
+      - name: Native disconnect and replay
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          binary="src-tauri/target/$PROFILE/klide"
+          if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
+          python -u tests/remote-machine-smoke.py "$binary"
+          # Windows installation must be launched by the OpenSSH service,
+          # outside GitHub's job container (which forbids breakaway).
+          if [ "$RUNNER_OS" != Windows ]; then python -u tests/remote-install-smoke.py "$binary"; fi
+      - name: Native Windows over OpenSSH
+        if: runner.os == 'Windows'
+        timeout-minutes: 4
+        shell: pwsh
+        run: ./tests/windows-openssh-smoke.ps1 -Binary "src-tauri/target/$env:PROFILE/klide.exe"
+      - name: Package helper and checksum
+        shell: python
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          import hashlib, os, pathlib, shutil
+          binary = pathlib.Path('src-tauri/target') / os.environ['PROFILE'] / ('klide.exe' if os.name == 'nt' else 'klide')
+          output = pathlib.Path('host-assets')
+          output.mkdir()
+          asset = output / os.environ['ASSET']
+          shutil.copy2(binary, asset)
+          asset.with_name(asset.name + '.sha256').write_text(hashlib.sha256(asset.read_bytes()).hexdigest() + '  ' + asset.name + '\n')
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: klide-linux-x86_64
-          path: src-tauri/target/release/klide
+          name: ${{ matrix.asset }}
+          path: host-assets/*
           retention-days: 7
 
-      - name: Publish matching setup helper
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: host-assets
+          merge-multiple: true
+      - name: Publish matching setup helpers
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMIT: ${{ github.sha }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          cp src-tauri/target/release/klide klide-linux-x86_64
-          sha256sum klide-linux-x86_64 > klide-linux-x86_64.sha256
           tag="host-${SOURCE_COMMIT}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --target "$SOURCE_COMMIT" --prerelease --title "Linux helper ${SOURCE_COMMIT:0:7}" --notes "Matching Klide SSH helper. Published after remote replay and installer smoke tests."
+            gh release create "$tag" --target "$SOURCE_COMMIT" --prerelease --title "SSH helpers ${SOURCE_COMMIT:0:7}" --notes "Matching native Klide SSH helpers for Linux, macOS and Windows. Published after native disconnect/replay and installer smoke tests on every target."
           fi
-          gh release upload "$tag" klide-linux-x86_64 klide-linux-x86_64.sha256 --clobber
+          gh release upload "$tag" host-assets/* --clobber

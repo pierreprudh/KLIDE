@@ -1,5 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), not(feature = "remote-host")),
+    windows_subsystem = "windows"
+)]
 
 fn main() {
     #[cfg(debug_assertions)]
@@ -25,7 +28,6 @@ fn main() {
     // `klide ptyd --data-dir <dir>` runs the headless delegate session host
     // instead of the GUI (docs/delegate-session-replay.md, Slice 3). Same
     // binary, so there is nothing extra to bundle, sign, or version-skew.
-    #[cfg(unix)]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
         if matches!(args.first().map(String::as_str), Some("ptyd" | "scheduled")) {
@@ -41,7 +43,7 @@ fn main() {
             if args[0] == "ptyd"
                 && matches!(
                     args.get(1).map(String::as_str),
-                    Some("connect" | "ping" | "ensure" | "prepare-upgrade")
+                    Some("connect" | "ping" | "ensure" | "prepare-upgrade" | "install")
                 )
             {
                 let option = |name: &str| {
@@ -51,6 +53,15 @@ fn main() {
                         .map(String::as_str)
                 };
                 let code = match (args[1].as_str(), option("--data-dir")) {
+                    ("install", Some(dir))
+                        if option("--expected").is_some() && option("--destination").is_some() =>
+                    {
+                        klide_lib::machine_install::install_main(
+                            std::path::Path::new(option("--destination").unwrap()),
+                            std::path::Path::new(dir),
+                            option("--expected").unwrap(),
+                        )
+                    }
                     ("ensure", Some(dir)) => {
                         klide_lib::pty_daemon::ensure_main(std::path::Path::new(dir))
                     }

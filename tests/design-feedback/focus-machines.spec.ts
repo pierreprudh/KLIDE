@@ -99,7 +99,10 @@ test("connection choice lists Tailscale devices before manual entry", async ({ p
   await dialog.getByRole("button", { name: /^Tailscale/ }).click();
   await expect(dialog.getByRole("status")).toHaveText("Looking for Tailscale devices");
   await expect(dialog.getByRole("button", { name: /Linux dev/ })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /Mac mini/ })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /Mac mini/ })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: /Windows PC/ })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: /Phone/ })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /Build server/ })).toHaveCSS("opacity", "0.45");
   await page.screenshot({ path: "artifacts/design-feedback/add-machine-devices.png" });
   await dialog.getByRole("button", { name: /Linux dev/ }).click();
   await expect(dialog.getByLabel("SSH host", { exact: true })).toHaveValue("100.64.0.2");
@@ -120,4 +123,48 @@ test("missing VPN client still allows a manual private address", async ({ page }
   await dialog.getByRole("button", { name: /^Other VPN/ }).click();
   await dialog.getByRole("button", { name: "Add a machine", exact: true }).click();
   await expect(dialog.getByText("Enter the machine’s private address while your VPN is connected.")).toBeVisible();
+});
+
+for (const [system, copy] of [["macos", "Apple silicon and Intel Macs"], ["windows", "Native Windows over OpenSSH"]]) {
+  test(`guided setup explains ${system} installation`, async ({ page }) => {
+    await page.goto(`/preview/where-it-runs.html?state=empty&system=${system}&needsInstall=1&theme=klide-light`);
+    await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+    await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+    await enterManualSsh(page);
+    const dialog = page.getByRole("dialog", { name: "Add a machine" });
+    await dialog.getByLabel("SSH host", { exact: true }).fill("dev@machine");
+    await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(dialog.getByRole("heading", { name: "Prepare this machine" })).toBeVisible();
+    await expect(dialog.getByText(copy, { exact: false })).toBeVisible();
+    await page.screenshot({ path: `artifacts/design-feedback/add-machine-${system}-install.png` });
+  });
+}
+
+test("offline setup downloads the chosen native helper without reaching the machine", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?state=empty&offline=1&theme=klide-light");
+  await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+  await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+  await enterManualSsh(page);
+  const dialog = page.getByRole("dialog", { name: "Add a machine" });
+  await dialog.getByLabel("SSH host", { exact: true }).fill("dev@machine");
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await dialog.getByLabel("Machine system").selectOption("macos:aarch64");
+  await dialog.getByRole("button", { name: "Prepare setup files on this Mac" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Setup files are saved on this Mac. Turn on the machine and continue here when you’re ready.");
+  expect(await page.evaluate(() => (window as any).__MACHINE_PREPARED_TARGET__)).toEqual({ os: "macos", arch: "aarch64" });
+  await expect(dialog.getByLabel("Machine system")).toHaveCSS("padding-left", "14px");
+});
+
+test("unsupported architectures show their limit instead of an offline installation loop", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?state=empty&system=windows&unsupported=1");
+  await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+  await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+  await enterManualSsh(page);
+  const dialog = page.getByRole("dialog", { name: "Add a machine" });
+  await dialog.getByLabel("SSH host", { exact: true }).fill("dev@arm-machine");
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "Machine not supported yet" })).toBeVisible();
+  await expect(dialog.getByRole("alert")).toHaveText("This remote architecture does not have a published helper yet");
+  await expect(dialog.getByRole("button", { name: "Install and continue" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Prepare setup files on this Mac" })).toHaveCount(0);
 });

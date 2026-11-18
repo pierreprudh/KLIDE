@@ -58,22 +58,54 @@ fn script(
     action: &SetupAction,
     machine: &crate::machines::Machine,
     root: Option<&str>,
+    os: crate::remote_platform::HostOs,
 ) -> Result<String, String> {
+    if os == crate::remote_platform::HostOs::Windows {
+        return windows_script(action, machine, root);
+    }
     let body = match action {
-        SetupAction::Connect => "printf 'SSH connected.\\n'; test \"$(uname -sm)\" = 'Linux x86_64' || { echo 'Klide currently requires x86_64 Linux.'; exit 1; }".into(),
+        SetupAction::Connect => "echo SSH connected".into(),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.sh").into(),
         SetupAction::SignIn => "exec claude auth login".into(),
-        SetupAction::GitHub => "gh auth login --hostname github.com --git-protocol https --web && gh auth setup-git".into(),
+        SetupAction::GitHub => {
+            "gh auth login --hostname github.com --git-protocol https --web && gh auth setup-git"
+                .into()
+        }
         SetupAction::Clone => {
             let root = root.ok_or("Open a local project before cloning it remotely")?;
-            let repo = crate::machines::origin_repo(root).ok_or("This project has no origin remote. Choose an existing remote checkout instead.")?;
+            let repo = crate::machines::origin_repo(root).ok_or(
+                "This project has no origin remote. Choose an existing remote checkout instead.",
+            )?;
             safe_origin(&repo)?;
             let destination = crate::machines::remote_path_word(&machine.remote_checkout(root));
             format!("destination={destination}\nif test -e \"$destination\"; then echo 'The destination already exists. Choose it as an existing checkout, or use a different folder.'; exit 1; fi\nmkdir -p -- \"$(dirname -- \"$destination\")\"\ngit clone -- {} \"$destination\"", crate::delegate::shell_quote(&repo))
         }
     };
     Ok(format!(
-        "export PATH=\"$HOME/.local/bin:$PATH\"\nset -e\n{body}"
+        "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\nset -e\n{body}"
+    ))
+}
+
+fn windows_script(
+    action: &SetupAction,
+    machine: &crate::machines::Machine,
+    root: Option<&str>,
+) -> Result<String, String> {
+    use crate::remote_platform::{ps_path, ps_quote, WINDOWS_PATH};
+    let body=match action {
+        SetupAction::Connect => "Write-Output 'SSH connected'".into(),
+        SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.ps1").into(),
+        SetupAction::SignIn => "& claude auth login; exit $LASTEXITCODE".into(),
+        SetupAction::GitHub => "& gh auth login --hostname github.com --git-protocol https --web; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & gh auth setup-git; exit $LASTEXITCODE".into(),
+        SetupAction::Clone => {
+            let root=root.ok_or("Open a local project before cloning it remotely")?;
+            let repo=crate::machines::origin_repo(root).ok_or("This project has no origin remote. Choose an existing remote checkout instead.")?;
+            safe_origin(&repo)?;
+            format!("$destination={}; if (Test-Path -LiteralPath $destination) {{ throw 'The destination already exists. Choose an existing checkout or a different folder.' }}; New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null; & git clone -- {} $destination; exit $LASTEXITCODE",ps_path(&machine.remote_checkout(root)),ps_quote(&repo))
+        }
+    };
+    Ok(format!(
+        "$ErrorActionPreference='Stop'; {WINDOWS_PATH} {body}"
     ))
 }
 
@@ -119,10 +151,13 @@ pub async fn machine_setup_spawn(
         let state = app.state::<crate::pty::PtyState>();
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
-        let remote = format!(
-            "sh -lc {}",
-            crate::delegate::shell_quote(&script(&action, &machine, workspace_root.as_deref())?)
-        );
+        let remote = if matches!(action, SetupAction::Connect) {
+            // Trust/authentication must happen before any batch-mode probe.
+            "echo SSH connected".to_string()
+        } else {
+            let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
+            os.command(&script(&action, &machine, workspace_root.as_deref(), os)?)
+        };
         let mut command = CommandBuilder::new("ssh");
         command.args([
             "-tt",
@@ -173,6 +208,43 @@ mod tests {
             "setup SSH process must terminate when its terminal closes"
         );
         cancel("test-setup-cancel").unwrap(); // idempotent cleanup
+    }
+
+    #[test]
+    fn setup_commands_use_the_native_windows_shell_and_remote_login() {
+        let machine = crate::machines::Machine {
+            id: "mini".into(),
+            label: None,
+            ssh_host: "dev@machine".into(),
+            checkouts: Default::default(),
+        };
+        let login = script(
+            &SetupAction::SignIn,
+            &machine,
+            None,
+            crate::remote_platform::HostOs::Windows,
+        )
+        .unwrap();
+        assert!(login.contains("& claude auth login; exit $LASTEXITCODE"));
+        assert!(!login.contains("export PATH"));
+        let install = script(
+            &SetupAction::Prepare,
+            &machine,
+            None,
+            crate::remote_platform::HostOs::Windows,
+        )
+        .unwrap();
+        assert!(install.contains("https://claude.ai/install.ps1"));
+        assert!(install.contains("Git.Git"));
+        let mac = script(
+            &SetupAction::Prepare,
+            &machine,
+            None,
+            crate::remote_platform::HostOs::Macos,
+        )
+        .unwrap();
+        assert!(mac.contains("Darwin)"));
+        assert!(!mac.contains("requires x86_64 Linux"));
     }
 
     #[test]

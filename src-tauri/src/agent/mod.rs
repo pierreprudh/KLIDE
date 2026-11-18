@@ -6,7 +6,6 @@ mod approval_store;
 pub(crate) mod skill_resources;
 pub(crate) mod daemon;
 mod daemon_client;
-#[cfg(unix)]
 pub(crate) mod remote_machine;
 mod run_host;
 mod dispatch_cancel;
@@ -1800,7 +1799,6 @@ pub async fn agent_start_run(
     on_event: Channel<AgentEvent>,
     machine_id: Option<String>,
 ) -> Result<StartRunResponse, String> {
-    #[cfg(unix)]
     {
         let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if let Some(parent) = request.parent_id.as_deref() {
@@ -1811,8 +1809,6 @@ pub async fn agent_start_run(
             return remote_machine::start(app, request, on_event, machine_id).await;
         }
     }
-    #[cfg(not(unix))]
-    if machine_id.is_some() { return Err("Remote Runs require a Unix SSH client".into()); }
     start_run(app, request, on_event, None, None).await
 }
 
@@ -2052,7 +2048,6 @@ async fn start_run(
         .unwrap_or_else(run_id);
     // The id names the transcript file — refuse anything path-shaped.
     validate_run_id(&id)?;
-    #[cfg(unix)]
     {
         let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if remote_machine::binding(&base, &id)?.is_some() || request.parent_id.as_deref().map(|parent| remote_machine::binding(&base, parent)).transpose()?.flatten().is_some() {
@@ -4270,7 +4265,6 @@ pub async fn agent_read_run(
     run_id: String,
 ) -> Result<Vec<AgentEvent>, String> {
     validate_run_id(&run_id)?;
-    #[cfg(unix)]
     {
         let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if let Some(binding) = remote_machine::binding(&base, &run_id)? {
@@ -4482,12 +4476,9 @@ pub(crate) fn accept_all_checkpoints_at(
 }
 
 fn local_files_only(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
-    #[cfg(unix)]
     if remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, id)?.is_some() {
         return Err("This task's files are on its remote machine. Use Remote changes to inspect its worktree.".into());
     }
-    #[cfg(not(unix))]
-    let _ = (app, id);
     Ok(())
 }
 
@@ -4497,7 +4488,6 @@ pub async fn agent_list_checkpoints(
     run_id: String,
 ) -> Result<Vec<CheckpointEntry>, String> {
     validate_run_id(&run_id)?;
-    #[cfg(unix)]
     if remote_machine::binding(&app.path().app_data_dir().map_err(|e| e.to_string())?, &run_id)?.is_some() { return Ok(Vec::new()); }
     let runs_dir = app_runs_dir(&app)?;
     list_checkpoints_at(&runs_dir, &run_id)

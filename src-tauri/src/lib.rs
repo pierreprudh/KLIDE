@@ -57,10 +57,12 @@ mod providers;
 mod provider_keys;
 mod pty;
 mod pty_client;
-mod machine_install;
+pub mod machine_install;
+mod remote_platform;
+#[cfg(windows)]
+mod windows_detach;
 mod machine_setup;
 mod machine_discovery;
-#[cfg(unix)]
 mod pty_transport;
 mod pty_frame;
 mod pty_wire;
@@ -1387,7 +1389,6 @@ pub fn run() {
             machine_install::machine_prepare_host,
             machine_setup::machine_setup_spawn,
             machine_setup::machine_setup_close,
-            #[cfg(unix)]
             agent::remote_machine::machine_run_changes,
             custom_cli_upsert,
             custom_cli_remove,

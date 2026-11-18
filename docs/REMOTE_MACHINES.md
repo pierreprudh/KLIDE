@@ -1,6 +1,6 @@
 # Remote machines
 
-Design note, started 2026-11-03, updated 2026-11-17. Native remote
+Design note, started 2026-11-03, updated 2026-11-18. Native remote
 conversations now launch through the SSH Run host, stream into Klide, replay
 missed activity and reconnect after a network interruption. The implementation
 has controlled-process and browser acceptance; live Linux acceptance on
@@ -9,35 +9,74 @@ in `CONTEXT.md`.
 
 ## Use it
 
-1. Connect from Terminal once (`ssh <alias>`) to accept the host key. Use an
-   SSH alias for keys and ports; Tailscale addresses work through the same SSH
-   connection.
-2. In Settings › Machines, add the SSH alias and the project's Remote
-   checkout. Clone the repository there first; the Mac's unsaved files are not
-   automatically copied.
-3. Choose **Install Run host**. Klide uses this Mac's `gh` connection to
-   download the successful `Linux host binary` CI artifact for this app's
-   source commit, sends only that binary over SSH, validates its package,
-   protocol and source commit, and replaces an idle host. Alternatively,
-   choose an already-downloaded, extracted Linux `klide` binary. Active tasks
-   prevent an update. The current CI artifact targets Linux x86_64; the host
-   still needs WebKitGTK and GTK runtime libraries (see the setup facts).
-4. Check the machine's facts: matching Run host, Claude Code installed and
-   logged in there, and Remote checkout present. Pick that machine above the
-   Focus composer and send the task. It runs in its own remote worktree.
-5. Quit Klide or shut down the Mac. Leave the Remote machine on. Reopen the
-   same conversation to replay missed output and resume live streaming;
-   pending approvals and questions are restored too. A quiet Reconnecting
-   label appears during a lost connection. Stop and approval answers travel
-   back to the owning host.
-6. **Remote changes** reads the worktree's diff from the remote machine,
-   including commits made during the task. Mac-only file, rollback and
-   artifact actions never operate on remote paths. Merge/Discard and opening
-   individual remote artifacts remain follow-ups.
+1. Enable SSH on the destination and connect it to your network or VPN.
+   On a Mac mini, enable **System Settings › General › Sharing › Remote
+   Login**. On Windows, enable the native **OpenSSH Server** capability and
+   service ([Microsoft setup](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse)).
+   Use an SSH alias for custom keys and ports.
+2. In Focus, open **Where it runs › + Add a machine**. Choose Tailscale,
+   another VPN or Direct SSH, then choose a device or enter `user@hostname`.
+   SSH confirms the fingerprint and authenticates in the setup terminal.
+   Background connections need an unlocked key or SSH agent.
+3. Continue through **Install**, **Sign in** and **Project**. Klide detects
+   the destination OS and processor, downloads its checksum-verified helper
+   from the source-specific `host-<commit>` release, and copies it with SFTP.
+   No GitHub CLI is needed on the Mac. Advanced setup accepts a matching
+   downloaded binary. The helper checks the exact package/protocol/source
+   signature and refuses to replace a host with active work.
+4. Sign in to Claude Code on the destination and choose or clone its Git
+   checkout. Logins remain on that machine. Local unsaved files are not
+   automatically copied. Settings › Machines manages saved machines.
+5. Select the machine above the Focus composer and launch a Claude Code
+   task. Quit Klide or turn off the Mac, leaving the remote machine on.
+   Reopen the conversation to replay missed output and resume live
+   streaming. Approvals, questions and Stop route back to its owning host.
+6. **Remote changes** reads the task worktree's diff, including its commits.
+   Local rollback and artifact actions do not operate on remote paths.
+   Remote Merge/Discard and opening individual artifacts remain follow-ups.
 
-For the current Windows-hosted VM, Windows and the VM must stay on while the
-Mac is off. A machine reboot or host crash interrupts execution; a connection
-loss does not. Transcript recovery retains evidence after the host exits.
+You can save setup while the machine is off. Choose its system under
+**Machine system**, then **Prepare setup files on this Mac** to cache the
+correct helper. Once it is reachable, installation detects the actual system
+again rather than trusting that offline selection.
+
+### Native host targets
+
+| Destination | Helper | Preparation |
+|---|---|---|
+| Linux x86_64 | `klide-linux-x86_64` | Ubuntu 24.04+ / Debian 13+ packages, including WebKitGTK 4.1 |
+| macOS Apple silicon | `klide-macos-aarch64` | Git from Apple Command Line Tools; optional GitHub CLI via existing Homebrew |
+| macOS Intel | `klide-macos-x86_64` | Same macOS setup |
+| Native Windows x86_64 | `klide-windows-x86_64.exe` | OpenSSH Server; PowerShell setup; Git and GitHub CLI via winget when available |
+
+Windows uses native Claude Code and Git, without WSL. Windows ARM64 and Linux
+ARM64 helpers are not published yet. Claude installation follows the official
+[platform installers](https://code.claude.com/docs/en/setup). If winget or Apple
+Command Line Tools are unavailable in an SSH session, setup explains what to
+install on the destination before retrying.
+
+Unix hosts use private domain sockets. Windows uses native filesystem sockets
+and a token under directories restricted to the current Windows identity. No
+TCP port is exposed for local host IPC. The
+host requests OpenSSH job breakaway and disconnects all inherited stdio. An
+older server that refuses breakaway fails setup explicitly. Each Windows
+Claude process starts suspended, enters its own kill-on-close job, then
+resumes; Stop owns that process tree without killing unrelated applications.
+
+The **Native host binaries** workflow builds and smoke-tests every target.
+Windows helpers use the `remote-host` Cargo feature for console stdio and a
+static CRT in release builds. A source-specific release is published only
+after every target passes. Each merge to main builds and publishes matching
+release helpers automatically; manual dispatch can publish a development
+revision too. Desktop app signing/notarization is a separate
+release task; these are SSH helpers, not desktop installers.
+
+Keep the destination awake. SSH disconnects do not stop a task; remote sleep
+pauses progress, and a reboot or host crash interrupts execution. Transcripts
+remain available for replay, but interrupted tasks do not restart themselves.
+The Run host is not installed as a Windows boot service. Real Claude login,
+client power-off and host sleep/reboot acceptance on physical machines remain
+on the deployment checklist.
 
 ## The idea
 
@@ -49,13 +88,13 @@ going; open it again, and Klide replays what was missed.
 Klide already does this between two processes on one Mac: `klide ptyd` keeps
 background subscription conversations alive after the app quits
 (`docs/BACKGROUND_CONVERSATIONS.md`). A **Remote machine** is the same
-`klide ptyd`, on a Linux computer reached over SSH.
+`klide ptyd`, on another computer reached over SSH.
 
 ## Everyday words → Klide's words
 
 | You might say | Klide says | What it is |
 |---|---|---|
-| VPS, cloud, server, the box | **Remote machine** | A Linux computer Klide reaches over SSH |
+| VPS, cloud, server, the box | **Remote machine** | A computer Klide reaches over SSH |
 | This machine, local | this Mac | Where the app always runs |
 | Where it runs | **Machine** | This Mac or a Remote machine |
 | The helper, the daemon | **Run host** (`klide ptyd`) | The process that keeps a Run alive |

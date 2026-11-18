@@ -22,6 +22,7 @@ use crate::delegate::shell_quote;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -81,6 +82,10 @@ fn read_store(path: &Path) -> Result<Store, String> {
     }
 }
 
+fn absolute_checkout(path: &str) -> bool {
+    path.starts_with('/') || (path.as_bytes().get(1)==Some(&b':') && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) && path.as_bytes().get(2).is_some_and(|b|matches!(b,b'/'|b'\\')))
+}
+
 /// The one SSH-host rule every ssh invocation shares: an alias or
 /// user@hostname, never an option. Save-time validation alone is not enough
 /// — the store file is plain JSON, and a host like `-oProxyCommand=…` would
@@ -90,6 +95,7 @@ pub(crate) fn validate_ssh_host(host: &str) -> Result<(), String> {
         return Err("Enter an SSH alias or user@hostname (configure ports and keys in ~/.ssh/config)".into());
     }
     Ok(())
+
 }
 
 pub(crate) fn validate_machine(machine: &Machine) -> Result<(), String> {
@@ -98,7 +104,7 @@ pub(crate) fn validate_machine(machine: &Machine) -> Result<(), String> {
     }
     validate_ssh_host(&machine.ssh_host)?;
     for (root, path) in &machine.checkouts {
-        if !root.starts_with('/') || !(path.starts_with('/') || path.starts_with("~/")) || path.contains(['\n', '\r', '\0']) {
+        if !absolute_checkout(root) || !(absolute_checkout(path) || path.starts_with("~/")) || path.contains(['\n', '\r', '\0']) {
             return Err("Checkout mappings need an absolute workspace path and an absolute or ~/ remote path".into());
         }
     }
@@ -244,6 +250,7 @@ pub struct MachineStatus {
     /// The Remote checkout this workspace maps to.
     pub checkout: Option<String>,
     pub setup: SetupFacts,
+    pub target: Option<crate::remote_platform::HostTarget>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -263,7 +270,7 @@ fn fact(label: &str, value: impl Into<String>, tone: &'static str, fix: Option<S
 /// prints a secret (`claude auth status` reports a method, not a token).
 fn probe_script(checkout: Option<&str>) -> String {
     let mut s = String::from(
-        "export PATH=\"$HOME/.local/bin:$PATH\"; \
+        "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
          echo host=$(\"$HOME/.klide/bin/klide\" ptyd version 2>/dev/null); \
          echo claude=$(claude --version 2>/dev/null | head -n1); \
          echo login=$(claude auth status 2>/dev/null | tr -d ' \\n' | grep -o '\"loggedIn\":[a-z]*' | cut -d: -f2); \
@@ -281,6 +288,15 @@ fn probe_script(checkout: Option<&str>) -> String {
     s
 }
 
+fn windows_probe(checkout: Option<&str>) -> String {
+    use crate::remote_platform::{WINDOWS_PATH, ps_path};
+    let mut script = format!("{WINDOWS_PATH} $ErrorActionPreference='Continue'; if (Test-Path -LiteralPath (Join-Path $HOME '.klide/bin/klide.exe')) {{ Write-Output ('host='+(& (Join-Path $HOME '.klide/bin/klide.exe') ptyd version)) }}; if (Get-Command claude -ErrorAction SilentlyContinue) {{ Write-Output ('claude='+(& claude --version | Select-Object -First 1)); try {{ $auth=(& claude auth status 2>$null | Out-String | ConvertFrom-Json); Write-Output ('login='+$auth.loggedIn.ToString().ToLowerInvariant()) }} catch {{}} }}; if (Get-Command gh -ErrorAction SilentlyContinue) {{ & gh auth status *> $null; if ($LASTEXITCODE -eq 0) {{ Write-Output 'gh=authenticated' }} }};");
+    if let Some(checkout)=checkout {
+        script.push_str(&format!("$p={}; if (Test-Path -LiteralPath (Join-Path $p '.git')) {{ & git -C $p rev-parse --is-inside-work-tree *> $null; if ($LASTEXITCODE -eq 0) {{ Write-Output 'checkout=yes'; Write-Output ('branch='+(& git -C $p branch --show-current)); Write-Output ('dirty='+(@(& git -C $p status --porcelain).Count)) }} else {{ Write-Output 'checkout=no' }} }} else {{ Write-Output 'checkout=no' }}",ps_path(checkout)));
+    }
+    script.push_str("; exit 0"); script
+}
+
 fn parse_probe(out: &str) -> BTreeMap<String, String> {
     out.lines()
         .filter_map(|l| l.split_once('='))
@@ -293,6 +309,7 @@ fn parse_probe(out: &str) -> BTreeMap<String, String> {
 pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     let checkout = workspace_root.map(|root| machine.remote_checkout(root));
     let started = Instant::now();
+
     let mut status = MachineStatus {
         id: machine.id.clone(),
         label: machine.label().to_string(),
@@ -300,6 +317,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         ready: false,
         caption: String::new(),
         facts: Vec::new(),
+        target: None,
         checkout: checkout.clone(),
         setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
@@ -310,29 +328,26 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         status.facts.push(fact("Reached", e, "bad", None));
         return status;
     }
-    let output = Command::new("ssh")
-        .args(SSH_OPTS)
-        .arg("-o")
-        .arg("ConnectTimeout=6")
-        .arg("--")
-        .arg(&machine.ssh_host)
-        .arg(probe_script(checkout.as_deref()))
-        .stdin(std::process::Stdio::null())
-        .output();
+    let target = crate::machine_install::detect_target(&machine.ssh_host);
+    status.target = target.as_ref().ok().copied();
+    let output = target.as_ref().map_err(Clone::clone).and_then(|target| {
+        let script = if target.os == crate::remote_platform::HostOs::Windows {
+            crate::remote_platform::powershell(&windows_probe(checkout.as_deref()))
+        } else { probe_script(checkout.as_deref()) };
+        crate::machine_install::ssh(&machine.ssh_host, &script)
+    });
     let elapsed = started.elapsed();
     let out = match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
-        Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr);
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(err) => {
             let why = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no answer").trim().to_string();
+            if err.starts_with("Unsupported remote") || err.starts_with("This remote architecture") {
+                status.setup.connection="unsupported".into(); status.caption=err.clone();
+                status.facts.push(fact("System",err,"bad",None)); return status;
+            }
             status.setup.connection = if err.contains("Host key verification failed") || err.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") { "needsTrust" } else if err.contains("Permission denied") { "needsAuthentication" } else { "offline" }.into();
             status.caption = match status.setup.connection.as_str() { "needsTrust" => "Confirm SSH connection", "needsAuthentication" => "SSH sign-in needed", _ => "Offline" }.into();
             status.facts.push(fact("Reached", why, "bad", Some(format!("ssh {}", machine.ssh_host))));
-            return status;
-        }
-        Err(e) => {
-            status.caption = "ssh could not start".into();
-            status.facts.push(fact("Reached", e.to_string(), "bad", None));
             return status;
         }
     };
@@ -354,13 +369,13 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         }
         None => {
             problems.push("Install Run host in Settings → Machines");
-            status.facts.push(fact("Run host", "Not installed or missing Linux runtime libraries", "warn", Some(format!("ssh -t {} 'sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0t64'", machine.ssh_host))));
+            status.facts.push(fact("Run host", "Not installed or prerequisites missing", "warn", None));
         }
     }
     match (got("claude"), got("login")) {
         (None, _) => {
             problems.push("Claude Code missing");
-            status.facts.push(fact("Claude Code", "not installed", "bad", Some(format!("ssh -t {} 'curl -fsSL https://claude.ai/install.sh | bash'", machine.ssh_host))));
+            status.facts.push(fact("Claude Code", "not installed", "bad", None));
         }
         (Some(v), Some("true")) => status.facts.push(fact("Claude Code", format!("{v} · logged in"), "ok", None)),
         (Some(v), _) => {
@@ -452,6 +467,21 @@ mod tests {
             ssh_host: "klide-box".into(),
             checkouts: BTreeMap::from([("/Users/me/src/app".into(), "/srv/app".into())]),
         }
+    }
+
+    #[test]
+    fn native_windows_checkout_paths_are_accepted_without_allowing_drive_relative_paths() {
+        let mut machine=box_machine();
+        for path in ["C:/Users/dev/project", "D:\\Projects\\user's app", "~/code/app"] {
+            machine.checkouts.insert("/Users/local/app".into(),path.into());
+            assert!(validate_machine(&machine).is_ok(),"{path}");
+        }
+        for path in ["C:relative", "relative/app", "C:/project\nexit"] {
+            machine.checkouts.insert("/Users/local/app".into(),path.into());
+            assert!(validate_machine(&machine).is_err(),"{path}");
+        }
+        let script=windows_probe(Some("C:/user's/$env:SECRET; app"));
+        assert!(script.contains("'C:/user''s/$env:SECRET; app'"));
     }
 
     #[test]
