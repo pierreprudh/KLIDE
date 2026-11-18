@@ -131,14 +131,113 @@ fn append(path: &Path, line: &str, sync: bool) -> Result<(), String> {
     if !existed {
         set_private(path);
     }
-    file.write_all(buf.as_bytes())
-        .map_err(|e| format!("Could not append to {path:?}: {e}"))?;
-    if !sync {
+    // Every append holds the file's flock across repair + write, so a repair
+    // can never trim a line another appender is still writing.
+    lock_exclusive(&file)?;
+    let result = (|| {
+        repair_torn_tail(path, &file)?;
+        file.write_all(buf.as_bytes())
+            .map_err(|e| format!("Could not append to {path:?}: {e}"))?;
+        if sync {
+            file.sync_data()
+                .map_err(|e| format!("Could not flush {path:?}: {e}"))?;
+        }
+        Ok(())
+    })();
+    unlock(&file);
+    result
+}
+
+/// A crash between an unsynced write and its flush can leave the log's final
+/// line without a newline. Appending then would glue the new record onto the
+/// fragment, turning the crash artefact into an *interior* corrupt line that
+/// strict readers refuse wholesale. So before appending, drop a torn tail —
+/// the readers already tolerate a torn last line. Called with the file's
+/// flock held (see `append`).
+fn repair_torn_tail(path: &Path, file: &fs::File) -> Result<(), String> {
+    let len = file
+        .metadata()
+        .map_err(|e| format!("Could not stat {path:?}: {e}"))?
+        .len();
+    if len == 0 {
         return Ok(());
     }
-    file.sync_data()
-        .map_err(|e| format!("Could not flush {path:?}: {e}"))
+    let mut last = [0u8; 1];
+    read_exact_at(path, len - 1, &mut last)?;
+    if last[0] == b'\n' {
+        return Ok(());
+    }
+    // Keep everything up to and including the last newline, scanning back in
+    // chunks — a long torn line must not read as "no newline anywhere" and
+    // wipe the whole log.
+    const CHUNK: u64 = 1024 * 1024;
+    let mut end = len;
+    let mut keep = 0;
+    while end > 0 {
+        let start = end.saturating_sub(CHUNK);
+        let mut chunk = vec![0u8; (end - start) as usize];
+        read_exact_at(path, start, &mut chunk)?;
+        if let Some(pos) = chunk.iter().rposition(|b| *b == b'\n') {
+            keep = start + pos as u64 + 1;
+            break;
+        }
+        end = start;
+    }
+    file.set_len(keep)
+        .map_err(|e| format!("Could not trim torn tail of {path:?}: {e}"))?;
+    eprintln!("klide: {path:?} ended in a torn line; trimmed it before appending.");
+    Ok(())
 }
+
+#[cfg(unix)]
+fn read_exact_at(path: &Path, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+    use std::os::unix::fs::FileExt;
+    let handle = fs::File::open(path).map_err(|e| format!("Could not open {path:?}: {e}"))?;
+    handle
+        .read_exact_at(buf, offset)
+        .map_err(|e| format!("Could not read {path:?}: {e}"))
+}
+
+#[cfg(not(unix))]
+fn read_exact_at(path: &Path, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+    let raw = fs::read(path).map_err(|e| format!("Could not read {path:?}: {e}"))?;
+    let start = (offset as usize).min(raw.len());
+    let end = (start + buf.len()).min(raw.len());
+    buf[..end - start].copy_from_slice(&raw[start..end]);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn lock_exclusive(file: &fs::File) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    loop {
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(format!("Could not lock for tail repair: {error}"));
+    }
+}
+
+#[cfg(not(unix))]
+fn lock_exclusive(_file: &fs::File) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unlock(file: &fs::File) {
+    use std::os::fd::AsRawFd;
+    unsafe {
+        libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+    }
+}
+
+#[cfg(not(unix))]
+fn unlock(_file: &fs::File) {}
 
 /// The temp sibling `write_atomic` uses. Exposed so callers that scan a
 /// directory (scrollback pruning, Mission listing) can skip in-flight writes.
@@ -181,6 +280,38 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn append_trims_a_torn_tail_before_writing() {
+        let dir = tmp_dir("torn");
+        let path = dir.join("log.jsonl");
+        fs::write(&path, "{\"a\":1}\n{\"torn").unwrap();
+        append_line(&path, "{\"b\":2}").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\"a\":1}\n{\"b\":2}\n",
+            "the torn fragment is dropped, the new record is whole"
+        );
+    }
+
+    #[test]
+    fn a_torn_tail_longer_than_one_chunk_keeps_the_records_before_it() {
+        let dir = tmp_dir("torn-long");
+        let path = dir.join("log.jsonl");
+        let torn = "x".repeat(3 * 1024 * 1024);
+        fs::write(&path, format!("{{\"a\":1}}\n{torn}")).unwrap();
+        append_line(&path, "{\"b\":2}").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"a\":1}\n{\"b\":2}\n");
+    }
+
+    #[test]
+    fn append_leaves_a_clean_ending_alone() {
+        let dir = tmp_dir("clean");
+        let path = dir.join("log.jsonl");
+        append_line(&path, "one").unwrap();
+        append_line(&path, "two").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "one\ntwo\n");
     }
 
     #[test]

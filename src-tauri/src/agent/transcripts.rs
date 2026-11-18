@@ -1061,6 +1061,26 @@ mod tests {
     }
 
     #[test]
+    fn append_repairs_a_torn_tail_instead_of_gluing_onto_it() {
+        let dir = read_dir_for("torn-append");
+        let id = "r5";
+        append_event(&dir, id, 0, &file_changed(id, "src/a.rs")).unwrap();
+        // The crash artefact: a partial final line with no newline.
+        let path = transcript_path(&dir, id);
+        let mut raw = std::fs::read_to_string(&path).unwrap();
+        raw.push_str("{\"torn");
+        std::fs::write(&path, raw).unwrap();
+
+        append_event(&dir, id, 1, &assistant_with_text(id, "after crash")).unwrap();
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(now.ends_with('\n'));
+        assert!(!now.contains("torn"), "the fragment was dropped, not glued: {now:?}");
+        // No interior corruption: the log still reads clean.
+        let events = read_events(&dir, id).unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
     fn read_events_refuses_a_corrupt_interior_line_instead_of_dropping_it() {
         // The regression this replaces: a dropped interior line handed a
         // resumed run a history with a turn missing, and nothing said so.
