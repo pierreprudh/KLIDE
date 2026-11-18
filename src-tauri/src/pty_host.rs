@@ -572,6 +572,14 @@ impl SessionHost {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         let mut cmd = CommandBuilder::new(shell);
         cmd.arg("-lc");
+        // The login shell runs the user's profile, which may activate a
+        // Python venv (VIRTUAL_ENV / PYTHONHOME / PYTHONPATH). Bundled-
+        // Python CLIs (PyInstaller binaries such as `vibe`) then abort at
+        // startup with "Fatal Python error: init_import_site: Failed to
+        // import the site module", so the PTY starts with those scrubbed.
+        for var in ["PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"] {
+            cmd.env_remove(var);
+        }
         let mut command = spec.command.clone();
         let mut routed_env = Vec::new();
         if let Some(path) = spec.cwd.as_deref() {
