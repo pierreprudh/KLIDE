@@ -8,6 +8,10 @@
 //! under a cross-process lock: the app writes watches, the service writes
 //! firings, the app marks firings announced once it has shown a toast.
 
+// The poller runs in the unix-only scheduled service; elsewhere only the
+// commands and the state file are live.
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
+
 use super::{transcripts, types::{AgentMode, StartRunRequest}};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -154,10 +158,17 @@ fn failing_prs(json: &str, since: i64) -> Result<Vec<FailingPr>, String> {
     Ok(out)
 }
 
-/// The Actions run id in a check's details URL (`…/actions/runs/<id>/job/<id>`).
-fn actions_run_id(url: &str) -> Option<u64> {
-    let rest = url.split("/actions/runs/").nth(1)?;
-    rest.split('/').next()?.parse().ok()
+/// The repository and Actions job in a check's details URL
+/// (`https://github.com/<owner>/<repo>/actions/runs/<run>/job/<job>`). The job,
+/// not the run: a run's log is refused while its other jobs are still going,
+/// and the failure is usually reported first.
+fn actions_job(url: &str) -> Option<(String, u64)> {
+    let path = url.strip_prefix("https://github.com/")?;
+    let (repo, rest) = path.split_once("/actions/runs/")?;
+    let job = rest.split("/job/").nth(1)?.split(['/', '?', '#']).next()?.parse().ok()?;
+    let valid = repo.split('/').count() == 2
+        && repo.split('/').all(|p| !p.is_empty() && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)));
+    valid.then(|| (repo.to_string(), job))
 }
 
 fn tail(text: &str, max: usize) -> &str {
@@ -176,6 +187,7 @@ fn tail(text: &str, max: usize) -> &str {
 /// the prefixes and end the excerpt at the last `##[error]` line, so the tail
 /// we keep is the failure, not the runner tidying up.
 fn log_excerpt(raw: &str, max: usize) -> String {
+    let raw = strip_ansi(raw.trim_start_matches('\u{feff}'));
     let lines: Vec<&str> = raw
         .lines()
         .map(|line| {
@@ -189,6 +201,25 @@ fn log_excerpt(raw: &str, max: usize) -> String {
         .collect();
     let end = lines.iter().rposition(|l| l.contains("##[error]")).map_or(lines.len(), |i| i + 1);
     tail(&lines[..end].join("\n"), max).to_string()
+}
+
+/// Cargo and npm colour their output in CI; the model reads text.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn prompt(pr: &FailingPr, logs: &str) -> String {
@@ -326,19 +357,18 @@ async fn fire(
     .await?;
 
     let root = watch.workspace_root.clone();
-    let runs: Vec<u64> = {
-        let mut ids: Vec<u64> = pr.checks.iter().filter_map(|(_, url)| actions_run_id(url)).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids.truncate(2);
-        ids
-    };
+    let jobs: Vec<(String, String, u64)> = pr
+        .checks
+        .iter()
+        .filter_map(|(name, url)| actions_job(url).map(|(repo, job)| (name.clone(), repo, job)))
+        .take(2)
+        .collect();
     let logs = crate::blocking::run(move || {
         let mut all = String::new();
-        for id in runs {
-            if let Ok(log) = crate::git::github::gh_output(&root, &["run", "view", &id.to_string(), "--log-failed"]) {
-                all.push_str(&log_excerpt(&log, LOG_TAIL_BYTES));
-                all.push('\n');
+        for (name, repo, job) in jobs {
+            let endpoint = format!("repos/{repo}/actions/jobs/{job}/logs");
+            if let Ok(log) = crate::git::github::gh_output(&root, &["api", &endpoint]) {
+                all.push_str(&format!("── {name} ──\n{}\n", log_excerpt(&log, LOG_TAIL_BYTES / 2)));
             }
         }
         Ok(tail(&all, LOG_TAIL_BYTES).to_string())
@@ -502,8 +532,9 @@ mod tests {
         let prs = failing_prs(LIST, since).unwrap();
         assert_eq!(prs.iter().map(|p| p.number).collect::<Vec<_>>(), vec![12, 15]);
         assert_eq!(prs[0].checks, vec![("test".to_string(), "https://github.com/o/r/actions/runs/987/job/55".to_string())]);
-        assert_eq!(actions_run_id(&prs[0].checks[0].1), Some(987));
-        assert_eq!(actions_run_id("https://ci"), None);
+        assert_eq!(actions_job(&prs[0].checks[0].1), Some(("o/r".to_string(), 55)));
+        assert_eq!(actions_job("https://ci"), None);
+        assert_eq!(actions_job("https://github.com/o/../actions/runs/1/job/2"), None);
     }
 
     #[test]
@@ -528,6 +559,7 @@ mod tests {
         let raw = "build\tUNKNOWN STEP\t2026-11-17T23:13:38.6Z 8 vulnerabilities\n\
                    build\tUNKNOWN STEP\t2026-11-17T23:13:38.7Z ##[error]Process completed with exit code 1.\n\
                    build\tUNKNOWN STEP\t2026-11-17T23:13:38.8Z Cleaning up orphan processes";
+        assert_eq!(log_excerpt("\u{feff}2026-11-18T22:00:52.7Z \u{1b}[1m\u{1b}[91merror\u{1b}[0m: boom\n2026-11-18T22:00:52.8Z ##[error]exit 1\n2026-11-18T22:00:53Z cleanup", 1000), "error: boom\n##[error]exit 1");
         assert_eq!(log_excerpt(raw, 1000), "8 vulnerabilities\n##[error]Process completed with exit code 1.");
         assert_eq!(apple_string(r#"a"b\"#), r#""a\"b\\""#);
     }
