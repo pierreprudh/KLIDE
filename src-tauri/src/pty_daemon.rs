@@ -32,7 +32,9 @@ use crate::pty_host::{PtyEventSink, PtyExitOutcome, SessionHost, SpawnSpec};
 // name these types on every target. See `crate::pty_wire`.
 pub use crate::pty_wire::{Event, Request, Response};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
+#[cfg(all(test, unix))]
+use std::io::BufRead;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as HostListener, UnixStream as HostStream};
 #[cfg(windows)]
@@ -454,10 +456,16 @@ fn handle_client(stream: HostStream, state: Arc<DaemonState>) {
         return;
     };
     let mut writer = stream;
-    let reader = BufReader::new(read_half);
+    let mut reader = BufReader::new(read_half);
     let mut authed = false;
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
+    // Capped reads: a line with no newline must not grow without bound before
+    // auth is even checked.
+    loop {
+        let line = match crate::pty_wire::read_line_capped(&mut reader) {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(_) => break,
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -533,10 +541,7 @@ fn handle_client(stream: HostStream, state: Arc<DaemonState>) {
                     // Keep reading only to notice the disconnect: an event
                     // stream client sends nothing more.
                     let mut drain = BufReader::new(writer);
-                    let mut scratch = String::new();
-                    while matches!(drain.read_line(&mut scratch), Ok(n) if n > 0) {
-                        scratch.clear();
-                    }
+                    while matches!(crate::pty_wire::read_line_capped(&mut drain), Ok(Some(_))) {}
                     state.subscribers.lock().unwrap().remove(&id);
                 } else {
                     let _ = respond(

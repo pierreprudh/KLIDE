@@ -54,6 +54,7 @@ fn run(command: &mut Command) -> Result<Output, String> {
 }
 
 pub(crate) fn ssh(host: &str, script: &str) -> Result<Output, String> {
+    crate::machines::validate_ssh_host(host)?;
     run(Command::new("ssh").args(crate::machines::SSH_OPTS).args([
         "-o",
         "StrictHostKeyChecking=yes",

@@ -329,12 +329,10 @@ fn ensure_watch(
                     }, ts: now_ms() }, next);
                     return Ok(());
                 }
-                let mut line = String::new();
                 loop {
-                    line.clear();
-                    if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+                    let Some(line) = crate::pty_wire::read_line_capped(&mut reader).map_err(|e| e.to_string())? else {
                         return Err("SSH connection closed; reconnecting".into());
-                    }
+                    };
                     if let Ok(Event::Chat { run_id, seq, event }) = serde_json::from_str(&line) {
                         if run_id != id || seq < next {
                             continue;

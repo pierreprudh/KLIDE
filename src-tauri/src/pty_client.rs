@@ -21,10 +21,10 @@ pub(crate) fn request_on(transport: &impl Transport, request: &Request) -> Resul
     let mut connection = transport.connect()?;
     let line = serde_json::to_string(request).map_err(|e| e.to_string())?;
     writeln!(connection, "{line}").map_err(|e| format!("send: {e}"))?;
-    let mut reply = String::new();
-    BufReader::new(connection)
-        .read_line(&mut reply)
-        .map_err(|e| format!("recv: {e}"))?;
+    let mut reader = BufReader::new(connection);
+    let reply = crate::pty_wire::read_line_capped(&mut reader)
+        .map_err(|e| format!("recv: {e}"))?
+        .ok_or_else(|| "recv: connection closed before a response".to_string())?;
     serde_json::from_str(&reply).map_err(|e| format!("bad response: {e}"))
 }
 
@@ -168,8 +168,9 @@ pub(crate) fn subscribe_on(transport: &impl Transport) -> Result<Box<dyn BufRead
     let line = serde_json::to_string(&Request::Subscribe).map_err(|e| e.to_string())?;
     writeln!(connection, "{line}").map_err(|e| format!("send: {e}"))?;
     let mut reader = BufReader::new(connection);
-    let mut ack = String::new();
-    reader.read_line(&mut ack).map_err(|e| format!("recv: {e}"))?;
+    let ack = crate::pty_wire::read_line_capped(&mut reader)
+        .map_err(|e| format!("recv: {e}"))?
+        .ok_or_else(|| "recv: connection closed before the ack".to_string())?;
     match serde_json::from_str::<Response>(&ack) {
         Ok(Response::Subscribed) => {
             // Events are pushed at the session's pace — an idle session may be

@@ -889,7 +889,18 @@ pub(crate) async fn git_fetch(
 ) -> Result<String, String> {
     blocking(move || {
         let remote = remote.unwrap_or_else(|| "--all".to_string());
-        run_git(&workspace_root, &["fetch", &remote])?;
+        // git would read a remote that starts with a dash as an option.
+        if remote.starts_with('-') && remote != "--all" {
+            return Err(format!("\"{remote}\" is not a remote name"));
+        }
+        let mut args = vec!["fetch"];
+        // `--` ends option parsing, but only for a real remote name — the
+        // built-in "--all" must stay an option.
+        if remote != "--all" {
+            args.push("--");
+        }
+        args.push(&remote);
+        run_git(&workspace_root, &args)?;
         Ok(format!("Fetched {remote}"))
     })
     .await
@@ -1532,6 +1543,10 @@ pub(crate) async fn git_worktree_merge(
     if branch.is_empty() {
         return Err("Branch to merge is required".to_string());
     }
+    // git would read a name that starts with a dash as an option.
+    if branch.starts_with('-') {
+        return Err(format!("\"{branch}\" is not a branch name"));
+    }
     // Tracked changes only. Untracked files never entangle a merge (git
     // refuses by itself if the branch would overwrite one), and Klide writes
     // untracked state of its own (`.klide/coordination/`) into every project
@@ -1552,6 +1567,7 @@ pub(crate) async fn git_worktree_merge(
         merge_args.push("-m");
         merge_args.push(msg);
     }
+    merge_args.push("--");
     merge_args.push(branch);
     match run_git(&workspace_root, &merge_args) {
         Ok(()) => Ok(format!("Merged {branch} into {target}.")),
@@ -2262,6 +2278,20 @@ detached
     /// Klide's own untracked state (`.klide/coordination/`) sits in every
     /// project it ran in; it must not read as "uncommitted changes". A
     /// tracked edit still refuses the merge.
+    #[tokio::test]
+    async fn worktree_merge_rejects_option_shaped_branch_names() {
+        let (_base, repo) = temp_repo("merge-dash");
+        let err = git_worktree_merge(repo, "--upload-pack=evil".into()).await.unwrap_err();
+        assert!(err.contains("not a branch name"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn fetch_rejects_option_shaped_remote_names() {
+        let (_base, repo) = temp_repo("fetch-dash");
+        let err = git_fetch(repo, Some("--upload-pack=evil".into())).await.unwrap_err();
+        assert!(err.contains("not a remote name"), "{err}");
+    }
+
     #[tokio::test]
     async fn worktree_merge_ignores_untracked_files_but_not_tracked_edits() {
         let (base, repo) = temp_repo("wt-merge-untracked");

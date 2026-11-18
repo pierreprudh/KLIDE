@@ -44,15 +44,7 @@ impl Ssh<'_> {
     fn command(&self) -> Result<Command, String> {
         // Keep even direct diagnostic calls from interpreting a host as an
         // SSH option. Paths are shell words on the remote side only.
-        if self.host.is_empty()
-            || self.host.starts_with('-')
-            || !self
-                .host
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c))
-        {
-            return Err("Invalid SSH host: use an alias or user@hostname".into());
-        }
+        crate::machines::validate_ssh_host(self.host)?;
         if self.binary.is_empty() || self.data_dir.is_empty() {
             return Err("Remote binary and data directory are required".into());
         }
