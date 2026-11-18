@@ -8,7 +8,8 @@ import json
 import faulthandler
 import os
 from pathlib import Path
-import selectors
+import queue
+import threading
 import subprocess
 import sys
 import tempfile
@@ -21,31 +22,25 @@ class Relay:
             [str(binary), "ptyd", "connect", "--ensure", "--data-dir", str(data)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
         )
-        self.pending = b""
+        self.lines = queue.Queue()
+        def read_lines():
+            for line in self.process.stdout:
+                self.lines.put(line)
+            self.lines.put(None)
+        threading.Thread(target=read_lines, daemon=True).start()
 
     def send(self, request):
         self.process.stdin.write(json.dumps(request).encode() + b"\n")
         self.process.stdin.flush()
 
     def read(self, timeout=15):
-        deadline = time.monotonic() + timeout
-        with selectors.DefaultSelector() as selector:
-            selector.register(self.process.stdout, selectors.EVENT_READ)
-            while b"\n" not in self.pending:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
-                    raise AssertionError("Timed out waiting for relay output")
-                chunk = os.read(self.process.stdout.fileno(), 65536)
-                if not chunk:
-                    if self.process.poll() is None:
-                        self.process.kill()
-                        self.process.wait(timeout=3)
-                    with selectors.DefaultSelector() as errors:
-                        errors.register(self.process.stderr, selectors.EVENT_READ)
-                        detail = os.read(self.process.stderr.fileno(), 8192).decode() if errors.select(.1) else ""
-                    raise AssertionError("Relay closed: " + detail)
-                self.pending += chunk
-        line, self.pending = self.pending.split(b"\n", 1)
+        try:
+            line = self.lines.get(timeout=timeout)
+        except queue.Empty:
+            raise AssertionError("Timed out waiting for relay output")
+        if line is None:
+            self.process.wait(timeout=3)
+            raise AssertionError("Relay closed: " + self.process.stderr.read().decode(errors="replace"))
         return json.loads(line)
 
     def close(self):
@@ -74,7 +69,7 @@ def main():
         subprocess.run(["git", "-C", str(checkout), "commit", "-qm", "fixture"], check=True)
         commands = root / "commands"
         commands.mkdir()
-        claude = commands / "claude"
+        claude = commands / ("fake_claude.py" if os.name == "nt" else "claude")
         claude.write_text("""#!/usr/bin/env python3
 import json, os, sys, time
 if '--version' in sys.argv:
@@ -93,7 +88,9 @@ emit({'type':'assistant','message':{'content':[{'type':'text','text':'controlled
 emit({'type':'result','subtype':'success','result':'controlled task completed','num_turns':1})
 """)
         claude.chmod(0o700)
-        env = dict(os.environ, PATH=str(commands) + ":" + os.environ["PATH"])
+        if os.name == "nt":
+            (commands / "claude.cmd").write_text('@echo off\n"' + sys.executable + '" -u "' + str(claude) + '" %*\n')
+        env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"])
         data = root / "host"
         daemon = subprocess.Popen([str(binary), "ptyd", "--data-dir", str(data)], stdin=subprocess.DEVNULL,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, start_new_session=True)
@@ -147,7 +144,7 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
             assert replay["type"] == "remote_events", replay
             assert any(e["type"] == "assistant_delta" for e in replay["events"]), replay
             started_event = next(e for e in replay["events"] if e["type"] == "run_started")
-            assert started_event["cwd"] == str(data / "worktrees" / run_id), started_event
+            assert Path(started_event["cwd"]).resolve() == (data / "worktrees" / run_id).resolve(), started_event
             stream = connect()
             stream.send({"type": "subscribe"})
             assert stream.read()["type"] == "subscribed"

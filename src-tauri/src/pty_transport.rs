@@ -2,8 +2,12 @@
 //! local socket; its relay reads the token on the destination, never the Mac.
 use crate::pty_wire::Request;
 use std::io::{self, Read, Write};
+#[cfg(windows)]
+use std::net::TcpStream as HostStream;
+#[cfg(unix)]
 use std::os::fd::OwnedFd;
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream as HostStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -16,8 +20,7 @@ pub(crate) struct Local<'a>(pub &'a Path);
 
 impl Transport for Local<'_> {
     fn connect(&self) -> Result<Connection, String> {
-        let stream = UnixStream::connect(crate::pty_daemon::socket_path(self.0))
-            .map_err(|e| format!("connect: {e}"))?;
+        let stream = crate::pty_daemon::connect_socket(self.0)?;
         let mut connection = Connection::new(stream, None, Duration::from_secs(5))?;
         let token = std::fs::read_to_string(crate::pty_daemon::token_path(self.0))
             .map_err(|e| format!("connect: no ptyd token: {e}"))?;
@@ -34,6 +37,7 @@ pub(crate) struct Ssh<'a> {
     pub host: &'a str,
     pub binary: &'a str,
     pub data_dir: &'a str,
+    pub os: crate::remote_platform::HostOs,
 }
 
 impl Ssh<'_> {
@@ -52,11 +56,16 @@ impl Ssh<'_> {
         if self.binary.is_empty() || self.data_dir.is_empty() {
             return Err("Remote binary and data directory are required".into());
         }
-        let remote = format!(
-            "export PATH=\"$HOME/.local/bin:$PATH\"; exec {} ptyd connect --ensure --data-dir {}",
-            crate::machines::remote_path_word(self.binary),
-            crate::machines::remote_path_word(self.data_dir)
-        );
+        let remote = if self.os == crate::remote_platform::HostOs::Windows {
+            crate::remote_platform::powershell(&format!(
+                "{} & {} ptyd connect --ensure --data-dir {}; exit $LASTEXITCODE",
+                crate::remote_platform::WINDOWS_PATH,
+                crate::remote_platform::ps_path(self.binary),
+                crate::remote_platform::ps_path(self.data_dir)
+            ))
+        } else {
+            format!("export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; exec {} ptyd connect --ensure --data-dir {}",crate::machines::remote_path_word(self.binary),crate::machines::remote_path_word(self.data_dir))
+        };
         let mut command = Command::new("ssh");
         command.args(crate::machines::SSH_OPTS).args([
             "-o",
@@ -81,12 +90,12 @@ impl Transport for Ssh<'_> {
 /// readers cannot leave SSH processes behind. Killing this child only closes
 /// the relay; the daemon and its Runs are independent processes.
 pub(crate) struct Connection {
-    stream: UnixStream,
+    stream: HostStream,
     child: Option<Child>,
 }
 
 impl Connection {
-    fn new(stream: UnixStream, child: Option<Child>, timeout: Duration) -> Result<Self, String> {
+    fn new(stream: HostStream, child: Option<Child>, timeout: Duration) -> Result<Self, String> {
         let connection = Self { stream, child };
         connection
             .stream
@@ -99,8 +108,9 @@ impl Connection {
         Ok(connection)
     }
 
+    #[cfg(unix)]
     pub(super) fn child(mut command: Command, timeout: Duration) -> Result<Self, String> {
-        let (stream, peer) = UnixStream::pair().map_err(|e| format!("connect: {e}"))?;
+        let (stream, peer) = HostStream::pair().map_err(|e| format!("connect: {e}"))?;
         let input: OwnedFd = peer.try_clone().map_err(|e| e.to_string())?.into();
         let output: OwnedFd = peer.into();
         let child = command
@@ -109,6 +119,32 @@ impl Connection {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| format!("connect: ssh: {e}"))?;
+        Self::new(stream, Some(child), timeout)
+    }
+
+    #[cfg(windows)]
+    pub(super) fn child(mut command: Command, timeout: Duration) -> Result<Self, String> {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|e| e.to_string())?;
+        let stream = HostStream::connect(listener.local_addr().map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let (mut peer, _) = listener.accept().map_err(|e| e.to_string())?;
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        let mut input = child.stdin.take().ok_or("SSH stdin unavailable")?;
+        let mut output = child.stdout.take().ok_or("SSH stdout unavailable")?;
+        let mut write_peer = peer.try_clone().map_err(|e| e.to_string())?;
+        std::thread::spawn(move || {
+            let _ = io::copy(&mut peer, &mut input);
+        });
+        std::thread::spawn(move || {
+            let _ = copy_flushed(&mut output, &mut write_peer);
+            let _ = write_peer.shutdown(std::net::Shutdown::Write);
+        });
         Self::new(stream, Some(child), timeout)
     }
 
@@ -186,7 +222,7 @@ fn copy_flushed(source: &mut impl Read, target: &mut impl Write) -> io::Result<(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::pty_wire::Response;
@@ -209,7 +245,7 @@ mod tests {
                     .map_err(io::Error::other)
             }
         }
-        let (mut writer, mut source) = UnixStream::pair().unwrap();
+        let (mut writer, mut source) = HostStream::pair().unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();
         let thread = std::thread::spawn(move || {
             copy_flushed(
@@ -283,7 +319,7 @@ mod tests {
         let listener = crate::pty_daemon::bind_socket(&dir).unwrap();
         let state = crate::pty_daemon::test_state(dir.clone());
         std::thread::spawn(move || crate::pty_daemon::serve(listener, state));
-        let (mut client, relay) = UnixStream::pair().unwrap();
+        let (mut client, relay) = HostStream::pair().unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -364,6 +400,7 @@ mod tests {
     fn ssh_uses_no_tty_or_prompts_and_quotes_remote_paths() {
         let ssh = Ssh {
             host: "klide-box",
+            os: crate::remote_platform::HostOs::Linux,
             binary: "~/bin/it's klide",
             data_dir: "~/data/$(touch nope)",
         };

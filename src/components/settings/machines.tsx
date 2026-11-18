@@ -42,7 +42,7 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
   async function install(chooseFile = false): Promise<boolean> {
     setInstalling(true); setInstallError("");
     try {
-      const selected = chooseFile ? await open({ title: "Choose the extracted Linux klide host binary", multiple: false, directory: false }) : undefined;
+      const selected = chooseFile ? await open({ title: "Choose the matching native Klide host binary", multiple: false, directory: false }) : undefined;
       if (chooseFile && typeof selected !== "string") return false;
       await machineInstallHost(machine.id, typeof selected === "string" ? selected : undefined);
       setRevision((r) => r + 1);
@@ -67,7 +67,7 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
     <div id={detailsId} hidden={!detailsOpen} className="klide-machine-details">
       <div className="klide-machine-details-body">
         <p>Tasks run on this machine and keep going when your Mac is off. The machine must stay on. Claude Code uses its login on that machine.</p>
-        <p>Klide downloads a matching, checksum-verified Linux helper and installs it over SSH. Active tasks prevent an update. Advanced: choose a binary for this app revision if you have downloaded it separately.</p>
+        <p>Klide downloads a matching, checksum-verified native helper and installs it over SSH. Active tasks prevent an update. Advanced: choose a binary for this app revision if you have downloaded it separately.</p>
         <GhostButton disabled={disabled || installing} onClick={() => { void install(true); }}>Choose downloaded host binary…</GhostButton>
 
         <div className="klide-machine-detail-heading"><span>SSH · Claude Code</span><GhostButton disabled={checking || disabled} onClick={() => { setRevision((r) => r + 1); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }}>{checking ? "Checking…" : "Check connection"}</GhostButton></div>
@@ -184,7 +184,7 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
         </article>
         <article className="klide-machine-option">
           <span className="klide-machine-option-icon"><MachineIcon size={26} /></span>
-          <div className="klide-machine-option-copy"><h3>Self-hosted</h3><p>Your own Linux computer, home server, or machine on your network.</p></div>
+          <div className="klide-machine-option-copy"><h3>Self-hosted</h3><p>Your own Mac, Windows computer, home server, or machine on your network.</p></div>
           <GhostButton disabled={cannotAdd} onClick={() => add("self-hosted")}>Connect</GhostButton>
         </article>
       </div>

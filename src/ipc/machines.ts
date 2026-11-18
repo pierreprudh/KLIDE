@@ -14,7 +14,10 @@ export type Machine = {
 
 export type MachineFact = { label: string; value: string; tone: MachineFactTone; fix?: string };
 
+export type HostTarget = { os: "linux" | "macos" | "windows"; arch: "x86_64" | "aarch64" };
+
 export type MachineStatus = {
+  target?: HostTarget | null;
   id: string;
   label: string;
   sshHost: string;

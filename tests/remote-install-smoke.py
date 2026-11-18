@@ -23,21 +23,19 @@ def main():
         root = Path(directory)
         commands = root / "commands"
         commands.mkdir()
-        if not shutil.which("flock"):
-            # macOS has flock(2), but does not ship the Linux flock CLI. This
-            # shim uses the inherited open-file description just like that CLI.
-            flock = commands / "flock"
-            flock.write_text("#!/usr/bin/env python3\nimport fcntl, sys\nfcntl.flock(int(sys.argv[-1]), fcntl.LOCK_EX)\n")
-            flock.chmod(0o700)
         bindir = root / ".klide/bin"
         bindir.mkdir(parents=True)
-        staged = bindir / "klide-stage"
+        staged = bindir / ("klide-stage.exe" if os.name == "nt" else "klide-stage")
         shutil.copy2(binary, staged)
-        env = dict(os.environ, HOME=str(root), PATH=str(commands) + ":" + os.environ["PATH"])
-        result = subprocess.run(["sh", str(installer), str(staged), signature], env=env,
+        env = dict(os.environ, HOME=str(root), PATH=str(commands) + os.pathsep + os.environ["PATH"])
+        installed = bindir / ("klide.exe" if os.name == "nt" else "klide")
+        def install(stage, expected):
+            if os.name == "nt":
+                return [str(stage), "ptyd", "install", "--expected", expected, "--destination", str(installed), "--data-dir", str(root / ".klide/run-host")]
+            return ["sh", str(installer), str(stage), expected]
+        result = subprocess.run(install(staged, signature), env=env,
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
-        installed = bindir / "klide"
         pid = None
         relay = smoke.Relay(installed, root / ".klide/run-host", env)
         try:
@@ -46,12 +44,14 @@ def main():
             assert reply["type"] == "pong", reply
             pid = reply["pid"]
             print("PASS: installed host releases the upgrade lock and accepts a fresh relay", flush=True)
-            rejected = bindir / "klide-wrong-version"
+            rejected = bindir / ("klide-wrong-version.exe" if os.name == "nt" else "klide-wrong-version")
             os.link(installed, rejected)
-            result = subprocess.run(["sh", str(installer), str(rejected), "wrong revision"], env=env,
+            result = subprocess.run(install(rejected, "wrong revision"), env=env,
                                     stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
             assert result.returncode != 0 and "does not match" in result.stderr, result
-            assert installed.exists() and not rejected.exists()
+            assert installed.exists()
+            if os.name != "nt":
+                assert not rejected.exists()
             relay.send({"type": "ping"})
             assert relay.read()["pid"] == pid
             print("PASS: a mismatched binary leaves the existing host running", flush=True)
@@ -59,7 +59,7 @@ def main():
             assert relay.read()["type"] == "ok"
         finally:
             relay.close()
-            if pid:
+            if pid and os.name != "nt":
                 try:
                     os.kill(pid, 15)
                 except ProcessLookupError:

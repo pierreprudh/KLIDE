@@ -5,7 +5,6 @@ use crate::pty_wire::{ChatControl, Event, Request, Response};
 use std::io::BufRead;
 use std::sync::OnceLock;
 
-pub(crate) const HOST_BINARY: &str = "~/.klide/bin/klide";
 pub(crate) const HOST_DATA: &str = "~/.klide/run-host";
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -13,6 +12,8 @@ pub(crate) struct Binding {
     pub machine_id: String,
     pub ssh_host: String,
     pub checkout: String,
+    #[serde(default)]
+    pub os: crate::remote_platform::HostOs,
 }
 
 fn binding_path(base: &Path, id: &str) -> Result<PathBuf, String> {
@@ -33,7 +34,8 @@ pub(crate) fn binding(base: &Path, id: &str) -> Result<Option<Binding>, String> 
 fn transport(binding: &Binding) -> crate::pty_transport::Ssh<'_> {
     crate::pty_transport::Ssh {
         host: &binding.ssh_host,
-        binary: HOST_BINARY,
+        binary: binding.os.binary(),
+        os: binding.os,
         data_dir: HOST_DATA,
     }
 }
@@ -178,7 +180,7 @@ pub(super) async fn start(
                     || daemon_client::statuses(&app)?.contains_key(&id) { return Err(run_host::busy(&id)); }
                 let machine = crate::machines::get(machine_id.as_deref().ok_or("No remote machine selected")?).ok_or("Remote machine is no longer configured")?;
                 let root = request.workspace_root.as_deref().ok_or("Open a project before starting a remote task")?;
-                let binding = Binding { machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root) };
+                let binding = Binding { os: crate::machine_install::detect_target(&machine.ssh_host)?.os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root) };
                 // Persist before sending: a dropped start response must never
                 // allow a later retry to silently create a local writer.
                 crate::durable::write_atomic_private(&binding_path(&base, &id)?, &serde_json::to_vec(&binding).map_err(|e| e.to_string())?)?;
@@ -565,8 +567,10 @@ pub(crate) fn changes_on_host(data: &Path, id: &str) -> Result<(String, String, 
         .filter(|path| !path.is_empty())
         .collect();
     for path in paths.iter().take(32) {
-        use std::os::unix::ffi::OsStrExt;
-        let path = std::ffi::OsStr::from_bytes(path);
+        #[cfg(unix)]
+        let path = { use std::os::unix::ffi::OsStrExt; std::ffi::OsStr::from_bytes(path) };
+        #[cfg(windows)]
+        let path = std::ffi::OsStr::new(std::str::from_utf8(path).map_err(|_|"Git returned an invalid Windows path")?);
         if std::fs::symlink_metadata(root.join(path))
             .map_err(|e| e.to_string())?
             .len()
@@ -585,7 +589,7 @@ pub(crate) fn changes_on_host(data: &Path, id: &str) -> Result<(String, String, 
                 "--no-ext-diff",
                 "--no-textconv",
                 "--",
-                "/dev/null",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
             ])
             .arg(path)
             .output()
@@ -741,6 +745,7 @@ mod tests {
         let path = binding_path(&base, "convo").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let placed = Binding {
+            os: crate::remote_platform::HostOs::Linux,
             machine_id: "box".into(),
             ssh_host: "my-box".into(),
             checkout: "~/code/project".into(),

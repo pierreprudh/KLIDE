@@ -1,73 +1,49 @@
-//! Short cross-process leases for admission and durable schedule controls.
-//! The kernel releases a lease if either the desktop or service crashes.
+//! Cross-process leases for admission and durable schedule controls. File
+//! locks use flock on Unix and LockFileEx on Windows and die with the owner.
 use std::path::Path;
-
 pub(crate) struct Lease {
-    #[cfg(unix)]
     file: std::fs::File,
 }
-
 pub(crate) fn exclusive(path: &Path) -> Result<Lease, String> {
     lock(path, false)?.ok_or("Could not acquire the process lease".into())
 }
-
-#[cfg(unix)]
 pub(crate) fn try_exclusive(path: &Path) -> Result<Option<Lease>, String> {
     lock(path, true)
 }
-
 fn lock(path: &Path, nonblocking: bool) -> Result<Option<Lease>, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
     {
-        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| e.to_string())?;
-        loop {
-            if unsafe {
-                libc::flock(
-                    file.as_raw_fd(),
-                    libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 },
-                )
-            } == 0
-            {
-                return Ok(Some(Lease { file }));
-            }
-            let error = std::io::Error::last_os_error();
-            if nonblocking && error.kind() == std::io::ErrorKind::WouldBlock {
-                return Ok(None);
-            }
-            if error.kind() != std::io::ErrorKind::Interrupted {
-                return Err(error.to_string());
-            }
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, nonblocking);
-        Ok(Some(Lease {}))
+    let file = options.open(path).map_err(|e| e.to_string())?;
+    loop {
+        let result = if nonblocking {
+            file.try_lock()
+        } else {
+            file.lock().map_err(std::fs::TryLockError::Error)
+        };
+        match result {
+            Ok(()) => return Ok(Some(Lease { file })),
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(std::fs::TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Interrupted => {
+                continue
+            }
+            Err(e) => return Err(e.to_string()),
+        }
     }
 }
-
 impl Drop for Lease {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
-        }
+        let _ = self.file.unlock();
     }
 }
-
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

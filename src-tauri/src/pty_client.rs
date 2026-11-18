@@ -4,33 +4,19 @@
 //! per call, and the subscribe upgrade. What to DO with responses and events
 //! stays in pty.rs, next to the in-process host it mirrors.
 
-//! Unix-only transport, but this module is NOT `#![cfg(unix)]` as a whole.
-//! An inner file-level cfg empties a module instead of removing it, so
-//! `pty.rs`'s unconditional `use crate::pty_client;` plus its calls used to
-//! fail to resolve on every non-unix target. The unix implementation is gated
-//! item by item, and a `cfg(not(unix))` stub answers the same three calls with
-//! "there is no daemon here" — which is exactly what `pty.rs` already handles,
-//! since a `None`/`Err` from this layer means "fall back to the in-process
-//! host".
-
 use crate::pty_wire::{Request, Response};
 use std::io::BufRead;
 use std::path::Path;
 
-#[cfg(unix)]
 use crate::pty_transport::{Local, Transport};
-#[cfg(unix)]
 use std::io::{BufReader, Write};
-#[cfg(unix)]
 use std::time::Duration;
 
-#[cfg(unix)]
 /// One request → one response over a fresh authenticated connection.
 pub fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
     request_on(&Local(data_dir), request)
 }
 
-#[cfg(unix)]
 pub(crate) fn request_on(transport: &impl Transport, request: &Request) -> Result<Response, String> {
     let mut connection = transport.connect()?;
     let line = serde_json::to_string(request).map_err(|e| e.to_string())?;
@@ -89,7 +75,6 @@ fn select_chat_host(
     }
 }
 
-#[cfg(unix)]
 /// Ensure a compatible daemon is serving. An idle older host is replaced;
 /// an older host with active work is left running and the new start is refused.
 /// Both the package version and protocol revision participate in compatibility.
@@ -97,13 +82,11 @@ pub fn ensure_daemon(data_dir: &Path) -> Result<(), String> {
     ensure(data_dir, false)
 }
 
-#[cfg(unix)]
 /// [`ensure_daemon`] for a background chat host: the same binary as this app.
 pub fn ensure_chat_daemon(data_dir: &Path) -> Result<(), String> {
     ensure(data_dir, true)
 }
 
-#[cfg(unix)]
 fn ensure(data_dir: &Path, strict: bool) -> Result<(), String> {
     match request(data_dir, &Request::Ping) {
         Ok(Response::Pong { version, protocol, build, .. })
@@ -140,10 +123,10 @@ fn ensure(data_dir: &Path, strict: bool) -> Result<(), String> {
     Err("ptyd did not come up".to_string())
 }
 
-#[cfg(unix)]
 /// Launch `klide ptyd` detached: own process group so a Ctrl-C aimed at a
 /// terminal-launched dev app doesn't take the daemon (and its sessions) down
 /// with it, and no inherited stdio so it cannot hold the app's pipes open.
+#[cfg(unix)]
 fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -160,7 +143,19 @@ fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn spawn_daemon(data_dir: &Path) -> Result<(),String> {
+    use std::os::windows::process::CommandExt;
+    // Modern Windows OpenSSH permits job breakaway. Refuse rather than
+    // silently start a host that will die with the SSH session if it does not.
+    std::process::Command::new(std::env::current_exe().map_err(|e|e.to_string())?)
+        .arg("ptyd").arg("--data-dir").arg(data_dir)
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .creation_flags(0x01000000 | 0x00000200 | 0x00000008)
+        .spawn().map_err(|e|format!("Cannot detach the Run host from Windows OpenSSH. Ensure the SSH server allows job breakaway: {e}"))?;
+    Ok(())
+}
+
 /// Open the event stream: a connection upgraded with `subscribe`, handed back
 /// as a line reader once the daemon acks. The caller owns the read loop; EOF
 /// or an error there means "reconnect if you still care".
@@ -168,7 +163,6 @@ pub fn subscribe(data_dir: &Path) -> Result<Box<dyn BufRead + Send>, String> {
     subscribe_on(&Local(data_dir))
 }
 
-#[cfg(unix)]
 pub(crate) fn subscribe_on(transport: &impl Transport) -> Result<Box<dyn BufRead + Send>, String> {
     let mut connection = transport.connect()?;
     let line = serde_json::to_string(&Request::Subscribe).map_err(|e| e.to_string())?;
@@ -289,23 +283,3 @@ mod tests {
     }
 }
 
-// ── No daemon off unix ───────────────────────────────────────────────────────
-// `ptyd` leans on a Unix domain socket and on a child surviving its parent, so
-// there is no daemon to talk to here. Every caller in `pty.rs` already treats a
-// failure from this layer as "use the in-process host", which is the correct
-// behaviour on these targets rather than a degraded one.
-
-#[cfg(not(unix))]
-pub fn request(_data_dir: &Path, _request: &Request) -> Result<Response, String> {
-    Err("ptyd is not available on this platform".to_string())
-}
-
-#[cfg(not(unix))]
-pub fn ensure_daemon(_data_dir: &Path) -> Result<(), String> {
-    Err("ptyd is not available on this platform".to_string())
-}
-
-#[cfg(not(unix))]
-pub fn subscribe(_data_dir: &Path) -> Result<Box<dyn BufRead + Send>, String> {
-    Err("ptyd is not available on this platform".to_string())
-}

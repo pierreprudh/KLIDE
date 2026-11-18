@@ -32,7 +32,8 @@
 .klide-machine-methods strong, .klide-machine-candidates strong { font-weight: 500; }
 .klide-machine-methods span span, .klide-machine-candidates span span, .klide-machine-candidates code { color: var(--fg-subtle); font-size: 12px; overflow-wrap: anywhere; }
 .klide-machine-candidates { max-height: 320px; overflow: auto; margin-bottom: 18px; }
-.klide-machine-candidates > button:disabled { opacity: .55; cursor: default; }
+.klide-machine-candidates > button:disabled, .klide-machine-candidates > button[data-online="false"] { opacity: .45; }
+.klide-machine-candidates > button:disabled { cursor: default; }
 .klide-machine-availability { width: 9px; height: 9px; flex: 0 0 9px; box-sizing: border-box; border-radius: 50%; border: 1.5px dashed var(--fg-subtle); background: transparent; }
 .klide-machine-availability[data-online="true"] { border: 1.5px solid var(--success); background: var(--success); }
 .klide-machine-discovery-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
