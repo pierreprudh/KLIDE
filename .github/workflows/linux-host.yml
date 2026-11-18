@@ -11,6 +11,10 @@ on:
       - 'tests/windows-openssh-smoke.ps1'
       - '.github/workflows/linux-host.yml'
 
+concurrency:
+  group: native-host-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -67,14 +71,29 @@ jobs:
           else
             cargo build --bin klide --features remote-host --manifest-path src-tauri/Cargo.toml "${flags[@]}"
           fi
-      - name: Native disconnect, replay and installation
+      - name: Check standalone Windows dependencies
+        if: runner.os == 'Windows' && env.PROFILE == 'release'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $dumpbin = & $vswhere -latest -products '*' -find 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe' | Select-Object -First 1
+          if (!$dumpbin) { throw 'Cannot inspect native Windows helper dependencies' }
+          $dependencies = & $dumpbin /DEPENDENTS src-tauri/target/release/klide.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the Windows helper' }
+          $dependencies
+          if ($dependencies -match '(?i)(VCRUNTIME|MSVCP|CONCRT)[^ ]*\.dll|WebView2Loader\.dll') {
+            throw 'The SSH helper must not depend on an unbundled VC runtime or WebView2 loader DLL'
+          }
+      - name: Native disconnect and replay
         timeout-minutes: 4
         shell: bash
         run: |
           binary="src-tauri/target/$PROFILE/klide"
           if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
           python -u tests/remote-machine-smoke.py "$binary"
-          python -u tests/remote-install-smoke.py "$binary"
+          # Windows installation must be launched by the OpenSSH service,
+          # outside GitHub's job container (which forbids breakaway).
+          if [ "$RUNNER_OS" != Windows ]; then python -u tests/remote-install-smoke.py "$binary"; fi
       - name: Native Windows over OpenSSH
         if: runner.os == 'Windows'
         timeout-minutes: 4
@@ -85,6 +104,7 @@ jobs:
         run: |
           cargo test --lib --manifest-path src-tauri/Cargo.toml remote_platform::
           cargo test --lib --manifest-path src-tauri/Cargo.toml process_lock::
+          cargo test --lib --manifest-path src-tauri/Cargo.toml durable::
           cargo test --lib --manifest-path src-tauri/Cargo.toml delegate::child::windows_job::
       - name: Package helper and checksum
         shell: python

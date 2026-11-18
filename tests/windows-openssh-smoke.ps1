@@ -43,16 +43,32 @@ Host native-smoke
   StrictHostKeyChecking yes
   ConnectTimeout 10
 "@ | Set-Content -Encoding ascii "$root/client_config"
-$process = Start-Process -FilePath $server -ArgumentList @('-D','-e','-f',"$root/sshd_config") -PassThru -RedirectStandardError "$root/server.log"
+# Service Control Manager launches sshd outside the CI step's non-breakaway
+# job, as a real Windows OpenSSH installation does. Use a unique service and
+# config; the VM's existing SSH service/configuration are never changed.
+$name = 'KlideSmoke-' + [guid]::NewGuid().ToString('N')
+$binaryPath = '"' + $server + '" -f "' + $root + '/sshd_config" -E "' + $root + '/server.log"'
+New-Service -Name $name -BinaryPathName $binaryPath -StartupType Manual | Out-Null
 try {
-    Start-Sleep -Seconds 2
-    if ($process.HasExited) { throw (Get-Content "$root/server.log" -Raw) }
+    Start-Service -Name $name
+    (Get-Service -Name $name).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
     $env:KLIDE_SMOKE_SSH_CONFIG = "$root/client_config"
     & python -u tests/remote-machine-smoke.py $Binary
     if ($LASTEXITCODE -ne 0) { throw 'Windows OpenSSH disconnect/replay acceptance failed' }
+    # Exercise the actual native installer from an SSH session as well. A
+    # direct CI-shell launch is intentionally refused by its outer job policy.
+    function Quote-Literal([string]$value) { return "'" + $value.Replace("'", "''") + "'" }
+    $python = (Get-Command python).Source
+    $installerTest = (Resolve-Path tests/remote-install-smoke.py).Path
+    $nativeBinary = (Resolve-Path $Binary).Path
+    $script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(`$false); `$env:PYTHONUTF8='1'; `$env:PATH=" + (Quote-Literal $env:PATH) + "; & " + (Quote-Literal $python) + " -u " + (Quote-Literal $installerTest) + " " + (Quote-Literal $nativeBinary) + "; exit `$LASTEXITCODE"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    & ssh -F "$root/client_config" native-smoke "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
+    if ($LASTEXITCODE -ne 0) { throw 'Windows OpenSSH installer acceptance failed' }
 } finally {
     Remove-Item Env:KLIDE_SMOKE_SSH_CONFIG -ErrorAction SilentlyContinue
-    Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
-    Get-Content "$root/server.log"
+    Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+    & sc.exe delete $name | Out-Null
+    if (Test-Path "$root/server.log") { Get-Content "$root/server.log" }
     Remove-Item -Recurse -Force $root
 }

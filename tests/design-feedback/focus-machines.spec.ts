@@ -99,7 +99,10 @@ test("connection choice lists Tailscale devices before manual entry", async ({ p
   await dialog.getByRole("button", { name: /^Tailscale/ }).click();
   await expect(dialog.getByRole("status")).toHaveText("Looking for Tailscale devices");
   await expect(dialog.getByRole("button", { name: /Linux dev/ })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /Mac mini/ })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /Mac mini/ })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: /Windows PC/ })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: /Phone/ })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: /Build server/ })).toHaveCSS("opacity", "0.45");
   await page.screenshot({ path: "artifacts/design-feedback/add-machine-devices.png" });
   await dialog.getByRole("button", { name: /Linux dev/ }).click();
   await expect(dialog.getByLabel("SSH host", { exact: true })).toHaveValue("100.64.0.2");

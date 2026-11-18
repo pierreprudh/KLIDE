@@ -26,7 +26,9 @@ let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-b
         machines: [
           { label: "Linux dev", sshHost: "100.64.0.2", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
           { label: "Build server", sshHost: "100.64.0.4", source: "tailscale", online: false, supported: true, detail: "Tailscale · SSH check required", machine: null },
-          { label: "Mac mini", sshHost: "100.64.0.3", source: "tailscale", online: true, supported: false, detail: "Linux remote hosts only", machine: null },
+          { label: "Mac mini", sshHost: "100.64.0.3", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
+          { label: "Windows PC", sshHost: "100.64.0.5", source: "tailscale", online: true, supported: true, detail: "Tailscale · SSH check required", machine: null },
+          { label: "Phone", sshHost: "100.64.0.6", source: "tailscale", online: true, supported: false, detail: "No native SSH helper for this operating system", machine: null },
         ], message: "Choose a device on your Tailscale network. SSH is checked next.",
       };
       return { machines: machines.map((machine) => ({ label: machine.label ?? machine.id, sshHost: machine.sshHost, source: "saved", online: null, supported: true, detail: "Saved in Klide", machine })), message: args.method === "vpn" ? "Connect your VPN first, then choose or add an SSH address." : "Choose a saved machine or add an SSH address." };

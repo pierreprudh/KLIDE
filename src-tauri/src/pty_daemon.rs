@@ -33,8 +33,6 @@ use crate::pty_host::{PtyEventSink, PtyExitOutcome, SessionHost, SpawnSpec};
 pub use crate::pty_wire::{Event, Request, Response};
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
-#[cfg(all(test, unix))]
-use std::io::BufRead;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as HostListener, UnixStream as HostStream};
 #[cfg(windows)]
