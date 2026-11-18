@@ -15,14 +15,16 @@ them.
 
 ## Remote machines — cross-platform deployment next, 2026-11-18
 
-Parked for the next session: make remote execution and distribution ready for
-macOS and Windows, beyond the current x86_64 Linux host support.
+In progress: native macOS (Apple silicon and Intel) and Windows x86_64 over
+OpenSSH. Windows uses native processes and PowerShell; WSL is not required.
+The installer selects OS/architecture artifacts and offers offline downloads.
+The native CI matrix gates helper publication on disconnect/replay, installer
+and process-lock acceptance; Windows also has a localhost OpenSSH test.
 
 - [ ] macOS remote hosts (including Mac mini): build matching arm64 and
   x86_64 helpers; support installation, remote CLI login and a detached
   lifecycle that survives the client disconnecting.
-- [ ] Windows remote hosts: decide and label native Windows versus WSL
-  support; implement and verify OpenSSH setup, process ownership, IPC,
+- [ ] Windows remote hosts: finish native OpenSSH acceptance of process ownership, IPC,
   Windows paths and shell quoting. Do not advertise native Windows support
   based only on a WSL/Linux test.
 - [ ] Make discovery, readiness and the guided installer choose the matching

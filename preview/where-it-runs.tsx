@@ -12,7 +12,7 @@ import "../src/styles/tokens.css";
 
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.theme = params.get("theme") ?? "dark";
-const READY = params.get("state") !== "offline";
+const READY = params.get("state") !== "offline" && !params.has("offline");
 const PICK = params.get("pick") === "1";
 
 let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-box", sshHost: "klide-box" }];
@@ -37,15 +37,17 @@ let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-b
       machines = [...machines.filter((m) => m.id !== machine.id), machine];
       return machines;
     }
+    if (cmd === "machine_prepare_host") { (window as any).__MACHINE_PREPARED_TARGET__ = args.target; return null; }
     if (cmd === "machine_check") {
       if (params.has("delay")) await new Promise((resolve) => setTimeout(resolve, 1500));
       const machine = machines.find((m) => m.id === args.id)!;
       return {
-        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: READY,
+        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: READY && !params.has("needsInstall"),
+        target: { os: params.get("system") ?? "linux", arch: params.get("system") === "macos" ? "aarch64" : "x86_64" },
         caption: READY ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: READY ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
-        setup: { connection: READY ? "connected" : "offline", host: "ready", claude: "ready", project: "ready" },
+        setup: { connection: READY ? "connected" : "offline", host: params.has("needsInstall") ? "missing" : "ready", claude: params.has("needsInstall") ? "missing" : "ready", project: "ready" },
       };
     }
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];

@@ -1,19 +1,9 @@
 //! The `ptyd` wire vocabulary: one [`Request`] per line in, one [`Response`]
 //! line back, and [`Event`]s pushed to subscribed connections.
 //!
-//! This is deliberately **not** behind `#![cfg(unix)]`, even though the daemon
-//! and its client are. The transport is Unix-only — a domain socket, and a
-//! daemon that outlives its parent — but these three enums are pure serde over
-//! types that already live in the portable [`crate::pty_host`]. They were
-//! unix-gated only by living in the same file as the socket code, and that had
-//! a real cost: `pty.rs` imports them unconditionally, so on any non-unix
-//! target the imports failed to resolve and the whole delegate layer stopped
-//! compiling. Splitting them out is what lets a `cfg(not(unix))` client stub
-//! typecheck.
-//!
-//! Note both enums are hand-maintained lists of the same operations
-//! `pty_host::SessionHost` exposes as methods. Keeping them in step is manual;
-//! `Recent` is the evidence — it is served but never sent.
+//! Shared by Unix domain sockets, authenticated Windows loopback endpoints,
+//! and SSH stdio relays. Keeping the vocabulary portable lets clients replay
+//! the same durable transcript regardless of the host operating system.
 
 pub const PROTOCOL_VERSION: u32 = 3;
 
@@ -208,15 +198,14 @@ pub enum Event {
 mod tests {
     //! The fence these types were behind, pinned.
     //!
-    //! `pty_daemon.rs` and `pty_client.rs` carry `#![cfg(unix)]`, and an inner
+    //! Historically `pty_daemon.rs` and `pty_client.rs` carried `#![cfg(unix)]`; an inner
     //! file-level cfg *empties* a module rather than removing it — so on a
     //! non-unix target the modules still existed, and every name inside them
     //! stopped resolving. `pty.rs` imports the wire enums and calls the client
     //! unconditionally, so the entire delegate layer failed to compile off unix.
     //!
-    //! Only the host target is installed here, so these read the source rather
-    //! than cross-compiling. They cannot prove a Windows build succeeds; they do
-    //! fail if the split is undone.
+    //! These source guards catch reintroduced module gates. Native CI builds
+    //! and runtime smoke tests provide the platform acceptance separately.
 
     /// Is `src` gated as a whole? Matches the inner attribute as its own line,
     /// so a doc comment that merely *mentions* it doesn't count.

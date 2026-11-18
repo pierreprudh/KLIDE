@@ -31,6 +31,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
     env:
+      PYTHONUTF8: "1"
       KLIDE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       PROFILE: ${{ github.event_name == 'workflow_dispatch' && 'release' || 'debug' }}
     steps:
@@ -42,6 +43,7 @@ jobs:
         with:
           workspaces: src-tauri
           key: native-host-${{ env.PROFILE }}
+          cache-on-failure: true
       - name: Tauri system packages
         if: runner.os == 'Linux'
         run: |
@@ -55,7 +57,16 @@ jobs:
           mkdir -p dist
           flags=()
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
-          cargo build --bin klide --features remote-host --manifest-path src-tauri/Cargo.toml "${flags[@]}"
+          # SSH installs a single Windows executable, without an MSI that
+          # could install the Visual C++ runtime alongside it.
+          if [ "$RUNNER_OS" = Windows ] && [ "$PROFILE" = release ]; then
+            export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C target-feature=+crt-static"
+            cargo build --target x86_64-pc-windows-msvc --bin klide --features remote-host --manifest-path src-tauri/Cargo.toml "${flags[@]}"
+            mkdir -p src-tauri/target/release
+            cp src-tauri/target/x86_64-pc-windows-msvc/release/klide.exe src-tauri/target/release/klide.exe
+          else
+            cargo build --bin klide --features remote-host --manifest-path src-tauri/Cargo.toml "${flags[@]}"
+          fi
       - name: Native disconnect, replay and installation
         timeout-minutes: 4
         shell: bash

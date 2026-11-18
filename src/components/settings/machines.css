@@ -66,8 +66,10 @@
 .klide-machine-setup .klide-machine-actions { flex-wrap: wrap; }
 .klide-machine-terminal { height: 280px; padding: 12px; margin-top: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--terminal-bg); overflow: hidden; }
 .klide-machine-project { display: grid; gap: 6px; max-width: 520px; }
-.klide-machine-project input { min-width: 0; width: 100%; box-sizing: border-box; }
+.klide-machine-project :is(input, select) { min-width: 0; width: 100%; box-sizing: border-box; }
 .klide-machine-setup details, .klide-machine-form details { overflow-wrap: anywhere; }
 .klide-machine-setup summary, .klide-machine-form summary { cursor: pointer; color: var(--fg-subtle); }
 .klide-machine-setup details code { font: 11px/1.8 var(--font-mono); }
 @media (max-width: 700px) { .klide-machine-setup { margin: 0 16px 20px; } }
+
+.klide-machine-project select.klide-field { padding: 10px 14px; border-radius: 12px; min-height: 40px; }

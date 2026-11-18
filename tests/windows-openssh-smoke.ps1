@@ -4,6 +4,7 @@ param([Parameter(Mandatory=$true)][string]$Binary)
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandArgumentPassing = 'Standard'
 $server = "$env:WINDIR\System32\OpenSSH\sshd.exe"
+if (!(Test-Path $server)) { Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null }
 if (!(Test-Path $server)) { throw 'Native Windows acceptance requires the OpenSSH Server Windows capability.' }
 $root = Join-Path $env:RUNNER_TEMP ('klide-sshd-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $root | Out-Null

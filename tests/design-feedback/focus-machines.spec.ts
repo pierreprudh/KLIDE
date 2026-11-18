@@ -121,3 +121,33 @@ test("missing VPN client still allows a manual private address", async ({ page }
   await dialog.getByRole("button", { name: "Add a machine", exact: true }).click();
   await expect(dialog.getByText("Enter the machine’s private address while your VPN is connected.")).toBeVisible();
 });
+
+for (const [system, copy] of [["macos", "Apple silicon and Intel Macs"], ["windows", "Native Windows over OpenSSH"]]) {
+  test(`guided setup explains ${system} installation`, async ({ page }) => {
+    await page.goto(`/preview/where-it-runs.html?state=empty&system=${system}&needsInstall=1&theme=klide-light`);
+    await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+    await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+    await enterManualSsh(page);
+    const dialog = page.getByRole("dialog", { name: "Add a machine" });
+    await dialog.getByLabel("SSH host", { exact: true }).fill("dev@machine");
+    await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(dialog.getByRole("heading", { name: "Prepare this machine" })).toBeVisible();
+    await expect(dialog.getByText(copy, { exact: false })).toBeVisible();
+    await page.screenshot({ path: `artifacts/design-feedback/add-machine-${system}-install.png` });
+  });
+}
+
+test("offline setup downloads the chosen native helper without reaching the machine", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?state=empty&offline=1&theme=klide-light");
+  await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+  await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+  await enterManualSsh(page);
+  const dialog = page.getByRole("dialog", { name: "Add a machine" });
+  await dialog.getByLabel("SSH host", { exact: true }).fill("dev@machine");
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await dialog.getByLabel("Machine system").selectOption("macos:aarch64");
+  await dialog.getByRole("button", { name: "Prepare setup files on this Mac" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Setup files are saved on this Mac. Turn on the machine and continue here when you’re ready.");
+  expect(await page.evaluate(() => (window as any).__MACHINE_PREPARED_TARGET__)).toEqual({ os: "macos", arch: "aarch64" });
+  await expect(dialog.getByLabel("Machine system")).toHaveCSS("padding-left", "14px");
+});

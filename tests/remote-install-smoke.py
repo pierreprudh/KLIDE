@@ -55,6 +55,20 @@ def main():
             relay.send({"type": "ping"})
             assert relay.read()["pid"] == pid
             print("PASS: a mismatched binary leaves the existing host running", flush=True)
+            # Replace an idle host while its old relay still maps the installed
+            # executable. Windows must wait for that relay to release the image.
+            replacement = bindir / ("klide-replacement.exe" if os.name == "nt" else "klide-replacement")
+            shutil.copy2(binary, replacement)
+            result = subprocess.run(install(replacement, signature), env=env,
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+            assert result.returncode == 0, result.stderr
+            relay.close()
+            relay = smoke.Relay(installed, root / ".klide/run-host", env)
+            relay.send({"type": "ping"})
+            updated = relay.read()
+            assert updated["type"] == "pong" and updated["pid"] != pid, updated
+            pid = updated["pid"]
+            print("PASS: an idle upgrade releases the old executable and starts a reconnectable host", flush=True)
             relay.send({"type": "shutdown"})
             assert relay.read()["type"] == "ok"
         finally:

@@ -174,7 +174,7 @@ emit({'type':'result','subtype':'success','result':'controlled task completed','
                     assert event["event"]["type"] == "run_result", event
                     break
             assert saw_live
-            print("PASS: launch → disconnect every client → replay → resume ordered streaming → completion")
+            print("PASS: launch -> disconnect every client -> replay -> resume ordered streaming -> completion")
             stream.close()
             relays.remove(stream)
             # A fresh process can recover a settled result without any GUI state.

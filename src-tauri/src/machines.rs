@@ -448,6 +448,21 @@ mod tests {
     }
 
     #[test]
+    fn native_windows_checkout_paths_are_accepted_without_allowing_drive_relative_paths() {
+        let mut machine=box_machine();
+        for path in ["C:/Users/dev/project", "D:\\Projects\\user's app", "~/code/app"] {
+            machine.checkouts.insert("/Users/local/app".into(),path.into());
+            assert!(validate_machine(&machine).is_ok(),"{path}");
+        }
+        for path in ["C:relative", "relative/app", "C:/project\nexit"] {
+            machine.checkouts.insert("/Users/local/app".into(),path.into());
+            assert!(validate_machine(&machine).is_err(),"{path}");
+        }
+        let script=windows_probe(Some("C:/user's/$env:SECRET; app"));
+        assert!(script.contains("'C:/user''s/$env:SECRET; app'"));
+    }
+
+    #[test]
     fn machine_settings_reject_ssh_options_and_invalid_checkout_paths() {
         let mut machine = box_machine();
         assert!(validate_machine(&machine).is_ok());

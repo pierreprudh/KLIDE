@@ -211,6 +211,43 @@ mod tests {
     }
 
     #[test]
+    fn setup_commands_use_the_native_windows_shell_and_remote_login() {
+        let machine = crate::machines::Machine {
+            id: "mini".into(),
+            label: None,
+            ssh_host: "dev@machine".into(),
+            checkouts: Default::default(),
+        };
+        let login = script(
+            &SetupAction::SignIn,
+            &machine,
+            None,
+            crate::remote_platform::HostOs::Windows,
+        )
+        .unwrap();
+        assert!(login.contains("& claude auth login; exit $LASTEXITCODE"));
+        assert!(!login.contains("export PATH"));
+        let install = script(
+            &SetupAction::Prepare,
+            &machine,
+            None,
+            crate::remote_platform::HostOs::Windows,
+        )
+        .unwrap();
+        assert!(install.contains("https://claude.ai/install.ps1"));
+        assert!(install.contains("Git.Git"));
+        let mac = script(
+            &SetupAction::Prepare,
+            &machine,
+            None,
+            crate::remote_platform::HostOs::Macos,
+        )
+        .unwrap();
+        assert!(mac.contains("Darwin)"));
+        assert!(!mac.contains("requires x86_64 Linux"));
+    }
+
+    #[test]
     fn cloning_rejects_credentials_and_executable_transports() {
         for url in [
             "https://user:secret@github.com/a/b",

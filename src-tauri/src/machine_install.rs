@@ -155,14 +155,14 @@ fn artifact(cache: &Path, target: crate::remote_platform::HostTarget) -> Result<
             }
             size += count;
             if size > 128 * 1024 * 1024 {
-                return Err("remote helper exceeds the download limit".into());
+                return Err("Remote helper exceeds the download limit".into());
             }
             digest.update(&buffer[..count]);
             file.write_all(&buffer[..count])
                 .map_err(|e| e.to_string())?;
         }
         if !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(checksum) {
-            return Err("remote helper checksum did not match. Retry the download.".into());
+            return Err("Remote helper checksum did not match. Retry the download.".into());
         }
         file.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(&temporary, &binary).map_err(|e| e.to_string())?;
@@ -337,5 +337,17 @@ pub fn install_main(destination: &Path, data_dir: &Path, expected: &str) -> i32 
             eprintln!("{error}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn scp_addresses_preserve_usernames_and_bracket_ipv6() {
+        assert_eq!(scp_host("dev@100.64.0.2"), "dev@100.64.0.2");
+        assert_eq!(scp_host("dev@fd7a:115c:a1e0::1"), "dev@[fd7a:115c:a1e0::1]");
+        assert_eq!(scp_host("[::1]"), "[::1]");
+        assert_eq!(scp_host("my-mini"), "my-mini");
     }
 }

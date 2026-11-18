@@ -14,7 +14,7 @@
 .klide-add-machine-form { display: grid; gap: 20px; font-size: 13px; }
 .klide-add-machine-form p { margin: 0; color: var(--fg-subtle); line-height: 1.7; }
 .klide-add-machine-form label { display: grid; gap: 7px; }
-.klide-add-machine-dialog input.klide-field { padding: 10px 14px; }
+.klide-add-machine-dialog :is(input, select).klide-field { padding: 10px 14px; }
 .klide-add-machine-form input { width: 100%; min-height: 42px; box-sizing: border-box; border-radius: 12px; }
 .klide-add-machine-form footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 .klide-add-machine-dialog .klide-button { border-radius: 12px; min-height: 36px; }
