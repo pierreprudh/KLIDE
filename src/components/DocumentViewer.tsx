@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatBytes } from "./settings/storage";
+import { formatBytes } from "../bytes";
 import { CloseIcon } from "../icons";
 import { Z } from "../zLayers";
 import { documentAppLogo } from "../documentAppLogo";

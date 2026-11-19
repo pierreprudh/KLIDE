@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { machineSetupStep } from "./machineSetupSteps";
+import { canVisitMachineSetupStep, machineSetupStep } from "./machineSetupSteps";
 import type { MachineStatus } from "../../ipc/machines";
 const ready: MachineStatus = { id: "dev", label: "Dev", sshHost: "dev", ready: true, caption: "Ready", checkout: "~/code/app", facts: [], setup: { connection: "connected", host: "ready", claude: "ready", project: "ready" } };
 function status(changes: Partial<MachineStatus["setup"]>): MachineStatus { return { ...ready, ready: false, setup: { ...ready.setup, ...changes } }; }
 describe("guided SSH setup", () => {
+  it("lets ready machines revisit setup while gating unverified prerequisites", () => {
+    for (const step of ["connection", "software", "signIn", "project", "ready"] as const) expect(canVisitMachineSetupStep(step, ready, true)).toBe(true);
+    expect(canVisitMachineSetupStep("software", status({ connection: "offline" }), true)).toBe(false);
+    expect(canVisitMachineSetupStep("signIn", status({ host: "missing" }), true)).toBe(false);
+    expect(canVisitMachineSetupStep("connection", null, true)).toBe(true);
+    expect(canVisitMachineSetupStep("project", ready, false)).toBe(false);
+  });
   it("never advances while disconnected, even with stale ready facts", () => {
     expect(machineSetupStep(null, true)).toBe("connection");
     for (const connection of ["offline", "needsTrust", "needsAuthentication"] as const) expect(machineSetupStep(status({ connection }), true)).toBe("connection");

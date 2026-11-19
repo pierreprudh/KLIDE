@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Z } from "../zLayers";
 import { SHORTCUTS, SHORTCUT_GROUPS } from "../shortcuts";
 import { Kbd } from "./Kbd";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 // The keyboard-shortcuts cheatsheet — a centered, read-only reference so
 // keyboard-only users can discover what's bound. Opened with ⌘/ or "?", closed
@@ -11,6 +12,8 @@ import { Kbd } from "./Kbd";
 
 export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, true);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -23,6 +26,7 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Keyboard shortcuts"

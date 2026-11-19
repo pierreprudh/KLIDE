@@ -8,7 +8,8 @@ import { artifactActionLabel, artifactPreview } from "../../artifacts";
 import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon, UndoIcon } from "../../icons";
 import { gitStatusMarkForLetter } from "../../gitStatusMark";
 import { ChangedFileLabel } from "../ChangedFileLabel";
-import { formatBytes } from "../settings/storage";
+import { ConfirmButton } from "../ConfirmButton";
+import { formatBytes } from "../../bytes";
 import { Z } from "../../zLayers";
 import "./completionCard.css";
 
@@ -248,8 +249,9 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
             every file's diff in place. Undo takes the run back. */}
         <button type="button" className={onReview ? "klide-result-primary" : undefined} aria-expanded={onReview ? undefined : allOpen}
           onClick={seeChanges}>{onReview ? <>See changes <span aria-hidden="true">↗</span></> : allOpen ? "Hide changes" : "See changes"}</button>
-        {revert && diffs && diffs.size > 0 && <button type="button" className="klide-result-revert" disabled={disabled || revert.busy}
-          title="Undo every file change this run made" onClick={revert.onRevert}><UndoIcon size={12} /><span className="klide-result-revert-label">{revert.busy ? "Undoing…" : "Undo"}</span></button>}
+        {revert && diffs && diffs.size > 0 && <ConfirmButton className="klide-result-revert" disabled={disabled || revert.busy}
+          title="Undo every file change this run made" confirmLabel="Confirm undo?"
+          onConfirm={revert.onRevert}><UndoIcon size={12} /><span className="klide-result-revert-label">{revert.busy ? "Undoing…" : "Undo"}</span></ConfirmButton>}
         {onOpenDesign && touchesInterface(completion.files) && <button type="button" onClick={() => { onDone(); onOpenDesign(); }}
           title="See the changed interface running, and review it">Open in Design</button>}
       </footer>}

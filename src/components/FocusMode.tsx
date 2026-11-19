@@ -544,6 +544,7 @@ export function InlineMenu({
   options,
   selected,
   onSelect,
+  onOpen,
   mono = false,
   leading,
   header,
@@ -557,6 +558,7 @@ export function InlineMenu({
   options: MenuOption[];
   selected: string | number | undefined;
   onSelect: (value: string | number | undefined) => void;
+  onOpen?: () => void;
   mono?: boolean;
   /** Optional glyph before the value (the provider trigger's logo). */
   leading?: ReactNode;
@@ -610,6 +612,7 @@ export function InlineMenu({
     const left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - width - 8));
     setMenuPos({ bottom: Math.round(window.innerHeight - r.top + 8), left });
     setFocusIdx(-1);
+    onOpen?.();
     setOpen(true);
   }
 

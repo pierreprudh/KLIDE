@@ -4,6 +4,8 @@ import { keysFor } from "../shortcuts";
 import { LayoutBento } from "./LayoutBento";
 import { Tooltip } from "./Tooltip";
 import { AgentMark } from "./fileMarks";
+import { useNeedsYouIds } from "../runAttention";
+import { useWorkspaceTrust, restrictedFolderMessage } from "../workspaceTrust";
 import type { GridLayout } from "../gridLayouts";
 import type { GitStatus } from "../gitTypes";
 
@@ -35,6 +37,8 @@ type Props = {
    *  open. The status bar is where they wait (Zed folds docks to nothing;
    *  Obsidian leaves a toolbar chevron — no second rail). Click reopens. */
   foldedEditor?: { files: number; agentFile: string | null; onOpen: () => void } | null;
+  /** Opens Mission Control, where the Needs-you queue lives. */
+  onOpenRuns?: () => void;
 };
 
 function TerminalIcon() {
@@ -87,10 +91,15 @@ export function StatusBar({
   onResetLayout,
   showLayoutControls = true,
   foldedEditor = null,
+  onOpenRuns,
 }: Props) {
   const display = relativePath(path, workspaceRoot);
   const filename = path?.split("/").pop() ?? null;
   const themeMeta = getThemeMeta(theme);
+  // Cross-workspace runs waiting on the user, and this workspace's trust —
+  // both are state that must stay visible, not just remembered.
+  const needsYouCount = useNeedsYouIds().size;
+  const { restricted, gitPaused, trustFolder } = useWorkspaceTrust(workspaceRoot);
   return (
     <footer
       style={{
@@ -177,6 +186,30 @@ export function StatusBar({
         </span>
       )}
       <div style={{ flex: 1 }} />
+      {needsYouCount > 0 && onOpenRuns && (
+        <Tooltip label={`${needsYouCount} run${needsYouCount === 1 ? "" : "s"} need${needsYouCount === 1 ? "s" : ""} you — open Mission Control`}>
+          <button
+            onClick={onOpenRuns}
+            aria-label={`${needsYouCount} run${needsYouCount === 1 ? "" : "s"} need${needsYouCount === 1 ? "s" : ""} your attention`}
+            className="klide-status-chip-btn"
+            style={{ color: "var(--accent)" }}
+          >
+            Needs you · {needsYouCount}
+          </button>
+        </Tooltip>
+      )}
+      {restricted && (
+        <Tooltip label={`${restrictedFolderMessage(gitPaused)} Click to trust this folder.`}>
+          <button
+            onClick={() => void trustFolder()}
+            aria-label={`Restricted folder — click to trust ${workspaceRoot ?? "this folder"}`}
+            className="klide-status-chip-btn"
+            style={{ color: "var(--warning)" }}
+          >
+            Restricted
+          </button>
+        </Tooltip>
+      )}
       {foldedEditor && (
         <Tooltip
           label={

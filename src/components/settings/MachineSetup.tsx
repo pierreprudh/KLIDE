@@ -1,42 +1,80 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { type Machine, type MachineStatus, type MachineSetupAction, type HostTarget } from "../../ipc/machines";
 import { errMessage } from "../../errors";
-import { machineSetupStep, type SetupStep } from "./machineSetupSteps";
+import { canVisitMachineSetupStep, machineSetupStep, type SetupStep } from "./machineSetupSteps";
 import { MachineSetupWaiting } from "./MachineSetupWaiting";
+import { machineSetupFailure } from "./machineSetupFailure";
+import { MachineSshFields } from "./MachineSshFields";
+import { canConnectSshAddress } from "./machineSshAddress";
+import { machineGithubState } from "./machineChecklistState";
+import { MachineSetupChecklist } from "./MachineSetupChecklist";
 import { GhostButton } from "./controls";
-const SetupTerminal = lazy(() => import("./MachineSetupTerminal"));
-const steps: { id: SetupStep; label: string }[] = [{ id: "connection", label: "Connect" }, { id: "software", label: "Install" }, { id: "signIn", label: "Sign in" }, { id: "project", label: "Project" }, { id: "ready", label: "Ready" }];
+const SetupSession = lazy(() => import("./MachineSetupSession"));
 
-export function MachineSetup({ machine, status, checking, workspaceRoot, onCheck, onInstall, onProject, onClose }: {
+export function MachineSetup({ machine, status, checking, workspaceRoot, onCheck, onInstall, onProject, onConnection, onClose }: {
   machine: Machine; status: MachineStatus | null; checking: boolean; workspaceRoot: string | null;
   onCheck: () => void; onInstall: () => Promise<boolean>;
   onProject: (path: string) => Promise<void>; onClose: () => void;
+  onConnection: (host: string) => Promise<void>;
 }) {
-  const step = machineSetupStep(status, !!workspaceRoot);
+  const automaticStep = machineSetupStep(status, !!workspaceRoot);
+  const [selectedStep, setSelectedStep] = useState<SetupStep | null>(null);
   const [action, setAction] = useState<MachineSetupAction | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [running, setRunning] = useState(false);
   const [working, setWorking] = useState(false);
+  const [installingHost, setInstallingHost] = useState(false);
+  const [actionStep, setActionStep] = useState<SetupStep | null>(null);
+  const step = running && actionStep ? actionStep : selectedStep && canVisitMachineSetupStep(selectedStep, status, !!workspaceRoot) ? selectedStep : automaticStep;
+  const checkRef = useRef(onCheck); checkRef.current = onCheck;
   const [progress, setProgress] = useState("");
   const [note, setNote] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const [path, setPath] = useState(status?.checkout ?? machine.checkouts?.[workspaceRoot ?? ""] ?? `~/code/${workspaceRoot?.split("/").filter(Boolean).pop() ?? "project"}`);
   const [offlineTarget, setOfflineTarget] = useState("linux:x86_64");
+  const [host, setHost] = useState(machine.sshHost);
+  const savedCheckout = machine.checkouts?.[workspaceRoot ?? ""];
+  useEffect(() => { setHost(machine.sshHost); }, [machine.sshHost]);
+  useEffect(() => { setPath(savedCheckout ?? `~/code/${workspaceRoot?.split("/").filter(Boolean).pop() ?? "project"}`); }, [savedCheckout, workspaceRoot]);
   const target = status?.target;
+  const selectedTarget = target ?? { os: offlineTarget.split(":")[0], arch: offlineTarget.split(":")[1] } as HostTarget;
+  const githubState = machineGithubState(status);
   const system = target?.os === "macos" ? "macOS" : target?.os === "windows" ? "Windows" : "Linux";
   const busy = checking || running || working;
-  function start(next: MachineSetupAction) { setNote(""); setAttempt((value) => value + 1); setRunning(true); setAction(next); }
-  async function complete(success: boolean) {
+  useEffect(() => { setAction(null); setRunning(false); setNote(""); }, [step]);
+  useEffect(() => {
+    if ((!running && !working) || checking || status?.setup.connection !== "connected") return;
+    const timer = window.setTimeout(() => checkRef.current(), 2500);
+    return () => window.clearTimeout(timer);
+  }, [running, working, checking, status]);
+  function start(next: MachineSetupAction) { setActionStep(step); setNote(""); setAttempt((value) => value + 1); setRunning(true); setAction(next); }
+  async function connect(next: "connect" | "authorize" = "connect") {
+    if (!canConnectSshAddress(host)) { setNote("Enter the remote account’s username before connecting."); return; }
+    setNote(""); setProgress("Saving SSH connection"); setWorking(true);
+    try {
+      if (host.trim() !== machine.sshHost) await onConnection(host.trim());
+      start(next);
+    } catch (reason) { setNote(errMessage(reason)); }
+    finally { setWorking(false); }
+  }
+  async function complete(success: boolean, output: string) {
     setRunning(false);
-    if (!success) { setNote("Setup stopped. Review the terminal output, then retry when you’re ready."); return; }
+    if (!success) { setNote(machineSetupFailure(action!, output)); return; }
+    if (action === "authorize") { start("connect"); return; }
+    if (action === "connect") setNote("SSH connected. Background tasks also require an unlocked SSH key accepted by this account.");
     if (action === "prepare") {
-      setProgress("Downloading and installing the Klide helper"); setWorking(true);
-      try { await onInstall(); } finally { setWorking(false); }
-    } else onCheck();
+      if (status?.setup.host === "ready") { setSelectedStep(null); onCheck(); }
+      else if (await installHost()) setSelectedStep(null);
+    } else { setSelectedStep(null); onCheck(); }
+  }
+  async function installHost() {
+    setProgress("Downloading and installing the Klide helper"); setWorking(true); setInstallingHost(true);
+    try { return await onInstall(); } finally { setInstallingHost(false); setWorking(false); }
   }
   async function download() {
     setProgress("Downloading setup files"); setWorking(true); setNote("");
-    try { await invoke("machine_prepare_host", { target: { os: offlineTarget.split(":")[0] as HostTarget["os"], arch: offlineTarget.split(":")[1] as HostTarget["arch"] } satisfies HostTarget }); setNote("Setup files are saved on this Mac. Turn on the machine and continue here when you’re ready."); }
+    try { await invoke("machine_prepare_host", { target: selectedTarget }); setNote("Setup files are saved on this Mac. Turn on the machine and continue here when you’re ready."); }
     catch (reason) { setNote(errMessage(reason)); }
     finally { setWorking(false); }
   }
@@ -46,19 +84,46 @@ export function MachineSetup({ machine, status, checking, workspaceRoot, onCheck
     catch (reason) { setNote(errMessage(reason)); }
     finally { setWorking(false); }
   }
+  async function saveCurrentStep() {
+    if (step === "connection" && host.trim() !== machine.sshHost) {
+      if (!canConnectSshAddress(host)) throw new Error("Enter the remote account’s username before saving.");
+      await onConnection(host.trim());
+    }
+    if (step === "project" && path.trim() !== (savedCheckout ?? status?.checkout)) {
+      if (!path.trim()) throw new Error("Enter a remote folder before saving.");
+      await onProject(path.trim());
+    }
+  }
+  async function changeStep(next: SetupStep) {
+    setProgress("Saving machine setup"); setWorking(true); setNote("");
+    try { await saveCurrentStep(); setSelectedStep(next); }
+    catch (reason) { setNote(errMessage(reason)); }
+    finally { setWorking(false); }
+  }
+  async function saveAndClose() {
+    setProgress("Saving machine setup"); setWorking(true); setNote("");
+    try {
+      await saveCurrentStep();
+      onClose();
+    } catch (reason) { setNote(errMessage(reason)); }
+    finally { setWorking(false); }
+  }
   return <section className="klide-machine-setup" aria-label={`Set up ${machine.label ?? machine.id}`}>
-    <ol className="klide-machine-steps" aria-label="Setup progress">{steps.filter((s) => workspaceRoot || s.id !== "project").map((s) => <li key={s.id} aria-current={s.id === step ? "step" : undefined}>{s.label}</li>)}</ol>
-    <div aria-live="polite">
+    <MachineSetupChecklist status={status} workspace={!!workspaceRoot} active={step} action={running ? action : installingHost ? "host" : null} busy={busy} onSelect={(next) => { void changeStep(next); }} />
+    <div className="klide-machine-setup-pane">
+    <div className="klide-machine-setup-copy" aria-live="polite">
       {step === "connection" && status?.setup.connection === "unsupported" && <><h3>Machine not supported yet</h3><p role="alert">{status.caption}</p><p>Available hosts: Linux on Intel / AMD, macOS on Apple silicon or Intel, and Windows on Intel / AMD.</p></>}
-      {step === "connection" && status?.setup.connection !== "unsupported" && <><h3>Connect to {machine.sshHost}</h3><p>Your setup is saved. Turn on the machine to continue. Confirm the SSH fingerprint or unlock your key in the terminal below.</p><p>Klide uses your SSH config and keys. An unlocked SSH key or agent is required for background connections.</p><label className="klide-machine-project">Machine system<select className="klide-field" value={offlineTarget} disabled={busy} onChange={(e) => setOfflineTarget(e.target.value)}><option value="linux:x86_64">Linux · Intel / AMD</option><option value="macos:aarch64">macOS · Apple silicon</option><option value="macos:x86_64">macOS · Intel</option><option value="windows:x86_64">Windows · Intel / AMD</option></select></label><div className="klide-machine-actions"><GhostButton disabled={busy} onClick={() => start("connect")}>Connect with SSH</GhostButton><GhostButton disabled={busy} onClick={() => { void download(); }}>Prepare setup files on this Mac</GhostButton></div></>}
-      {step === "software" && <><h3>Prepare this machine</h3><p>Install the {system} prerequisites, Claude Code and Klide’s matching helper. Tasks will keep running here when your Mac is off.</p><p>{target?.os === "macos" ? "Apple silicon and Intel Macs. Git requires Apple Command Line Tools. GitHub CLI can be installed with Homebrew." : target?.os === "windows" ? "Native Windows over OpenSSH · Intel / AMD. Setup uses PowerShell and winget for Git and GitHub CLI when available." : "Ubuntu 24.04+ / Debian 13+ · Intel / AMD. The terminal may ask for sudo."} Your remote logins stay on this machine.</p><div className="klide-machine-actions"><GhostButton disabled={busy} onClick={() => start("prepare")}>Install and continue</GhostButton>{status?.setup.claude !== "missing" && <GhostButton disabled={busy} onClick={() => { setProgress("Downloading and installing the Klide helper"); setWorking(true); void onInstall().finally(() => setWorking(false)); }}>Install Klide helper only</GhostButton>}</div></>}
-      {step === "signIn" && <><h3>Sign in to Claude Code</h3><p>Use the link shown in the terminal to sign in, then return here to finish. This login belongs to the remote machine.</p><GhostButton disabled={busy} onClick={() => start("signIn")}>Sign in on this machine</GhostButton></>}
-      {step === "project" && <><h3>Choose the remote project</h3><p>Use an existing Git checkout, or save a destination and clone this project’s origin there.</p><label className="klide-machine-project">Remote folder<input className="klide-field" value={path} onChange={(e) => setPath(e.target.value)} disabled={busy} placeholder="~/code/project" /></label><div className="klide-machine-actions"><GhostButton disabled={busy || !path.trim()} onClick={() => { void saveProject(); }}>Use this folder</GhostButton><GhostButton disabled={busy || path.trim() !== status?.checkout} onClick={() => start("clone")}>Clone project here</GhostButton><GhostButton disabled={busy} onClick={() => start("gitHub")}>Sign in to GitHub</GhostButton></div><p>Private repositories use the remote machine’s Git credentials.</p></>}
+      {step === "connection" && status?.setup.connection !== "unsupported" && <><h3>Connect to your machine</h3><p>Use the account you sign in with on this machine.</p><MachineSshFields value={host} onChange={setHost} disabled={busy} />{!action && advanced && <label className="klide-machine-project">Machine system<select className="klide-field" value={target ? `${target.os}:${target.arch}` : offlineTarget} disabled={busy || !!target} onChange={(e) => setOfflineTarget(e.target.value)}><option value="linux:x86_64">Linux · Intel / AMD</option><option value="macos:aarch64">macOS · Apple silicon</option><option value="macos:x86_64">macOS · Intel</option><option value="windows:x86_64">Windows · Intel / AMD</option></select></label>}<div className="klide-machine-actions" hidden={running}><GhostButton disabled={busy || !canConnectSshAddress(host)} onClick={() => { void connect(); }}>Connect with SSH</GhostButton>{selectedTarget.os !== "windows" && <GhostButton disabled={busy || !canConnectSshAddress(host)} onClick={() => { void connect("authorize"); }}>Enable background access</GhostButton>}{!action && advanced && <GhostButton disabled={busy} onClick={() => { void download(); }}>Prepare setup files on this Mac</GhostButton>}</div>{!action && <GhostButton disabled={busy} onClick={() => setAdvanced((open) => !open)}>{advanced ? "Hide advanced options" : "Advanced options"}</GhostButton>}</>}
+      {step === "software" && <><h3>Prepare this machine</h3><p>Install missing components on {system}. Your work and logins stay on this machine.</p><p>{target?.os === "macos" ? "Apple silicon and Intel Macs · Git needs Apple Command Line Tools." : target?.os === "windows" ? "Native Windows over OpenSSH · Git and GitHub CLI use winget." : "Ubuntu 24.04+ / Debian 13+ · Intel / AMD."}</p><div className="klide-machine-actions" hidden={running}><GhostButton disabled={busy} onClick={() => start("prepare")}>Install and continue</GhostButton>{status?.setup.claude !== "missing" && <GhostButton disabled={busy} onClick={() => { void installHost(); }}>Install Klide helper only</GhostButton>}</div></>}
+      {step === "signIn" && <><h3>Sign in to Claude Code</h3><p>Connect your Claude account to this machine. We’ll show a browser sign-in link when it’s ready.</p><GhostButton disabled={busy} onClick={() => start("signIn")}>Sign in on this machine</GhostButton></>}
+      {step === "github" && <><h3>Connect GitHub</h3><p>{githubState === "missing" ? "GitHub CLI is not installed. It is optional for running Claude Code." : githubState === "unknown" ? "Check GitHub availability on this machine." : githubState === "ready" ? "GitHub is signed in on this machine. You can reconnect your account here." : "GitHub CLI is already installed. Sign in to use private repositories."}</p><div className="klide-machine-actions" hidden={running}>{githubState === "missing" ? <GhostButton disabled={busy || !canVisitMachineSetupStep("software", status, !!workspaceRoot)} onClick={() => { void changeStep("software"); }}>Installation options</GhostButton> : githubState === "unknown" ? <GhostButton disabled={busy} onClick={onCheck}>Check GitHub</GhostButton> : <GhostButton disabled={busy} onClick={() => start("gitHub")}>Sign in to GitHub</GhostButton>}</div></>}
+      {step === "project" && <><h3>Choose the remote project</h3><p>Use an existing Git checkout, or save a destination and clone this project’s origin there.</p><label className="klide-machine-project">Remote folder<input className="klide-field" value={path} onChange={(e) => setPath(e.target.value)} disabled={busy} placeholder="~/code/project" /></label><div className="klide-machine-actions" hidden={running}><GhostButton disabled={busy || !path.trim()} onClick={() => { void saveProject(); }}>Use this folder</GhostButton><GhostButton disabled={busy || path.trim() !== status?.checkout} onClick={() => start("clone")}>Clone project here</GhostButton><GhostButton disabled={busy} onClick={() => start("gitHub")}>Sign in to GitHub</GhostButton></div><p>Private repositories use the remote machine’s Git credentials.</p></>}
       {step === "ready" && <><h3>{workspaceRoot ? "Ready for remote tasks" : "Machine ready"}</h3><p>{workspaceRoot ? "Select this machine in “Where it runs” when starting a Claude Code conversation. Reopen the conversation later to replay its output and stream live progress." : "Open a local project, then return here to choose its remote folder."} The remote machine must stay on.</p><GhostButton disabled={busy} onClick={onClose}>Done</GhostButton></>}
-      {(working || checking || running) && <MachineSetupWaiting>{working ? progress : checking ? "Checking the machine" : action === "connect" ? "Waiting for SSH connection" : "Complete the prompts in the remote terminal"}</MachineSetupWaiting>}
+      {(working || checking) && <MachineSetupWaiting>{working ? progress : "Checking the machine"}</MachineSetupWaiting>}
       {note && <p role="status">{note}</p>}
     </div>
-    {action && <Suspense fallback={<MachineSetupWaiting>Opening remote terminal</MachineSetupWaiting>}><SetupTerminal key={attempt} machineId={machine.id} workspaceRoot={workspaceRoot} action={action} onDone={(success) => { void complete(success); }} /></Suspense>}
-    <div className="klide-machine-actions">{running ? <GhostButton onClick={() => { setAction(null); setRunning(false); setNote("Setup terminal closed. Check the connection to see what completed."); }}>Close setup terminal</GhostButton> : <GhostButton disabled={busy} onClick={onCheck}>{checking ? "Checking…" : "Check again"}</GhostButton>}{step !== "ready" && <GhostButton disabled={running || working} onClick={onClose}>Save for later</GhostButton>}</div>
+    {action && <Suspense fallback={<MachineSetupWaiting>Starting setup</MachineSetupWaiting>}><SetupSession key={attempt} machineId={machine.id} workspaceRoot={workspaceRoot} action={action} target={action === "authorize" ? selectedTarget : undefined} onDone={(success, output) => { void complete(success, output); }} /></Suspense>}
+    <div className="klide-machine-actions klide-machine-setup-footer">{running ? <GhostButton onClick={() => { setAction(null); setRunning(false); setNote("Setup cancelled. Your saved connection is kept."); }}>Cancel setup</GhostButton> : <GhostButton disabled={busy} onClick={onCheck}>{checking ? "Checking…" : "Check again"}</GhostButton>}{step !== "ready" && <GhostButton disabled={running || working} onClick={() => { void saveAndClose(); }}>Save for later</GhostButton>}</div>
+    </div>
   </section>;
 }

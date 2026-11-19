@@ -46,19 +46,14 @@ import { relativeTime } from "../ai/utils";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
 import { GhostButton, LinkButton, Panel, Row, SettingBlock } from "./controls";
+import { formatBytes } from "../../bytes";
 
 /** What a webview gives the whole origin. Not readable at runtime — WebKit
  *  reports no quota — so the meter measures against the figure the platform
  *  actually enforces, and says it is approximate. */
 const CACHE_QUOTA_BYTES = 5_000_000;
 
-export function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "0 KB";
-  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
-  if (bytes < 1000) return `${bytes} B`;
-  if (bytes < 1_000_000) return `${Math.round(bytes / 1000)} KB`;
-  return `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} MB`;
-}
+export { formatBytes };
 
 /** A hairline fill, not a progress bar: it reports pressure, and turns from
  *  quiet to warning only once the quota is genuinely close. */

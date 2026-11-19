@@ -100,6 +100,9 @@ fn artifact(cache: &Path, target: crate::remote_platform::HostTarget) -> Result<
     use std::io::{Read, Write};
     static DOWNLOAD: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = DOWNLOAD.lock().map_err(|_| "Download lock unavailable")?;
+    if let Some(binary) = current_app_artifact(target) {
+        return Ok(binary);
+    }
     let asset = target.asset()?;
     let cache = cache.join(asset);
     let source = env!("KLIDE_SOURCE_COMMIT");
@@ -113,7 +116,11 @@ fn artifact(cache: &Path, target: crate::remote_platform::HostTarget) -> Result<
         .map_err(|e| e.to_string())?;
     let base = format!("https://github.com/pierreprudh/KLIDE/releases/download/host-{source}");
     let download_error = |e: reqwest::Error| {
-        format!("Could not download the matching remote helper. Check this computer’s connection, or choose a downloaded binary in Advanced. {e}")
+        if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+            format!("The matching {} helper for app revision {} has not been published yet. Retry when its build is available. This is not a connection problem.", asset, &source[..7])
+        } else {
+            format!("Could not download the matching remote helper. Check this computer’s connection and retry. {e}")
+        }
     };
     let mut manifest = String::new();
     client
@@ -172,6 +179,40 @@ fn artifact(cache: &Path, target: crate::remote_platform::HostTarget) -> Result<
         let _ = std::fs::remove_file(temporary);
     }
     result
+}
+
+/// On Macs, the app executable is also the headless Run host. Reuse only
+/// the same OS/CPU and exact package/protocol/source identity; never fall
+/// back to a different release just because this revision is unpublished.
+#[cfg(any(target_os = "macos", test))]
+fn checked_local_artifact(
+    target: crate::remote_platform::HostTarget,
+    local: crate::remote_platform::HostTarget,
+    executable: &Path,
+    expected: &str,
+) -> Option<PathBuf> {
+    if target != local || target.os != crate::remote_platform::HostOs::Macos {
+        return None;
+    }
+    let output = run(Command::new(executable).args(["ptyd", "version"])).ok()?;
+    (String::from_utf8_lossy(&output.stdout).trim() == expected).then(|| executable.to_owned())
+}
+
+fn current_app_artifact(target: crate::remote_platform::HostTarget) -> Option<PathBuf> {
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        use crate::remote_platform::{HostArch, HostOs, HostTarget};
+        let arch = match std::env::consts::ARCH {
+            "aarch64" => HostArch::Aarch64,
+            "x86_64" => HostArch::X86_64,
+            _ => return None,
+        };
+        let executable = std::env::current_exe().ok()?;
+        let expected = format!("{} {} {}", env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION, env!("KLIDE_SOURCE_COMMIT"));
+        checked_local_artifact(target, HostTarget { os: HostOs::Macos, arch }, &executable, &expected)
+    }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { let _ = target; None }
 }
 
 fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -349,6 +390,25 @@ pub fn install_main(destination: &Path, data_dir: &Path, expected: &str) -> i32 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn local_mac_helper_requires_matching_platform_architecture_and_identity() {
+        use crate::remote_platform::{HostArch, HostOs, HostTarget};
+        use std::os::unix::fs::PermissionsExt;
+        let directory = std::env::temp_dir().join(format!("klide-local-helper-{}", crate::agent::transcripts::run_id()));
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join("klide");
+        let expected = "0.7.0 3 exact-source";
+        std::fs::write(&executable, format!("#!/bin/sh\n[ \"$1\" = ptyd ] && [ \"$2\" = version ] || exit 1\nprintf '%s\\n' '{expected}'\n")).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mac = HostTarget { os: HostOs::Macos, arch: HostArch::Aarch64 };
+        assert_eq!(checked_local_artifact(mac, mac, &executable, expected), Some(executable.clone()));
+        assert_eq!(checked_local_artifact(mac, mac, &executable, "0.7.0 3 other-source"), None);
+        assert_eq!(checked_local_artifact(HostTarget { arch: HostArch::X86_64, ..mac }, mac, &executable, expected), None);
+        let linux = HostTarget { os: HostOs::Linux, ..mac };
+        assert_eq!(checked_local_artifact(linux, linux, &executable, expected), None);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn scp_addresses_preserve_usernames_and_bracket_ipv6() {
         assert_eq!(scp_host("dev@100.64.0.2"), "dev@100.64.0.2");
