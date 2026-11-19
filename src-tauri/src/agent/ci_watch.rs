@@ -386,13 +386,26 @@ async fn fire(
         Err(e) => Err(e),
     };
     let project = Path::new(&watch.workspace_root).file_name().and_then(|n| n.to_str()).unwrap_or("project");
-    match &started {
-        Ok(()) => notify_mac(
-            &format!("CI failed · #{} {}", pr.number, project),
-            &format!("{} — Kit is looking into it.", fired.checks.join(", ")),
-        ),
-        Err(e) => notify_mac(&format!("CI failed · #{} {}", pr.number, project), &format!("Couldn't start a Run: {e}")),
-    }
+    let title = format!("CI failed · #{} {}", pr.number, project);
+    let body = match &started {
+        Ok(()) => format!("{} — Kit is looking into it.", fired.checks.join(", ")),
+        Err(e) => format!("Couldn't start a Run: {e}"),
+    };
+    // An open app posts a Klide-branded notification and marks the firing
+    // announced within seconds. Only a firing nobody claimed falls back to
+    // osascript, which macOS shows under Script Editor.
+    let (d, announce_key) = (data.to_path_buf(), fired.key.clone());
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        let _ = crate::blocking::run(move || {
+            let claimed = read(&d)?.fired.iter().any(|f| f.key == announce_key && f.announced);
+            if !claimed {
+                notify_mac(&title, &body);
+            }
+            Ok(())
+        })
+        .await;
+    });
     if let Err(e) = started {
         fired.error = Some(e.clone());
         fired.run_id = None;
@@ -424,6 +437,23 @@ pub(crate) fn start_service(data: PathBuf, host: std::sync::Arc<super::daemon::R
     });
 }
 
+/// A notification under Klide's own name and icon (the bundled app; a dev
+/// binary has no bundle, so macOS shows it unbranded).
+fn notify_native(app: &tauri::AppHandle, f: &Fired) {
+    use tauri_plugin_notification::NotificationExt;
+    let project = Path::new(&f.workspace_root).file_name().and_then(|n| n.to_str()).unwrap_or("project");
+    let body = match (&f.run_id, &f.error) {
+        (Some(_), _) => format!("{} — Kit is looking into it.", f.checks.join(", ")),
+        (None, e) => format!("Couldn't start a Run: {}", e.as_deref().unwrap_or("unknown error")),
+    };
+    let _ = app
+        .notification()
+        .builder()
+        .title(format!("CI failed · #{} {}", f.pr_number, project))
+        .body(body)
+        .show();
+}
+
 /// The app's half: keep the service up while anything is watched, and turn
 /// each new firing into one `ci-watch:fired` event the renderer toasts.
 pub fn start(app: tauri::AppHandle) {
@@ -449,6 +479,7 @@ pub fn start(app: tauri::AppHandle) {
                 .await
                 .unwrap_or_default();
                 for f in fresh {
+                    notify_native(&app, &f);
                     let _ = app.emit("ci-watch:fired", f);
                 }
             }

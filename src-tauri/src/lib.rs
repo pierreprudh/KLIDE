@@ -1143,6 +1143,7 @@ pub fn run() {
         // handler only exists once the plugin is initialized here. Without
         // this line a link in an answer answers "plugin opener not found".
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
         // KLIDE_SMOKE=1 is the bundle boot check (scripts/verify-bundle.sh):
         // the frontend finishing its first page load proves the packaged
