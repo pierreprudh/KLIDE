@@ -257,6 +257,9 @@ fn run_request(template: &StartRunRequest, run_id: &str, text: String) -> StartR
     request.mission_id = None;
     request.mission_task_id = None;
     request.side_question_of = None;
+    // Nobody is watching a fired Run: a Tool that waits for an approval (a
+    // connector read, the network, a command) would hang it forever.
+    request.disabled_tools.extend(super::tools::unattended_read_only_disabled_tool_names());
     request
 }
 
@@ -511,6 +514,20 @@ pub async fn ci_watch_set(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_fired_run_cannot_reach_a_tool_that_waits_for_approval() {
+        let template: StartRunRequest = serde_json::from_value(serde_json::json!({
+            "provider": "ollama", "model": "m", "mode": "goal", "workspaceRoot": "/tmp/w",
+            "initialText": "", "disabledTools": ["plan.memory_search"]
+        })).unwrap();
+        let request = run_request(&template, "run_1", "go".into());
+        for name in ["connector_call", "connector_tools", "run_command", "web_fetch", "spawn_subagent", "write_file"] {
+            assert!(request.disabled_tools.iter().any(|t| t == name), "{name} still offered");
+        }
+        assert!(!request.disabled_tools.iter().any(|t| t == "read_file"));
+        assert!(request.disabled_tools.iter().any(|t| t == "plan.memory_search"));
+    }
+
     use super::*;
 
     const LIST: &str = r#"[

@@ -303,6 +303,33 @@ impl ToolCapability {
 /// gate on a Command tool and the diff gate on a Write tool also pause, and
 /// they stay enabled because they have durable supervisor state and can be
 /// resolved after a surface reattaches.
+/// Every Tool an unattended read-only Run must not reach: anything that can
+/// pause for a person (questions, connector and network approvals, commands),
+/// write, or start another agent. What is left reads the Workspace, its
+/// history and Memory, and keeps its own plan. Derived from the registry, so a
+/// new prompting Tool is excluded without anyone listing it here.
+pub fn unattended_read_only_disabled_tool_names() -> Vec<String> {
+    let mut names: Vec<String> = registry()
+        .into_iter()
+        .filter(|e| {
+            !matches!(
+                e.kind.capability(),
+                ToolCapability::ReadWorkspace
+                    | ToolCapability::ReadConversationHistory
+                    | ToolCapability::ReadProjectMemory
+                    | ToolCapability::UpdatePlanState
+            )
+        })
+        .filter_map(|e| e.schema["function"]["name"].as_str().map(str::to_string))
+        .collect();
+    for name in [super::connector_tools::CONNECTOR_TOOLS, super::connector_tools::CONNECTOR_CALL] {
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
 pub fn interactive_tool_names() -> Vec<String> {
     registry()
         .into_iter()
