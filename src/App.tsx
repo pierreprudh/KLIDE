@@ -3428,6 +3428,9 @@ function App() {
           onRemoveRecent={forgetFolder}
           onOpenSettings={() => openOverlay("settings")}
         />
+        {/* The one toast host — and the app-wide watchers it owns — lives on
+            Welcome too, or a firing or a finished Run has nowhere to land. */}
+        <ToastHost />
       </div>
     );
   }

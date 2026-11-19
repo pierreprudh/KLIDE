@@ -64,6 +64,9 @@ pub struct Fired {
     at: i64,
     #[serde(default)]
     announced: bool,
+    /// The open app posted the Klide notification (whatever screen it is on).
+    #[serde(default)]
+    notified: bool,
 }
 
 #[derive(Serialize)]
@@ -348,6 +351,7 @@ async fn fire(
         error: None,
         at: transcripts::now_ms(),
         announced: false,
+        notified: false,
     };
     let (d, f) = (data.to_path_buf(), fired.clone());
     crate::blocking::run(move || {
@@ -398,7 +402,7 @@ async fn fire(
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         let _ = crate::blocking::run(move || {
-            let claimed = read(&d)?.fired.iter().any(|f| f.key == announce_key && f.announced);
+            let claimed = read(&d)?.fired.iter().any(|f| f.key == announce_key && (f.notified || f.announced));
             if !claimed {
                 notify_mac(&title, &body);
             }
@@ -468,6 +472,31 @@ pub fn start(app: tauri::AppHandle) {
                 if !ensured {
                     ensured = crate::scheduled_service::ensure_for_app(&app).await.is_ok();
                 }
+                // The notification is the app's, not the page's: Welcome has
+                // no toast host, and a window may not have loaded yet.
+                let d = data.clone();
+                let unnotified = crate::blocking::run(move || {
+                    if !read(&d)?.fired.iter().any(|f| !f.notified && !f.announced) {
+                        return Ok(Vec::new());
+                    }
+                    mutate(&d, |s| {
+                        let day_ago = transcripts::now_ms() - 86_400_000;
+                        s.fired
+                            .iter_mut()
+                            .filter(|f| !f.notified && !f.announced)
+                            .map(|f| {
+                                f.notified = true;
+                                f.clone()
+                            })
+                            .filter(|f| f.at >= day_ago)
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .await
+                .unwrap_or_default();
+                for f in &unnotified {
+                    notify_native(&app, f);
+                }
                 let d = data.clone();
                 let waiting = crate::blocking::run(move || Ok(read(&d)?.fired.iter().any(|f| !f.announced)))
                     .await
@@ -502,9 +531,8 @@ pub async fn ci_watch_get(app: tauri::AppHandle, workspace_root: String) -> Resu
     crate::blocking::run(move || Ok(info(&read(&data)?, &workspace_root))).await
 }
 
-/// Firings not yet shown, each returned once: marked announced under the
-/// state lock and posted as a Klide notification. Older than a day is marked
-/// but not returned.
+/// Firings not yet toasted, each returned once: marked announced under the
+/// state lock. Older than a day is marked but not returned.
 #[tauri::command]
 pub async fn ci_watch_take(app: tauri::AppHandle) -> Result<Vec<Fired>, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -526,9 +554,6 @@ pub async fn ci_watch_take(app: tauri::AppHandle) -> Result<Vec<Fired>, String> 
         })
     })
     .await?;
-    for f in &fresh {
-        notify_native(&app, f);
-    }
     Ok(fresh)
 }
 
