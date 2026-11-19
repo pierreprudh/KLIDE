@@ -8,7 +8,7 @@ import { canOpenConversation, openConversation } from "./conversationNavigation"
 import { notify } from "./toast";
 import { errMessage } from "./errors";
 import { openSchedule } from "./scheduleNavigation";
-import type { CiWatchFired } from "./ipc/ciWatch";
+import { ciWatchTake, type CiWatchFired } from "./ipc/ciWatch";
 
 const runIds = new Set<string>();
 export function isScheduledRun(id: string): boolean { return runIds.has(id); }
@@ -72,7 +72,9 @@ export function watchScheduleStatus(): () => void {
   scope.add(registration);
   // A CI watch firing (agent/ci_watch.rs) is the same kind of Run: started by
   // the service, no Stored conversation, opened through the scheduled-run door.
-  scope.add(listen<CiWatchFired>("ci-watch:fired", ({ payload: f }) => {
+  // Pulled, not pushed: a firing that landed before this page listened (or
+  // while the app was closed) is taken on load.
+  const showFired = (f: CiWatchFired) => {
     if (stopped) return;
     const where = f.workspaceRoot.split(/[\\/]/).filter(Boolean).pop() ?? "";
     if (!f.runId) {
@@ -86,7 +88,16 @@ export function watchScheduleStatus(): () => void {
       provider: f.provider,
       action: { label: "Open", run: () => { openConversation(runId); } },
     });
-  }));
+  };
+  let taking = false;
+  const take = () => {
+    if (stopped || taking) return;
+    taking = true;
+    void ciWatchTake().then(list => list.forEach(showFired)).catch(() => {}).finally(() => { taking = false; });
+  };
+  const pending = listen("ci-watch:pending", take);
+  scope.add(pending);
+  void pending.then(take, () => {});
   void registration.then(() => listSchedules()).then(rows => {
     for (const row of rows) apply(row);
   }).catch(error => { if (!stopped) notify(`Couldn't restore schedules: ${errMessage(error)}`, { tone: "error" }); });

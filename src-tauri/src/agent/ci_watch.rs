@@ -454,8 +454,10 @@ fn notify_native(app: &tauri::AppHandle, f: &Fired) {
         .show();
 }
 
-/// The app's half: keep the service up while anything is watched, and turn
-/// each new firing into one `ci-watch:fired` event the renderer toasts.
+/// The app's half: keep the service up while anything is watched, and nudge
+/// the window while a firing waits to be shown. The window takes firings with
+/// `ci_watch_take` (on load and on each nudge), so one that lands before the
+/// page listens — or while the app was closed — is shown, not lost.
 pub fn start(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let Ok(data) = app.path().app_data_dir() else { return };
@@ -467,20 +469,11 @@ pub fn start(app: tauri::AppHandle) {
                     ensured = crate::scheduled_service::ensure_for_app(&app).await.is_ok();
                 }
                 let d = data.clone();
-                let fresh = crate::blocking::run(move || {
-                    if !read(&d)?.fired.iter().any(|f| !f.announced) {
-                        return Ok(Vec::new());
-                    }
-                    mutate(&d, |s| {
-                        let day_ago = transcripts::now_ms() - 86_400_000;
-                        s.fired.iter_mut().filter(|f| !f.announced).map(|f| { f.announced = true; f.clone() }).filter(|f| f.at >= day_ago).collect::<Vec<_>>()
-                    })
-                })
-                .await
-                .unwrap_or_default();
-                for f in fresh {
-                    notify_native(&app, &f);
-                    let _ = app.emit("ci-watch:fired", f);
+                let waiting = crate::blocking::run(move || Ok(read(&d)?.fired.iter().any(|f| !f.announced)))
+                    .await
+                    .unwrap_or(false);
+                if waiting {
+                    let _ = app.emit("ci-watch:pending", ());
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -507,6 +500,36 @@ fn info(state: &State, root: &str) -> WatchInfo {
 pub async fn ci_watch_get(app: tauri::AppHandle, workspace_root: String) -> Result<WatchInfo, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     crate::blocking::run(move || Ok(info(&read(&data)?, &workspace_root))).await
+}
+
+/// Firings not yet shown, each returned once: marked announced under the
+/// state lock and posted as a Klide notification. Older than a day is marked
+/// but not returned.
+#[tauri::command]
+pub async fn ci_watch_take(app: tauri::AppHandle) -> Result<Vec<Fired>, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let fresh = crate::blocking::run(move || {
+        if !read(&data)?.fired.iter().any(|f| !f.announced) {
+            return Ok(Vec::new());
+        }
+        mutate(&data, |s| {
+            let day_ago = transcripts::now_ms() - 86_400_000;
+            s.fired
+                .iter_mut()
+                .filter(|f| !f.announced)
+                .map(|f| {
+                    f.announced = true;
+                    f.clone()
+                })
+                .filter(|f| f.at >= day_ago)
+                .collect::<Vec<_>>()
+        })
+    })
+    .await?;
+    for f in &fresh {
+        notify_native(&app, f);
+    }
+    Ok(fresh)
 }
 
 /// `request: None` stops watching this Workspace.

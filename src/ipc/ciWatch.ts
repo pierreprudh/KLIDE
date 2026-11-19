@@ -26,3 +26,9 @@ export function ciWatchGet(workspaceRoot: string): Promise<CiWatchInfo> {
 export function ciWatchSet(workspaceRoot: string, input: StartAgentRunInput | null): Promise<CiWatchInfo> {
   return invoke("ci_watch_set", { workspaceRoot, request: input ? toStartRunRequest(input) : null });
 }
+
+/** Firings not yet shown, each returned once (Rust marks them announced and
+ *  posts the Klide notification). Called on load and on `ci-watch:pending`. */
+export function ciWatchTake(): Promise<CiWatchFired[]> {
+  return invoke("ci_watch_take");
+}

@@ -1434,6 +1434,7 @@ pub fn run() {
             agent::schedules::agent_schedule_create,
             agent::ci_watch::ci_watch_get,
             agent::ci_watch::ci_watch_set,
+            agent::ci_watch::ci_watch_take,
             agent::schedules::agent_schedule_update,
             agent::schedules::agent_schedule_list,
             agent::schedules::agent_schedule_history,
