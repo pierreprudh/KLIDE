@@ -1143,6 +1143,7 @@ pub fn run() {
         // handler only exists once the plugin is initialized here. Without
         // this line a link in an answer answers "plugin opener not found".
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
         // KLIDE_SMOKE=1 is the bundle boot check (scripts/verify-bundle.sh):
         // the frontend finishing its first page load proves the packaged
@@ -1204,6 +1205,7 @@ pub fn run() {
                 // on an `npx` cold start.
                 connector_pool::warm();
                 agent::schedules::start(handle.clone());
+                agent::ci_watch::start(handle.clone());
             }
 
             // Open at a comfortable fraction of the display the window lands on,
@@ -1430,6 +1432,9 @@ pub fn run() {
             agent::design_feedback::agent_start_design_review,
             agent::agent_start_run,
             agent::schedules::agent_schedule_create,
+            agent::ci_watch::ci_watch_get,
+            agent::ci_watch::ci_watch_set,
+            agent::ci_watch::ci_watch_take,
             agent::schedules::agent_schedule_update,
             agent::schedules::agent_schedule_list,
             agent::schedules::agent_schedule_history,

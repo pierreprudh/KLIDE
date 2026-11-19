@@ -6,24 +6,21 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { createListenerScope } from "../tauriEvents";
 import { createSchedule, updateSchedule, listSchedules, scheduleAction, scheduleHistory, localScheduleTime, mergeScheduleRows, scheduleServiceStatus, enableScheduleService, type ScheduleService, type Schedule, type ScheduledRun } from "../agent/schedules";
 import { stopAgentRun } from "../agent/client";
-import { PROVIDER_CATALOG, isAutoProvider, providerDefinition, providerName } from "../agent/providers";
-import type { AgentMode, ProviderId, StartAgentRunInput } from "../agent/types";
+import { isAutoProvider, providerName } from "../agent/providers";
+import type { AgentMode, ProviderId } from "../agent/types";
 import type { HarnessSettings } from "../settingsStore";
 import { listProviderModels } from "../ipc/aiProviders";
-import { ProviderLogo } from "./ai/icons";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { routedSelection } from "../agent/harnessSource";
 import { switchModelForProvider } from "./ai/rememberedModel";
-import { buildSystemPrompt } from "./ai/system-prompt";
-import { allFavModels } from "../favModels";
-import { enabledRunSkills, loadFilesystemSkills, loadSkills, mergeFilesystemSkills } from "../skills";
-import { readWorkspaceTextFile } from "../workspaceFs";
 import { errMessage } from "../errors";
 import { ChevronIcon, ClockIcon, MoreIcon, NewTaskIcon, OpenInEditorIcon, PauseIcon, PlayIcon } from "../icons";
 import { ScheduleSelect, type ScheduleSelectOption } from "./ScheduleSelect";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
-import { useCustomProviders } from "../hooks/useCustomProviders";
 import { formatSpan } from "../time";
+import { CI_WATCH_ID, CiWatchDetail, CiWatchHistory, CiWatchListRow, useCiWatch } from "./missionControl/ciWatch";
+import { agentSourceLabel, useAgentOptions } from "./agentOptions";
+import { scheduledRunInput } from "../agent/scheduledRunInput";
 import "./scheduled.css";
 
 type Props = {
@@ -59,6 +56,8 @@ export function Scheduled(props: Props) {
   const editorOpener = useRef<HTMLButtonElement | null>(null);
   const actionsTrigger = useRef<HTMLButtonElement | null>(null);
   const selected = rows.find(row => row.id === selectedId);
+  const ciWatch = useCiWatch(props.workspaceRoot, props.defaultProvider, props.defaultModel, props.harnessSettings);
+  const ciSelected = selectedId === CI_WATCH_ID && !creating;
 
   useEffect(() => { if (props.initialSelectedId) { setSelectedId(props.initialSelectedId); setCreating(false); setEditing(false); } }, [props.initialSelectedId, props.selectionVersion]);
   useEffect(() => {
@@ -94,11 +93,11 @@ export function Scheduled(props: Props) {
   }, []);
   useEffect(() => { setHistory([]); setMenu(null); }, [selectedId]);
   useEffect(() => {
-    if (!loading && !creating && !rows.some(row => row.id === selectedId) && rows.length) setSelectedId(rows[0].id);
+    if (!loading && !creating && selectedId !== CI_WATCH_ID && !rows.some(row => row.id === selectedId) && rows.length) setSelectedId(rows[0].id);
   }, [rows, loading, creating, selectedId]);
   useEffect(() => {
     let disposed = false;
-    if (selectedId) void scheduleHistory(selectedId).then(rows => { if (!disposed) setHistory(rows); }).catch(e => { if (!disposed) setError(errMessage(e)); });
+    if (selectedId && selectedId !== CI_WATCH_ID) void scheduleHistory(selectedId).then(rows => { if (!disposed) setHistory(rows); }).catch(e => { if (!disposed) setError(errMessage(e)); });
     return () => { disposed = true; };
   }, [selectedId, historyVersion]);
 
@@ -150,6 +149,9 @@ export function Scheduled(props: Props) {
             <span className="scheduled-list-row-top"><strong>{row.name}</strong><span data-failed={row.status === "failed" || undefined}>{statusName(row.status)}</span></span>
             <span className="scheduled-list-row-meta">{cadence(row.intervalMs)}<span aria-hidden="true"> · </span>{workspaceName(row.workspaceRoot)}</span>
           </button>)}
+          <div className="scheduled-pane-heading scheduled-subheading"><h2>Triggers</h2></div>
+          <CiWatchListRow watch={ciWatch} project={props.workspaceRoot ? workspaceName(props.workspaceRoot) : "No project"} current={ciSelected}
+            onSelect={() => { setSelectedId(CI_WATCH_ID); setCreating(false); setEditing(false); setError(null); setMenu(null); }} />
         </div>
         <div className="scheduled-local" title={service?.error ?? "The local service works with Klide closed. Your Mac must be awake and you must be logged in. Permissions wait until you reopen Klide."}>
           <ClockIcon size={12} /><span>{!service ? "Checking local service…" : service.installed && service.running && service.compatible ? "This Mac · service running" : service.error ? "Local service needs attention" : "Local service not enabled"}</span>
@@ -159,7 +161,7 @@ export function Scheduled(props: Props) {
         </div>
       </nav>
       <main className="scheduled-pane scheduled-detail">
-        {selected ? <>
+        {ciSelected ? <CiWatchDetail watch={ciWatch} project={props.workspaceRoot ? workspaceName(props.workspaceRoot) : null} /> : selected ? <>
           <div className="scheduled-detail-heading">
             <h2>{selected.name}</h2>
             <div className="scheduled-toolbar">
@@ -194,9 +196,9 @@ export function Scheduled(props: Props) {
         </> : <div className="scheduled-empty"><strong>{loading ? "Loading schedules…" : "No schedules yet"}</strong><p>Choose New schedule to get started.</p></div>}
       </main>
       <aside className="scheduled-pane scheduled-history" aria-label="Run history">
-        <div className="scheduled-pane-heading"><h2>Run history</h2>{history.length > 0 && <span>{history.length}</span>}</div>
+        <div className="scheduled-pane-heading"><h2>Run history</h2>{ciSelected ? (ciWatch.info?.fired.length ? <span>{ciWatch.info.fired.length}</span> : null) : history.length > 0 && <span>{history.length}</span>}</div>
         <div className="scheduled-history-scroll klide-scroll-slim">
-          {!history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
+          {ciSelected ? <CiWatchHistory watch={ciWatch} onOpenRun={props.onOpenRun} /> : !history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
             <button type="button" aria-label={`Open Run · ${shortWhen(run.startedAt)} · ${statusName(run.status)}`}
               title={`Scheduled ${when(run.scheduledAt)}${run.finishedAt ? ` · Finished ${when(run.finishedAt)}` : ""}`} onClick={() => props.onOpenRun(run.runId)}>
               <span className="scheduled-history-top"><time dateTime={new Date(run.startedAt).toISOString()}>{shortWhen(run.startedAt)}</time><span data-failed={run.status === "failed" || undefined}>{statusName(run.status)}</span></span>
@@ -230,17 +232,11 @@ function ScheduleEditor({ schedule, onSaved, onCancel, returnFocusTo, ...props }
   const fieldId = useId();
   const dueDate = new Date(due);
   const validDate = Number.isFinite(dueDate.getTime());
-  const sourceGroup = providerDefinition(provider)?.group;
-  const sourceLabel = sourceGroup === "subscription" ? "Subscription" : sourceGroup === "local" ? "Local model" : sourceGroup === "routed" ? "Automatic" : "API provider";
+  const sourceLabel = agentSourceLabel(provider);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone.replace(/_/g, " ");
   const [dialog, setDialog] = useState<HTMLDialogElement | null>(null);
   const returnFocus = useRef(returnFocusTo ?? document.activeElement);
-  const customProviders = useCustomProviders();
-  const agentOptions: ScheduleSelectOption[] = [
-    ...[{ id: "subscription", name: "Subscriptions", description: "Uses the agent’s saved login" }, { id: "hosted", name: "API providers", description: "Uses saved API credentials" }, { id: "local", name: "Local models", description: "Runs on this Mac" }, { id: "routed", name: "Automatic", description: "Chooses a model for the task" }].flatMap(group => PROVIDER_CATALOG.filter(row => row.group === group.id).map(row => ({ value: row.id, label: row.name, group: group.name, description: group.description, icon: <ProviderLogo id={row.id} size={18} /> }))),
-    ...customProviders.map(row => ({ value: row.id, label: row.label, group: "Self-hosted", description: "Your configured endpoint", icon: <ProviderLogo id={row.id as ProviderId} size={18} /> })),
-  ];
-  if (!agentOptions.some(option => option.value === provider)) agentOptions.unshift({ value: provider, label: providerName(provider), icon: <ProviderLogo id={provider} size={18} /> });
+  const agentOptions = useAgentOptions(provider);
   const repeatOptions: ScheduleSelectOption[] = [
     { value: "0", label: "Once", description: "One run at the chosen time" },
     { value: "3600000", label: "Every hour", description: "Repeats every 60 minutes" },
@@ -271,25 +267,7 @@ function ScheduleEditor({ schedule, onSaved, onCancel, returnFocusTo, ...props }
     try {
       const dueAt = new Date(due).getTime();
       if (!Number.isFinite(dueAt) || dueAt <= Date.now()) throw new Error("Choose a future start time");
-      const settings = props.harnessSettings;
-      const [skills, rules] = await Promise.all([
-        loadFilesystemSkills(root).then(scanned => mergeFilesystemSkills(loadSkills(), scanned)),
-        (async () => {
-          for (const name of ["AGENTS.md", "CLAUDE.md"]) {
-            try { return (await readWorkspaceTextFile(root, name)).slice(0, 6000).trim(); } catch { /* Try the next convention. */ }
-          }
-          return "";
-        })(),
-      ]);
-      const input: StartAgentRunInput = {
-        workspaceRoot: root, provider, model, mode, text, attachments: [],
-        systemPrompt: buildSystemPrompt(root, true, skills, mode, mode !== "chat", rules, settings, model, provider),
-        skills: enabledRunSkills(skills), maxParallelTools: settings.maxParallelTools,
-        requireDiffReview: true, maxTurns: settings.maxTurns, commandTimeoutSecs: settings.commandTimeoutSecs,
-        testAfterEditCommand: settings.testAfterEditCommand,
-        numCtx: settings.contextWindows?.[model], reflectionLevel: settings.reflectionLevels?.[model],
-        preferredModels: isAutoProvider(provider) ? allFavModels() : undefined,
-      };
+      const input = await scheduledRunInput({ root, provider, model, mode, text, settings: props.harnessSettings });
       const saved = schedule ? await updateSchedule(schedule.id, input, dueAt, Number(interval) || null, name.trim() || text.trim().split("\n")[0].slice(0, 80)) : await createSchedule(input, dueAt, Number(interval) || null, name.trim() || text.trim().split("\n")[0].slice(0, 80));
       if (alive.current) onSaved(saved);
     } catch (e) { if (alive.current) setError(errMessage(e)); }
