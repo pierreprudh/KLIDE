@@ -13,10 +13,11 @@ export type UsageWindow = {
 };
 
 export type ToolUsage = {
-  provider: "claude-code" | "codex" | "opencode";
+  provider: "claude-code" | "codex" | "opencode" | "vibe";
   plan: string | null;
   windows: UsageWindow[];
-  spend: { costUsd: number; tokens: number; sinceMs: number } | null;
+  /** null costUsd = tokens only (subscription CLIs are not list-priced). */
+  spend: { costUsd: number | null; tokens: number; sinceMs: number } | null;
   error: string | null;
 };
 

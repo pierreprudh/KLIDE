@@ -169,7 +169,9 @@ impl ProviderCaps {
     /// The quirks for a provider id: the row's `caps`, or `HOSTED` for an id
     /// the registry doesn't hold (custom endpoints, stale ids).
     pub fn for_provider(provider: &str) -> Self {
-        lookup(provider).map(|entry| entry.caps).unwrap_or(Self::HOSTED)
+        lookup(provider)
+            .map(|entry| entry.caps)
+            .unwrap_or(Self::HOSTED)
     }
 }
 
@@ -1448,6 +1450,22 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
         caps: HOSTED_CAPS, context_window: None,
     },
+    // Mistral Vibe — the `vibe` CLI on the user's Mistral subscription. Models
+    // come from its on-disk catalogue cache (`$VIBE_HOME/model_catalog_cache.json`),
+    // with the aliases below as the fallback before the first sync.
+    ProviderEntry {
+        id: "vibe", label: "Vibe", short_label: None,
+        group: ProviderGroup::Subscription, wire: WireFormat::Ollama,
+        key: KeySource::Local, models: ModelsHandler::Subscription,
+        subscription: Some(SubscriptionSpec {
+            delegate: &crate::delegate::Vibe,
+            default_models: &["mistral-large-4-0", "mistral-medium-latest", "mistral-small-latest"],
+            cached_models: crate::models::vibe_cached_models,
+        }),
+        default_model: None, presets: NO_PRESETS, auto: NO_LADDER, brand: "vibe",
+        credits: CreditsSource::None, is_local_server: false, has_num_ctx: false,
+        caps: HOSTED_CAPS, context_window: None,
+    },
 ];
 
 /// Look up a provider by id. O(n) over a 10–20 row registry — the
@@ -1522,7 +1540,12 @@ impl ProviderRow {
                 env_legacy,
                 placeholder,
                 token_command,
-            } => (env, env_legacy, Some(placeholder), token_command.map(|c| c.join(" "))),
+            } => (
+                env,
+                env_legacy,
+                Some(placeholder),
+                token_command.map(|c| c.join(" ")),
+            ),
             KeySource::Local => (None, None, None, None),
         };
         let endpoint_vars = match entry.wire {
@@ -1540,7 +1563,10 @@ impl ProviderRow {
         };
         ProviderRow {
             id: entry.id,
-            label: entry.subscription.map(|spec| spec.label()).unwrap_or(entry.label),
+            label: entry
+                .subscription
+                .map(|spec| spec.label())
+                .unwrap_or(entry.label),
             short_label: entry.short_label,
             group: entry.group,
             wire,
@@ -1606,7 +1632,9 @@ pub struct ProviderKeyStatus {
 /// the env-var name otherwise. Used by `env_fallback` below.
 fn env_fallback_names(entry: &ProviderEntry) -> (Option<&'static str>, Option<&'static str>) {
     match entry.key {
-        KeySource::Hosted { env, env_legacy, .. } => (env, env_legacy),
+        KeySource::Hosted {
+            env, env_legacy, ..
+        } => (env, env_legacy),
         KeySource::Local => (None, None),
     }
 }
@@ -1668,7 +1696,11 @@ pub fn provider_key_in(
             if let Some(key) = keychain.or(from_env) {
                 return Ok(Some(key));
             }
-            if let KeySource::Hosted { token_command: Some(command), .. } = entry.key {
+            if let KeySource::Hosted {
+                token_command: Some(command),
+                ..
+            } = entry.key
+            {
                 return command_token(id, command).map(Some);
             }
             Err(format!("No API key saved for {id}"))
@@ -1686,7 +1718,10 @@ pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
 /// folder the asking surface has open, which the window may not have
 /// announced to Rust yet (`set_active_workspace` lands after a child's
 /// first read).
-pub fn key_status_in(id: &str, scope: Option<&std::path::Path>) -> Result<ProviderKeyStatus, String> {
+pub fn key_status_in(
+    id: &str,
+    scope: Option<&std::path::Path>,
+) -> Result<ProviderKeyStatus, String> {
     let Some(entry) = lookup(id) else {
         // Custom (self-hosted) provider — not in the static registry. These
         // never use the keychain: their token comes from a `${VAR}` reference
@@ -1743,7 +1778,11 @@ pub fn key_status_in(id: &str, scope: Option<&std::path::Path>) -> Result<Provid
     // A token command counts when its binary is installed. Running it here
     // would cost a sign-in round trip per Settings render; whether the
     // session is live is the send's to find out, with the command's own error.
-    if let KeySource::Hosted { token_command: Some(command), .. } = entry.key {
+    if let KeySource::Hosted {
+        token_command: Some(command),
+        ..
+    } = entry.key
+    {
         if crate::cli::resolve_command(command[0]).is_ok() {
             return Ok(ProviderKeyStatus {
                 has_key: true,
@@ -1775,7 +1814,11 @@ static COMMAND_TOKENS: LazyLock<Mutex<HashMap<String, CommandToken>>> =
 
 fn command_token(id: &str, command: &[&str]) -> Result<String, String> {
     if let Some((at, result)) = COMMAND_TOKENS.lock().unwrap().get(id) {
-        let ttl = if result.is_ok() { COMMAND_TOKEN_TTL } else { COMMAND_FAILURE_TTL };
+        let ttl = if result.is_ok() {
+            COMMAND_TOKEN_TTL
+        } else {
+            COMMAND_FAILURE_TTL
+        };
         if at.elapsed() < ttl {
             return result.clone();
         }
@@ -1803,8 +1846,15 @@ fn run_token_command(id: &str, command: &[&str]) -> Result<String, String> {
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !output.status.success() || token.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let reason = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("no token printed");
-        return Err(format!("`{}` did not return a token: {}", command.join(" "), reason.trim()));
+        let reason = stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("no token printed");
+        return Err(format!(
+            "`{}` did not return a token: {}",
+            command.join(" "),
+            reason.trim()
+        ));
     }
     Ok(token)
 }
@@ -1839,7 +1889,10 @@ fn known_endpoint_vars() -> Vec<&'static str> {
     let mut vars = Vec::new();
     for entry in PROVIDERS {
         if let WireFormat::OpenAi(cfg) = entry.wire {
-            for name in template_vars(cfg.chat_url).into_iter().chain(template_vars(cfg.models_url)) {
+            for name in template_vars(cfg.chat_url)
+                .into_iter()
+                .chain(template_vars(cfg.models_url))
+            {
                 if !vars.contains(&name) {
                     vars.push(name);
                 }
@@ -1863,7 +1916,9 @@ fn read_endpoint_values() -> HashMap<String, String> {
 fn valid_endpoint_value(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Save (or clear, with `None`/empty) one endpoint variable from Settings.
@@ -1961,16 +2016,26 @@ pub fn resolve_endpoint(
 /// Whether every endpoint variable a row's URL names has a value — what the
 /// router asks before it puts an account-scoped Provider on the bench.
 pub fn endpoint_ready(id: &str) -> bool {
-    endpoint_status(id, None).iter().all(|var| var.value.is_some())
+    endpoint_status(id, None)
+        .iter()
+        .all(|var| var.value.is_some())
 }
 
 /// A row's chat-completions URL with its endpoint variables filled.
-pub fn openai_chat_url(id: &str, cfg: &OpenAiConfig, scope: Option<&std::path::Path>) -> Result<String, String> {
+pub fn openai_chat_url(
+    id: &str,
+    cfg: &OpenAiConfig,
+    scope: Option<&std::path::Path>,
+) -> Result<String, String> {
     resolve_endpoint(id, cfg.chat_url, scope)
 }
 
 /// A row's `/models` URL with its endpoint variables filled.
-pub fn openai_models_url(id: &str, cfg: &OpenAiConfig, scope: Option<&std::path::Path>) -> Result<String, String> {
+pub fn openai_models_url(
+    id: &str,
+    cfg: &OpenAiConfig,
+    scope: Option<&std::path::Path>,
+) -> Result<String, String> {
     resolve_endpoint(id, cfg.models_url, scope)
 }
 
@@ -2155,7 +2220,10 @@ fn reference_search_summary(scope: Option<&std::path::Path>) -> String {
 
 /// Resolve a `${VAR}` reference: process environment first, then a `.env`
 /// file (project, then global). No path touches the keychain, so no prompt.
-pub(crate) fn resolve_reference(reference: &str, scope: Option<&std::path::Path>) -> Option<String> {
+pub(crate) fn resolve_reference(
+    reference: &str,
+    scope: Option<&std::path::Path>,
+) -> Option<String> {
     let name = reference_var_name(reference)?;
     env_var(name).or_else(|| dotenv_lookup(name, scope))
 }
@@ -2176,7 +2244,10 @@ pub fn custom_token(id: &str, scope: Option<&std::path::Path>) -> Option<String>
 }
 
 /// Resolve an unsaved endpoint exactly as a saved endpoint, without writing it.
-pub(crate) fn custom_token_for_config(provider: &crate::custom_providers::CustomProvider, scope: Option<&std::path::Path>) -> Option<String> {
+pub(crate) fn custom_token_for_config(
+    provider: &crate::custom_providers::CustomProvider,
+    scope: Option<&std::path::Path>,
+) -> Option<String> {
     if let Some(reference) = &provider.token_ref {
         return resolve_reference(&reference, scope);
     }
@@ -2669,14 +2740,25 @@ pub(crate) struct ProviderTurn {
 #[derive(Debug)]
 pub(crate) enum DispatchPlan {
     /// Self-hosted OpenAI-wire endpoint from the custom store.
-    CustomProvider { id: String, chat_url: String },
+    CustomProvider {
+        id: String,
+        chat_url: String,
+    },
     /// A delegate CLI on a subscription; never reaches the wire match.
-    SubscriptionCli { provider_id: &'static str, label: &'static str },
+    SubscriptionCli {
+        provider_id: &'static str,
+        label: &'static str,
+    },
     Ollama,
     /// The row's id rides the plan so the key is read for *that* row, never
     /// for a literal the dispatcher happens to spell the same way.
-    Anthropic { provider_id: &'static str },
-    OpenAiWire { provider_id: &'static str, cfg: OpenAiConfig },
+    Anthropic {
+        provider_id: &'static str,
+    },
+    OpenAiWire {
+        provider_id: &'static str,
+        cfg: OpenAiConfig,
+    },
 }
 
 pub(crate) fn plan_dispatch(provider: &str) -> Result<DispatchPlan, String> {
@@ -2940,27 +3022,58 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
             assert!(!entry.brand.trim().is_empty(), "{}: empty brand", entry.id);
             if let Some(short) = entry.short_label {
                 assert!(!short.trim().is_empty(), "{}: empty short label", entry.id);
-                assert_ne!(short, entry.label, "{}: short label equals label — drop it", entry.id);
+                assert_ne!(
+                    short, entry.label,
+                    "{}: short label equals label — drop it",
+                    entry.id
+                );
             }
             match entry.group {
                 ProviderGroup::Hosted => {
-                    let KeySource::Hosted { env, placeholder, .. } = entry.key else {
+                    let KeySource::Hosted {
+                        env, placeholder, ..
+                    } = entry.key
+                    else {
                         panic!("{}: hosted row without a hosted key source", entry.id);
                     };
-                    assert!(env.is_some(), "{}: hosted row without a key env var", entry.id);
-                    assert!(!placeholder.is_empty(), "{}: hosted row without a key placeholder", entry.id);
-                    assert!(entry.default_model.is_some(), "{}: hosted row without a default model", entry.id);
+                    assert!(
+                        env.is_some(),
+                        "{}: hosted row without a key env var",
+                        entry.id
+                    );
+                    assert!(
+                        !placeholder.is_empty(),
+                        "{}: hosted row without a key placeholder",
+                        entry.id
+                    );
+                    assert!(
+                        entry.default_model.is_some(),
+                        "{}: hosted row without a default model",
+                        entry.id
+                    );
                     assert!(entry.subscription.is_none(), "{}", entry.id);
                     assert!(!entry.is_local_server, "{}", entry.id);
                 }
                 ProviderGroup::Local => {
-                    assert!(matches!(entry.key, KeySource::Local), "{}: local row with a key", entry.id);
-                    assert!(entry.default_model.is_some(), "{}: local row without a default model", entry.id);
+                    assert!(
+                        matches!(entry.key, KeySource::Local),
+                        "{}: local row with a key",
+                        entry.id
+                    );
+                    assert!(
+                        entry.default_model.is_some(),
+                        "{}: local row without a default model",
+                        entry.id
+                    );
                     assert!(entry.subscription.is_none(), "{}", entry.id);
                     assert_eq!(entry.credits, CreditsSource::None, "{}", entry.id);
                 }
                 ProviderGroup::Subscription => {
-                    assert!(entry.subscription.is_some(), "{}: subscription row without a spec", entry.id);
+                    assert!(
+                        entry.subscription.is_some(),
+                        "{}: subscription row without a spec",
+                        entry.id
+                    );
                     assert!(
                         entry.default_model.is_none(),
                         "{}: a CLI's own default wins (delegate::CLI_DEFAULT_MODEL)",
@@ -2994,7 +3107,11 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
         assert_eq!(ollama.presets, OLLAMA_MODEL_PRESETS);
         assert!(ollama.has_num_ctx && ollama.is_local_server);
         let cc = rows.iter().find(|r| r.id == "claude-code").unwrap();
-        assert_eq!(cc.wire, WireName::Delegate, "a placeholder wire never leaks as Ollama");
+        assert_eq!(
+            cc.wire,
+            WireName::Delegate,
+            "a placeholder wire never leaks as Ollama"
+        );
         assert!(rows
             .iter()
             .filter(|r| r.has_credits)
@@ -3002,21 +3119,36 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
             .eq(["deepseek", "openrouter"]));
         // No URL, function pointer or secret rides the published row.
         let json = serde_json::to_string(&rows).unwrap();
-        assert!(!json.contains("http"), "chat URLs are the adapter's business");
+        assert!(
+            !json.contains("http"),
+            "chat URLs are the adapter's business"
+        );
     }
 
     #[test]
     fn provider_caps_come_from_the_row() {
         // The run loop asks the row, and a custom endpoint gets the hosted
         // posture — that used to be a `match` on the id in run_core.
-        assert_eq!(ProviderCaps::for_provider("ollama"), lookup("ollama").unwrap().caps);
-        assert_eq!(ProviderCaps::for_provider("custom:my-box"), ProviderCaps::HOSTED);
+        assert_eq!(
+            ProviderCaps::for_provider("ollama"),
+            lookup("ollama").unwrap().caps
+        );
+        assert_eq!(
+            ProviderCaps::for_provider("custom:my-box"),
+            ProviderCaps::HOSTED
+        );
         assert_eq!(ProviderCaps::for_provider("auto"), ProviderCaps::HOSTED);
     }
 
     #[test]
     fn account_scoped_endpoints_name_their_variables() {
-        let vars = |id: &str| catalog().into_iter().find(|r| r.id == id).unwrap().endpoint_vars;
+        let vars = |id: &str| {
+            catalog()
+                .into_iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .endpoint_vars
+        };
         assert_eq!(vars("azure"), vec!["AZURE_RESOURCE_NAME"]);
         assert_eq!(vars("amazon-bedrock"), vec!["AWS_REGION"]);
         assert_eq!(vars("google-vertex"), vec!["GOOGLE_CLOUD_PROJECT"]);
@@ -3030,7 +3162,11 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
         for entry in PROVIDERS {
             if let WireFormat::OpenAi(cfg) = entry.wire {
                 for name in template_vars(cfg.models_url) {
-                    assert!(template_vars(cfg.chat_url).contains(&name), "{}: {name}", entry.id);
+                    assert!(
+                        template_vars(cfg.chat_url).contains(&name),
+                        "{}: {name}",
+                        entry.id
+                    );
                 }
             }
         }
@@ -3040,17 +3176,29 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
     fn an_endpoint_value_is_a_name_never_a_url() {
         assert!(valid_endpoint_value("my-resource_01"));
         assert!(valid_endpoint_value("us-east-1"));
-        for bad in ["", "evil.com/", "a.b", "x?y", "x#", "a b", "user@host", "https://x"] {
+        for bad in [
+            "",
+            "evil.com/",
+            "a.b",
+            "x?y",
+            "x#",
+            "a b",
+            "user@host",
+            "https://x",
+        ] {
             assert!(!valid_endpoint_value(bad), "{bad:?}");
         }
-        assert!(set_endpoint_value("HOME", Some("x")).unwrap_err().contains("not an endpoint setting"));
+        assert!(set_endpoint_value("HOME", Some("x"))
+            .unwrap_err()
+            .contains("not an endpoint setting"));
     }
 
     #[test]
     fn a_template_fills_from_the_environment_and_names_what_is_missing() {
         // A variable only this test sets, so the developer's settings file
         // can't answer for it.
-        let template: &'static str = "https://${KLIDE_TEST_ENDPOINT_VAR}.example.test/v1/chat/completions";
+        let template: &'static str =
+            "https://${KLIDE_TEST_ENDPOINT_VAR}.example.test/v1/chat/completions";
         std::env::remove_var("KLIDE_TEST_ENDPOINT_VAR");
         let err = resolve_endpoint("azure", template, None).unwrap_err();
         assert!(err.contains("KLIDE_TEST_ENDPOINT_VAR"), "{err}");
@@ -3068,7 +3216,8 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
     fn only_cloudflare_gateway_moves_the_key_out_of_authorization() {
         for entry in PROVIDERS {
             if let WireFormat::OpenAi(cfg) = entry.wire {
-                let expected = (entry.id == "cloudflare-ai-gateway").then_some("cf-aig-authorization");
+                let expected =
+                    (entry.id == "cloudflare-ai-gateway").then_some("cf-aig-authorization");
                 assert_eq!(cfg.auth_header, expected, "{}", entry.id);
             }
         }
@@ -3078,8 +3227,14 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
 
     #[test]
     fn vertex_mints_its_token_with_gcloud_when_no_key_is_saved() {
-        let row = catalog().into_iter().find(|r| r.id == "google-vertex").unwrap();
-        assert_eq!(row.key_command.as_deref(), Some("gcloud auth print-access-token"));
+        let row = catalog()
+            .into_iter()
+            .find(|r| r.id == "google-vertex")
+            .unwrap();
+        assert_eq!(
+            row.key_command.as_deref(),
+            Some("gcloud auth print-access-token")
+        );
         assert!(catalog().iter().filter(|r| r.key_command.is_some()).count() == 1);
     }
 
@@ -3208,7 +3363,10 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
             assert_eq!(spec.delegate.id(), id, "{id}'s row names another adapter");
             assert_eq!(spec.cmd(), d.binary());
             assert_eq!(spec.label(), d.label());
-            assert_eq!(ProviderRow::from_entry(lookup(id).unwrap()).label, d.label());
+            assert_eq!(
+                ProviderRow::from_entry(lookup(id).unwrap()).label,
+                d.label()
+            );
         }
         for id in [
             "ollama",

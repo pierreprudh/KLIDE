@@ -140,6 +140,8 @@ const BRAND_COLOR: Partial<Record<BrandKey | ModelColorBrand, { mark?: string; c
   // The amber between the pixel M's yellow and red — its red end sits too
   // close to Anthropic's clay for two neighbouring bars.
   mistral: { chart: "#F5A524" },
+  // Vibe is Mistral's CLI — it wears the Mistral amber and the pixel M.
+  vibe: { mark: "#F5A524", chart: "#F5A524" },
   gemini: { chart: "#3186FF" },
   // Grape — the glyph colour from openrouter.ai/brand.
   openrouter: { mark: "#7624F4", chart: "#7624F4" },
@@ -182,6 +184,7 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   copilot: "/copilot-logo.svg",
   "claude-code": "/claude-code-logo.png",
   codex: "/codex-logo.png",
+  vibe: "/mistral-logo.png",
   // The hugging face in its own yellow (the mark its models wear, cropped
   // to its edge so it reads at the size of its neighbours).
   huggingface: "/providers/huggingface.png",
@@ -224,6 +227,7 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   gemini: "color-logo-img",
   // Mistral's pixel M is a yellow→red gradient; inverting it would ruin it.
   mistral: "color-logo-img",
+  vibe: "color-logo-img",
   huggingface: "color-logo-img",
   minimax: "color-logo-img",
   // Cloudflare's orange cloud (the two-tone mark, via SVG Repo).

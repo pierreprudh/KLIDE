@@ -368,6 +368,11 @@ async fn account_save_current(provider: String, name: String) -> Result<accounts
 }
 
 #[tauri::command]
+async fn delegate_save_api_key(provider: String, api_key: String) -> Result<(), String> {
+    blocking::run(move || accounts::save_api_key(&provider, &api_key)).await
+}
+
+#[tauri::command]
 async fn account_activate(app: tauri::AppHandle, provider: String, name: String) -> Result<(), String> {
     blocking::run(move || {
         // Live-run guard: a running delegate refreshes its token and writes back
@@ -1398,6 +1403,7 @@ pub fn run() {
             usage_snapshot,
             account_save_current,
             account_activate,
+            delegate_save_api_key,
             set_active_workspace,
             ai_chat,
             llamacpp_setup::ai_llamacpp_install,

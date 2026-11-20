@@ -2,7 +2,7 @@
 //! account menu shows under each login.
 //!
 //! Ported from Token Usage Island (`usage_tool/Sources/Core/Fetchers.swift`),
-//! which has already paid for the edge cases recorded below. Three sources,
+//! which has already paid for the edge cases recorded below. Four sources,
 //! none of them a Klide invention:
 //!
 //! - **Claude Code** — the same endpoint `/usage` reads,
@@ -14,12 +14,16 @@
 //!   (`~/.codex/sessions/**/*.jsonl`) on every API turn, as of the last run.
 //! - **OpenCode** — pay-as-you-go, so no cap to be a percentage of: this
 //!   week's spend and tokens, summed from its SQLite database.
+//! - **Vibe** — the plan from the non-secret `whoami_cache.json`, and this
+//!   week's tokens summed from the per-call usage records in the session
+//!   journals (`~/.vibe/logs/session/unified/*/journal/*.jsonl`). Vibe runs on
+//!   a subscription, so the reading is tokens only — no list-price cost.
 //!
 //! Every reader fails soft into a one-line `error`, so one missing CLI never
 //! blanks the others.
 
 use serde::Serialize;
-use crate::delegate::{Codex, ClaudeCode, OpenCode, Delegate, Env, ProcessEnv};
+use crate::delegate::{Codex, ClaudeCode, OpenCode, Vibe, Delegate, Env, ProcessEnv};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -50,11 +54,12 @@ pub struct UsageWindow {
     pub seen_at_ms: Option<i64>,
 }
 
-/// Pay-as-you-go spend since `since_ms`.
+/// Spend since `since_ms`. `cost_usd` is null when the reading is not priced
+/// (a subscription CLI's tokens are allowance, not list-price spend).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Spend {
-    pub cost_usd: f64,
+    pub cost_usd: Option<f64>,
     pub tokens: f64,
     pub since_ms: i64,
 }
@@ -80,6 +85,7 @@ fn local_usage(env: &dyn Env, now: i64) -> Vec<ToolUsage> {
     vec![
         Codex.sessions_dir(env).map(|path| codex(&path, now)).unwrap_or_else(|| missing("codex")),
         OpenCode.data_home(env).map(|path| opencode(&path.join("opencode.db"), now)).unwrap_or_else(|| missing("opencode")),
+        vibe(env, now),
     ]
 }
 
@@ -333,7 +339,7 @@ fn opencode(db: &Path, now_ms: i64) -> ToolUsage {
         // Both NULL when nothing falls in the window — zero spend, not a failure.
         Ok((cost, tokens)) => {
             tool.spend = Some(Spend {
-                cost_usd: cost.unwrap_or(0.0),
+                cost_usd: Some(cost.unwrap_or(0.0)),
                 tokens: tokens.unwrap_or(0.0),
                 since_ms,
             })
@@ -341,6 +347,70 @@ fn opencode(db: &Path, now_ms: i64) -> ToolUsage {
         Err(_) => tool.error = Some("Couldn't read OpenCode's history.".into()),
     }
     tool
+}
+
+// ── Vibe ─────────────────────────────────────────────────────────────────
+
+/// Plan from the non-secret `whoami_cache.json` (keyed by the login's
+/// `oidc:v1:<sha256>` id, payload carries `plan_name`); this week's tokens
+/// summed from the sessions' journal usage records. No network call — the
+/// OAuth tokens ride the keyring and Klide never reads them here.
+fn vibe(env: &dyn Env, now_ms: i64) -> ToolUsage {
+    let mut tool = ToolUsage { provider: "vibe", ..Default::default() };
+    let Some(home) = Vibe.config_home(env) else {
+        tool.error = Some("No CLI data directory available.".into());
+        return tool;
+    };
+    if let Some(payload) = whoami_payload(&home.join("whoami_cache.json")) {
+        tool.plan = payload
+            .get("plan_name")
+            .and_then(|p| p.as_str())
+            .filter(|p| !p.is_empty())
+            .map(capitalize);
+    }
+    let since_ms = now_ms - 7 * 86_400_000;
+    if let Some(sessions) = Vibe.sessions_dir(env) {
+        let mut tokens: i64 = 0;
+        let mut any_session = false;
+        if let Ok(entries) = std::fs::read_dir(&sessions) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                // Same row rules as the board: root sessions with a meta only.
+                if !path.is_dir()
+                    || path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("child-"))
+                    || !path.join("meta.json").exists()
+                {
+                    continue;
+                }
+                any_session = true;
+                let (input, output) = crate::delegate::journal_usage_since(&path, since_ms);
+                tokens += input + output;
+            }
+        }
+        // No session on disk is no reading — not "0 tokens" — so a CLI that
+        // was never run here still gets the sign-in hint below.
+        if any_session {
+            tool.spend = Some(Spend {
+                cost_usd: None,
+                tokens: tokens as f64,
+                since_ms,
+            });
+        }
+    }
+    if tool.plan.is_none() && tool.spend.is_none() {
+        tool.error = Some("Not signed in — use Log in, or set MISTRAL_API_KEY.".into());
+    }
+    tool
+}
+
+/// The cached `/whoami` payload: `{ "<oidc key>": { "payload": {…} } }`.
+fn whoami_payload(path: &Path) -> Option<serde_json::Value> {
+    let bytes = std::fs::read(path).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let (_, entry) = v.as_object()?.iter().next()?;
+    Some(entry.get("payload")?.clone())
 }
 
 // ── Shared ───────────────────────────────────────────────────────────────
@@ -427,8 +497,62 @@ mod tests {
         let env = MapEnv::with_home(&root).set("CODEX_HOME", &codex_home).set("XDG_DATA_HOME", &data_home);
         let readings = local_usage(&env, 1790790000000);
         assert_eq!(readings[0].windows[0].percent, 44.0);
-        assert_eq!(readings[1].spend.as_ref().unwrap().cost_usd, 2.5);
-        assert!(readings.iter().all(|r| r.error.is_none()));
+        assert_eq!(readings[1].spend.as_ref().unwrap().cost_usd, Some(2.5));
+        assert!(readings[..2].iter().all(|r| r.error.is_none()));
+        // No VIBE_HOME under the fixture: Vibe fails soft into its own error.
+        let vibe = readings.iter().find(|r| r.provider == "vibe").unwrap();
+        assert!(vibe.error.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vibe_reads_plan_from_whoami_and_weekly_tokens_from_journals() {
+        use crate::delegate::home::MapEnv;
+        let root = std::env::temp_dir().join(format!("klide-usage-vibe-{}", std::process::id()));
+        let vibe_home = root.join("vibe-home");
+        let env = MapEnv::with_home(&root).set("VIBE_HOME", &vibe_home);
+        let session = Vibe.sessions_dir(&env).unwrap().join("aaaa-bbbb");
+        std::fs::create_dir_all(session.join("journal")).unwrap();
+        std::fs::write(
+            vibe_home.join("whoami_cache.json"),
+            r#"{"oidc:v1:abc":{"payload":{"plan_name":"pro","customer_id":"cus_1","email":"p@x.io"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(session.join("meta.json"), r#"{"session_id":"aaaa-bbbb"}"#).unwrap();
+        // "now" for the reading: 2026-11-18T12:00:00Z.
+        let now = 1_795_003_200_000_i64;
+        let in_week = "2026-11-18T09:00:00Z";
+        let last_week = "2026-11-10T09:00:00Z";
+        std::fs::write(
+            session.join("journal/1.jsonl"),
+            format!(
+                "{{\"type\":\"action_result\",\"timestamp\":\"{in_week}\",\"usage\":{{\"input_tokens\":1000,\"cache_read_input_tokens\":400,\"output_tokens\":55}}}}\n\
+                 {{\"type\":\"action_result\",\"timestamp\":\"{last_week}\",\"usage\":{{\"input_tokens\":9000,\"output_tokens\":900}}}}\n"
+            ),
+        )
+        .unwrap();
+        let tool = vibe(&env, now);
+        assert_eq!(tool.provider, "vibe");
+        assert_eq!(tool.plan.as_deref(), Some("Pro"));
+        let spend = tool.spend.as_ref().unwrap();
+        // Cache reads excluded; last week's record outside the window.
+        assert_eq!(spend.tokens, 655.0);
+        assert_eq!(spend.cost_usd, None, "subscription tokens are unpriced");
+        assert_eq!(spend.since_ms, now - 7 * 86_400_000);
+        assert!(tool.error.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vibe_without_a_login_reports_the_sign_in_hint() {
+        use crate::delegate::home::MapEnv;
+        let root = std::env::temp_dir().join(format!("klide-usage-vibe-empty-{}", std::process::id()));
+        let vibe_home = root.join("vibe-home");
+        std::fs::create_dir_all(&vibe_home).unwrap();
+        let env = MapEnv::with_home(&root).set("VIBE_HOME", &vibe_home);
+        let tool = vibe(&env, 1_795_003_200_000);
+        assert_eq!(tool.error.as_deref(), Some("Not signed in — use Log in, or set MISTRAL_API_KEY."));
+        assert!(tool.plan.is_none() && tool.spend.is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 

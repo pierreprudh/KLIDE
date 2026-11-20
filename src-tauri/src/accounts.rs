@@ -47,6 +47,15 @@ const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 /// Keychain service Klide stores *its* captured Claude account tokens under,
 /// namespaced so it never collides with Claude Code's own item.
 const KLIDE_CLAUDE_SERVICE: &str = "Klide Claude Accounts";
+/// Keychain service Vibe stores its OAuth tokens under, with the login's
+/// `oidc:v1:<sha256>` key (the one `whoami_cache.json` is keyed by) as the
+/// account name — verified against the CLI's `vibe/utils/keyring.py`
+/// (`_KEYRING_SERVICE = "ai.mistral.vibe"`, legacy `"vibe"` migrated on read).
+const VIBE_KEYRING_SERVICE: &str = "ai.mistral.vibe";
+/// Pre-rename service name; read as a fallback, never written.
+const VIBE_LEGACY_KEYRING_SERVICE: &str = "vibe";
+/// Keychain service Klide stores *its* captured Vibe account tokens under.
+const KLIDE_VIBE_SERVICE: &str = "Klide Vibe Accounts";
 
 // --- paths -----------------------------------------------------------------
 
@@ -208,6 +217,43 @@ fn claude_identity(config: &serde_json::Value) -> AccountIdentity {
     }
 }
 
+// --- Vibe -------------------------------------------------------------------
+
+/// `$VIBE_HOME/whoami_cache.json` — the non-secret cache the CLI writes after
+/// a successful `/whoami`, keyed by the login's `oidc:v1:<sha256>` id.
+fn vibe_whoami_path() -> Option<PathBuf> {
+    crate::delegate::Vibe
+        .config_home(&ProcessEnv)
+        .map(|h| h.join("whoami_cache.json"))
+}
+
+/// The login's keyring account name plus its cached whoami payload.
+fn vibe_whoami() -> Option<(String, serde_json::Value)> {
+    let bytes = std::fs::read(vibe_whoami_path()?).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let (key, entry) = v.as_object()?.iter().next()?;
+    Some((key.clone(), entry.get("payload")?.clone()))
+}
+
+fn vibe_identity(payload: &serde_json::Value) -> AccountIdentity {
+    AccountIdentity {
+        auth_mode: Some("oidc".to_string()),
+        account_id: payload
+            .get("customer_id")
+            .and_then(|c| c.as_str())
+            .map(str::to_string),
+        email: payload
+            .get("email")
+            .and_then(|e| e.as_str())
+            .map(str::to_string),
+        detail: payload
+            .get("plan_name")
+            .and_then(|p| p.as_str())
+            .map(str::to_string),
+        ..Default::default()
+    }
+}
+
 // --- the provider seam -----------------------------------------------------
 
 /// One account-snapshot backend per delegate CLI. The same shape as the
@@ -255,6 +301,7 @@ trait AccountProvider {
 struct CodexProvider;
 struct OpenCodeProvider;
 struct ClaudeProvider;
+struct VibeProvider;
 
 impl AccountProvider for CodexProvider {
     fn delegate(&self) -> &'static dyn Delegate {
@@ -334,15 +381,121 @@ impl AccountProvider for ClaudeProvider {
     }
 }
 
+impl AccountProvider for VibeProvider {
+    fn delegate(&self) -> &'static dyn Delegate {
+        &delegate::Vibe
+    }
+    // `live_files` is the adapter's empty list: keyring-based, no files. The
+    // identity rides the non-secret whoami cache.
+    fn live_identity(&self) -> Option<AccountIdentity> {
+        let (_, payload) = vibe_whoami()?;
+        let id = vibe_identity(&payload);
+        id.is_recognised().then_some(id)
+    }
+    fn capture(
+        &self,
+        dir: &Path,
+        name: &str,
+        _existing: Option<&Account>,
+    ) -> Result<(Vec<String>, Option<String>), String> {
+        let (oidc_key, payload) = vibe_whoami().ok_or_else(|| not_logged_in_msg(self))?;
+        // Current service first, the pre-rename one as fallback — the same
+        // migration the CLI itself does on read.
+        let tokens = [VIBE_KEYRING_SERVICE, VIBE_LEGACY_KEYRING_SERVICE]
+            .iter()
+            .find_map(|service| Keyring.get(service, &oidc_key).ok())
+            .ok_or_else(|| {
+                "Couldn't read Vibe's keychain credentials. \
+                 Make sure you're signed in (run `vibe`) and allow the keychain prompt."
+                    .to_string()
+            })?;
+        // Tokens go to Klide's own keychain item, never to disk.
+        Keyring
+            .set(KLIDE_VIBE_SERVICE, name, &tokens)
+            .map_err(|e| format!("Couldn't store the account in Klide's keychain: {e}"))?;
+        // The snapshot file carries only the non-secret identity: the keyring
+        // account name and the whoami payload, so a restore can address the
+        // right keyring entry without any token on disk.
+        let stem = slugify(name);
+        let file = format!("{stem}.account.json");
+        let snapshot = serde_json::json!({ "oidcKey": oidc_key, "whoami": payload });
+        write_private(
+            &dir.join(&file),
+            &serde_json::to_vec_pretty(&snapshot).map_err(|e| e.to_string())?,
+        )?;
+        Ok((vec![file], Some(name.to_string())))
+    }
+    fn restore(&self, dir: &Path, account: &Account) -> Result<(), String> {
+        let kref = account
+            .keychain_ref
+            .as_deref()
+            .ok_or_else(|| "This Vibe snapshot has no stored credentials.".to_string())?;
+        let tokens = Keyring.get(KLIDE_VIBE_SERVICE, kref).map_err(|e| {
+            format!("Couldn't read the saved Vibe credentials from Klide's keychain: {e}")
+        })?;
+        let file = account
+            .files
+            .first()
+            .ok_or_else(|| "This Vibe snapshot is missing its account file.".to_string())?;
+        let snap: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.join(file))
+                .map_err(|e| format!("Could not read account snapshot: {e}"))?,
+        )
+        .map_err(|e| format!("Account snapshot isn't valid JSON: {e}"))?;
+        let oidc_key = snap
+            .get("oidcKey")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| "This Vibe snapshot names no keyring account.".to_string())?;
+        Keyring
+            .set(VIBE_KEYRING_SERVICE, oidc_key, &tokens)
+            .map_err(|e| format!("Couldn't write Vibe's keyring credentials: {e}"))?;
+        Ok(())
+    }
+}
+
+/// Store a user-supplied API key where the CLI itself reads it: Vibe keeps an
+/// env-var-provided key in the keychain under (`ai.mistral.vibe`,
+/// `MISTRAL_API_KEY`) — the same item `vibe` writes when `MISTRAL_API_KEY` is
+/// set in its own environment (`set_api_key_in_keyring` in the CLI's
+/// `vibe/utils/keyring.py`). Klide never mints or exchanges tokens; it stores
+/// a key the user pasted, in the slot the CLI already owns.
+pub fn save_api_key(provider_id: &str, api_key: &str) -> Result<(), String> {
+    save_api_key_in(&Keyring, provider_id, api_key)
+}
+
+fn save_api_key_in(
+    store: &dyn SecretStore,
+    provider_id: &str,
+    api_key: &str,
+) -> Result<(), String> {
+    if crate::delegate::lookup(provider_id).map(|d| d.id()) != Some("vibe") {
+        return Err(format!("{provider_id} has no API-key sign-in"));
+    }
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("The API key is empty".to_string());
+    }
+    store
+        .set(VIBE_KEYRING_SERVICE, "MISTRAL_API_KEY", key)
+        .map_err(|e| format!("Couldn't store the API key in the keychain: {e}"))
+}
+
 /// Every implemented snapshot backend. Installed CLI versions may disable
 /// a backend whose file format no longer matches their live credentials.
-const BACKENDS: [&dyn AccountProvider; 3] = [&CodexProvider, &ClaudeProvider, &OpenCodeProvider];
+const BACKENDS: [&dyn AccountProvider; 4] = [
+    &CodexProvider,
+    &ClaudeProvider,
+    &OpenCodeProvider,
+    &VibeProvider,
+];
 
 /// Resolve a provider id to its backend. Ids are never matched here: each
 /// backend names its adapter, and the adapter's id is the key — so the
 /// account switcher and `delegate::lookup` cannot disagree on a spelling.
 fn provider(id: &str) -> Option<&'static dyn AccountProvider> {
-    BACKENDS.into_iter().find(|b| b.delegate().id() == id && b.delegate().account_snapshots_available())
+    BACKENDS
+        .into_iter()
+        .find(|b| b.delegate().id() == id && b.delegate().account_snapshots_available())
 }
 
 // --- index records ---------------------------------------------------------
@@ -513,9 +666,7 @@ pub fn save_current(provider_id: &str, name: &str) -> Result<Account, String> {
     }
     let p = provider(provider_id).ok_or_else(|| format!("Unknown provider \"{provider_id}\""))?;
 
-    let identity = p
-        .live_identity()
-        .ok_or_else(|| not_logged_in_msg(p))?;
+    let identity = p.live_identity().ok_or_else(|| not_logged_in_msg(p))?;
     if !identity.is_recognised() {
         return Err(format!(
             "Couldn't recognise {}'s login shape — not saving, to avoid storing \
@@ -638,7 +789,10 @@ fn splice_claude_identity(
     for key in ["oauthAccount", "userID"] {
         obj.insert(
             key.into(),
-            snapshot.get(key).cloned().unwrap_or(serde_json::Value::Null),
+            snapshot
+                .get(key)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         );
     }
     Ok(())
@@ -670,8 +824,8 @@ fn capture_claude(
 
     // Snapshot the non-secret account block so a future activation can splice
     // it back into ~/.claude.json.
-    let config_bytes =
-        std::fs::read(config_path).map_err(|e| format!("Could not read {}: {e}", config_path.display()))?;
+    let config_bytes = std::fs::read(config_path)
+        .map_err(|e| format!("Could not read {}: {e}", config_path.display()))?;
     let config: serde_json::Value = serde_json::from_slice(&config_bytes)
         .map_err(|e| format!("Claude Code's state file isn't valid JSON: {e}"))?;
     let stem = slugify(name);
@@ -762,8 +916,8 @@ fn restore_claude(
     )
     .map_err(|e| format!("Account snapshot isn't valid JSON: {e}"))?;
 
-    let cfg_bytes =
-        std::fs::read(cfg_path).map_err(|e| format!("Could not read {}: {e}", cfg_path.display()))?;
+    let cfg_bytes = std::fs::read(cfg_path)
+        .map_err(|e| format!("Could not read {}: {e}", cfg_path.display()))?;
     // One-deep backup so a botched splice is recoverable.
     let backup = std::path::PathBuf::from(format!("{}.klide-bak", cfg_path.display()));
     let _ = std::fs::write(&backup, &cfg_bytes);
@@ -891,10 +1045,10 @@ mod tests {
     impl FakeStore {
         fn with(service: &str, user: &str, secret: &str) -> Self {
             let me = Self::default();
-            me.secrets.lock().unwrap().insert(
-                (service.to_string(), user.to_string()),
-                secret.to_string(),
-            );
+            me.secrets
+                .lock()
+                .unwrap()
+                .insert((service.to_string(), user.to_string()), secret.to_string());
             me
         }
         fn read(&self, service: &str, user: &str) -> Option<String> {
@@ -916,10 +1070,10 @@ mod tests {
                 return Err("keychain denied".to_string());
             }
             self.writes.lock().unwrap().push(service.to_string());
-            self.secrets.lock().unwrap().insert(
-                (service.to_string(), user.to_string()),
-                secret.to_string(),
-            );
+            self.secrets
+                .lock()
+                .unwrap()
+                .insert((service.to_string(), user.to_string()), secret.to_string());
             Ok(())
         }
     }
@@ -942,6 +1096,37 @@ mod tests {
     }
 
     #[test]
+    fn vibe_api_key_goes_to_the_slot_the_cli_reads() {
+        let store = FakeStore::default();
+        save_api_key_in(&store, "vibe", "  sk-test-key  \n").expect("save");
+        assert_eq!(
+            store.read(VIBE_KEYRING_SERVICE, "MISTRAL_API_KEY"),
+            Some("sk-test-key".to_string()),
+            "the CLI reads (ai.mistral.vibe, MISTRAL_API_KEY) — nothing else"
+        );
+        assert_eq!(
+            store.writes.lock().unwrap().as_slice(),
+            [VIBE_KEYRING_SERVICE]
+        );
+    }
+
+    #[test]
+    fn vibe_api_key_rejects_empty_and_other_providers() {
+        let store = FakeStore::default();
+        assert!(save_api_key_in(&store, "vibe", "   ").is_err());
+        assert!(save_api_key_in(&store, "claude", "sk-x").is_err());
+        assert!(store.writes.lock().unwrap().is_empty(), "nothing written");
+    }
+
+    #[test]
+    fn vibe_api_key_surfaces_keychain_failures() {
+        let mut store = FakeStore::default();
+        store.fail_writes_to = Some(VIBE_KEYRING_SERVICE.to_string());
+        let err = save_api_key_in(&store, "vibe", "sk-x").unwrap_err();
+        assert!(err.contains("keychain"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn claude_snapshot_carries_identity_but_never_tokens() {
         // The snapshot is written to disk in the clear, so its field list is a
         // security boundary: exactly the two identity keys, nothing adjacent.
@@ -957,7 +1142,10 @@ mod tests {
         assert_eq!(snap["oauthAccount"]["emailAddress"], "p@example.com");
         assert_eq!(snap["userID"], "user-1");
         let text = serde_json::to_string(&snap).unwrap();
-        assert!(!text.contains("SECRET"), "snapshot leaked a credential: {text}");
+        assert!(
+            !text.contains("SECRET"),
+            "snapshot leaked a credential: {text}"
+        );
         assert_eq!(
             snap.as_object().unwrap().len(),
             2,
@@ -1016,11 +1204,20 @@ mod tests {
 
         assert_eq!(kref, "work");
         // The tokens land in Klide's item, and Claude's own item is untouched.
-        assert_eq!(store.read(KLIDE_CLAUDE_SERVICE, "work").as_deref(), Some("TOKEN-123"));
-        assert_eq!(store.read(CLAUDE_KEYCHAIN_SERVICE, &user).as_deref(), Some("TOKEN-123"));
+        assert_eq!(
+            store.read(KLIDE_CLAUDE_SERVICE, "work").as_deref(),
+            Some("TOKEN-123")
+        );
+        assert_eq!(
+            store.read(CLAUDE_KEYCHAIN_SERVICE, &user).as_deref(),
+            Some("TOKEN-123")
+        );
         // And nothing secret reached the snapshot file.
         let on_disk = std::fs::read_to_string(dir.join(&file)).unwrap();
-        assert!(!on_disk.contains("TOKEN-123"), "tokens hit the disk: {on_disk}");
+        assert!(
+            !on_disk.contains("TOKEN-123"),
+            "tokens hit the disk: {on_disk}"
+        );
         assert!(on_disk.contains("p@example.com"));
     }
 
@@ -1031,8 +1228,14 @@ mod tests {
         std::fs::write(&cfg, b"{}").unwrap();
 
         let err = capture_claude(&FakeStore::default(), &dir, &cfg, "work").unwrap_err();
-        assert!(err.contains("Couldn't read Claude Code's keychain"), "got: {err}");
-        assert!(err.contains("/login"), "the message should say how to fix it: {err}");
+        assert!(
+            err.contains("Couldn't read Claude Code's keychain"),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("/login"),
+            "the message should say how to fix it: {err}"
+        );
     }
 
     #[test]
@@ -1065,7 +1268,9 @@ mod tests {
 
         // Claude Code's live item now holds the saved tokens.
         assert_eq!(
-            store.read(CLAUDE_KEYCHAIN_SERVICE, &claude_keychain_username()).as_deref(),
+            store
+                .read(CLAUDE_KEYCHAIN_SERVICE, &claude_keychain_username())
+                .as_deref(),
             Some("TOKEN-NEW")
         );
         // The config got the new identity and kept the user's own settings.
@@ -1074,10 +1279,9 @@ mod tests {
         assert_eq!(after["oauthAccount"]["emailAddress"], "new@example.com");
         assert_eq!(after["editorMode"], "vim");
         // The pre-switch config is recoverable.
-        let backup: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(format!("{}.klide-bak", cfg.display())).unwrap(),
-        )
-        .unwrap();
+        let backup: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(format!("{}.klide-bak", cfg.display())).unwrap())
+                .unwrap();
         assert_eq!(backup["oauthAccount"]["emailAddress"], "old@example.com");
     }
 
@@ -1108,18 +1312,29 @@ mod tests {
         let account = claude_account(Some("work"));
 
         let err = restore_claude(&store, &dir, &cfg, &account).unwrap_err();
-        assert!(err.contains("Couldn't write Claude Code's keychain"), "got: {err}");
+        assert!(
+            err.contains("Couldn't write Claude Code's keychain"),
+            "got: {err}"
+        );
         let after: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&cfg).unwrap()).unwrap();
-        assert_eq!(after, original, "the config was rewritten despite the failure");
+        assert_eq!(
+            after, original,
+            "the config was rewritten despite the failure"
+        );
     }
 
     #[test]
     fn restore_refuses_an_account_with_no_stored_credentials() {
         let dir = temp_dir("restore-no-kref");
         let account = claude_account(None);
-        let err = restore_claude(&FakeStore::default(), &dir, &dir.join("claude.json"), &account)
-            .unwrap_err();
+        let err = restore_claude(
+            &FakeStore::default(),
+            &dir,
+            &dir.join("claude.json"),
+            &account,
+        )
+        .unwrap_err();
         assert!(err.contains("no stored credentials"), "got: {err}");
     }
 
@@ -1159,7 +1374,10 @@ supports_accounts() == false — the frontend would hide the switcher"
         for backend in BACKENDS {
             let d = backend.delegate();
             assert_eq!(backend.label(), d.label());
-            assert_eq!(Some(backend.login_cmd()), d.login_commands().into_iter().next());
+            assert_eq!(
+                Some(backend.login_cmd()),
+                d.login_commands().into_iter().next()
+            );
             assert_eq!(backend.live_files(), d.auth_files(&ProcessEnv));
         }
         // The disagreement that prompted this: OpenCode's hint said

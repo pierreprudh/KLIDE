@@ -77,6 +77,9 @@ pub fn is_sensitive_path(root: &Path, path: &Path) -> bool {
                 | ".credentials.json"
                 | "auth.json"
                 | "auth-profiles.json"
+                // Vibe's non-secret login-identity cache — names the signed-in
+                // account even though it holds no token.
+                | "whoami_cache.json"
                 | "secrets.json"
                 | "secrets.yaml"
                 | "secrets.yml"
@@ -92,7 +95,9 @@ pub fn is_sensitive_path(root: &Path, path: &Path) -> bool {
 pub fn is_review_store(root: &Path, path: &Path) -> bool {
     let relative = path.strip_prefix(root).unwrap_or(path);
     let parts: Vec<_> = relative.components().map(|c| c.as_os_str()).collect();
-    parts.windows(2).any(|pair| pair[0] == ".klide" && pair[1] == "memory-proposals")
+    parts
+        .windows(2)
+        .any(|pair| pair[0] == ".klide" && pair[1] == "memory-proposals")
 }
 
 pub struct Workspace {
@@ -350,9 +355,11 @@ Open it locally yourself if needed; do not send its contents to a model.",
     pub fn guard_write(&self, path: &Path, access: Access) -> Result<(), String> {
         self.guard(path, access)?;
         let relative = path.strip_prefix(&self.root).unwrap_or(path);
-        let in_git = relative
-            .components()
-            .any(|c| c.as_os_str().to_str().is_some_and(|name| name.eq_ignore_ascii_case(".git")));
+        let in_git = relative.components().any(|c| {
+            c.as_os_str()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+        });
         if access == Access::Agent && in_git {
             return Err(format!(
                 "{} is inside the repository's .git folder; a run can't write there. Use git commands instead.",
@@ -554,10 +561,14 @@ mod tests {
         // The agent-tier write guard sees the canonical .git and refuses.
         assert!(ws.guard_write(&resolved, Access::Agent).is_err());
         // ...and the write itself is refused before touching the real hook.
-        assert!(ws.write_text(&resolved, "#!/bin/sh\n", Access::Agent).is_err());
+        assert!(ws
+            .write_text(&resolved, "#!/bin/sh\n", Access::Agent)
+            .is_err());
         assert!(!ws.root().join(".git/hooks/pre-commit").exists());
         // The user tier may still write there — they saw what they did.
-        assert!(ws.write_text(&resolved, "#!/bin/sh\n", Access::User).is_ok());
+        assert!(ws
+            .write_text(&resolved, "#!/bin/sh\n", Access::User)
+            .is_ok());
     }
 
     #[cfg(unix)]
@@ -679,14 +690,22 @@ mod tests {
             ".config/gh/hosts.yml",
             ".openclaw/agents/main/agent/auth-profiles.json",
         ] {
-            assert!(ws.is_sensitive(&root.join(rel)), "{rel} should be sensitive");
+            assert!(
+                ws.is_sensitive(&root.join(rel)),
+                "{rel} should be sensitive"
+            );
         }
         // A CLI home checked into a project: every login file its adapter
         // names is caught, without this test spelling the CLI's layout.
-        let cli_logins = crate::delegate::secret_files(&crate::delegate::home::MapEnv::with_home(&root));
+        let cli_logins =
+            crate::delegate::secret_files(&crate::delegate::home::MapEnv::with_home(&root));
         assert!(!cli_logins.is_empty());
         for login in cli_logins {
-            assert!(ws.is_sensitive(&login), "{} should be sensitive", login.display());
+            assert!(
+                ws.is_sensitive(&login),
+                "{} should be sensitive",
+                login.display()
+            );
         }
         assert!(!ws.is_sensitive(&root.join("src/env.rs")));
         assert!(!ws.is_sensitive(&root.join("docs/environment.md")));
@@ -720,14 +739,25 @@ mod tests {
         let root = dir.canonicalize().unwrap();
         std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
         std::fs::write(root.join(".git/config"), "[core]\n").unwrap();
-        for rel in [".git/config", ".git/hooks/pre-commit", "vendor/lib/.GIT/config"] {
-            let refused = ws.write_text(&root.join(rel), "x", Access::Agent).unwrap_err();
+        for rel in [
+            ".git/config",
+            ".git/hooks/pre-commit",
+            "vendor/lib/.GIT/config",
+        ] {
+            let refused = ws
+                .write_text(&root.join(rel), "x", Access::Agent)
+                .unwrap_err();
             assert!(refused.contains(".git folder"), "{rel}: {refused}");
         }
         assert!(ws.remove(&root.join(".git/config"), Access::Agent).is_err());
-        assert_eq!(std::fs::read_to_string(root.join(".git/config")).unwrap(), "[core]\n");
-        ws.write_text(&root.join(".gitignore"), "target\n", Access::Agent).unwrap();
-        ws.write_text(&root.join(".git/config"), "[user]\n", Access::User).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+        ws.write_text(&root.join(".gitignore"), "target\n", Access::Agent)
+            .unwrap();
+        ws.write_text(&root.join(".git/config"), "[user]\n", Access::User)
+            .unwrap();
     }
 
     #[cfg(unix)]
@@ -735,10 +765,16 @@ mod tests {
     fn a_new_path_through_a_dangling_link_is_refused() {
         let (dir, ws) = temp_workspace("dangling-link");
         let root = dir.canonicalize().unwrap();
-        let outside = root.parent().unwrap().join(format!("{}-outside.txt", root.file_name().unwrap().to_string_lossy()));
+        let outside = root.parent().unwrap().join(format!(
+            "{}-outside.txt",
+            root.file_name().unwrap().to_string_lossy()
+        ));
         let _ = std::fs::remove_file(&outside);
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
-        assert!(ws.resolve_new("link").is_err(), "the write would follow the link out of the workspace");
+        assert!(
+            ws.resolve_new("link").is_err(),
+            "the write would follow the link out of the workspace"
+        );
         assert!(ws.resolve_new("link/child.txt").is_err());
         assert!(ws.resolve_new("fresh/child.txt").is_ok());
         assert!(!outside.exists());

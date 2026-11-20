@@ -9,10 +9,10 @@
 // wire keeps working. The Provider-published facts this module reads (the
 // Codex manifest, an OpenAI-wire `/models` listing) feed that answer.
 
-use crate::providers;
 use crate::cli::{ensure_command_available, resolve_command};
-use crate::providers::{provider_key, response_error, ANTHROPIC_VERSION, OLLAMA_URL};
 use crate::delegate::Delegate;
+use crate::providers;
+use crate::providers::{provider_key, response_error, ANTHROPIC_VERSION, OLLAMA_URL};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -59,7 +59,14 @@ pub(crate) fn listed_task(row: &serde_json::Value) -> Option<String> {
     }
     let caps = row.get("capabilities").and_then(|v| v.as_array())?;
     let has = |name: &str| caps.iter().any(|c| c.as_str() == Some(name));
-    Some(if has("embedding") && !has("completion") { "embedding" } else { "chat" }.to_string())
+    Some(
+        if has("embedding") && !has("completion") {
+            "embedding"
+        } else {
+            "chat"
+        }
+        .to_string(),
+    )
 }
 
 /// Cached `/models` metadata, keyed by provider id. OpenRouter's listing is
@@ -106,7 +113,8 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
     }
     if provider == "llamacpp" {
         return tokio::task::spawn_blocking(|| Ok(vec![crate::llamacpp_models::launch_model()]))
-            .await.map_err(|e| e.to_string())?;
+            .await
+            .map_err(|e| e.to_string())?;
     }
     // A registry miss falls through to the custom (self-hosted) store —
     // those endpoints expose the OpenAI `/v1/models` listing, queried
@@ -300,8 +308,14 @@ pub(crate) async fn key_lists_model(provider: &str, model: &str) -> Option<bool>
 /// the offline rule above.
 #[cfg(test)]
 pub(crate) fn seed_listing(provider: &str, ids: &[String]) {
-    let meta = ids.iter().map(|id| (id.clone(), ModelMeta::default())).collect();
-    OPENAI_MODEL_META_CACHE.lock().unwrap().insert(provider.to_string(), (Instant::now(), meta));
+    let meta = ids
+        .iter()
+        .map(|id| (id.clone(), ModelMeta::default()))
+        .collect();
+    OPENAI_MODEL_META_CACHE
+        .lock()
+        .unwrap()
+        .insert(provider.to_string(), (Instant::now(), meta));
 }
 
 /// Test-only, live: fill the cache from the key's real listing, prices and
@@ -339,7 +353,10 @@ pub(crate) async fn model_blended_price(provider: &str, model: &str) -> Option<f
     if let crate::model_capabilities::PriceClass::Priced(price) =
         crate::model_capabilities::price_class(provider, model)
     {
-        return Some(blend(price.input_per_million, Some(price.output_per_million)));
+        return Some(blend(
+            price.input_per_million,
+            Some(price.output_per_million),
+        ));
     }
     if let Some(entry) = providers::lookup(provider) {
         if matches!(entry.models, providers::ModelsHandler::OpenAiModels) {
@@ -392,9 +409,39 @@ async fn fetch_ollama_tags() -> Result<Vec<String>, String> {
 
 pub(crate) fn parse_anthropic_model(row: &serde_json::Value) -> ModelMeta {
     let capabilities = row.get("capabilities");
-    let supported = |name: &str| capabilities.and_then(|c| c.get(name)).and_then(|v| v.get("supported")).and_then(|v| v.as_bool());
-    let reasoning_levels = capabilities.and_then(|c| c.get("effort")).and_then(|e| e.as_object()).map(|e| e.iter().filter(|(key, value)| key.as_str() != "supported" && value.get("supported").and_then(|v| v.as_bool()).unwrap_or(false)).map(|(key, _)| key.clone()).collect());
-    ModelMeta { context_length: row.get("max_input_tokens").and_then(|v| v.as_u64()).map(|v| v as usize), supports_tools: None, input_per_million: None, output_per_million: None, supports_vision: supported("image_input"), reasoning_levels, task: None }
+    let supported = |name: &str| {
+        capabilities
+            .and_then(|c| c.get(name))
+            .and_then(|v| v.get("supported"))
+            .and_then(|v| v.as_bool())
+    };
+    let reasoning_levels = capabilities
+        .and_then(|c| c.get("effort"))
+        .and_then(|e| e.as_object())
+        .map(|e| {
+            e.iter()
+                .filter(|(key, value)| {
+                    key.as_str() != "supported"
+                        && value
+                            .get("supported")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                })
+                .map(|(key, _)| key.clone())
+                .collect()
+        });
+    ModelMeta {
+        context_length: row
+            .get("max_input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+        supports_tools: None,
+        input_per_million: None,
+        output_per_million: None,
+        supports_vision: supported("image_input"),
+        reasoning_levels,
+        task: None,
+    }
 }
 
 async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
@@ -412,22 +459,43 @@ async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
         return Err(response_error("Anthropic", status, &body));
     }
     let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let rows = value.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let rows = value
+        .get("data")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut metadata = HashMap::new();
     for row in &rows {
-        if let Some(id) = row.get("id").and_then(|v| v.as_str()) { metadata.insert(id.to_string(), parse_anthropic_model(row)); }
+        if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
+            metadata.insert(id.to_string(), parse_anthropic_model(row));
+        }
     }
-    OPENAI_MODEL_META_CACHE.lock().unwrap().insert("anthropic".into(), (Instant::now(), metadata));
-    Ok(rows.iter().filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(str::to_string)).collect())
+    OPENAI_MODEL_META_CACHE
+        .lock()
+        .unwrap()
+        .insert("anthropic".into(), (Instant::now(), metadata));
+    Ok(rows
+        .iter()
+        .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(str::to_string))
+        .collect())
 }
 
 pub(crate) async fn anthropic_model_meta() -> HashMap<String, ModelMeta> {
-    if let Some((ts, meta)) = OPENAI_MODEL_META_CACHE.lock().unwrap().get("anthropic") { if ts.elapsed() < MODEL_META_TTL { return meta.clone(); } }
+    if let Some((ts, meta)) = OPENAI_MODEL_META_CACHE.lock().unwrap().get("anthropic") {
+        if ts.elapsed() < MODEL_META_TTL {
+            return meta.clone();
+        }
+    }
     if LISTINGS_OFFLINE {
         return HashMap::new();
     }
     let _ = fetch_anthropic_models().await;
-    OPENAI_MODEL_META_CACHE.lock().unwrap().get("anthropic").map(|(_, m)| m.clone()).unwrap_or_default()
+    OPENAI_MODEL_META_CACHE
+        .lock()
+        .unwrap()
+        .get("anthropic")
+        .map(|(_, m)| m.clone())
+        .unwrap_or_default()
 }
 
 async fn fetch_openai_compatible_models(
@@ -452,10 +520,10 @@ async fn fetch_openai_compatible_models(
     // The same response is the metadata listing: keep it, so a self-hosted
     // endpoint (no registry row for `fetch_openai_model_meta` to read) has
     // its per-model facts too.
-    OPENAI_MODEL_META_CACHE
-        .lock()
-        .unwrap()
-        .insert(provider.to_string(), (Instant::now(), parse_openai_models_meta(&value)));
+    OPENAI_MODEL_META_CACHE.lock().unwrap().insert(
+        provider.to_string(),
+        (Instant::now(), parse_openai_models_meta(&value)),
+    );
     Ok(normalize_model_ids(&value))
 }
 
@@ -565,10 +633,12 @@ pub(crate) async fn fetch_openai_model_meta(provider: &str) -> HashMap<String, M
             .unwrap_or_default();
     };
     let url = match entry.wire {
-        providers::WireFormat::OpenAi(cfg) => match providers::openai_models_url(entry.id, &cfg, None) {
-            Ok(url) => url,
-            Err(_) => return HashMap::new(),
-        },
+        providers::WireFormat::OpenAi(cfg) => {
+            match providers::openai_models_url(entry.id, &cfg, None) {
+                Ok(url) => url,
+                Err(_) => return HashMap::new(),
+            }
+        }
         _ => return HashMap::new(),
     };
     // No key (or an unresolved reference) → skip auth; OpenRouter's listing
@@ -630,7 +700,9 @@ pub(crate) async fn ai_provider_model_meta(provider: String) -> Result<Vec<Model
         .collect())
 }
 
-pub(crate) fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<Vec<String>, String> {
+pub(crate) fn subscription_models(
+    spec: &providers::SubscriptionSpec,
+) -> Result<Vec<String>, String> {
     // Confirm the CLI is reachable before returning any model list.
     // Without this guard, a "Check the Claude Code install" UI
     // (or the AiPanel's provider chip) would happily display a stale
@@ -658,70 +730,158 @@ pub(crate) struct OpenCodeModelFacts {
     pub max_output_tokens: Option<usize>,
 }
 type OpenCodeVariants = HashMap<String, OpenCodeModelFacts>;
-static OPENCODE_VARIANTS: LazyLock<Mutex<Option<(String, Instant, OpenCodeVariants)>>> = LazyLock::new(|| Mutex::new(None));
+static OPENCODE_VARIANTS: LazyLock<Mutex<Option<(String, Instant, OpenCodeVariants)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 fn opencode_catalog(value: &serde_json::Value) -> Option<OpenCodeVariants> {
     let mut catalog = HashMap::new();
     for model in value.get("data")?.as_array()? {
-        let (Some(provider), Some(id)) = (model.get("providerID").and_then(|v| v.as_str()), model.get("id").and_then(|v| v.as_str())) else { continue; };
-        let levels = model.get("variants").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|variant| {
-            let settings = variant.get("settings")?.as_object()?;
-            if !["reasoningEffort", "reasoning_effort", "effort", "thinking", "thinkingBudget", "thinkingLevel"].iter().any(|key| settings.contains_key(*key)) { return None; }
-            variant.get("id")?.as_str().filter(|id| !id.trim().is_empty()).map(str::to_owned)
-        }).collect();
-        let limit = |key: &str| model.get("limit")?.get(key)?.as_u64().and_then(|v| usize::try_from(v).ok()).filter(|v| *v > 0);
-        catalog.insert(format!("{provider}/{id}"), OpenCodeModelFacts { reasoning_levels: levels, context_window: limit("context"), max_output_tokens: limit("output"), supports_vision: model.pointer("/capabilities/input").and_then(|v| v.as_array()).map(|inputs| inputs.iter().any(|v| v.as_str() == Some("image"))) });
+        let (Some(provider), Some(id)) = (
+            model.get("providerID").and_then(|v| v.as_str()),
+            model.get("id").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        let levels = model
+            .get("variants")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|variant| {
+                let settings = variant.get("settings")?.as_object()?;
+                if ![
+                    "reasoningEffort",
+                    "reasoning_effort",
+                    "effort",
+                    "thinking",
+                    "thinkingBudget",
+                    "thinkingLevel",
+                ]
+                .iter()
+                .any(|key| settings.contains_key(*key))
+                {
+                    return None;
+                }
+                variant
+                    .get("id")?
+                    .as_str()
+                    .filter(|id| !id.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .collect();
+        let limit = |key: &str| {
+            model
+                .get("limit")?
+                .get(key)?
+                .as_u64()
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|v| *v > 0)
+        };
+        catalog.insert(
+            format!("{provider}/{id}"),
+            OpenCodeModelFacts {
+                reasoning_levels: levels,
+                context_window: limit("context"),
+                max_output_tokens: limit("output"),
+                supports_vision: model
+                    .pointer("/capabilities/input")
+                    .and_then(|v| v.as_array())
+                    .map(|inputs| inputs.iter().any(|v| v.as_str() == Some("image"))),
+            },
+        );
     }
     Some(catalog)
 }
 
 pub(crate) fn opencode_model_facts(model: &str) -> Option<OpenCodeModelFacts> {
-    if !model.contains('/') { return None; }
+    if !model.contains('/') {
+        return None;
+    }
     let cli = resolve_command(crate::delegate::OpenCode.binary()).ok()?;
     if let Some((binary, at, catalog)) = OPENCODE_VARIANTS.lock().unwrap().as_ref() {
         if binary == &cli && at.elapsed() < Duration::from_secs(300) {
-            return catalog.get(model.split('#').next().unwrap_or(model)).cloned();
+            return catalog
+                .get(model.split('#').next().unwrap_or(model))
+                .cloned();
         }
     }
     opencode_models_from(&cli)?;
-    OPENCODE_VARIANTS.lock().unwrap().as_ref().and_then(|(_, _, catalog)| catalog.get(model.split('#').next().unwrap_or(model)).cloned())
+    OPENCODE_VARIANTS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|(_, _, catalog)| {
+            catalog
+                .get(model.split('#').next().unwrap_or(model))
+                .cloned()
+        })
 }
 
 pub(crate) fn cached_opencode_model_facts(model: &str) -> Option<OpenCodeModelFacts> {
-    OPENCODE_VARIANTS.lock().unwrap().as_ref().and_then(|(_, at, catalog)| {
-        (at.elapsed() < Duration::from_secs(300)).then(|| catalog.get(model).cloned()).flatten()
-    })
+    OPENCODE_VARIANTS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|(_, at, catalog)| {
+            (at.elapsed() < Duration::from_secs(300))
+                .then(|| catalog.get(model).cloned())
+                .flatten()
+        })
 }
 
 /// Called off the async runtime by subscription discovery. V2's shared
 /// service can outlive its config and binary; a private query reads today's
 /// providers and credentials without depending on that service's health.
 pub(crate) fn opencode_models_from(cli: &str) -> Option<Vec<String>> {
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
     runtime.block_on(async {
         let mut version = tokio::process::Command::new(cli);
         version.arg("--version").kill_on_drop(true);
-        let version = tokio::time::timeout(Duration::from_secs(3), version.output()).await.ok()?.ok()?;
-        if !version.status.success() { return None; }
-        let v2 = crate::delegate::first_version_token(&String::from_utf8_lossy(&version.stdout))?.starts_with("2.");
+        let version = tokio::time::timeout(Duration::from_secs(3), version.output())
+            .await
+            .ok()?
+            .ok()?;
+        if !version.status.success() {
+            return None;
+        }
+        let v2 = crate::delegate::first_version_token(&String::from_utf8_lossy(&version.stdout))?
+            .starts_with("2.");
         let mut query = tokio::process::Command::new(cli);
         query.kill_on_drop(true);
-        if v2 { query.args(["api", "get", "/api/model", "--standalone"]); }
-        else { query.arg("models"); }
-        let output = tokio::time::timeout(Duration::from_secs(20), query.output()).await.ok()?.ok()?;
-        if !output.status.success() { return None; }
+        if v2 {
+            query.args(["api", "get", "/api/model", "--standalone"]);
+        } else {
+            query.arg("models");
+        }
+        let output = tokio::time::timeout(Duration::from_secs(20), query.output())
+            .await
+            .ok()?
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
         if v2 {
             let value = serde_json::from_slice(&output.stdout).ok()?;
             let catalog = opencode_catalog(&value)?;
             let mut models: Vec<String> = catalog.keys().cloned().collect();
             models.sort();
-            if models.is_empty() { return None; }
+            if models.is_empty() {
+                return None;
+            }
             *OPENCODE_VARIANTS.lock().unwrap() = Some((cli.to_string(), Instant::now(), catalog));
             return Some(models);
         }
-        *OPENCODE_VARIANTS.lock().unwrap() = Some((cli.to_string(), Instant::now(), HashMap::new()));
+        *OPENCODE_VARIANTS.lock().unwrap() =
+            Some((cli.to_string(), Instant::now(), HashMap::new()));
         let mut models: Vec<String> = String::from_utf8_lossy(&output.stdout)
-            .lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect();
         models.sort();
         models.dedup();
         (!models.is_empty()).then_some(models)
@@ -799,7 +959,11 @@ pub(crate) fn claude_cached_models() -> Option<Vec<String>> {
 
     // Recent transcripts first — the models the user actually runs today.
     let mut transcripts: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-    collect_jsonl_paths(&crate::delegate::ClaudeCode.sessions_dir(&env)?, &mut transcripts, 0);
+    collect_jsonl_paths(
+        &crate::delegate::ClaudeCode.sessions_dir(&env)?,
+        &mut transcripts,
+        0,
+    );
     transcripts.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
     for (_, path) in transcripts.into_iter().take(CLAUDE_RECENT_TRANSCRIPTS) {
         scan_for_claude_models(&path, &mut models);
@@ -920,10 +1084,7 @@ fn codex_home() -> Option<std::path::PathBuf> {
 }
 
 /// One manifest row, by the slug the CLI takes on `-m`.
-fn codex_manifest_entry_in(
-    home: &std::path::Path,
-    model: &str,
-) -> Option<serde_json::Value> {
+fn codex_manifest_entry_in(home: &std::path::Path, model: &str) -> Option<serde_json::Value> {
     codex_manifest_models_in(home)?
         .into_iter()
         .find(|entry| entry.get("slug").and_then(|slug| slug.as_str()) == Some(model))
@@ -969,7 +1130,10 @@ fn codex_cached_models_in(home: &std::path::Path) -> Option<Vec<String>> {
         .filter(|model| model.get("visibility").and_then(|v| v.as_str()) != Some("hide"))
         .filter_map(|model| {
             let slug = model.get("slug").and_then(|slug| slug.as_str())?;
-            let priority = model.get("priority").and_then(|p| p.as_u64()).unwrap_or(u64::MAX);
+            let priority = model
+                .get("priority")
+                .and_then(|p| p.as_u64())
+                .unwrap_or(u64::MAX);
             Some((priority, slug.to_string()))
         })
         .collect();
@@ -985,6 +1149,67 @@ fn codex_cached_models_in(home: &std::path::Path) -> Option<Vec<String>> {
 
 pub(crate) fn codex_context_window(model: &str) -> Option<usize> {
     codex_context_window_in(&codex_home()?, model)
+}
+
+pub(crate) fn vibe_cached_models() -> Option<Vec<String>> {
+    vibe_cached_models_in(&crate::delegate::Vibe.models_cache(&crate::delegate::ProcessEnv)?)
+}
+
+/// Vibe caches the account's model catalogue at
+/// `$VIBE_HOME/model_catalog_cache.json`, keyed by the login's `oidc:v1:…`
+/// id — the first entry's `payload.models` is the list the CLI's own picker
+/// shows, in the CLI's order (recommended models first).
+fn vibe_cached_models_in(cache: &std::path::Path) -> Option<Vec<String>> {
+    let bytes = std::fs::read(cache).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let models = value
+        .as_object()?
+        .values()
+        .next()?
+        .get("payload")?
+        .get("models")?
+        .as_array()?;
+    let mut out: Vec<String> = models
+        .iter()
+        .filter_map(|m| {
+            let id = m.get("id")?.as_str()?;
+            (!id.trim().is_empty()).then(|| id.to_string())
+        })
+        .collect();
+    out.dedup();
+    (!out.is_empty()).then_some(out)
+}
+
+pub(crate) fn vibe_model_context_window(model: &str) -> Option<usize> {
+    vibe_model_context_window_in(&crate::delegate::Vibe.models_cache(&crate::delegate::ProcessEnv)?, model)
+}
+
+/// The limit Vibe publishes for one of its catalogue models —
+/// `max_context_length` on the model's entry in the same
+/// `$VIBE_HOME/model_catalog_cache.json`. The picker may name an alias
+/// (`mistral-large-4` for `mistral-large-4-0`), so `id` and every `aliases`
+/// entry match.
+fn vibe_model_context_window_in(cache: &std::path::Path, model: &str) -> Option<usize> {
+    let bytes = std::fs::read(cache).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let models = value
+        .as_object()?
+        .values()
+        .next()?
+        .get("payload")?
+        .get("models")?
+        .as_array()?;
+    let entry = models.iter().find(|m| {
+        m.get("id").and_then(|v| v.as_str()) == Some(model)
+            || m
+                .get("aliases")
+                .and_then(|v| v.as_array())
+                .is_some_and(|aliases| aliases.iter().any(|a| a.as_str() == Some(model)))
+    })?;
+    entry
+        .get("max_context_length")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
 }
 
 fn codex_context_window_in(home: &std::path::Path, model: &str) -> Option<usize> {
@@ -1049,8 +1274,12 @@ pub(crate) async fn ai_model_capabilities(
     model: String,
     allow_activation_probe: Option<bool>,
 ) -> Result<crate::model_capabilities::ModelCapabilities, String> {
-    crate::model_capabilities::capabilities(&provider, &model, allow_activation_probe.unwrap_or(true))
-        .await
+    crate::model_capabilities::capabilities(
+        &provider,
+        &model,
+        allow_activation_probe.unwrap_or(true),
+    )
+    .await
 }
 
 /// The model's trained context window, or `None` when nobody published one.
@@ -1059,9 +1288,11 @@ pub(crate) async fn ai_context_window(
     provider: String,
     model: String,
 ) -> Result<Option<usize>, String> {
-    Ok(crate::model_capabilities::capabilities(&provider, &model, false)
-        .await?
-        .context_window)
+    Ok(
+        crate::model_capabilities::capabilities(&provider, &model, false)
+            .await?
+            .context_window,
+    )
 }
 
 #[tauri::command]
@@ -1069,9 +1300,11 @@ pub(crate) async fn ai_model_supports_tools(
     provider: String,
     model: String,
 ) -> Result<bool, String> {
-    Ok(crate::model_capabilities::capabilities(&provider, &model, false)
-        .await?
-        .supports_tools)
+    Ok(
+        crate::model_capabilities::capabilities(&provider, &model, false)
+            .await?
+            .supports_tools,
+    )
 }
 
 /// Whether the model can accept image input, so the composer only offers
@@ -1083,9 +1316,11 @@ pub(crate) async fn ai_model_supports_vision(
     provider: String,
     model: String,
 ) -> Result<bool, String> {
-    Ok(crate::model_capabilities::capabilities(&provider, &model, false)
-        .await?
-        .supports_vision)
+    Ok(
+        crate::model_capabilities::capabilities(&provider, &model, false)
+            .await?
+            .supports_vision,
+    )
 }
 
 /// Which reasoning efforts this provider+model actually accepts, weakest
@@ -1096,9 +1331,11 @@ pub(crate) async fn ai_model_reflection_levels(
     provider: String,
     model: String,
 ) -> Result<Vec<String>, String> {
-    Ok(crate::model_capabilities::capabilities(&provider, &model, true)
-        .await?
-        .reasoning_levels)
+    Ok(
+        crate::model_capabilities::capabilities(&provider, &model, true)
+            .await?
+            .reasoning_levels,
+    )
 }
 
 #[tauri::command]
@@ -1106,9 +1343,11 @@ pub(crate) async fn ai_model_supports_reflection(
     provider: String,
     model: String,
 ) -> Result<bool, String> {
-    Ok(crate::model_capabilities::capabilities(&provider, &model, true)
-        .await?
-        .supports_reasoning())
+    Ok(
+        crate::model_capabilities::capabilities(&provider, &model, true)
+            .await?
+            .supports_reasoning(),
+    )
 }
 
 /// Exact token count for a single message's text under a specific model's own
@@ -1218,7 +1457,10 @@ mod tests {
 
     #[test]
     fn a_listing_names_a_model_by_id_or_by_its_dated_snapshot() {
-        let ids = ["claude-haiku-4-5-20251001".to_string(), "mistral-medium-latest".to_string()];
+        let ids = [
+            "claude-haiku-4-5-20251001".to_string(),
+            "mistral-medium-latest".to_string(),
+        ];
         assert!(listing_names(ids.iter(), "mistral-medium-latest"));
         assert!(listing_names(ids.iter(), "claude-haiku-4-5"));
         assert!(!listing_names(ids.iter(), "mistral-large-latest"));
@@ -1231,8 +1473,14 @@ mod tests {
     async fn only_a_listing_that_loaded_can_rule_a_model_out() {
         assert_eq!(key_lists_model("deepseek", "deepseek-chat").await, None);
         seed_listing("deepseek", &["deepseek-chat".to_string()]);
-        assert_eq!(key_lists_model("deepseek", "deepseek-chat").await, Some(true));
-        assert_eq!(key_lists_model("deepseek", "deepseek-reasoner").await, Some(false));
+        assert_eq!(
+            key_lists_model("deepseek", "deepseek-chat").await,
+            Some(true)
+        );
+        assert_eq!(
+            key_lists_model("deepseek", "deepseek-reasoner").await,
+            Some(false)
+        );
         assert_eq!(key_lists_model("ollama", "anything").await, None);
     }
 
@@ -1243,8 +1491,14 @@ mod tests {
             {"providerID":"opencode-go","id":"glm-5.3-flash","variants":[{"id":"low","settings":{"reasoningEffort":"low"}},{"id":"high","settings":{"reasoningEffort":"high"}}]},
             {"providerID":"mock","id":"plain","capabilities":{"input":["text","image"]},"limit":{"context":1000000,"output":131072},"variants":[{"id":"batch","body":{"service_tier":"flex"}}]}
         ]})).unwrap();
-        assert_eq!(catalog["opencode-go/minimax-m3"].reasoning_levels, ["none", "thinking"]);
-        assert_eq!(catalog["opencode-go/glm-5.3-flash"].reasoning_levels, ["low", "high"]);
+        assert_eq!(
+            catalog["opencode-go/minimax-m3"].reasoning_levels,
+            ["none", "thinking"]
+        );
+        assert_eq!(
+            catalog["opencode-go/glm-5.3-flash"].reasoning_levels,
+            ["low", "high"]
+        );
         assert!(catalog["mock/plain"].reasoning_levels.is_empty());
         assert_eq!(catalog["mock/plain"].supports_vision, Some(true));
         assert_eq!(catalog["opencode-go/minimax-m3"].supports_vision, None);
@@ -1578,5 +1832,66 @@ mod tests {
         // copy, so adding an MLX preset doesn't silently rot this test.
         let models = ai_provider_models("mlx".to_string()).await.unwrap();
         assert_eq!(models, crate::providers::MLX_MODEL_PRESETS.to_vec());
+    }
+
+    /// A throwaway VIBE_HOME holding a `model_catalog_cache.json`, so the
+    /// catalogue reads run against a fixture rather than the developer's
+    /// actual Vibe login.
+    fn vibe_cache_fixture(name: &str, catalog: &str) -> std::path::PathBuf {
+        let home = std::env::temp_dir().join(format!("klide-models-test-{name}"));
+        let _ = std::fs::remove_dir_all(&home);
+        let path = crate::delegate::Vibe
+            .models_cache(&crate::delegate::home::test_env(&home))
+            .unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, catalog).unwrap();
+        path
+    }
+
+    /// The shape of `$VIBE_HOME/model_catalog_cache.json`, trimmed to the
+    /// fields Klide reads: one entry keyed by the login's `oidc:v1:…` id.
+    const VIBE_CATALOG: &str = r#"{
+      "oidc:v1:abc123": {
+        "stored_at_timestamp": 1795018595,
+        "payload": {
+          "models": [
+            {
+              "id": "mistral-large-4-0",
+              "aliases": ["mistral-large-4-0-3", "mistral-large-4"],
+              "max_context_length": 1048576,
+              "capabilities": { "completion_chat": true, "function_calling": true, "vision": true }
+            },
+            {
+              "id": "mistral-medium-latest",
+              "aliases": ["mistral-medium", "mistral-medium-3.5"],
+              "max_context_length": 262144,
+              "capabilities": { "completion_chat": true, "function_calling": true, "vision": true }
+            }
+          ]
+        }
+      }
+    }"#;
+
+    #[test]
+    fn vibe_catalog_reads_the_window_by_id_and_by_alias() {
+        let cache = vibe_cache_fixture("vibe-catalog", VIBE_CATALOG);
+        assert_eq!(vibe_model_context_window_in(&cache, "mistral-large-4-0"), Some(1_048_576));
+        // The picker may show an alias; the limit follows the real entry.
+        assert_eq!(vibe_model_context_window_in(&cache, "mistral-large-4"), Some(1_048_576));
+        assert_eq!(vibe_model_context_window_in(&cache, "mistral-medium-latest"), Some(262_144));
+        // A model the catalogue doesn't list is unknown, not zero.
+        assert_eq!(vibe_model_context_window_in(&cache, "gpt-9-imaginary"), None);
+    }
+
+    #[test]
+    fn a_missing_or_corrupt_vibe_catalog_is_silence_not_a_panic() {
+        let empty = std::env::temp_dir().join("klide-models-test-vibe-absent");
+        let _ = std::fs::remove_dir_all(&empty);
+        assert!(vibe_model_context_window_in(&empty.join("model_catalog_cache.json"), "mistral-large-4-0").is_none());
+
+        // The cache is written by another process — a half-written file must
+        // not take Klide down.
+        let torn = vibe_cache_fixture("vibe-torn", r#"{"oidc:v1:abc": {"payload": {"models": [{"id": "#);
+        assert!(vibe_model_context_window_in(&torn, "mistral-large-4-0").is_none());
     }
 }

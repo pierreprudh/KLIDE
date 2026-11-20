@@ -1,8 +1,10 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import type { ProviderId } from "../../agent/types";
 import { ProviderLogo } from "../ai/icons";
 import { AccountControl, GitHubAccountRow } from "./accounts";
 import { GhostButton, Panel, Row, SettingBlock, StatusText } from "./controls";
+import { DelegateLoginModal } from "./DelegateLoginModal";
 import { ProviderWordmark } from "./providerWordmarks";
 
 type Provider = { id: string; title: string; description: string; accounts: boolean };
@@ -20,13 +22,17 @@ function AccountGroup({ title, description, action, children }: {
   );
 }
 
-export function SubscriptionAccounts({ providers, statuses, ollamaAccount, refreshing, onRefresh }: {
+export function SubscriptionAccounts({ providers, statuses, ollamaAccount, refreshing, workspaceRoot, onRefresh }: {
   providers: Provider[];
   statuses: Partial<Record<string, Status>>;
   ollamaAccount: OllamaAccount | null;
   refreshing: boolean;
+  workspaceRoot: string | null;
   onRefresh: () => void;
 }) {
+  // Which CLI's sign-in terminal is open, if any.
+  const [loginFor, setLoginFor] = useState<string | null>(null);
+  const loginProvider = providers.find((p) => p.id === loginFor);
   return (
     <div className="klide-subscription-accounts" data-setting="Connections & Accounts" tabIndex={-1}>
       <AccountGroup title="Workspace identity" description="Your GitHub account for pull requests and repository access.">
@@ -41,12 +47,21 @@ export function SubscriptionAccounts({ providers, statuses, ollamaAccount, refre
               titleContent={<ProviderWordmark id={provider.id} label={provider.title} />}
               description={status?.detail || provider.description}
               leading={<ProviderLogo id={provider.id as ProviderId} size={24} />}
-              control={provider.accounts ? (
-                <AccountControl provider={provider.id} title={provider.title} connected={!!status?.connected} />
+              control={status?.connected ? (
+                provider.accounts ? (
+                  <AccountControl provider={provider.id} title={provider.title} connected />
+                ) : (
+                  <StatusText tone="ok">Ready</StatusText>
+                )
               ) : (
-                <StatusText tone={status?.connected ? "ok" : "idle"}>
-                  {status?.connected ? "Ready" : status?.installed ? "Not connected" : "Not installed"}
-                </StatusText>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                  <StatusText tone="idle">
+                    {status?.installed ? "Not connected" : "Not installed"}
+                  </StatusText>
+                  {status?.installed ? (
+                    <GhostButton onClick={() => setLoginFor(provider.id)}>Log in</GhostButton>
+                  ) : null}
+                </span>
               )} />;
           })}
         </div>
@@ -58,6 +73,15 @@ export function SubscriptionAccounts({ providers, statuses, ollamaAccount, refre
             {ollamaAccount?.signedIn ? ollamaAccount.name ?? "Signed in" : ollamaAccount?.running ? "Not signed in" : "Server offline"}
           </StatusText>} />
       </AccountGroup>
+      {loginProvider ? (
+        <DelegateLoginModal
+          providerId={loginProvider.id as ProviderId}
+          title={loginProvider.title}
+          workspaceRoot={workspaceRoot}
+          onClose={() => setLoginFor(null)}
+          onExited={onRefresh}
+        />
+      ) : null}
     </div>
   );
 }
