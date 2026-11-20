@@ -943,7 +943,14 @@ pub fn pty_spawn(
     watch_shell_title(app.clone(), id.clone(), shell_pid);
 
     std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
+        // Rate-limit output events: dense output (`cat big.log`, a compiler
+        // spew, a TUI redraw storm) crosses the IPC boundary once per read —
+        // an unthrottled session floods the webview with thousands of
+        // events/s. Sleeping briefly after each chunk lets bursts pile up in
+        // the kernel's PTY buffer, so the next (large) read drains them as
+        // one event. Caps traffic at ~60 events/s per shell; nothing is ever
+        // left stuck. Same pattern as the delegate host (pty_host.rs).
+        let mut buf = [0u8; 65536];
         let mut framer = crate::pty_frame::Utf8Framer::new();
         loop {
             let (chunk, eof) = match reader.read(&mut buf) {
@@ -965,6 +972,7 @@ pub fn pty_spawn(
                     chunk,
                 },
             );
+            std::thread::sleep(std::time::Duration::from_millis(15));
         }
         let _ = child.wait();
         // The shell is gone (`exit`, or the user killed it). Drop it so the id
@@ -1028,14 +1036,19 @@ pub(crate) fn spawn_machine_setup(
     shells.insert(id.clone(), Shell { writer, master: pair.master, cwd: None });
     drop(shells);
     std::thread::spawn(move || {
-        let mut bytes = [0u8; 4096];
+        // Same coalescing rule as the user-shell reader above: one large read
+        // every ~15 ms instead of an IPC message per 4 KB burst.
+        let mut bytes = [0u8; 65536];
         let mut framer = crate::pty_frame::Utf8Framer::new();
         loop {
             let (chunk, done) = match reader.read(&mut bytes) {
                 Ok(0) | Err(_) => (framer.finish(), true),
                 Ok(count) => (framer.push(&bytes[..count]), false),
             };
-            if !chunk.is_empty() { let _ = app.emit("pty:data", PtyChunk { id: id.clone(), chunk }); }
+            if !chunk.is_empty() {
+                let _ = app.emit("pty:data", PtyChunk { id: id.clone(), chunk });
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
             if done { break; }
         }
         let success = child.wait().is_ok_and(|status| status.success());
