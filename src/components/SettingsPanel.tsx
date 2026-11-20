@@ -202,6 +202,10 @@ const DELEGATE_COPY: Record<DelegateId, { description: string; modelNote: string
     description: "Nous Research's Hermes agent. Configure credentials with hermes setup.",
     modelNote: "Uses Hermes's configured provider and model.",
   },
+  vibe: {
+    description: "Mistral's Vibe CLI on your Mistral subscription. Sign in by running vibe.",
+    modelNote: "Loaded from Vibe's model catalogue cache when available.",
+  },
 };
 
 const subscriptionProviders: SubscriptionProviderRow[] = DELEGATES.map((d) => ({
@@ -2154,6 +2158,7 @@ export function SettingsPanel({
                 statuses={subscriptionStatuses}
                 ollamaAccount={ollamaAccount}
                 refreshing={connectionLoading}
+                workspaceRoot={workspaceRoot}
                 onRefresh={() => void refreshSubscriptionConnections()}
               />
               </Section>

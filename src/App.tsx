@@ -69,7 +69,6 @@ import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchCliSessionRun, fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
 import { delegateLabel, isDelegateId, type DelegateId } from "./delegates";
-import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId } from "./theme";
 import { SETTINGS, getSetting, setSetting, useSetting } from "./settingsStore";
 import { loadSkills, saveSkills, loadFilesystemSkills, mergeFilesystemSkills, type Skill } from "./skills";
@@ -165,6 +164,9 @@ const Scheduled = lazy(() => import("./components/Scheduled").then(m => ({ defau
 const FocusMode = lazy(() => import("./components/FocusMode").then((m) => ({ default: m.FocusMode })));
 const GitReview = lazy(() => import("./components/GitReview").then((m) => ({ default: m.GitReview })));
 const LibraryModal = lazy(() => import("./components/LibraryModal").then((m) => ({ default: m.LibraryModal })));
+// Always mounted (it animates its own exit), but off the entry chunk: it loads
+// right after first render instead of with the shell.
+const ProfileModal = lazy(() => import("./components/ProfileModal").then((m) => ({ default: m.ProfileModal })));
 const ArtifactInspector = lazy(() => import("./components/ArtifactInspector").then((m) => ({ default: m.ArtifactInspector })));
 const WorktreesModal = lazy(() => import("./components/WorktreesModal").then((m) => ({ default: m.WorktreesModal })));
 const FileViewerPanel = lazy(() => import("./components/FileViewerPanel").then((m) => ({ default: m.FileViewerPanel })));
@@ -4495,11 +4497,13 @@ function App() {
           />
         </Suspense>
       )}
-      <ProfileModal
-        open={profileVisible}
-        workspaceRoot={workspaceRoot}
-        onClose={() => setProfileVisible(false)}
-      />
+      <Suspense fallback={null}>
+        <ProfileModal
+          open={profileVisible}
+          workspaceRoot={workspaceRoot}
+          onClose={() => setProfileVisible(false)}
+        />
+      </Suspense>
       {shortcutsOpen && (
         <Suspense fallback={null}>
           <KeyboardShortcuts onClose={() => setShortcutsOpen(false)} />

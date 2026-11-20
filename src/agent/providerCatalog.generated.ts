@@ -865,5 +865,28 @@ export const PROVIDER_ROWS = [
     "contextWindow": null,
     "endpointVars": [],
     "keyCommand": null
+  },
+  {
+    "id": "vibe",
+    "label": "Vibe",
+    "shortLabel": null,
+    "group": "subscription",
+    "wire": "delegate",
+    "keyEnv": null,
+    "keyEnvLegacy": null,
+    "keyPlaceholder": null,
+    "defaultModel": null,
+    "presets": [],
+    "brand": "vibe",
+    "hasCredits": false,
+    "isLocalServer": false,
+    "hasNumCtx": false,
+    "caps": {
+      "structuredReplay": true,
+      "minimalChatContext": false
+    },
+    "contextWindow": null,
+    "endpointVars": [],
+    "keyCommand": null
   }
 ] as const;

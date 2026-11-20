@@ -16,26 +16,27 @@ mod additional;
 mod hermes_acp;
 pub use additional::{AMP, CURSOR, FACTORY, HERMES};
 mod chat;
-mod child;
 mod chat_server;
 pub(crate) mod chat_stream;
+mod child;
 pub(crate) use chat_stream::summarize_call;
-mod cli_commands;
 mod claude_code;
+mod cli_commands;
 mod codex;
 mod copilot;
-mod hosted_sessions;
 pub mod home;
+mod hosted_sessions;
 mod omp;
 mod opencode;
 mod opencode_images;
 mod runs;
 pub mod status;
+mod vibe;
 
 pub use chat::run_subscription_chat;
-pub use cli_commands::{claude_code_settings, cli_commands, CliCommands};
 pub use claude_code::ClaudeCode;
 pub use claude_code::EFFORT_LEVELS as CLAUDE_EFFORT_LEVELS;
+pub use cli_commands::{claude_code_settings, cli_commands, CliCommands};
 pub use codex::Codex;
 pub use copilot::Copilot;
 pub use home::{home_dir, Env, ProcessEnv};
@@ -43,6 +44,8 @@ pub use omp::Omp;
 pub use opencode::OpenCode;
 pub(crate) use runs::{fill_worktree_evidence, retain_candidates_in_workspace, worktree_label};
 pub use runs::{AgentRun, RunCandidate, RunMessage};
+pub use vibe::Vibe;
+pub(crate) use vibe::journal_usage_since;
 
 /// The frontend's "no model picked" sentinel (`DEFAULT_MODELS` in
 /// src/agent/providers.ts). A delegate spawned or chatted with this model
@@ -115,7 +118,10 @@ impl McpServerSpec {
         [
             (crate::mcp_server::ENV_ENDPOINT, self.endpoint_path.as_str()),
             (crate::mcp_server::ENV_SESSION, self.session_id.as_str()),
-            (crate::mcp_server::ENV_SECRET_FILE, self.secret_path.as_str()),
+            (
+                crate::mcp_server::ENV_SECRET_FILE,
+                self.secret_path.as_str(),
+            ),
         ]
     }
 
@@ -141,7 +147,9 @@ pub struct McpWiring {
 
 pub trait Delegate: Sync {
     /// A bidirectional ACP turn, rather than a one-way stdout stream.
-    fn uses_acp(&self, _spec: &ChatSpec) -> bool { false }
+    fn uses_acp(&self, _spec: &ChatSpec) -> bool {
+        false
+    }
     /// Klide's provider id for this delegate, e.g. "claude-code". This is the
     /// `source` field on every Run the adapter parses.
     fn id(&self) -> &'static str;
@@ -237,7 +245,11 @@ pub trait Delegate: Sync {
 
     /// Per-launch configuration for a CLI whose interactive entry point
     /// cannot express the selection with command-line flags.
-    fn spawn_env(&self, _model: Option<&str>, _effort: Option<&str>) -> Result<Vec<(String, String)>, String> {
+    fn spawn_env(
+        &self,
+        _model: Option<&str>,
+        _effort: Option<&str>,
+    ) -> Result<Vec<(String, String)>, String> {
         Ok(Vec::new())
     }
 
@@ -356,7 +368,11 @@ pub trait Delegate: Sync {
         let mut command = tokio::process::Command::new(cli);
         command.envs(self.headless_env());
         let env = self.chat_source_env(cwd, model)?;
-        command.current_dir(cwd).args(args).args(self.chat_source_args(model, &env)?).envs(env);
+        command
+            .current_dir(cwd)
+            .args(args)
+            .args(self.chat_source_args(model, &env)?)
+            .envs(env);
         Ok(command)
     }
 
@@ -387,10 +403,12 @@ pub trait Delegate: Sync {
     /// one. By default the list is the stream's own
     /// [`StreamItem::Commands`](chat_stream::StreamItem::Commands).
     fn parse_probe_line(&self, line: &str) -> Option<CliCommands> {
-        self.parse_stream_line(line).into_iter().find_map(|item| match item {
-            chat_stream::StreamItem::Commands(commands) => Some(commands),
-            _ => None,
-        })
+        self.parse_stream_line(line)
+            .into_iter()
+            .find_map(|item| match item {
+                chat_stream::StreamItem::Commands(commands) => Some(commands),
+                _ => None,
+            })
     }
 
     /// A probe line that names a URL serving the command list (a CLI that
@@ -468,7 +486,9 @@ pub trait Delegate: Sync {
             command.envs(self.headless_env());
             command.envs(self.chat_stream_env(spec));
             let env = self.chat_source_env(cwd, spec.model)?;
-            command.args(self.chat_source_args(spec.model, &env)?).envs(env);
+            command
+                .args(self.chat_source_args(spec.model, &env)?)
+                .envs(env);
             Ok(command)
         }))
     }
@@ -479,7 +499,11 @@ pub trait Delegate: Sync {
         Ok(Vec::new())
     }
 
-    fn chat_source_args(&self, _model: &str, _env: &[(String, String)]) -> Result<Vec<String>, String> {
+    fn chat_source_args(
+        &self,
+        _model: &str,
+        _env: &[(String, String)],
+    ) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
 
@@ -515,7 +539,11 @@ pub trait Delegate: Sync {
     ///
     /// The default probes each transcript's head for its `cwd`, which is where
     /// all three JSONL delegates record it.
-    fn discover_runs_for_workspace(&self, env: &dyn Env, workspace_root: &str) -> Vec<RunCandidate> {
+    fn discover_runs_for_workspace(
+        &self,
+        env: &dyn Env,
+        workspace_root: &str,
+    ) -> Vec<RunCandidate> {
         retain_candidates_in_workspace(self.discover_runs(env), workspace_root)
     }
 
@@ -534,7 +562,9 @@ pub trait Delegate: Sync {
 
     /// Whether Klide can import this CLI's recorded sessions. Launch-only
     /// adapters opt out of session handoff instructions until they have a parser.
-    fn supports_session_import(&self) -> bool { true }
+    fn supports_session_import(&self) -> bool {
+        true
+    }
 
     /// The run's conversation for the Mission Control detail pane. `key` is
     /// the same value `discover_runs` produced — a transcript path or a
@@ -649,12 +679,25 @@ pub trait RunParser {
 }
 
 /// The registry — one adapter per delegate CLI Klide can dispatch.
-pub const ALL: [&dyn Delegate; 9] = [&ClaudeCode, &Codex, &OpenCode, &Omp, &AMP, &CURSOR, &FACTORY, &Copilot, &HERMES];
+pub const ALL: [&dyn Delegate; 10] = [
+    &ClaudeCode,
+    &Codex,
+    &OpenCode,
+    &Omp,
+    &AMP,
+    &CURSOR,
+    &FACTORY,
+    &Copilot,
+    &HERMES,
+    &Vibe,
+];
 
 /// Every Delegate's [`Delegate::secret_files`], for the command sandbox's
 /// read denies: the adapters say where a login lives, nobody else spells it.
 pub fn secret_files(env: &dyn Env) -> Vec<std::path::PathBuf> {
-    ALL.iter().flat_map(|delegate| delegate.secret_files(env)).collect()
+    ALL.iter()
+        .flat_map(|delegate| delegate.secret_files(env))
+        .collect()
 }
 
 pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
@@ -694,14 +737,26 @@ pub fn find_run(env: &dyn Env, provider: &str, session_id: &str) -> Option<Agent
     let delegate = ALL.iter().find(|d| d.id() == provider)?;
     let stamp = delegate.parse_inputs_stamp(env);
     let parser = delegate.run_parser(env);
-    delegate.discover_runs(env).into_iter().filter(|c| {
-        c.key == session_id || std::path::Path::new(&c.key).file_stem().is_some_and(|stem| {
-            let stem = stem.to_string_lossy();
-            stem == session_id || stem.ends_with(&format!("-{session_id}")) || stem.ends_with(&format!("_{session_id}"))
+    delegate
+        .discover_runs(env)
+        .into_iter()
+        .filter(|c| {
+            c.key == session_id
+                || std::path::Path::new(&c.key)
+                    .file_stem()
+                    .is_some_and(|stem| {
+                        let stem = stem.to_string_lossy();
+                        stem == session_id
+                            || stem.ends_with(&format!("-{session_id}"))
+                            || stem.ends_with(&format!("_{session_id}"))
+                    })
         })
-    }).filter_map(|candidate| {
-        PARSED_RUNS.get_or_compute(std::path::Path::new(&candidate.key), stamp, |_| parser.parse(&candidate.key))
-    }).find(|run| run.id == session_id)
+        .filter_map(|candidate| {
+            PARSED_RUNS.get_or_compute(std::path::Path::new(&candidate.key), stamp, |_| {
+                parser.parse(&candidate.key)
+            })
+        })
+        .find(|run| run.id == session_id)
 }
 
 /// The session of one delegate that `workspace_root` saw last — what a
@@ -717,7 +772,11 @@ pub fn find_latest_run(env: &dyn Env, provider: &str, workspace_root: &str) -> O
     candidates
         .into_iter()
         .take(MAX_WORKSPACE_MISSES)
-        .filter_map(|c| PARSED_RUNS.get_or_compute(std::path::Path::new(&c.key), stamp, |_| parser.parse(&c.key)))
+        .filter_map(|c| {
+            PARSED_RUNS.get_or_compute(std::path::Path::new(&c.key), stamp, |_| {
+                parser.parse(&c.key)
+            })
+        })
         .find(|run| run_matches_workspace(run, workspace_root))
 }
 
@@ -773,15 +832,24 @@ static SESSION_KEYS: std::sync::Mutex<Option<std::collections::HashMap<(String, 
     std::sync::Mutex::new(None);
 
 fn remembered_session_key(provider: &str, session: &str) -> Option<String> {
-    SESSION_KEYS.lock().ok()?.as_ref()?.get(&(provider.to_string(), session.to_string())).cloned()
+    SESSION_KEYS
+        .lock()
+        .ok()?
+        .as_ref()?
+        .get(&(provider.to_string(), session.to_string()))
+        .cloned()
 }
 
 fn remember_session_key(provider: &str, session: &str, key: Option<String>) {
     if let Ok(mut guard) = SESSION_KEYS.lock() {
         let map = guard.get_or_insert_with(Default::default);
         match key {
-            Some(key) => { map.insert((provider.to_string(), session.to_string()), key); }
-            None => { map.remove(&(provider.to_string(), session.to_string())); }
+            Some(key) => {
+                map.insert((provider.to_string(), session.to_string()), key);
+            }
+            None => {
+                map.remove(&(provider.to_string(), session.to_string()));
+            }
         }
     }
 }
@@ -801,7 +869,9 @@ pub fn session_tail(
     let key = match remembered_session_key(provider, session) {
         Some(key) => key,
         None => {
-            let Some(run) = find_run(env, provider, session) else { return Ok(None) };
+            let Some(run) = find_run(env, provider, session) else {
+                return Ok(None);
+            };
             remember_session_key(provider, session, Some(run.path.clone()));
             run.path
         }
@@ -809,7 +879,11 @@ pub fn session_tail(
     let path = std::path::Path::new(&key);
     let file_stamp = if delegate.run_key_is_path() {
         match std::fs::metadata(path) {
-            Ok(meta) => Some(format!("{}:{}", crate::file_memo::mtime_epoch(path), meta.len())),
+            Ok(meta) => Some(format!(
+                "{}:{}",
+                crate::file_memo::mtime_epoch(path),
+                meta.len()
+            )),
             Err(_) => {
                 // Moved or deleted under us: forget the key so the next tick
                 // looks the session up again, and report it gone for now.
@@ -829,13 +903,23 @@ pub fn session_tail(
     let stamp = file_stamp.unwrap_or_else(|| format!("{}:{}", run.updated_ms, run.message_count));
     // The parse is memoised on the file, so its `running` was judged against
     // the clock of the tick that parsed it. Judge it again now.
-    let status = if run.status == "running" && runs::now_ms() - run.updated_ms >= runs::DELEGATE_RECENCY_MS {
+    let status = if run.status == "running"
+        && runs::now_ms() - run.updated_ms >= runs::DELEGATE_RECENCY_MS
+    {
         "done".to_string()
     } else {
         run.status.clone()
     };
-    let messages = if seen == Some(stamp.as_str()) { None } else { Some(delegate.read_run(env, &key)?) };
-    Ok(Some(SessionTail { stamp, status, messages }))
+    let messages = if seen == Some(stamp.as_str()) {
+        None
+    } else {
+        Some(delegate.read_run(env, &key)?)
+    };
+    Ok(Some(SessionTail {
+        stamp,
+        status,
+        messages,
+    }))
 }
 
 pub(crate) fn normalize_path(path: &str) -> String {
@@ -865,7 +949,8 @@ fn run_matches_workspace(run: &AgentRun, workspace_root: &str) -> bool {
 /// `offset`; with the memo both are a stat per candidate, and only a transcript
 /// that moved since the last tick is read again. OpenCode keys are session ids,
 /// not paths — the memo computes those uncached, exactly as before.
-static PARSED_RUNS: crate::file_memo::FileMemo<Option<AgentRun>> = crate::file_memo::FileMemo::new();
+static PARSED_RUNS: crate::file_memo::FileMemo<Option<AgentRun>> =
+    crate::file_memo::FileMemo::new();
 
 fn list_runs_matching(
     env: &dyn Env,
@@ -877,7 +962,9 @@ fn list_runs_matching(
     let stamps: Vec<u64> = ALL.iter().map(|d| d.parse_inputs_stamp(env)).collect();
     let mut candidates: Vec<(usize, RunCandidate)> = Vec::new();
     for (i, delegate) in ALL.iter().enumerate() {
-        if !delegate.supports_session_import() { continue; }
+        if !delegate.supports_session_import() {
+            continue;
+        }
         let found = match workspace_root {
             Some(root) => delegate.discover_runs_for_workspace(env, root),
             None => delegate.discover_runs(env),
@@ -948,7 +1035,8 @@ mod tests {
 
     #[test]
     fn session_lookup_resolves_timestamped_provider_files() {
-        let home = std::env::temp_dir().join(format!("klide-session-lookup-{}", std::process::id()));
+        let home =
+            std::env::temp_dir().join(format!("klide-session-lookup-{}", std::process::id()));
         let codex = home.join(".codex/sessions/2026/10/11");
         let omp = home.join(".omp/agent/sessions/--tmp-work--");
         std::fs::create_dir_all(&codex).unwrap();
@@ -972,23 +1060,48 @@ mod tests {
         std::fs::write(&log, r#"{"type":"user","ts":1,"cwd":"/tmp/work","sessionId":"tail-id","message":{"content":"first ask"}}"#).unwrap();
         let env = home::test_env(&home);
 
-        let first = session_tail(&env, "claude-code", "tail-id", None).unwrap().unwrap();
-        assert_eq!(first.status, "running", "a fresh user turn with no answer yet is in flight");
-        assert_eq!(first.messages.as_ref().map(|m| m.len()), Some(1), "the first tick carries the transcript");
+        let first = session_tail(&env, "claude-code", "tail-id", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first.status, "running",
+            "a fresh user turn with no answer yet is in flight"
+        );
+        assert_eq!(
+            first.messages.as_ref().map(|m| m.len()),
+            Some(1),
+            "the first tick carries the transcript"
+        );
 
-        let quiet = session_tail(&env, "claude-code", "tail-id", Some(&first.stamp)).unwrap().unwrap();
+        let quiet = session_tail(&env, "claude-code", "tail-id", Some(&first.stamp))
+            .unwrap()
+            .unwrap();
         assert_eq!(quiet.stamp, first.stamp);
-        assert!(quiet.messages.is_none(), "an unchanged transcript sends no messages");
+        assert!(
+            quiet.messages.is_none(),
+            "an unchanged transcript sends no messages"
+        );
 
         std::fs::OpenOptions::new().append(true).open(&log).unwrap()
             .write_all(b"\n{\"type\":\"assistant\",\"ts\":2,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}").unwrap();
-        let moved = session_tail(&env, "claude-code", "tail-id", Some(&first.stamp)).unwrap().unwrap();
+        let moved = session_tail(&env, "claude-code", "tail-id", Some(&first.stamp))
+            .unwrap()
+            .unwrap();
         assert_ne!(moved.stamp, first.stamp);
-        assert_eq!(moved.messages.as_ref().map(|m| m.len()), Some(2), "a grown transcript comes back folded");
+        assert_eq!(
+            moved.messages.as_ref().map(|m| m.len()),
+            Some(2),
+            "a grown transcript comes back folded"
+        );
         assert_eq!(moved.status, "done", "a plain answer closes the turn");
 
         std::fs::remove_file(&log).unwrap();
-        assert!(session_tail(&env, "claude-code", "tail-id", Some(&moved.stamp)).unwrap().is_none(), "a vanished session stops the follower");
+        assert!(
+            session_tail(&env, "claude-code", "tail-id", Some(&moved.stamp))
+                .unwrap()
+                .is_none(),
+            "a vanished session stops the follower"
+        );
         std::fs::remove_dir_all(home).unwrap();
     }
 
@@ -999,7 +1112,11 @@ mod tests {
         let proj = home.join(".claude/projects/-tmp-work");
         std::fs::create_dir_all(proj.join("carried/subagents")).unwrap();
         let turn = r#"{"type":"user","cwd":"/tmp/work","message":{"content":"my own ask"}}"#;
-        for log in ["carried.jsonl", "carried/subagents/agent-1.jsonl", "mine.jsonl"] {
+        for log in [
+            "carried.jsonl",
+            "carried/subagents/agent-1.jsonl",
+            "mine.jsonl",
+        ] {
             std::fs::write(proj.join(log), turn).unwrap();
         }
         hosted_sessions::use_test_path(Some(home.join("hosted_sessions.jsonl")));
@@ -1007,8 +1124,15 @@ mod tests {
         let env = home::test_env(&home);
 
         let ids: Vec<String> = list_runs(&env, 10, 0).into_iter().map(|r| r.id).collect();
-        assert_eq!(ids, ["mine"], "the carried session and its sub-agent are Klide's conversation now");
-        assert!(find_run(&env, "claude-code", "carried").is_some(), "following it by id still works");
+        assert_eq!(
+            ids,
+            ["mine"],
+            "the carried session and its sub-agent are Klide's conversation now"
+        );
+        assert!(
+            find_run(&env, "claude-code", "carried").is_some(),
+            "following it by id still works"
+        );
 
         hosted_sessions::use_test_path(None);
         std::fs::remove_dir_all(home).unwrap();
@@ -1016,20 +1140,28 @@ mod tests {
 
     #[test]
     fn claude_dispatch_with_task_and_model() {
-        let cmd = ClaudeCode.spawn_command(Some("fix the bug"), Some("claude-sonnet-4-6"), None, None);
+        let cmd =
+            ClaudeCode.spawn_command(Some("fix the bug"), Some("claude-sonnet-4-6"), None, None);
         assert_eq!(cmd, "claude --model 'claude-sonnet-4-6' 'fix the bug'");
     }
 
     #[test]
     fn claude_effort_survives_launch_and_resume() {
         for level in ["low", "medium", "high", "xhigh", "max"] {
-            assert_eq!(ClaudeCode.spawn_command(Some("task"), None, None, Some(level)),
-                format!("claude --effort '{level}' 'task'"));
-            assert_eq!(ClaudeCode.spawn_command(None, Some("sonnet"), Some("session"), Some(level)),
-                format!("claude --resume 'session' --model 'sonnet' --effort '{level}'"));
+            assert_eq!(
+                ClaudeCode.spawn_command(Some("task"), None, None, Some(level)),
+                format!("claude --effort '{level}' 'task'")
+            );
+            assert_eq!(
+                ClaudeCode.spawn_command(None, Some("sonnet"), Some("session"), Some(level)),
+                format!("claude --resume 'session' --model 'sonnet' --effort '{level}'")
+            );
         }
         for level in ["", "  ", "ultra", "high'; echo bad"] {
-            assert_eq!(ClaudeCode.spawn_command(None, None, None, Some(level)), "claude");
+            assert_eq!(
+                ClaudeCode.spawn_command(None, None, None, Some(level)),
+                "claude"
+            );
         }
     }
 
@@ -1076,7 +1208,10 @@ mod tests {
         // Bare `opencode '<task>'` treats the arg as a project path and dies;
         // only `run` accepts a message.
         let cmd = OpenCode.spawn_command(Some("add a feature"), Some("minimax-m3"), None, None);
-        assert_eq!(cmd.replacen(" --standalone", "", 1), "opencode run -m 'minimax-m3' 'add a feature'");
+        assert_eq!(
+            cmd.replacen(" --standalone", "", 1),
+            "opencode run -m 'minimax-m3' 'add a feature'"
+        );
     }
 
     #[test]
@@ -1084,10 +1219,14 @@ mod tests {
         // In resume mode the TUI must come up interactive — `run` would make
         // it one-shot. The task still lands as the first prompt.
         let cmd = OpenCode.spawn_command(Some("continue"), None, Some("oss-42"), None);
-        assert!([
-            "opencode -s 'oss-42' 'continue'",
-            "opencode -s 'oss-42' --prompt 'continue'",
-        ].contains(&cmd.replacen(" --standalone", "", 1).as_str()), "{cmd}");
+        assert!(
+            [
+                "opencode -s 'oss-42' 'continue'",
+                "opencode -s 'oss-42' --prompt 'continue'",
+            ]
+            .contains(&cmd.replacen(" --standalone", "", 1).as_str()),
+            "{cmd}"
+        );
     }
 
     #[test]
@@ -1120,7 +1259,8 @@ mod tests {
         assert_eq!(
             OpenCode
                 .mission_command(Some("fix the bug"), Some("opencode/minimax-m3"))
-                .unwrap().replacen(" --standalone", "", 1),
+                .unwrap()
+                .replacen(" --standalone", "", 1),
             "opencode run -m 'opencode/minimax-m3' 'fix the bug'"
         );
         assert_eq!(
@@ -1308,7 +1448,11 @@ mod tests {
         text.push_str("\n{\"type\":\"assistant\",\"ts\":2,\"message\":{\"content\":\"done\"}}");
         std::fs::write(&log, text).unwrap();
         let grown = list_runs(&env, 10, 0);
-        assert_eq!(PARSED_RUNS.computes_for(&log), 2, "a changed transcript is parsed again");
+        assert_eq!(
+            PARSED_RUNS.computes_for(&log),
+            2,
+            "a changed transcript is parsed again"
+        );
         assert!(grown[0].message_count > first[0].message_count);
     }
 
@@ -1407,8 +1551,7 @@ mod tests {
 
         let env = home::test_env(&home);
         assert_eq!(ClaudeCode.discover_runs(&env).len(), 51);
-        let narrowed =
-            ClaudeCode.discover_runs_for_workspace(&env, workspace.to_str().unwrap());
+        let narrowed = ClaudeCode.discover_runs_for_workspace(&env, workspace.to_str().unwrap());
         assert_eq!(
             narrowed.len(),
             1,

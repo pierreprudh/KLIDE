@@ -217,6 +217,7 @@ const PAIR_MIN_SIZE = 22;
 const DELEGATE_HOUSE: Partial<Record<ProviderId, ProviderId>> = {
   "claude-code": "anthropic",
   codex: "openai",
+  vibe: "mistral",
 };
 
 /**

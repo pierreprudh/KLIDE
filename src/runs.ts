@@ -445,6 +445,8 @@ export const SOURCE_COLOR: Record<RunSource, string> = {
   factory: "var(--fg-subtle)",
   copilot: "var(--fg-subtle)",
   hermes: "var(--fg-subtle)",
+  // Vibe is Mistral's CLI — its mark wears Mistral's amber.
+  vibe: "#F5A524",
   klide: "var(--accent)",
 };
 

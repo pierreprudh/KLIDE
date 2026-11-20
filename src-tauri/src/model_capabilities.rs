@@ -754,8 +754,10 @@ async fn resolve_uncached(
     }
 
     // A Delegate CLI: the CLI's own facts. Codex publishes a per-model window
-    // and effort set in its manifest; Claude Code accepts a CLI-wide effort
-    // vocabulary; OpenCode V2 publishes reasoning variants per model. Every Delegate uses tools; OpenCode
+    // and effort set in its manifest; Vibe publishes a per-model window
+    // (`max_context_length`) in its catalogue cache; Claude Code accepts a
+    // CLI-wide effort vocabulary; OpenCode V2 publishes reasoning variants per
+    // model. Every Delegate uses tools; OpenCode
     // also accepts images through its native file flag.
     if providers::is_subscription_provider(provider) {
         let entry = providers::lookup(provider);
@@ -765,6 +767,8 @@ async fn resolve_uncached(
         } else { None };
         let context_window = if provider == "codex" {
             crate::models::codex_context_window(model)
+        } else if provider == "vibe" {
+            crate::models::vibe_model_context_window(model)
         } else {
             opencode.as_ref().and_then(|facts| facts.context_window)
         }

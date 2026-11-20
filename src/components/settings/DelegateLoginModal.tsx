@@ -7,11 +7,13 @@
 // inert backdrop and Escape come free), header with title and X, a framed
 // terminal body, and a Cancel footer.
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ProviderId } from "../../agent/types";
 import { DelegateTerminalSurface } from "../ai/DelegateTerminal";
-import { stopDelegatePty } from "../../ipc/delegatePty";
+import { onDelegateExit, stopDelegatePty } from "../../ipc/delegatePty";
+import { saveDelegateApiKey } from "../../ipc/delegates";
+import { errMessage } from "../../errors";
 import { CloseIcon } from "../../icons";
 import { GhostButton } from "./controls";
 import "./delegateLoginDialog.css";
@@ -34,6 +36,32 @@ export function DelegateLoginModal({
   // instead of stacking a second login terminal.
   const sessionId = `login:${providerId}`;
   const dialog = useRef<HTMLDialogElement>(null);
+  // Native sign-in form (API key) vs. the CLI's own terminal flow.
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // The PTY is stopped only on a real close — never in an effect cleanup,
+  // which React StrictMode runs once on mount in dev and would kill the
+  // just-spawned CLI mid-start.
+  const close = useCallback(() => {
+    void stopDelegatePty(sessionId).catch(() => {});
+    onExited?.();
+    onClose();
+  }, [sessionId, onClose, onExited]);
+
+  const saveKey = useCallback(() => {
+    if (!apiKey.trim() || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    void saveDelegateApiKey(providerId, apiKey.trim())
+      .then(() => close())
+      .catch((e) => {
+        setSaving(false);
+        setSaveError(errMessage(e));
+      });
+  }, [apiKey, saving, providerId, close]);
 
   useLayoutEffect(() => {
     const element = dialog.current!;
@@ -41,12 +69,22 @@ export function DelegateLoginModal({
     return () => element.close();
   }, []);
 
+  // When the CLI exits (login done, `/exit` typed), the window finishes
+  // itself: stop, close, re-probe auth.
   useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void onDelegateExit((exit) => {
+      if (!cancelled && exit.sessionId === sessionId) close();
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
     return () => {
-      void stopDelegatePty(sessionId).catch(() => {});
-      onExited?.();
+      cancelled = true;
+      unlisten?.();
     };
-  }, [sessionId, onExited]);
+  }, [sessionId, close]);
 
   return createPortal(
     <dialog
@@ -55,7 +93,7 @@ export function DelegateLoginModal({
       aria-labelledby="klide-login-title"
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        close();
       }}
     >
       <header>
@@ -64,26 +102,54 @@ export function DelegateLoginModal({
           type="button"
           className="klide-login-close"
           aria-label={`Close sign in to ${title}`}
-          onClick={onClose}
+          onClick={close}
         >
           <CloseIcon size={18} />
         </button>
       </header>
       <div className="klide-login-body">
         <p className="klide-login-hint">
-          Finish the login in this window — {title} opens the sign-in in your browser — then close it.
+          Sign in to {title} with a Mistral API key (create one at console.mistral.ai), or open {title}'s
+          own browser sign-in in a terminal below.
         </p>
-        <div className="klide-login-terminal">
-          <DelegateTerminalSurface
-            sessionId={sessionId}
-            providerId={providerId}
-            provider={title}
-            workspaceRoot={workspaceRoot}
+        <form
+          className="klide-login-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveKey();
+          }}
+        >
+          <input
+            type="password"
+            className="klide-field"
+            placeholder="MISTRAL_API_KEY"
+            aria-label={`${title} API key`}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
           />
-        </div>
+          <button type="submit" className="klide-button klide-button-primary" disabled={!apiKey.trim() || saving}>
+            {saving ? "Saving…" : "Save and sign in"}
+          </button>
+        </form>
+        {saveError ? <p className="klide-login-error">{saveError}</p> : null}
+        <button type="button" className="klide-button klide-button-ghost" onClick={() => setShowTerminal((v) => !v)}>
+          {showTerminal ? "Hide terminal" : "Use browser sign-in in a terminal"}
+        </button>
+        {showTerminal ? (
+          <div className="klide-login-terminal">
+            <DelegateTerminalSurface
+              sessionId={sessionId}
+              providerId={providerId}
+              provider={title}
+              workspaceRoot={workspaceRoot}
+            />
+          </div>
+        ) : null}
       </div>
       <footer className="klide-login-footer">
-        <GhostButton onClick={onClose}>Cancel</GhostButton>
+        <GhostButton onClick={close}>Cancel</GhostButton>
       </footer>
     </dialog>,
     document.body

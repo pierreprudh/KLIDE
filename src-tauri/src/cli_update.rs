@@ -142,27 +142,23 @@ pub fn version_of(adapter: &'static dyn delegate::Delegate) -> CliVersion {
                 latest: None,
                 update_available: false,
                 latest_error: None,
-            }
+            };
         }
     };
 
-    let (raw, version, detail) =
-        match output_within(&path, adapter.version_args(), VERSION_TIMEOUT) {
-            Ok(text) => {
-                let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-                let raw = line.trim().to_string();
-                let version = adapter.parse_version(&raw);
-                let detail = version
-                    .is_none()
-                    .then(|| format!("{binary} answered something Klide couldn't read as a version"));
-                (
-                    (!raw.is_empty()).then_some(raw),
-                    version,
-                    detail,
-                )
-            }
-            Err(detail) => (None, None, Some(detail)),
-        };
+    let (raw, version, detail) = match output_within(&path, adapter.version_args(), VERSION_TIMEOUT)
+    {
+        Ok(text) => {
+            let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+            let raw = line.trim().to_string();
+            let version = adapter.parse_version(&raw);
+            let detail = version
+                .is_none()
+                .then(|| format!("{binary} answered something Klide couldn't read as a version"));
+            ((!raw.is_empty()).then_some(raw), version, detail)
+        }
+        Err(detail) => (None, None, Some(detail)),
+    };
 
     CliVersion {
         provider: adapter.id().to_string(),
@@ -298,14 +294,17 @@ fn with_latest(mut row: CliVersion, adapter: &'static dyn delegate::Delegate) ->
     };
     match latest_release(package) {
         Ok(latest) => {
-            match row.version.as_deref().map(|installed| is_newer(&latest, installed)) {
+            match row
+                .version
+                .as_deref()
+                .map(|installed| is_newer(&latest, installed))
+            {
                 Some(Some(newer)) => row.update_available = newer,
                 // The registry answered but the two can't be ranked. Saying
                 // that is the honest report; leaving the row silent would read
                 // as "up to date".
                 Some(None) | None => {
-                    row.latest_error =
-                        Some(format!("Klide can't rank {latest} against this build"))
+                    row.latest_error = Some(format!("Klide can't rank {latest} against this build"))
                 }
             }
             row.latest = Some(latest);
@@ -328,19 +327,21 @@ pub fn checked_versions() -> Vec<CliVersion> {
     handles
         .into_iter()
         .zip(delegate::ALL)
-        .map(|(handle, adapter)| handle.join().unwrap_or_else(|_| CliVersion {
-            provider: adapter.id().to_string(),
-            binary: adapter.binary(),
-            installed: false,
-            version: None,
-            raw: None,
-            command_path: None,
-            update_command: None,
-            detail: Some("Version check crashed".to_string()),
-            latest: None,
-            update_available: false,
-            latest_error: None,
-        }))
+        .map(|(handle, adapter)| {
+            handle.join().unwrap_or_else(|_| CliVersion {
+                provider: adapter.id().to_string(),
+                binary: adapter.binary(),
+                installed: false,
+                version: None,
+                raw: None,
+                command_path: None,
+                update_command: None,
+                detail: Some("Version check crashed".to_string()),
+                latest: None,
+                update_available: false,
+                latest_error: None,
+            })
+        })
         .collect()
 }
 
@@ -491,8 +492,14 @@ mod tests {
         // unknown instead of presenting a fabricated latest-version check.
         for adapter in delegate::ALL {
             match adapter.id() {
-                "amp" | "cursor" | "factory" | "hermes" => assert!(adapter.release_package().is_none()),
-                _ => assert!(adapter.release_package().is_some(), "{} names no release package", adapter.id()),
+                "amp" | "cursor" | "factory" | "hermes" | "vibe" => {
+                    assert!(adapter.release_package().is_none())
+                }
+                _ => assert!(
+                    adapter.release_package().is_some(),
+                    "{} names no release package",
+                    adapter.id()
+                ),
             }
         }
     }

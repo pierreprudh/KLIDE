@@ -243,7 +243,7 @@ function UsageLines({
   if (!usage) return null;
   if (usage.error) return <div className="profile-usage-note">{usage.error}</div>;
   const spend = usage.spend
-    ? `$${usage.spend.costUsd.toFixed(2)} · ${humanTokens(usage.spend.tokens)} tokens`
+    ? `${usage.spend.costUsd !== null ? `$${usage.spend.costUsd.toFixed(2)} · ` : ""}${humanTokens(usage.spend.tokens)} tokens`
     : null;
   if (collapsed) {
     // Folded into the account's own row: only the 5-hour session window, the

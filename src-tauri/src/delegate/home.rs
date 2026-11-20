@@ -111,7 +111,7 @@ pub fn test_env(home: &Path) -> MapEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delegate::{ClaudeCode, Codex, Delegate, Omp, OpenCode, ALL};
+    use crate::delegate::{ClaudeCode, Codex, Delegate, Omp, OpenCode, Vibe, ALL};
 
     fn tmp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("klide-home-{name}-{}", std::process::id()));
@@ -134,9 +134,15 @@ mod tests {
         let env = MapEnv::with_home(&home);
         assert_eq!(Codex.config_home(&env), Some(home.join(".codex")));
         assert_eq!(Codex.sessions_dir(&env), Some(home.join(".codex/sessions")));
-        assert_eq!(Codex.config_file(&env), Some(home.join(".codex/config.toml")));
+        assert_eq!(
+            Codex.config_file(&env),
+            Some(home.join(".codex/config.toml"))
+        );
         assert_eq!(Codex.auth_files(&env), vec![home.join(".codex/auth.json")]);
-        assert_eq!(Codex.models_cache(&env), Some(home.join(".codex/models_cache.json")));
+        assert_eq!(
+            Codex.models_cache(&env),
+            Some(home.join(".codex/models_cache.json"))
+        );
 
         let moved = PathBuf::from("/srv/codex-home");
         let env = env.set("CODEX_HOME", &moved);
@@ -144,7 +150,10 @@ mod tests {
         assert_eq!(Codex.sessions_dir(&env), Some(moved.join("sessions")));
         assert_eq!(Codex.config_file(&env), Some(moved.join("config.toml")));
         assert_eq!(Codex.auth_files(&env), vec![moved.join("auth.json")]);
-        assert_eq!(Codex.models_cache(&env), Some(moved.join("models_cache.json")));
+        assert_eq!(
+            Codex.models_cache(&env),
+            Some(moved.join("models_cache.json"))
+        );
     }
 
     #[test]
@@ -152,19 +161,37 @@ mod tests {
         let home = PathBuf::from("/u/x");
         let env = MapEnv::with_home(&home);
         assert_eq!(ClaudeCode.config_home(&env), Some(home.join(".claude")));
-        assert_eq!(ClaudeCode.sessions_dir(&env), Some(home.join(".claude/projects")));
-        assert_eq!(ClaudeCode.config_file(&env), Some(home.join(".claude/settings.json")));
+        assert_eq!(
+            ClaudeCode.sessions_dir(&env),
+            Some(home.join(".claude/projects"))
+        );
+        assert_eq!(
+            ClaudeCode.config_file(&env),
+            Some(home.join(".claude/settings.json"))
+        );
         // The user-state file sits beside the config dir by default…
-        assert_eq!(ClaudeCode.user_state_file(&env), Some(home.join(".claude.json")));
-        assert!(ClaudeCode.auth_files(&env).is_empty(), "keychain, not files");
+        assert_eq!(
+            ClaudeCode.user_state_file(&env),
+            Some(home.join(".claude.json"))
+        );
+        assert!(
+            ClaudeCode.auth_files(&env).is_empty(),
+            "keychain, not files"
+        );
 
         // …and moves inside it when the dir is moved.
         let moved = PathBuf::from("/srv/claude-cfg");
         let env = env.set("CLAUDE_CONFIG_DIR", &moved);
         assert_eq!(ClaudeCode.config_home(&env), Some(moved.clone()));
         assert_eq!(ClaudeCode.sessions_dir(&env), Some(moved.join("projects")));
-        assert_eq!(ClaudeCode.config_file(&env), Some(moved.join("settings.json")));
-        assert_eq!(ClaudeCode.user_state_file(&env), Some(moved.join(".claude.json")));
+        assert_eq!(
+            ClaudeCode.config_file(&env),
+            Some(moved.join("settings.json"))
+        );
+        assert_eq!(
+            ClaudeCode.user_state_file(&env),
+            Some(moved.join(".claude.json"))
+        );
         assert_eq!(ClaudeCode.skills_dir(&env), Some(moved.join("skills")));
     }
 
@@ -172,9 +199,18 @@ mod tests {
     fn opencode_has_two_roots_and_honours_xdg() {
         let home = tmp("oc-xdg");
         let env = MapEnv::with_home(&home);
-        assert_eq!(OpenCode.config_home(&env), Some(home.join(".config/opencode")));
-        assert_eq!(OpenCode.data_home(&env), Some(home.join(".local/share/opencode")));
-        assert_eq!(OpenCode.config_file(&env), Some(home.join(".config/opencode/opencode.json")));
+        assert_eq!(
+            OpenCode.config_home(&env),
+            Some(home.join(".config/opencode"))
+        );
+        assert_eq!(
+            OpenCode.data_home(&env),
+            Some(home.join(".local/share/opencode"))
+        );
+        assert_eq!(
+            OpenCode.config_file(&env),
+            Some(home.join(".config/opencode/opencode.json"))
+        );
         assert_eq!(
             OpenCode.auth_files(&env),
             vec![
@@ -189,7 +225,10 @@ mod tests {
         assert_eq!(OpenCode.config_home(&env), Some(cfg.join("opencode")));
         assert_eq!(OpenCode.data_home(&env), Some(data.join("opencode")));
         assert_eq!(OpenCode.sessions_dir(&env), Some(data.join("opencode")));
-        assert_eq!(OpenCode.auth_files(&env)[0], data.join("opencode/auth.json"));
+        assert_eq!(
+            OpenCode.auth_files(&env)[0],
+            data.join("opencode/auth.json")
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -209,9 +248,15 @@ mod tests {
         // An explicit override wins even before its directory is created.
         let moved = home.join("new-data");
         let overridden = MapEnv::with_home(&home).set("XDG_DATA_HOME", &moved);
-        assert_eq!(OpenCode.data_home(&overridden), Some(moved.join("opencode")));
+        assert_eq!(
+            OpenCode.data_home(&overridden),
+            Some(moved.join("opencode"))
+        );
         let without_home = MapEnv(Default::default()).set("XDG_DATA_HOME", &moved);
-        assert_eq!(OpenCode.data_home(&without_home), Some(moved.join("opencode")));
+        assert_eq!(
+            OpenCode.data_home(&without_home),
+            Some(moved.join("opencode"))
+        );
 
         // The XDG dir wins as soon as it exists.
         let xdg = home.join(".local/share/opencode");
@@ -221,12 +266,40 @@ mod tests {
     }
 
     #[test]
+    fn vibe_home_is_under_home_and_honours_vibe_home() {
+        let home = PathBuf::from("/u/x");
+        let env = MapEnv::with_home(&home);
+        assert_eq!(Vibe.config_home(&env), Some(home.join(".vibe")));
+        assert_eq!(
+            Vibe.sessions_dir(&env),
+            Some(home.join(".vibe/logs/session/unified"))
+        );
+        assert!(Vibe.auth_files(&env).is_empty(), "keyring, not files");
+        assert_eq!(
+            Vibe.secret_files(&env),
+            vec![
+                home.join(".vibe/.env"),
+                home.join(".vibe/whoami_cache.json")
+            ]
+        );
+        let moved = PathBuf::from("/srv/vibe-home");
+        let env = env.set("VIBE_HOME", &moved);
+        assert_eq!(Vibe.config_home(&env), Some(moved));
+    }
+
+    #[test]
     fn omp_home_is_under_home() {
         let home = PathBuf::from("/u/x");
         let env = MapEnv::with_home(&home);
         assert_eq!(Omp.config_home(&env), Some(home.join(".omp")));
-        assert_eq!(Omp.sessions_dir(&env), Some(home.join(".omp/agent/sessions")));
-        assert_eq!(Omp.models_cache(&env), Some(home.join(".omp/agent/models.db")));
+        assert_eq!(
+            Omp.sessions_dir(&env),
+            Some(home.join(".omp/agent/sessions"))
+        );
+        assert_eq!(
+            Omp.models_cache(&env),
+            Some(home.join(".omp/agent/models.db"))
+        );
         assert_eq!(Omp.config_file(&env), None);
         assert!(Omp.auth_files(&env).is_empty());
     }
@@ -252,10 +325,15 @@ mod tests {
         assert_eq!(Codex.ensure_status_hooks(&env), Ok(true));
         let hooked = moved.join("config.toml");
         assert!(
-            std::fs::read_to_string(&hooked).unwrap().starts_with("notify = ["),
+            std::fs::read_to_string(&hooked)
+                .unwrap()
+                .starts_with("notify = ["),
             "the hook landed in $CODEX_HOME"
         );
-        assert!(!home.join(".codex").exists(), "nothing written under ~/.codex");
+        assert!(
+            !home.join(".codex").exists(),
+            "nothing written under ~/.codex"
+        );
         assert_eq!(crate::gateway::codex_config_path(&env), Some(hooked));
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -266,8 +344,17 @@ mod tests {
     fn secret_files_name_each_cli_login_and_follow_a_moved_home() {
         let home = std::env::temp_dir().join(format!("klide-secret-files-{}", std::process::id()));
         let files = super::super::secret_files(&MapEnv::with_home(&home));
-        for login in [".claude/.credentials.json", ".codex/auth.json", ".local/share/opencode/auth.json", ".config/opencode/auth.json"] {
-            assert!(files.contains(&home.join(login)), "{login} missing from {files:?}");
+        for login in [
+            ".claude/.credentials.json",
+            ".codex/auth.json",
+            ".local/share/opencode/auth.json",
+            ".config/opencode/auth.json",
+            ".vibe/.env",
+        ] {
+            assert!(
+                files.contains(&home.join(login)),
+                "{login} missing from {files:?}"
+            );
         }
         let moved = home.join("elsewhere");
         let files = super::super::secret_files(&MapEnv::with_home(&home).set("CODEX_HOME", &moved));
@@ -284,9 +371,24 @@ mod tests {
         // Paths, and *reads* of the override variables (`var("CODEX_HOME")`).
         // A test that sets one to prove the override is honoured is fine.
         let needles = [
-            "\".codex", ".codex/", "\".claude", ".claude/", ".claude.json", "\".omp", ".omp/",
-            ".config/opencode", "share/opencode", "Application Support/opencode",
-            "\"CODEX_HOME\")", "\"CLAUDE_CONFIG_DIR\")", "\"XDG_CONFIG_HOME\")", "\"XDG_DATA_HOME\")",
+            "\".codex",
+            ".codex/",
+            "\".claude",
+            ".claude/",
+            ".claude.json",
+            "\".omp",
+            ".omp/",
+            ".config/opencode",
+            "share/opencode",
+            "Application Support/opencode",
+            "\".vibe",
+            ".vibe/",
+            "logs/session/unified",
+            "\"CODEX_HOME\")",
+            "\"CLAUDE_CONFIG_DIR\")",
+            "\"XDG_CONFIG_HOME\")",
+            "\"XDG_DATA_HOME\")",
+            "\"VIBE_HOME\")",
         ];
         let mut offenders = Vec::new();
         let mut stack = vec![src.clone()];
