@@ -141,6 +141,7 @@ import { enabledRunSkills, enabledSkillsPrompt, enabledSkillsPromptParts, skillF
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { StackSideMenu } from "./ai/StackSideMenu";
+import { ConnectorsMenu } from "./ai/ConnectorsMenu";
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
@@ -5497,6 +5498,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                         <span style={{ flex: 1, textAlign: "left" }}>{photoGate.menuLabel}</span>
                         <AttachIcon size={14} />
                       </button>
+                      <ConnectorsMenu onNavigate={closeModeMenu} />
                       <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />
                       <ArtifactOutputRows value={artifactOutput} disabled={goalDisabled} onChange={(value) => { setArtifactOutput(value); if (value) selectMode("goal", false); }} />
                       {MODE_CHOICES.map((rung) => {

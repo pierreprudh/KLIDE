@@ -10896,3 +10896,420 @@ input.klide-rail-search:focus-visible {
   --inline-menu-active-bg: color-mix(in srgb, var(--fg) 11%, transparent);
   --menu-row-hover: color-mix(in srgb, var(--fg) 5%, transparent);
 }
+
+/* ---- Connectors › Popular servers: a grid of cards ------------------------
+   Borrowed from a file browser's grid: a small top line (what kind of server,
+   and its switch once added), a square tile holding the logo — or short
+   letters when no brand mark fits, the way a file shows `PDF` — then the name
+   and one quiet line. White cards on the page, a hairline, 20px corners; the
+   tile is the chrome grey, so the card reads as content and the tile as its
+   frame. No shadow beyond the settings panels' own, no badge. */
+
+.klide-connector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(146px, 1fr));
+  gap: 12px;
+}
+
+.klide-connector-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding: 12px 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--settings-panel-radius, 20px);
+  background: var(--bg-panel);
+  box-shadow: 0 2px 5px rgb(0 0 0 / 3%);
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  animation: klide-connector-row-in 0.3s var(--ease-out) both;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out);
+}
+
+button.klide-connector-card {
+  cursor: pointer;
+}
+
+button.klide-connector-card:hover:not(:disabled),
+.klide-connector-card[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--fg-strong) 18%, var(--border));
+}
+
+button.klide-connector-card:disabled {
+  cursor: default;
+}
+
+.klide-connector-card-top {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Tall enough for the switch, so an added card's tile sits level with its
+     neighbours'. */
+  height: 24px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+
+/* The verb a click performs, shown on hover/focus like the ledger's verbs. */
+.klide-connector-card-verb {
+  font-size: 12px;
+  color: var(--fg-subtle);
+  opacity: 0;
+  transition: opacity var(--motion-med) var(--ease-out);
+}
+
+button.klide-connector-card:hover .klide-connector-card-verb,
+button.klide-connector-card:focus-visible .klide-connector-card-verb,
+.klide-connector-card[data-selected="true"] .klide-connector-card-verb {
+  opacity: 1;
+}
+
+/* The logo stands on the card itself — no frame around it. */
+.klide-connector-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  margin: 14px 0 12px;
+}
+
+.klide-connector-setup .klide-connector-tile {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+}
+
+.klide-connector-monogram {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-subtle);
+}
+
+.klide-connector-card-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two lines, held open even when one is enough, so every card in a row ends
+   at the same height. */
+.klide-connector-card-blurb {
+  max-width: 100%;
+  min-height: calc(2 * 1.4em);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.klide-connector-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-strong);
+  letter-spacing: -0.01em;
+}
+
+.klide-connector-card-blurb {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+/* Added and switched off: the card recedes, as a disabled ledger row does. */
+.klide-connector-card[data-off="true"] :is(.klide-connector-tile, .klide-connector-card-title) {
+  opacity: 0.55;
+}
+
+.klide-connector-setup {
+  margin-top: 14px;
+  animation: klide-connector-detail-in var(--motion-slow) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-connector-card,
+  .klide-connector-setup {
+    animation: none;
+  }
+}
+
+/* The grid's filter: a small field where the other heads keep a verb. */
+.klide-connector-filter {
+  width: 160px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  align-self: center;
+}
+
+/* Inside a settings panel the highlight takes the whole row: out through the
+   panel's side padding to a hairline from its border, its corners nested in
+   the panel's 20px ones. */
+.klide-glide-list[data-bleed] > .klide-glide {
+  left: calc(6px - var(--settings-panel-padding, 24px));
+  right: calc(6px - var(--settings-panel-padding, 24px));
+  /* Rows meet edge to edge; a few pixels off top and bottom keep the first
+     and last highlight off the panel's border. */
+  border-radius: 0;
+  clip-path: inset(5px 0 round 14px);
+}
+
+/* An import card's top line: the tool it was found in, mark then name. */
+.klide-connector-card-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The command or URL in place of a description: mono, a half-step down. */
+.klide-connector-card-command {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  /* Break at spaces first; only a single long token is split mid-word. */
+  overflow-wrap: anywhere;
+}
+
+/* ---- "+" menu › Connectors ------------------------------------------------
+   One folded row in both composers' "+" menus; open, each connector with its
+   logo and a small switch, then "Manage connectors". Rows match the menus'
+   own (32px, 13px, the soft hover fill); the switch is the settings switch at
+   menu size. */
+
+.klide-menu-connectors-row,
+.klide-menu-connectors-item {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.klide-menu-connectors-row:hover,
+.klide-menu-connectors-item:hover {
+  background: var(--menu-row-hover, var(--bg-hover));
+}
+
+.klide-menu-connectors-label,
+.klide-menu-connectors-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-menu-connectors-meta {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.klide-menu-connectors-chevron {
+  flex-shrink: 0;
+  color: var(--fg-dim);
+  transition: transform var(--motion-med) var(--ease-out);
+}
+
+/* The list opens in a card beside the "+" menu (portaled, fixed). It grows
+   out of the edge nearest the menu — a short fade with a hair of slide, the
+   picker card's entrance — and the rows follow a beat behind. */
+.klide-menu-connectors-card {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  transform-origin: top left;
+  animation: klide-menu-connectors-card-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.klide-menu-connectors-card[data-side="left"] {
+  transform-origin: top right;
+  --from-x: 4px;
+}
+
+@keyframes klide-menu-connectors-card-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--from-x, -4px)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.klide-menu-connectors-row[data-open] {
+  background: var(--menu-row-hover, var(--bg-hover));
+}
+
+.klide-menu-connectors-filter {
+  flex-shrink: 0;
+  height: 28px;
+  margin: 0 0 4px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg-strong);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.klide-menu-connectors-filter:focus {
+  border-color: var(--border-strong);
+}
+
+.klide-menu-connectors-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  --fade-top: 0px;
+  --fade-bottom: 0px;
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+}
+
+.klide-menu-connectors-list[data-fade-top] {
+  --fade-top: 18px;
+}
+
+.klide-menu-connectors-list[data-fade-bottom] {
+  --fade-bottom: 18px;
+}
+
+.klide-menu-connectors-list > * {
+  animation: klide-menu-connectors-row-in 200ms var(--ease-out) both;
+  animation-delay: calc(40ms + var(--i, 0) * 16ms);
+}
+
+@keyframes klide-menu-connectors-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.klide-menu-connectors-empty {
+  padding: 10px 9px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.klide-menu-connectors-foot {
+  flex-shrink: 0;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+/* Inset hairline, the "+" menu's own divider: short of both edges. */
+.klide-menu-connectors-foot::before {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 0 9px 4px;
+  background: var(--border);
+}
+
+.klide-menu-connectors-item {
+  min-height: 30px;
+  font-size: 12.5px;
+}
+
+.klide-menu-connectors-mark {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--fg-strong);
+}
+
+/* Off: the name recedes and the mark goes quiet, as a disabled row does in
+   Settings. */
+.klide-menu-connectors-item[data-off] .klide-menu-connectors-name {
+  color: var(--fg-subtle);
+}
+
+.klide-menu-connectors-item[data-off] .klide-menu-connectors-mark {
+  opacity: 0.45;
+}
+
+.klide-menu-connectors-manage {
+  color: var(--fg-subtle);
+}
+
+/* The settings switch (`.klide-switch`) at menu size. */
+.klide-menu-switch {
+  flex-shrink: 0;
+  width: 26px;
+  height: 16px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-hover);
+  display: flex;
+  align-items: center;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.klide-menu-switch > span {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--fg-subtle);
+  transition:
+    transform var(--motion-med) var(--ease-out),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.klide-menu-switch[data-checked] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.klide-menu-switch[data-checked] > span {
+  transform: translateX(10px);
+  background: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-menu-connectors-card,
+  .klide-menu-connectors-list > * {
+    animation: none;
+  }
+  .klide-menu-connectors-list {
+    scroll-behavior: auto;
+  }
+  .klide-menu-connectors-chevron,
+  .klide-menu-switch,
+  .klide-menu-switch > span {
+    transition: none;
+  }
+}

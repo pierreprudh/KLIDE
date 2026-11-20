@@ -6,6 +6,7 @@ import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from 
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import { StackSideMenu, type Stack } from "./ai/StackSideMenu";
+import { ConnectorsMenu } from "./ai/ConnectorsMenu";
 import { sideQuestionDirective } from "./ai/sideQuestions";
 // FocusMode — Klide's chat-first workspace, blending the project/thread
 // command-centre pattern with an artifact-first agent home. A quiet left rail
@@ -1385,6 +1386,7 @@ function FocusAddMenu({
                 </span>
                 <AttachIcon size={14} />
               </button>
+              <ConnectorsMenu onNavigate={close} />
               <div className="klide-focus-add-menu-divider" />
               <ArtifactOutputRows value={artifactOutput} disabled={!supportsTools && !providerDelegatesWork} onChange={(value) => { onArtifactOutputChange(value); if (value) onModeChange("goal"); }} />
               {MODE_CHOICES.map((choice) => {

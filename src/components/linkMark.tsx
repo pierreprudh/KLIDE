@@ -4,6 +4,7 @@ import type { LinkSite } from "../linkIdentity";
 import type { ProviderId } from "../agent/types";
 import { ProviderLogo, ToolIcon } from "./ai/icons";
 import { CONNECTOR_BRANDS, type ConnectorBrand } from "../connectorBrands";
+import { CONNECTOR_PICTURES, type ConnectorPicture } from "../connectorLogos";
 import { isRemote, type ServerSpec } from "../ipc/connectors";
 
 // The mark beside a link's name. Brand marks are the standing exception to the
@@ -37,10 +38,18 @@ const NPM_PATH =
  *  label, the URL host or the command line that starts it. Whole tokens only,
  *  so `sandbox` never reads as Box and `mirror` never as Miro. */
 export function connectorBrand(...names: (string | null | undefined)[]): ConnectorBrand | null {
-  const tokens = new Set(
-    names.filter(Boolean).join(" ").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
-  );
+  const tokens = nameTokens(names);
   return CONNECTOR_BRANDS.find((brand) => brand.keywords.some((k) => tokens.has(k))) ?? null;
+}
+
+/** The company's own picture, for a brand Simple Icons doesn't carry. */
+export function connectorPicture(...names: (string | null | undefined)[]): ConnectorPicture | null {
+  const tokens = nameTokens(names);
+  return CONNECTOR_PICTURES.find((p) => p.keywords.some((k) => tokens.has(k))) ?? null;
+}
+
+function nameTokens(names: (string | null | undefined)[]): Set<string> {
+  return new Set(names.filter(Boolean).join(" ").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
 }
 
 /** What a server spec says about whom it talks to: a URL's host, or the
@@ -79,7 +88,23 @@ export function ConnectorMark({
   tone?: "ink" | "brand";
 }) {
   const brand = connectorBrand(connector, label, serverNames(server));
-  if (!brand) return <ToolIcon name="connector_call" size={size} />;
+  if (!brand) {
+    // A picture is in colour by nature, so only where colour is asked for.
+    const picture = tone === "brand" ? connectorPicture(connector, label, serverNames(server)) : null;
+    if (picture) {
+      return (
+        <img
+          src={picture.src}
+          alt={picture.title}
+          width={size}
+          height={size}
+          draggable={false}
+          style={{ flexShrink: 0, objectFit: "contain", borderRadius: picture.tile ? "22%" : undefined }}
+        />
+      );
+    }
+    return <ToolIcon name="connector_call" size={size} />;
+  }
   const color = tone === "brand" && !inkOnly(brand.hex) ? `#${brand.hex}` : "currentColor";
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill={color} role="img" aria-label={brand.title} style={{ flexShrink: 0 }}>
