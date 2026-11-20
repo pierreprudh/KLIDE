@@ -441,8 +441,7 @@ pub(crate) fn start_service(data: PathBuf, host: std::sync::Arc<super::daemon::R
     });
 }
 
-/// A notification under Klide's own name and icon (the bundled app; a dev
-/// binary has no bundle, so macOS shows it unbranded).
+/// A notification under Klide's own name and icon (the bundled app).
 fn notify_native(app: &tauri::AppHandle, f: &Fired) {
     use tauri_plugin_notification::NotificationExt;
     let project = Path::new(&f.workspace_root).file_name().and_then(|n| n.to_str()).unwrap_or("project");
@@ -450,12 +449,15 @@ fn notify_native(app: &tauri::AppHandle, f: &Fired) {
         (Some(_), _) => format!("{} — Kit is looking into it.", f.checks.join(", ")),
         (None, e) => format!("Couldn't start a Run: {}", e.as_deref().unwrap_or("unknown error")),
     };
-    let _ = app
-        .notification()
-        .builder()
-        .title(format!("CI failed · #{} {}", f.pr_number, project))
-        .body(body)
-        .show();
+    let title = format!("CI failed · #{} {}", f.pr_number, project);
+    // A dev binary has no app bundle, so macOS drops the plugin's
+    // notification without a word; osascript at least shows up (under
+    // Script Editor). A bundled build posts as Klide.
+    if cfg!(debug_assertions) {
+        notify_mac(&title, &body);
+        return;
+    }
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /// The app's half: keep the service up while anything is watched, and nudge
