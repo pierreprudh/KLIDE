@@ -297,6 +297,10 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
       onMouseEnter={(e) => { if (!disabled && !menu.open) { e.currentTarget.style.background = bareHover ? "transparent" : "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; } }}
       onMouseLeave={(e) => { if (!menu.open) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; } }}
       onClick={() => { if (menu.open) menu.close(); else { setCategory(null); setSource(null); menu.openMenu(); } }}>
+      {/* The model's own mark leads its name, as on ModelPicker's trigger; the source (or the CLI itself) is the floor. */}
+      <span aria-hidden="true" style={{ display: "flex", flexShrink: 0 }}>
+        {resolveModelLogo(current?.model ?? model, 13) ?? <ProviderLogo id={(current?.provider ?? harness) as ProviderId} size={13} />}
+      </span>
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: fluid ? "left" : "right" }}>{(current?.model ?? (model || placeholder || "default")).split("/").pop()}</span>
       <ChevronIcon size={12} style={{ position: "absolute", right: 2, color: "var(--fg-dim)", transform: menu.open ? "rotate(180deg)" : "none" }} />
     </button>
