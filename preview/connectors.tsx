@@ -10,6 +10,7 @@
 //   ?theme=dark | klide-light | sage-garden | sage-garden-dark | cursor-dark | …
 //   ?state=empty            →  the first-visit page, nothing imported yet
 //   ?state=github           →  GitHub already connected
+//   ?pick=Notion            →  a catalog card picked, its key form open
 import ReactDOM from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
@@ -126,6 +127,20 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
           elapsedMs: many ? 4200 : 760,
         };
       }
+      case "connectors_sign_in": {
+        // Stands in for the browser round trip.
+        await wait(1500);
+        const next = args.connector as (typeof store)[number];
+        store = [...store.filter((c) => c.id !== next.id), next].sort((a, b) =>
+          a.label.toLowerCase().localeCompare(b.label.toLowerCase())
+        );
+        return store;
+      }
+      case "connectors_sign_in_cancel":
+        return null;
+      case "connectors_sign_out":
+        store = store.map((c) => (c.id === args.id ? { ...c, enabled: false } : c));
+        return store;
       case "github_accounts":
         return { logins: ["pierreprudh"], active: "pierreprudh", pinned: null };
       case "connectors_add_github": {
@@ -184,3 +199,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <ToastHost />
   </div>
 );
+
+// ?pick=Notion — click that card once the page has loaded, to see its setup.
+const pick = params.get("pick");
+if (pick) {
+  setTimeout(() => (document.querySelector(`[aria-label="Add ${pick}"]`) as HTMLElement | null)?.click(), 600);
+}
+
+// ?hover=1 — light the first ledger row, as the pointer would.
+if (params.get("hover")) {
+  setTimeout(() => (document.querySelector(".klide-connector-row button") as HTMLElement | null)?.focus(), 700);
+}

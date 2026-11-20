@@ -1,16 +1,19 @@
 // Connectors — the Settings surface for MCP servers Klide connects *to*.
 //
-// Three blocks, in the order a first visit needs them:
+// Four blocks, in the order a first visit needs them:
 //
 //   1. Your connectors     — what Klide has, and whether each one starts.
-//   2. Available to import — the servers already configured in Claude Code,
+//   2. Popular servers     — the classic MCP servers as a grid of cards
+//                            (`connectorCatalog.ts`); a card adds itself, or
+//                            asks for the key it references first.
+//   3. Available to import — the servers already configured in Claude Code,
 //                            Codex and OpenCode, read from their own config.
-//   3. Add a connector     — the escape hatch for a server no other tool knows:
+//   4. Add a connector     — the escape hatch for a server no other tool knows:
 //                            a command, or a URL for a remote server.
 //
-// GitHub gets one more door: "Connect GitHub" adds GitHub's own remote server,
-// signed in as the account Klide already uses (`connectors::github_preset`), so
-// the most common connector needs no token and no config file at all.
+// GitHub's card is its own door: it adds GitHub's own remote server, signed in
+// as the account Klide already uses (`connectors::github_preset`), so the most
+// common connector needs no token and no config file at all.
 //
 // The import block is the point. Anyone who would use this page has already
 // typed these commands into another tool's JSON; asking them to type them a
@@ -36,22 +39,20 @@
 // every remote tool needs approval on first use; server annotations are advisory
 // (`agent/connector_tools.rs`).
 
+import { connectorPicture } from "../../connectorMarksMore";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  addGithubConnector,
-  discoverConnectors,
-  isRemote,
-  listConnectors,
-  probeConnector,
-  removeConnector,
-  upsertConnector,
-  type Connector,
-  type Discovered,
-  type Probe,
-  type ServerSpec,
-} from "../../ipc/connectors";
+import {addGithubConnector, discoverConnectors, isRemote, listConnectors, probeConnector, removeConnector, upsertConnector, type Connector, type Discovered, type Probe, type ServerSpec} from "../../ipc/connectors";
+import { cancelConnectorSignIn, signInConnector, signOutConnector, usesSignIn } from "../../ipc/connectorSignIn";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { githubAccounts } from "../../ipc/git";
-import { ConnectorMark } from "../linkMark";
+import { ConnectorMark, connectorBrand, serverNames } from "../linkMark";
+import {
+  CONNECTOR_CATALOG,
+  catalogConnector,
+  catalogMatch,
+  transportWord,
+  type CatalogEntry,
+} from "./connectorCatalog";
 import { ProviderLogo } from "../ai/icons";
 import { DELEGATES } from "../../delegates";
 import type { ProviderId } from "../../agent/types";
@@ -71,6 +72,7 @@ type Check =
  *  name comes from the one catalog; discovery only ever names a Delegate id. */
 const ORIGIN_LABEL: Record<string, string> = {
   manual: "Added here",
+  catalog: "Added from the list",
   preset: "As your GitHub account",
   ...Object.fromEntries(DELEGATES.map((d) => [d.id, `From ${d.label}`])),
   workspace: "From this project",
@@ -196,13 +198,18 @@ function Head({
 
 export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | null }) {
   const ledger = useGlide();
-  const offers = useGlide();
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [found, setFound] = useState<Discovered[]>([]);
   const [scanning, setScanning] = useState(false);
   const [checks, setChecks] = useState<Record<string, Check>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  /** The catalog card whose keys are being filled in, if any. */
+  const [setup, setSetup] = useState<CatalogEntry | null>(null);
+  /** The connector waiting on a browser sign-in. One at a time: Rust keeps a
+   *  single loopback listener, and a new sign-in abandons the last. */
+  const [signingIn, setSigningIn] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
   const [connectingGithub, setConnectingGithub] = useState(false);
   /** Who "Connect GitHub" will sign in as — the pinned account, else gh's
    *  active one. `undefined` while loading, `null` when gh has no login. */
@@ -265,12 +272,24 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     }
   }
 
-  async function save(connector: Connector) {
+  async function save(connector: Connector): Promise<boolean> {
     try {
       setConnectors(await upsertConnector(connector));
+      return true;
     } catch (e) {
       notify(errMessage(e), { tone: "error" });
+      return false;
     }
+  }
+
+  /** A card picked on purpose is enabled and checked at once — the check is
+   *  the answer to "did that work?", and it is still one explicit click. */
+  async function addFromCatalog(entry: CatalogEntry, values: Record<string, string>) {
+    const connector = catalogConnector(entry, values);
+    if (!(await save(connector))) return;
+    setSetup(null);
+    setOpen(connector.id);
+    void check(connector);
   }
 
   async function drop(connector: Connector) {
@@ -298,6 +317,31 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     }
   }
 
+  /** Browser sign-in, then save. Rust probes before it saves, so success here
+   *  means the server answered as the signed-in account. */
+  async function signIn(connector: Connector) {
+    setSigningIn(connector.id);
+    try {
+      setConnectors(await signInConnector(connector));
+      notify(`${connector.label} connected`, { tone: "success" });
+      setChecks((prev) => ({ ...prev, [connector.id]: { state: "idle" } }));
+    } catch (e) {
+      const message = errMessage(e);
+      if (message !== "Sign-in cancelled") notify(message, { tone: "error" });
+    } finally {
+      setSigningIn((prev) => (prev === connector.id ? null : prev));
+    }
+  }
+
+  async function signOut(connector: Connector) {
+    try {
+      setConnectors(await signOutConnector(connector.id));
+      setChecks((prev) => ({ ...prev, [connector.id]: { state: "idle" } }));
+    } catch (e) {
+      notify(errMessage(e), { tone: "error" });
+    }
+  }
+
   async function importOne(candidate: Discovered) {
     await save({
       id: candidate.id,
@@ -312,7 +356,6 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
 
   const importable = useMemo(() => found.filter((f) => !f.alreadyAdded), [found]);
   const busy = connectors.some((c) => checks[c.id]?.state === "checking");
-  const hasGithub = connectors.some(isGithub);
 
   // "2 of 3 on · 14 tools seen" — the facts worth knowing before reading rows.
   const summary = useMemo(() => {
@@ -343,16 +386,10 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
           }
         />
         <Panel>
-          <div {...ledger.listProps}>
+          <div {...ledger.listProps} data-bleed>
             <GlideHighlight glide={ledger.glide} />
-            {!hasGithub && (
-              <GithubSuggestion
-                login={githubLogin}
-                connecting={connectingGithub}
-                onConnect={() => void connectGithub()}
-                rowProps={ledger.rowProps}
-                last={connectors.length === 0}
-              />
+            {connectors.length === 0 && (
+              <Empty>Nothing connected yet. Pick a service below, or import one you already use.</Empty>
             )}
             {connectors.map((connector, i) => (
                 <ConnectorRow
@@ -370,6 +407,15 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
                   }}
                   onEnabledChange={(enabled) => void save({ ...connector, enabled })}
                   onRemove={() => void drop(connector)}
+                  signIn={
+                    usesSignIn(connector.server)
+                      ? {
+                          busy: signingIn === connector.id,
+                          onSignIn: () => void signIn(connector),
+                          onSignOut: () => void signOut(connector),
+                        }
+                      : undefined
+                  }
                   rowProps={ledger.rowProps}
                 />
             ))}
@@ -388,6 +434,58 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
       <section className="klide-primitive-section">
         <Head
           index="02"
+          title="Popular servers"
+          note="Sign in once; the token stays in your Keychain."
+          action={
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter"
+              aria-label="Filter servers"
+              spellCheck={false}
+              className="klide-field klide-connector-filter"
+            />
+          }
+        />
+        <div className="klide-connector-grid">
+          {matchesFilter({ label: "GitHub", blurb: "Repositories, issues and pull requests" }, filter) && <GithubCard
+            added={connectors.find(isGithub) ?? null}
+            login={githubLogin}
+            connecting={connectingGithub}
+            onConnect={() => void connectGithub()}
+            onEnabledChange={(c, enabled) => void save({ ...c, enabled })}
+          />}
+          {CONNECTOR_CATALOG.filter((entry) => matchesFilter(entry, filter)).map((entry, i) => (
+            <CatalogCard
+              key={entry.id}
+              entry={entry}
+              index={i + 1}
+              added={catalogMatch(entry, connectors)}
+              selected={setup?.id === entry.id}
+              signingIn={signingIn === entry.id}
+              onPick={() => {
+                if (signingIn === entry.id) void cancelConnectorSignIn();
+                else if (entry.auth === "oauth") void signIn(catalogConnector(entry, {}));
+                else if (entry.secrets.length === 0) void addFromCatalog(entry, {});
+                else setSetup((prev) => (prev?.id === entry.id ? null : entry));
+              }}
+              onEnabledChange={(c, enabled) => void save({ ...c, enabled })}
+            />
+          ))}
+        </div>
+        {setup && (
+          <CatalogSetup
+            key={setup.id}
+            entry={setup}
+            onCancel={() => setSetup(null)}
+            onAdd={(values) => void addFromCatalog(setup, values)}
+          />
+        )}
+      </section>
+
+      <section className="klide-primitive-section">
+        <Head
+          index="03"
           title="Available to import"
           note="Read from your other tools' own config. Klide never edits them."
           action={
@@ -405,43 +503,22 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
                 : "No MCP servers found in Claude Code, Codex or OpenCode."}
           </Empty>
         ) : (
-          <div {...offers.listProps}>
-            <GlideHighlight glide={offers.glide} />
-            {importable.map((candidate, i) => {
-              const source = SOURCE[candidate.origin];
-              return (
-                <div
-                  key={`${candidate.origin}:${candidate.id}`}
-                  className="klide-connector-offer"
-                  style={{ animationDelay: `${Math.min(i, 8) * 22}ms` }}
-                  {...offers.rowProps}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div className="klide-connector-offer-head">
-                      <RowTitle connector={candidate}>{candidate.label}</RowTitle>
-                      <span className="klide-connector-source" title={candidate.sourcePath}>
-                        {source?.logo && <ProviderLogo id={source.logo} size={12} />}
-                        <span>{source?.name ?? candidate.origin}</span>
-                        <span className="klide-connector-source-path">{tildify(candidate.sourcePath)}</span>
-                      </span>
-                    </div>
-                    <div className="klide-connector-command" title={commandLine(candidate.server)}>
-                      {shortCommand(candidate.server)}
-                    </div>
-                  </div>
-                  <div className="klide-connector-verbs">
-                    <Verb onClick={() => void importOne(candidate)}>Import</Verb>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="klide-connector-grid">
+            {importable.map((candidate, i) => (
+              <ImportCard
+                key={`${candidate.origin}:${candidate.id}`}
+                candidate={candidate}
+                index={i}
+                onImport={() => void importOne(candidate)}
+              />
+            ))}
           </div>
         )}
       </section>
 
       <section className="klide-primitive-section">
         <Head
-          index="03"
+          index="04"
           title="Add a connector"
           note="A command Klide starts, or a remote server's URL."
           action={
@@ -471,6 +548,7 @@ function ConnectorRow({
   onCheck,
   onEnabledChange,
   onRemove,
+  signIn,
   rowProps,
 }: {
   connector: Connector;
@@ -481,6 +559,8 @@ function ConnectorRow({
   onCheck: () => void;
   onEnabledChange: (enabled: boolean) => void;
   onRemove: () => void;
+  /** For a connector signed in through the browser. */
+  signIn?: { busy: boolean; onSignIn: () => void; onSignOut: () => void };
   /** Hover/focus handlers from the list's glide. */
   rowProps: { onMouseEnter: (e: { currentTarget: HTMLElement }) => void; onFocus: (e: { currentTarget: HTMLElement }) => void };
 }) {
@@ -516,6 +596,8 @@ function ConnectorRow({
             <span>{ORIGIN_LABEL[connector.origin] ?? connector.origin}</span>
             {scope ? (
               <span style={{ opacity: 0.75 }}>{scope}</span>
+            ) : signIn ? (
+              <span style={{ opacity: 0.75 }}>Signed in through your browser</span>
             ) : (
               env.length > 0 && <span style={{ opacity: 0.75 }}>{env.join(" · ")}</span>
             )}
@@ -527,6 +609,14 @@ function ConnectorRow({
             <Verb onClick={onCheck} disabled={check.state === "checking"}>
               Check
             </Verb>
+            {signIn && (
+              <>
+                <Verb onClick={signIn.onSignIn} disabled={signIn.busy}>
+                  {signIn.busy ? "Waiting for browser…" : "Sign in again"}
+                </Verb>
+                <Verb onClick={signIn.onSignOut}>Sign out</Verb>
+              </>
+            )}
             <Verb onClick={onRemove} danger>
               Remove
             </Verb>
@@ -571,38 +661,273 @@ function githubScope(server: ServerSpec): string | null {
   return toolsets ? toolsets.split(",").map((s) => s.trim().replace(/_/g, " ")).join(" · ") : null;
 }
 
-/** GitHub, before it is connected: the one connector most people want, offered
- *  where connectors live rather than as a link in a heading. Its verb is always
- *  shown — this row exists to be clicked, unlike a row's Check / Remove. */
-function GithubSuggestion({
+/* ---------------------------------------------------------- catalog cards --*/
+
+/** Name or blurb contains every word typed, in any order. */
+function matchesFilter(entry: { label: string; blurb: string }, filter: string): boolean {
+  const haystack = `${entry.label} ${entry.blurb}`.toLowerCase();
+  return filter.toLowerCase().split(/\s+/).filter(Boolean).every((word) => haystack.includes(word));
+}
+
+/** The square a card's logo sits in: the brand's own mark when one of the
+ *  server's names says which, else short letters — the way a file browser
+ *  shows `PDF` for a file it has no picture of. */
+function CardTile({ id, label, server, monogram }: { id: string; label: string; server?: ServerSpec; monogram: string }) {
+  const names = serverNames(server);
+  const brand = connectorBrand(id, label, names) ?? connectorPicture(id, label, names);
+  return (
+    <span className="klide-connector-tile" aria-hidden>
+      {brand ? (
+        <span className="klide-connector-mark">
+          <ConnectorMark connector={id} label={label} server={server} size={30} tone="brand" />
+        </span>
+      ) : (
+        <span className="klide-connector-monogram">{monogram}</span>
+      )}
+    </span>
+  );
+}
+
+/** One card's frame. Not yet added, the whole card is the button that adds
+ *  it; added, it is a plain surface whose switch is the only control — a
+ *  button may not hold another button. */
+function CardShell({
+  added,
+  selected,
+  index,
+  label,
+  onPick,
+  disabled,
+  action = "Add",
+  children,
+}: {
+  added: Connector | null;
+  selected?: boolean;
+  index: number;
+  label: string;
+  /** What a click does, for assistive tech: `Add Linear`, `Import pencil`. */
+  action?: string;
+  onPick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  const common = {
+    className: "klide-connector-card",
+    "data-added": added ? "true" : undefined,
+    "data-off": added && !added.enabled ? "true" : undefined,
+    "data-selected": selected ? "true" : undefined,
+    style: { animationDelay: `${Math.min(index, 12) * 18}ms` },
+  };
+  if (added) return <div {...common}>{children}</div>;
+  return (
+    <button
+      type="button"
+      {...common}
+      onClick={onPick}
+      disabled={disabled}
+      aria-label={`${action} ${label}`}
+      aria-expanded={selected}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** `Remote                    ◯━` — what kind of server, and either its
+ *  switch (added) or the verb a click performs (not yet). */
+function CardTop({
+  word,
+  added,
+  verb,
+  onEnabledChange,
+}: {
+  word: ReactNode;
+  added: Connector | null;
+  verb: string;
+  onEnabledChange: (connector: Connector, enabled: boolean) => void;
+}) {
+  return (
+    <span className="klide-connector-card-top">
+      <span>{word}</span>
+      {added ? (
+        <Toggle
+          checked={added.enabled}
+          onChange={(enabled) => onEnabledChange(added, enabled)}
+          label={`Use ${added.label}`}
+        />
+      ) : (
+        <span className="klide-connector-card-verb">{verb}</span>
+      )}
+    </span>
+  );
+}
+
+function CatalogCard({
+  entry,
+  index,
+  added,
+  selected,
+  signingIn,
+  onPick,
+  onEnabledChange,
+}: {
+  entry: CatalogEntry;
+  index: number;
+  added: Connector | null;
+  selected: boolean;
+  signingIn: boolean;
+  onPick: () => void;
+  onEnabledChange: (connector: Connector, enabled: boolean) => void;
+}) {
+  return (
+    <CardShell added={added} selected={selected || signingIn} index={index} label={entry.label} onPick={onPick}>
+      <CardTop
+        // "Sign in" is what a card still asks for; once the connector is
+        // added it has been answered, so the card says where it runs instead.
+        word={entry.auth === "oauth" && !added ? "Sign in" : transportWord(entry.server)}
+        added={added}
+        verb={signingIn ? "Cancel" : entry.auth === "oauth" ? "Connect" : entry.secrets.length > 0 ? "Set up" : "Add"}
+        onEnabledChange={onEnabledChange}
+      />
+      <CardTile id={entry.id} label={entry.label} server={entry.server} monogram={entry.monogram} />
+      <span className="klide-connector-card-title">{entry.label}</span>
+      <span className="klide-connector-card-blurb" title={entry.blurb}>
+        {signingIn ? "Finish signing in in your browser" : entry.blurb}
+      </span>
+    </CardShell>
+  );
+}
+
+/** A server found in another tool's config, as a card: that tool's mark and
+ *  name on top, the server's own logo, its name, and the command or URL that
+ *  starts it. A click imports it — switched off, as every import is. */
+function ImportCard({
+  candidate,
+  index,
+  onImport,
+}: {
+  candidate: Discovered;
+  index: number;
+  onImport: () => void;
+}) {
+  const source = SOURCE[candidate.origin];
+  return (
+    <CardShell added={null} index={index} label={candidate.label} action="Import" onPick={onImport}>
+      <CardTop
+        word={
+          <span className="klide-connector-card-source" title={tildify(candidate.sourcePath)}>
+            {source?.logo && <ProviderLogo id={source.logo} size={11} />}
+            {source?.name ?? candidate.origin}
+          </span>
+        }
+        added={null}
+        verb="Import"
+        onEnabledChange={() => {}}
+      />
+      <CardTile
+        id={candidate.id}
+        label={candidate.label}
+        server={candidate.server}
+        monogram={monogramOf(candidate.label)}
+      />
+      <span className="klide-connector-card-title" title={candidate.label}>{candidate.label}</span>
+      <span className="klide-connector-card-blurb klide-connector-card-command" title={commandLine(candidate.server)}>
+        {shortCommand(candidate.server)}
+      </span>
+    </CardShell>
+  );
+}
+
+/** `obsidian-mcp-tools` → `OMT`; `pencil` → `PEN`. */
+function monogramOf(label: string): string {
+  const words = label.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const letters = words.length > 1 ? words.map((w) => w[0]).join("") : (words[0] ?? "?");
+  return letters.slice(0, 3).toUpperCase();
+}
+
+/** GitHub's card: its own door, signed in as the account Klide already uses,
+ *  so it never asks for a token. */
+function GithubCard({
+  added,
   login,
   connecting,
   onConnect,
-  rowProps,
-  last,
+  onEnabledChange,
 }: {
+  added: Connector | null;
   login: string | null | undefined;
   connecting: boolean;
   onConnect: () => void;
-  rowProps: { onMouseEnter: (e: { currentTarget: HTMLElement }) => void; onFocus: (e: { currentTarget: HTMLElement }) => void };
-  last: boolean;
+  onEnabledChange: (connector: Connector, enabled: boolean) => void;
 }) {
-  const who =
-    login === undefined ? "Signs in as your GitHub account"
-      : login === null ? "Needs a GitHub login first — run gh auth login"
-        : `Signs in as ${login} — nothing to paste`;
+  const blurb = added
+    ? "Repositories, issues and pull requests"
+    : login === undefined ? "Signs in as your GitHub account"
+      : login === null ? "Run gh auth login first"
+        : `Signs in as ${login}`;
   return (
-    <div className="klide-connector-row" style={last ? { borderBottom: "none" } : undefined} {...rowProps}>
-      <div style={{ minWidth: 0 }}>
-        <RowTitle connector={{ id: "github", label: "GitHub" }}>GitHub</RowTitle>
-        <div className="klide-connector-meta" style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>
-          Repositories, issues, pull requests and Actions
+    <CardShell added={added} index={0} label="GitHub" onPick={onConnect} disabled={connecting || login === null}>
+      <CardTop
+        word={added ? "Remote" : "Sign in"}
+        added={added}
+        verb={connecting ? "Connecting…" : "Connect"}
+        onEnabledChange={onEnabledChange}
+      />
+      <CardTile id="github" label="GitHub" monogram="GH" />
+      <span className="klide-connector-card-title">GitHub</span>
+      <span className="klide-connector-card-blurb" title={blurb}>{blurb}</span>
+    </CardShell>
+  );
+}
+
+/** The keys a picked card references, asked for under the grid. Empty keeps
+ *  the `${VAR}` reference — resolved from the environment or the project's
+ *  `.env` at connect time — so pasting is a choice, not a requirement. */
+function CatalogSetup({
+  entry,
+  onAdd,
+  onCancel,
+}: {
+  entry: CatalogEntry;
+  onAdd: (values: Record<string, string>) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  return (
+    <div className="klide-connector-setup">
+      <Panel>
+        <div style={{ padding: "20px 0", display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <CardTile id={entry.id} label={entry.label} server={entry.server} monogram={entry.monogram} />
+            <div style={{ minWidth: 0 }}>
+              <div className="klide-row-title">{entry.label}</div>
+              <div className="klide-connector-command" title={commandLine(entry.server)}>
+                {shortCommand(entry.server)}
+              </div>
+            </div>
+          </div>
+          {entry.secrets.map((secret) => (
+            <Field key={secret.name} label={secret.label} hint={`leave empty to read \${${secret.name}} from your environment or .env`}>
+              <Input
+                value={values[secret.name] ?? ""}
+                onChange={(v) => setValues((prev) => ({ ...prev, [secret.name]: v }))}
+                placeholder={`\${${secret.name}}`}
+                mono
+                autoFocus
+                secret
+              />
+            </Field>
+          ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
+            {entry.docs && (
+              <Verb onClick={() => void openUrl(entry.docs!)}>Where to find it</Verb>
+            )}
+            <span style={{ flex: 1 }} />
+            <GhostButton onClick={onCancel}>Cancel</GhostButton>
+            <LinkButton onClick={() => onAdd(values)}>Add {entry.label}</LinkButton>
+          </div>
         </div>
-        <div className="klide-connector-meta">{who}</div>
-      </div>
-      <Verb onClick={onConnect} disabled={connecting || login === null}>
-        {connecting ? "Connecting…" : "Connect"}
-      </Verb>
+      </Panel>
     </div>
   );
 }
@@ -833,15 +1158,20 @@ function Input({
   placeholder,
   mono,
   autoFocus,
+  secret,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   mono?: boolean;
   autoFocus?: boolean;
+  /** A pasted key is masked; its reference placeholder still reads. */
+  secret?: boolean;
 }) {
   return (
     <input
+      type={secret ? "password" : "text"}
+      autoComplete="off"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
