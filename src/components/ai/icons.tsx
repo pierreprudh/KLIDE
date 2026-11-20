@@ -95,9 +95,11 @@ export function KlideMark({ size = 13 }: { size?: number }) {
   return <TwoToneMark light="/klide-logo-light.svg" dark="/klide-logo-dark.svg" size={size} />;
 }
 
-// Official OpenRouter brand mark (Simple Icons, single path).
+// Official OpenRouter glyph (openrouter.ai/brand, 2026 identity): the ring
+// and the routed tail, one path. The 1024×730 art is scaled to the 24-box by
+// width and centred vertically.
 const OPENROUTER_PATH =
-  "M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z";
+  "M18.654 3.445C21.463 3.445 23.741 5.742 23.741 8.575C23.741 11.409 21.463 13.705 18.654 13.705L23.7 18.794C24.341 19.44 23.887 20.545 22.981 20.545H8.479C3.796 20.545 0 16.717 0 11.995C0 7.273 3.796 3.445 8.479 3.445L18.654 3.445ZM8.479 6.865C5.669 6.865 3.392 9.162 3.392 11.995C3.392 14.829 5.669 17.125 8.479 17.125C11.289 17.125 13.566 14.829 13.566 11.995C13.566 9.162 11.289 6.865 8.479 6.865Z";
 
 export const BRAND_LOGO_PATHS: Partial<Record<BrandKey, string>> = {
   ollama:
@@ -139,7 +141,8 @@ const BRAND_COLOR: Partial<Record<BrandKey | ModelColorBrand, { mark?: string; c
   // close to Anthropic's clay for two neighbouring bars.
   mistral: { chart: "#F5A524" },
   gemini: { chart: "#3186FF" },
-  openrouter: { mark: "#4A6CF7", chart: "#6467F2" },
+  // Grape — the glyph colour from openrouter.ai/brand.
+  openrouter: { mark: "#7624F4", chart: "#7624F4" },
   deepseek: { mark: "#4D6BFE", chart: "#4D6BFE" },
   omp: { mark: "#7C6BAE", chart: "#7C6BAE" },
   // Model-only makers use the hues of the logo assets shipped in /public.
