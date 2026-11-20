@@ -27,6 +27,8 @@ const realInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: st
   if (cmd === "agent_schedule_history") return [];
   return realInvoke(cmd, args);
 };
+const { registerCiFixOpener } = await import("../src/ciFixNavigation");
+registerCiFixOpener(() => {});
 const { Scheduled } = await import("../src/components/Scheduled");
 const { CI_WATCH_ID } = await import("../src/components/missionControl/ciWatch");
 ReactDOM.createRoot(document.getElementById("root")!).render(

@@ -81,17 +81,31 @@ switch, agent and model in the detail pane and its firings under Run history. Th
 that failed *after* the switch was turned on starts one Run per failing commit
 (PR number + head SHA), at most three per poll. A commit never fires twice.
 
-The Run is always Plan mode: standalone, read-only, with no command authority,
-whatever the captured template said. Its prompt names the failing checks and
-carries an excerpt of `gh run view --log-failed`, ending at the last
-`##[error]` line and fenced as CI data, not instructions. It runs on the agent and model picked in the detail pane (the composer's
-provider menu and model picker); changing them keeps the watch's start time.
+The Run is always Plan mode: standalone and read-only, with no command
+authority and no Tool that could wait for an approval nobody is there to give
+(connectors, network, commands, writes, subagents), whatever the captured
+template said. Its prompt names the failing checks and carries an excerpt of
+each failed job's log (`gh api …/actions/jobs/<id>/logs`), ending at the last
+`##[error]` line and fenced as CI data, not instructions. It runs on the agent
+and model picked in the detail pane; changing them keeps the watch's start time.
 
-The service posts a macOS notification (via `osascript`, so macOS lists it
-under Script Editor; clicking it does not open Klide yet). The app turns each
-firing into a toast with **Open**, and Run history lists recent firings. State is
-`ci-watch.json` in app data, shared by the app and the service under
-`ci-watch.lock`.
+While Klide is open, the app posts the notification under its own name and
+icon, on any screen, and the window shows a toast with **Fix it** and **Open**.
+The window takes firings itself (`ci_watch_take`, on load and when the app
+nudges it with `ci-watch:pending`), so a firing that landed while Klide was
+closed is shown when it opens. Only a firing no open app claimed within 15 s
+falls back to an `osascript` notification, which macOS lists under Script
+Editor. State is `ci-watch.json` in app data, shared by the app and the
+service under `ci-watch.lock`.
+
+**Fix it** (toast, or the button beside a firing in Run history) checks the
+PR's failing commit out in a fresh worktree on `klide/fix-pr-<n>-<sha8>`
+(`ci_watch_fix_prepare`; a second click reuses it) and starts a Work
+conversation on Focus there, on the watch's agent and model. Its first message
+carries the read-only Run's diagnosis as notes to verify and asks for the
+smallest fix, a local run of the failing check, a commit, and a push to the
+PR's branch. Every edit is reviewed as usual and the push is a command you
+approve; a fork's PR is never pushed to.
 
 ## Controls and recovery
 

@@ -248,3 +248,9 @@
 .scheduled-history li > button:disabled:hover { background: transparent; }
 .scheduled-history-top > span:last-child { flex-shrink: 0; white-space: nowrap; }
 .scheduled-history-top > .ci-watch-pr { font-size: 12px; color: var(--fg); }
+
+/* "Fix it" sits beside a CI watch firing's row, not inside its button. */
+.scheduled-history li:has(> .ci-watch-fix) { display: flex; align-items: center; gap: 4px; }
+.scheduled-history li:has(> .ci-watch-fix) > button:first-child { flex: 1; min-width: 0; }
+.scheduled-history li > .ci-watch-fix { flex: none; width: auto; display: block; margin-right: 6px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: transparent; color: var(--fg); font-size: 12px; padding: 5px 10px; }
+.scheduled-history li > .ci-watch-fix:hover { background: var(--bg-hover); }

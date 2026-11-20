@@ -26,6 +26,7 @@ import { relativeTime } from "../../time";
 import { errMessage } from "../../errors";
 import { createListenerScope } from "../../tauriEvents";
 import { OpenInEditorIcon } from "../../icons";
+import { canStartCiFix, startCiFix } from "../../ciFixNavigation";
 
 /** The list selection that means "Watch CI", never a schedule id. */
 export const CI_WATCH_ID = "__ci-watch__";
@@ -152,7 +153,7 @@ export function CiWatchDetail({ watch, project }: { watch: CiWatch; project: str
         <ModelPicker provider={watch.provider} model={watch.model} availableModels={watch.models} onChange={watch.pickModel} direction="down" disabled={watch.busy} />
       </div>
       <h3>What it does</h3>
-      <p className="scheduled-instructions">When a check fails on one of your open pull requests in {project}, this agent reads the failed log and proposes the smallest fix. It runs read-only: nothing is edited until you open the Run and decide. Each failing commit starts one Run, and failures from before you turned this on are skipped.</p>
+      <p className="scheduled-instructions">When a check fails on one of your open pull requests in {project}, this agent reads the failed log and proposes the smallest fix. It runs read-only. Fix it then works in a fresh worktree at the failing commit, and you review every edit before it lands. Each failing commit starts one Run, and failures from before you turned this on are skipped.</p>
       {info?.lastError ? <p className="scheduled-error" role="status">{info.lastError}</p> : null}
       {watch.error ? <p className="scheduled-error" role="alert">{watch.error}</p> : null}
     </div>
@@ -169,5 +170,6 @@ export function CiWatchHistory({ watch, onOpenRun }: { watch: CiWatch; onOpenRun
       <span className="scheduled-history-bottom"><span className="ci-watch-checks">{f.checks.join(", ")}</span>{f.runId ? <OpenInEditorIcon size={12} /> : null}</span>
       {f.error && <span className="scheduled-history-error">{f.error}</span>}
     </button>
+    {f.runId && canStartCiFix() && <button type="button" className="ci-watch-fix" title="Fix it in a worktree at the failing commit — every edit is reviewed" onClick={() => startCiFix(f)}>Fix it</button>}
   </li>)}</ol>;
 }

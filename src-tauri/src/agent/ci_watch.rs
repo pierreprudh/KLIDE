@@ -557,6 +557,75 @@ pub async fn ci_watch_take(app: tauri::AppHandle) -> Result<Vec<Fired>, String> 
     Ok(fresh)
 }
 
+/// Where "Fix it" works: a fresh worktree at the PR's failing commit.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FixWorkspace {
+    cwd: String,
+    branch: String,
+    sha: String,
+    /// The PR's own branch, for `git push origin HEAD:<headRef>`.
+    head_ref: Option<String>,
+    /// A fork's PR can't be pushed to from here.
+    cross_repo: bool,
+}
+
+/// The commit a firing is about: the 40-hex sha after the key's `@`.
+fn fired_sha(key: &str) -> Option<&str> {
+    let sha = key.rsplit_once('@')?.1;
+    (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
+}
+
+fn fix_branch(pr: u64, sha: &str) -> String {
+    format!("klide/fix-pr-{pr}-{}", &sha[..8])
+}
+
+/// Check the failing commit out on its own branch, beside the checkout. A
+/// second click on the same firing returns the worktree the first one made.
+#[tauri::command]
+pub async fn ci_watch_fix_prepare(app: tauri::AppHandle, key: String) -> Result<FixWorkspace, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let k = key.clone();
+    let fired = crate::blocking::run(move || {
+        read(&data)?.fired.into_iter().find(|f| f.key == k).ok_or_else(|| "That CI failure is no longer recorded".to_string())
+    })
+    .await?;
+    let sha = fired_sha(&key).ok_or("That CI failure has no commit to check out")?.to_string();
+    let root = fired.workspace_root.clone();
+    let pr = fired.pr_number;
+    let branch = fix_branch(pr, &sha);
+
+    let (r, b) = (root.clone(), branch.clone());
+    let facts = crate::blocking::run(move || {
+        let view = crate::git::github::gh_output(&r, &["pr", "view", &pr.to_string(), "--json", "headRefName,isCrossRepository"])
+            .ok()
+            .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok());
+        let head_ref = view.as_ref().and_then(|v| v["headRefName"].as_str()).map(str::to_string);
+        let cross_repo = view.as_ref().and_then(|v| v["isCrossRepository"].as_bool()).unwrap_or(false);
+        let existing = crate::git::git_output(&r, &["worktree", "list", "--porcelain"])?
+            .split("\n\n")
+            .find(|block| block.lines().any(|l| l == format!("branch refs/heads/{b}")))
+            .and_then(|block| block.lines().find_map(|l| l.strip_prefix("worktree ")).map(str::to_string));
+        if existing.is_none() {
+            // The PR's head may not be local yet (pushed from elsewhere).
+            crate::git::git_output(&r, &["fetch", "--quiet", "origin", &format!("refs/pull/{pr}/head")])?;
+        }
+        Ok((head_ref, cross_repo, existing))
+    })
+    .await?;
+    let (head_ref, cross_repo, existing) = facts;
+    let cwd = match existing {
+        Some(path) => path,
+        None => {
+            let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
+            crate::git::worktree_add_from_commit_core(root, branch.clone(), None, None, quiet, Some(sha.clone()))
+                .await?
+                .path
+        }
+    };
+    Ok(FixWorkspace { cwd, branch, sha, head_ref, cross_repo })
+}
+
 /// `request: None` stops watching this Workspace.
 #[tauri::command]
 pub async fn ci_watch_set(
@@ -593,6 +662,14 @@ pub async fn ci_watch_set(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_fix_branch_names_the_pr_and_its_commit() {
+        let sha = "590249afda8a778ab13d4bd2f062c3f4675bb63c";
+        assert_eq!(fired_sha(&format!("/w#573@{sha}")), Some(sha));
+        assert_eq!(fired_sha("/w#573@notasha"), None);
+        assert_eq!(fix_branch(573, sha), "klide/fix-pr-573-590249af");
+    }
+
     #[test]
     fn a_fired_run_cannot_reach_a_tool_that_waits_for_approval() {
         let template: StartRunRequest = serde_json::from_value(serde_json::json!({

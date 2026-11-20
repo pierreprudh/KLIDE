@@ -32,3 +32,14 @@ export function ciWatchSet(workspaceRoot: string, input: StartAgentRunInput | nu
 export function ciWatchTake(): Promise<CiWatchFired[]> {
   return invoke("ci_watch_take");
 }
+
+/** Where "Fix it" works: a fresh worktree checked out at the PR's failing
+ *  commit (reused on a second click). */
+export type CiFixWorkspace = {
+  cwd: string; branch: string; sha: string;
+  headRef: string | null; crossRepo: boolean;
+};
+
+export function ciWatchFixPrepare(key: string): Promise<CiFixWorkspace> {
+  return invoke("ci_watch_fix_prepare", { key });
+}
