@@ -1,38 +1,76 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Msg } from "./types";
 
-/** Match the durable observer id, never the position of the latest user turn. */
-export function observerConnections(msgs: Msg[]) {
-  const links: { start: number; end: number; members: number[]; direct?: boolean }[] = [];
+type Link = { start: number; end: number; members: number[]; direct?: boolean };
+
+/** Stable empty result: most conversations have no observer or Mission rows,
+ * and the panel re-renders ~28×/s while a Run streams. Returning the same
+ * constant keeps `links` identity-stable so the layout effect below does not
+ * re-run (and no ResizeObserver is ever created) for them. */
+const EMPTY_LINKS: Link[] = [];
+
+/** A `Watching `cmd` as `shell`. …` tool row, read once per row instead of
+ * once per observer message. */
+const WATCHING_RE = /^Watching `[^`]*` as `([^`]*)`\./;
+
+/** Scan backward from a tool row to the assistant message that requested it,
+ * stopping at the turn boundary. */
+function launchStart(msgs: Msg[], toolIndex: number, toolCallId?: string): number {
+  for (let i = toolIndex - 1; i >= 0; i--) {
+    const row = msgs[i];
+    if (row.role === "user") break;
+    if (row.role === "assistant" && row.toolCalls?.some(call => call.id === toolCallId)) return i;
+  }
+  return -1;
+}
+
+/** Match the durable observer id, never the position of the latest user turn.
+ * A single O(n) pre-scan indexes plan receipts and watch rows so the link
+ * pass never does a `findIndex` per message — the previous shape was O(n²)
+ * with a `JSON.parse` in the inner loop, re-run on every streamed flush. */
+export function observerConnections(msgs: Msg[]): Link[] {
+  let anyObserver = false;
+  for (const row of msgs) {
+    if ((row.role === "assistant" && row.missionReportId) || (row.role === "system" && row.observer)) { anyObserver = true; break; }
+  }
+  if (!anyObserver) return EMPTY_LINKS;
+  // First tool row per Mission id / observed shell — the first occurrence is
+  // the only candidate the old `findIndex` (bounded to `i < end`) could ever
+  // match, so a map lookup with the same bound is equivalent.
+  const planFirst = new Map<string, number>();
+  const watchFirst = new Map<string, number>();
+  for (let i = 0; i < msgs.length; i++) {
+    const row = msgs[i];
+    if (row.role !== "tool") continue;
+    if (row.toolName === "plan_mission") {
+      try {
+        const receipt = JSON.parse(row.content) as { action?: unknown; missionId?: unknown };
+        if (receipt?.action === "plan" && typeof receipt.missionId === "string" && !planFirst.has(receipt.missionId)) {
+          planFirst.set(receipt.missionId, i);
+        }
+      } catch { /* not a receipt-shaped row */ }
+    } else if (row.toolName === "run_command" && row.content.startsWith("Watching `")) {
+      const shellId = WATCHING_RE.exec(row.content)?.[1];
+      if (shellId && !watchFirst.has(shellId)) watchFirst.set(shellId, i);
+    }
+  }
+  const links: Link[] = [];
   msgs.forEach((msg, end) => {
     if (msg.role === "assistant" && msg.missionReportId) {
-      const toolIndex = msgs.findIndex((row, i) => {
-        if (i >= end || row.role !== "tool" || row.toolName !== "plan_mission") return false;
-        try { const receipt = JSON.parse(row.content); return receipt.action === "plan" && receipt.missionId === msg.missionReportId; }
-        catch { return false; }
-      });
+      const toolIndex = planFirst.get(msg.missionReportId) ?? -1;
+      if (toolIndex < 0 || toolIndex >= end) return;
       const tool = msgs[toolIndex];
       if (!tool || tool.role !== "tool") return;
-      let start = -1;
-      for (let i = toolIndex - 1; i >= 0; i--) {
-        const row = msgs[i];
-        if (row.role === "user") break;
-        if (row.role === "assistant" && row.toolCalls?.some(call => call.id === tool.toolCallId)) { start = i; break; }
-      }
+      const start = launchStart(msgs, toolIndex, tool.toolCallId);
       if (start >= 0) links.push({ start, end, members: [start, end], direct: true });
       return;
     }
     if (msg.role !== "system" || !msg.observer) return;
-    const toolIndex = msgs.findIndex((row, i) => i < end && row.role === "tool" && row.toolName === "run_command" && row.content.startsWith("Watching `") && row.content.includes(` as \`${msg.observer!.shellId}\`.`));
-    if (toolIndex < 0) return;
+    const toolIndex = watchFirst.get(msg.observer.shellId) ?? -1;
+    if (toolIndex < 0 || toolIndex >= end) return;
     const tool = msgs[toolIndex];
-    if (tool.role !== "tool") return;
-    let start = -1;
-    for (let i = toolIndex - 1; i >= 0; i--) {
-      const row = msgs[i];
-      if (row.role === "user") break;
-      if (row.role === "assistant" && row.toolCalls?.some(call => call.id === tool.toolCallId)) { start = i; break; }
-    }
+    if (!tool || tool.role !== "tool") return;
+    const start = launchStart(msgs, toolIndex, tool.toolCallId);
     if (start < 0) return;
     const members = [end];
     for (let i = start; i < toolIndex; i++) members.push(i);
@@ -53,6 +91,13 @@ export function ObserverConnections({ msgs, children }: { msgs: Msg[]; children:
   useLayoutEffect(() => {
     const node = root.current;
     if (!node) return;
+    if (links.length === 0) {
+      // Nothing to draw: skip the ResizeObserver and the forced layout
+      // measure entirely. Only clear paths left over from a previous state,
+      // keeping the array identity stable so this stays a no-op re-render.
+      setPaths(prev => (prev.length === 0 ? prev : []));
+      return;
+    }
     const measure = () => {
       const box = node.getBoundingClientRect();
       setPaths(links.map(link => {

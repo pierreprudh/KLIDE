@@ -1650,10 +1650,8 @@ mod blocking_door_tests {
         "accounts_list",
         // lib.rs — hand off to the native menu
         "menu_sync_projects",
-        // missions.rs — Mission writes serialized behind the store's write
-        // gate (ADR-0002); a blocking closure cannot hold that State lock.
-        "mission_create",
-        "mission_save_task",
+        // missions.rs — Mission writes are `async fn` now and take the store's
+        // write gate inside a blocking closure (ADR-0002); nothing left here.
         // pty.rs — a mutex touch on an in-process session, or a spawn whose
         // cost is the fork itself
         "delegate_daemon_status",
