@@ -9,6 +9,7 @@ import { notify } from "./toast";
 import { errMessage } from "./errors";
 import { openSchedule } from "./scheduleNavigation";
 import { ciWatchTake, type CiWatchFired } from "./ipc/ciWatch";
+import { canStartCiFix, startCiFix } from "./ciFixNavigation";
 
 const runIds = new Set<string>();
 export function isScheduledRun(id: string): boolean { return runIds.has(id); }
@@ -86,6 +87,7 @@ export function watchScheduleStatus(): () => void {
     notify(`CI failed on #${f.prNumber} ${f.prTitle} — Kit is looking into it`, {
       tone: "warn", duration: 0,
       provider: f.provider,
+      actions: canStartCiFix() ? [{ label: "Fix it", run: () => startCiFix(f) }] : undefined,
       action: { label: "Open", run: () => { openConversation(runId); } },
     });
   };

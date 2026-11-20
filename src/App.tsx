@@ -45,7 +45,7 @@ import { StatusBar } from "./components/StatusBar";
 import { MissionControlSkeleton } from "./components/MissionControlSkeleton";
 import ToastHost from "./components/ToastHost";
 import { ObserverNotifications } from "./components/ObserverNotifications";
-import { notify } from "./toast";
+import { dismissToast, notify } from "./toast";
 import { MISSIONS_UNREADABLE_EVENT, type UnreadableMission } from "./agent/durableMissions";
 import { onDelegateExit } from "./ipc/delegatePty";
 import {
@@ -143,6 +143,9 @@ import { registerAttachmentOpener } from "./attachmentNavigation";
 import { attachmentsRoot } from "./ipc/pdf";
 import { registerConversationOpener, registerSessionReattacher } from "./conversationNavigation";
 import { registerScheduleOpener } from "./scheduleNavigation";
+import { registerCiFixOpener } from "./ciFixNavigation";
+import { ciWatchFixPrepare, type CiWatchFired } from "./ipc/ciWatch";
+import { ciDiagnosis, ciFixTurn, ciLog } from "./agent/ciFix";
 import { isScheduledRun } from "./scheduleStatus";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
@@ -1159,6 +1162,54 @@ function App() {
       registerSessionReattacher(null);
     };
   });
+
+  // "Fix it" on a CI watch firing: a worktree at the PR's failing commit, then
+  // a Work turn on Focus's canvas carrying the read-only Run's diagnosis.
+  const pendingCiFixRef = useRef<{ root: string; fired: CiWatchFired } | null>(null);
+  const startCiFixRef = useRef<(fired: CiWatchFired) => Promise<void>>(async () => {});
+  startCiFixRef.current = async (fired) => {
+    if (fired.workspaceRoot !== workspaceRoot) {
+      pendingCiFixRef.current = { root: fired.workspaceRoot, fired };
+      changeRoot(fired.workspaceRoot);
+      return;
+    }
+    const preparing = notify(`Preparing a worktree for #${fired.prNumber}…`, { tone: "info", duration: 0 });
+    try {
+      const ws = await ciWatchFixPrepare(fired.key);
+      const events = fired.runId ? await readAgentRunEvents(fired.runId).catch(() => []) : [];
+      const turn = ciFixTurn(fired, ciDiagnosis(events), ws, ciLog(events));
+      back();
+      if (!focusBase) enterFocus();
+      endFocusRaceWatch();
+      setAiPanelCwd(primaryPanelId, ws.cwd);
+      if (fired.provider) {
+        setAiPanelProvider(primaryPanelId, fired.provider as ProviderId);
+        if (fired.model) updateAiPanelModel(primaryPanelId, fired.model);
+      }
+      setFocusInitialMessage(turn.text);
+      setFocusInitialMachine(null);
+      setFocusInitialAttachments([turn.attachment]);
+      setFocusInitialMode("goal");
+      setFocusChatActive(true);
+    } catch (e) {
+      const message = errMessage(e);
+      // A failure that no longer stands is an answer, not an error.
+      if (message.startsWith("Nothing to fix")) notify(message, { tone: "info" });
+      else notify(`Couldn't start the fix for #${fired.prNumber}: ${message}`, { tone: "error" });
+    } finally {
+      dismissToast(preparing);
+    }
+  };
+  useEffect(() => {
+    const pending = pendingCiFixRef.current;
+    if (!pending || pending.root !== workspaceRoot) return;
+    pendingCiFixRef.current = null;
+    void startCiFixRef.current(pending.fired);
+  }, [workspaceRoot]);
+  useEffect(() => {
+    registerCiFixOpener(fired => { void startCiFixRef.current(fired); });
+    return () => registerCiFixOpener(null);
+  }, []);
 
   const [scheduledSelection, setScheduledSelection] = useState<{ id: string; version: number } | null>(null);
   useEffect(() => {

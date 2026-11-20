@@ -248,3 +248,24 @@
 .scheduled-history li > button:disabled:hover { background: transparent; }
 .scheduled-history-top > span:last-child { flex-shrink: 0; white-space: nowrap; }
 .scheduled-history-top > .ci-watch-pr { font-size: 12px; color: var(--fg); }
+
+/* CI watch firings: who looked, which checks failed, what Kit concluded. */
+.scheduled-history .ci-fires { display: grid; gap: 6px; padding-top: 2px; }
+.ci-fires li { position: relative; }
+.scheduled-history .ci-fires li + li { border-top: none; }
+.scheduled-history .ci-fires li > .ci-fire { gap: 6px; padding: 12px 10px; border: 1px solid var(--border); border-radius: var(--radius-xl); }
+.scheduled-history .ci-fires li > .ci-fire:hover { background: var(--bg-hover); }
+.ci-fire-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ci-fire-title { flex: 1; min-width: 0; font-size: 12px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-fire-time { flex: none; font-size: 10px; color: var(--fg-subtle); }
+.ci-fire-checks { display: flex; flex-wrap: wrap; gap: 4px 10px; padding-left: 26px; padding-right: 44px; font-size: 11px; color: var(--fg-muted); }
+.ci-fire-checks > span { display: inline-flex; align-items: center; gap: 4px; }
+.ci-fire-checks svg { color: var(--danger); flex: none; }
+.ci-fire-verdict { padding-left: 26px; font-size: 11px; line-height: 1.5; color: var(--fg-subtle); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ci-fire-verdict:empty { display: none; }
+.ci-fire-verdict[data-pending] { font-style: italic; }
+
+/* "Fix it": a quiet text action on the row, a sibling of its button (a button
+   can't hold another). */
+.scheduled-history li > .ci-watch-fix { position: absolute; right: 6px; top: 35px; width: auto; display: block; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: 11px; padding: 3px 6px; }
+.scheduled-history li > .ci-watch-fix:hover { color: var(--fg); background: var(--bg-hover); }
