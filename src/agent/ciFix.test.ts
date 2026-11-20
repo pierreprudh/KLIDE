@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ciDiagnosis, ciFixPrompt } from "./ciFix";
+import { ciDiagnosis, ciFixTurn } from "./ciFix";
 import type { AgentEvent } from "./types";
 
 const fired = {
@@ -14,17 +14,17 @@ it("takes the last assistant text as the diagnosis", () => {
   expect(ciDiagnosis([])).toBe("");
 });
 
-it("names the branch, commit and push target, and fences the diagnosis", () => {
-  const p = ciFixPrompt(fired, "Delete it.", ws);
-  expect(p).toContain("PR #573");
-  expect(p).toContain("`klide/fix-pr-573-590249af`");
-  expect(p).toContain("`590249af`");
-  expect(p).toContain("git push origin HEAD:test/canary");
-  expect(p).toContain("<diagnosis>\nDelete it.\n</diagnosis>");
+it("keeps the visible line short and puts the diagnosis in a fenced note", () => {
+  const { text, attachment } = ciFixTurn(fired, "Delete it.", ws);
+  expect(text).toBe("Fix the failing Frontend tests on #573. Smallest change, run the check, commit, then push with `git push origin HEAD:test/canary`.");
+  expect(attachment.path).toBe("CI #573 diagnosis.md");
+  expect(attachment.content).toContain("`klide/fix-pr-573-590249af`");
+  expect(attachment.content).toContain("`590249af`");
+  expect(attachment.content).toContain("<diagnosis>\nDelete it.\n</diagnosis>");
 });
 
 it("never offers a push to a fork's branch", () => {
-  const p = ciFixPrompt(fired, "", { ...ws, crossRepo: true });
-  expect(p).not.toContain("git push");
-  expect(p).toContain("Don't push");
+  const { text } = ciFixTurn(fired, "", { ...ws, crossRepo: true });
+  expect(text).not.toContain("git push");
+  expect(text).toContain("Don't push");
 });

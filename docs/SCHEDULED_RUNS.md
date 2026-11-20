@@ -102,9 +102,9 @@ service under `ci-watch.lock`.
 PR's failing commit out in a fresh worktree on `klide/fix-pr-<n>-<sha8>`
 (`ci_watch_fix_prepare`; a second click reuses it) and starts a Work
 conversation on Focus there, on the watch's agent and model. Its first message
-carries the read-only Run's diagnosis as notes to verify and asks for the
-smallest fix, a local run of the failing check, a commit, and a push to the
-PR's branch. Every edit is reviewed as usual and the push is a command you
+is one line — the smallest fix, a local run of the failing check, a commit, a
+push to the PR's branch — with the read-only Run's diagnosis attached as a
+note to verify (`CI #<n> diagnosis.md`). Every edit is reviewed as usual and the push is a command you
 approve; a fork's PR is never pushed to.
 
 ## Controls and recovery

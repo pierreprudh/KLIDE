@@ -167,7 +167,7 @@ export function CiWatchHistory({ watch, onOpenRun }: { watch: CiWatch; onOpenRun
     <button type="button" disabled={!f.runId} aria-label={`Open Run · #${f.prNumber} ${f.prTitle}`} title={`#${f.prNumber} ${f.prTitle}\n${f.checks.join(", ")}`}
       onClick={() => f.runId && onOpenRun(f.runId)}>
       <span className="scheduled-history-top"><span className="ci-watch-pr">#{f.prNumber} {f.prTitle}</span><span data-failed={f.error ? true : undefined}>{f.error ? "Not started" : relativeTime(f.at)}</span></span>
-      <span className="scheduled-history-bottom"><span className="ci-watch-checks">{f.checks.join(", ")}</span>{f.runId ? <OpenInEditorIcon size={12} /> : null}</span>
+      <span className="scheduled-history-bottom"><span className="ci-watch-checks">{f.checks.join(", ")}</span>{f.runId && !canStartCiFix() ? <OpenInEditorIcon size={12} /> : null}</span>
       {f.error && <span className="scheduled-history-error">{f.error}</span>}
     </button>
     {f.runId && canStartCiFix() && <button type="button" className="ci-watch-fix" title="Fix it in a worktree at the failing commit — every edit is reviewed" onClick={() => startCiFix(f)}>Fix it</button>}

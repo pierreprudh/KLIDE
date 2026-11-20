@@ -145,7 +145,7 @@ import { registerConversationOpener, registerSessionReattacher } from "./convers
 import { registerScheduleOpener } from "./scheduleNavigation";
 import { registerCiFixOpener } from "./ciFixNavigation";
 import { ciWatchFixPrepare, type CiWatchFired } from "./ipc/ciWatch";
-import { ciDiagnosis, ciFixPrompt } from "./agent/ciFix";
+import { ciDiagnosis, ciFixTurn } from "./agent/ciFix";
 import { isScheduledRun } from "./scheduleStatus";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
@@ -1177,7 +1177,7 @@ function App() {
     try {
       const ws = await ciWatchFixPrepare(fired.key);
       const events = fired.runId ? await readAgentRunEvents(fired.runId).catch(() => []) : [];
-      const text = ciFixPrompt(fired, ciDiagnosis(events), ws);
+      const turn = ciFixTurn(fired, ciDiagnosis(events), ws);
       back();
       if (!focusBase) enterFocus();
       endFocusRaceWatch();
@@ -1186,9 +1186,9 @@ function App() {
         setAiPanelProvider(primaryPanelId, fired.provider as ProviderId);
         if (fired.model) updateAiPanelModel(primaryPanelId, fired.model);
       }
-      setFocusInitialMessage(text);
+      setFocusInitialMessage(turn.text);
       setFocusInitialMachine(null);
-      setFocusInitialAttachments([]);
+      setFocusInitialAttachments([turn.attachment]);
       setFocusInitialMode("goal");
       setFocusChatActive(true);
     } catch (e) {
