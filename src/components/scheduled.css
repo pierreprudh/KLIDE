@@ -250,8 +250,11 @@
 .scheduled-history-top > .ci-watch-pr { font-size: 12px; color: var(--fg); }
 
 /* CI watch firings: who looked, which checks failed, what Kit concluded. */
+.scheduled-history .ci-fires { display: grid; gap: 6px; padding-top: 2px; }
 .ci-fires li { position: relative; }
-.scheduled-history .ci-fires li > .ci-fire { gap: 6px; padding: 12px 8px; }
+.scheduled-history .ci-fires li + li { border-top: none; }
+.scheduled-history .ci-fires li > .ci-fire { gap: 6px; padding: 12px 10px; border: 1px solid var(--border); border-radius: var(--radius-xl); }
+.scheduled-history .ci-fires li > .ci-fire:hover { background: var(--bg-hover); }
 .ci-fire-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ci-fire-title { flex: 1; min-width: 0; font-size: 12px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ci-fire-time { flex: none; font-size: 10px; color: var(--fg-subtle); }
@@ -264,5 +267,5 @@
 
 /* "Fix it": a quiet text action on the row, a sibling of its button (a button
    can't hold another). */
-.scheduled-history li > .ci-watch-fix { position: absolute; right: 4px; top: 34px; width: auto; display: block; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: 11px; padding: 3px 6px; }
+.scheduled-history li > .ci-watch-fix { position: absolute; right: 6px; top: 35px; width: auto; display: block; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: 11px; padding: 3px 6px; }
 .scheduled-history li > .ci-watch-fix:hover { color: var(--fg); background: var(--bg-hover); }
