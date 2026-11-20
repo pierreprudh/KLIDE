@@ -570,6 +570,29 @@ pub(crate) struct FixWorkspace {
     cross_repo: bool,
 }
 
+/// Why there is nothing to fix any more, from `gh pr view --json
+/// state,headRefOid,statusCheckRollup`: the PR closed, moved past the failing
+/// commit (its new head is watched on its own), or the failing checks passed
+/// on a re-run. `None` when the failure still stands or GitHub said nothing.
+fn nothing_to_fix(view: &serde_json::Value, sha: &str, checks: &[String]) -> Option<String> {
+    match view["state"].as_str() {
+        Some("MERGED") => return Some("it's merged".into()),
+        Some("CLOSED") => return Some("it's closed".into()),
+        _ => {}
+    }
+    if view["headRefOid"].as_str().is_some_and(|head| head != sha) {
+        return Some("it has newer commits — those are watched on their own".into());
+    }
+    let rollup = view["statusCheckRollup"].as_array()?;
+    let passed = |name: &String| {
+        rollup.iter().any(|c| {
+            c["name"].as_str().or(c["context"].as_str()) == Some(name.as_str())
+                && c["conclusion"].as_str().filter(|s| !s.is_empty()).or(c["state"].as_str()) == Some("SUCCESS")
+        })
+    };
+    (!checks.is_empty() && checks.iter().all(passed)).then(|| "its failing checks pass now".into())
+}
+
 /// The commit a firing is about: the 40-hex sha after the key's `@`.
 fn fired_sha(key: &str) -> Option<&str> {
     let sha = key.rsplit_once('@')?.1;
@@ -595,11 +618,14 @@ pub async fn ci_watch_fix_prepare(app: tauri::AppHandle, key: String) -> Result<
     let pr = fired.pr_number;
     let branch = fix_branch(pr, &sha);
 
-    let (r, b) = (root.clone(), branch.clone());
+    let (r, b, s2, checks) = (root.clone(), branch.clone(), sha.clone(), fired.checks.clone());
     let facts = crate::blocking::run(move || {
-        let view = crate::git::github::gh_output(&r, &["pr", "view", &pr.to_string(), "--json", "headRefName,isCrossRepository"])
+        let view = crate::git::github::gh_output(&r, &["pr", "view", &pr.to_string(), "--json", "headRefName,isCrossRepository,state,headRefOid,statusCheckRollup"])
             .ok()
             .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok());
+        if let Some(why) = view.as_ref().and_then(|v| nothing_to_fix(v, &s2, &checks)) {
+            return Err(format!("Nothing to fix on #{pr}: {why}."));
+        }
         let head_ref = view.as_ref().and_then(|v| v["headRefName"].as_str()).map(str::to_string);
         let cross_repo = view.as_ref().and_then(|v| v["isCrossRepository"].as_bool()).unwrap_or(false);
         let existing = crate::git::git_output(&r, &["worktree", "list", "--porcelain"])?
@@ -662,6 +688,21 @@ pub async fn ci_watch_set(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fix_it_stands_down_when_the_failure_no_longer_stands() {
+        let sha = "590249afda8a778ab13d4bd2f062c3f4675bb63c";
+        let checks = vec!["Frontend tests".to_string()];
+        let view = |state: &str, head: &str, conclusion: &str| serde_json::json!({
+            "state": state, "headRefOid": head,
+            "statusCheckRollup": [{ "name": "Frontend tests", "conclusion": conclusion }, { "context": "Review", "state": "SUCCESS" }],
+        });
+        assert_eq!(nothing_to_fix(&view("OPEN", sha, "FAILURE"), sha, &checks), None);
+        assert!(nothing_to_fix(&view("OPEN", sha, "SUCCESS"), sha, &checks).unwrap().contains("pass now"));
+        assert!(nothing_to_fix(&view("OPEN", "abc", "FAILURE"), sha, &checks).unwrap().contains("newer commits"));
+        assert!(nothing_to_fix(&view("MERGED", sha, "FAILURE"), sha, &checks).unwrap().contains("merged"));
+        assert_eq!(nothing_to_fix(&serde_json::json!({}), sha, &checks), None);
+    }
+
     #[test]
     fn a_fix_branch_names_the_pr_and_its_commit() {
         let sha = "590249afda8a778ab13d4bd2f062c3f4675bb63c";

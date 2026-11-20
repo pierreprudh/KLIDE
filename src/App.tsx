@@ -145,7 +145,7 @@ import { registerConversationOpener, registerSessionReattacher } from "./convers
 import { registerScheduleOpener } from "./scheduleNavigation";
 import { registerCiFixOpener } from "./ciFixNavigation";
 import { ciWatchFixPrepare, type CiWatchFired } from "./ipc/ciWatch";
-import { ciDiagnosis, ciFixTurn } from "./agent/ciFix";
+import { ciDiagnosis, ciFixTurn, ciLog } from "./agent/ciFix";
 import { isScheduledRun } from "./scheduleStatus";
 import { registerWorkspaceOpener } from "./revealPath";
 import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
@@ -1177,7 +1177,7 @@ function App() {
     try {
       const ws = await ciWatchFixPrepare(fired.key);
       const events = fired.runId ? await readAgentRunEvents(fired.runId).catch(() => []) : [];
-      const turn = ciFixTurn(fired, ciDiagnosis(events), ws);
+      const turn = ciFixTurn(fired, ciDiagnosis(events), ws, ciLog(events));
       back();
       if (!focusBase) enterFocus();
       endFocusRaceWatch();
@@ -1192,7 +1192,10 @@ function App() {
       setFocusInitialMode("goal");
       setFocusChatActive(true);
     } catch (e) {
-      notify(`Couldn't start the fix for #${fired.prNumber}: ${errMessage(e)}`, { tone: "error" });
+      const message = errMessage(e);
+      // A failure that no longer stands is an answer, not an error.
+      if (message.startsWith("Nothing to fix")) notify(message, { tone: "info" });
+      else notify(`Couldn't start the fix for #${fired.prNumber}: ${message}`, { tone: "error" });
     } finally {
       dismissToast(preparing);
     }

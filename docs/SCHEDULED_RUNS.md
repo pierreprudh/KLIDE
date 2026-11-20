@@ -105,7 +105,13 @@ conversation on Focus there, on the watch's agent and model. Its first message
 is one line — the smallest fix, a local run of the failing check, a commit, a
 push to the PR's branch — with the read-only Run's diagnosis attached as a
 note to verify (`CI #<n> diagnosis.md`). Every edit is reviewed as usual and the push is a command you
-approve; a fork's PR is never pushed to.
+approve; a fork's PR is never pushed to. Fix it stands down with a note when
+the failure no longer stands (the PR merged or closed, moved past the commit,
+or the checks passed on a re-run), and the attached note also carries the
+failed log the watch fetched, so the fix needs no connector call to find it.
+
+Run history shows each firing with the agent's mark, the failing checks, and
+Kit's verdict in one line once its Run settles.
 
 ## Controls and recovery
 

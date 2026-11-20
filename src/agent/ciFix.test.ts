@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ciDiagnosis, ciFixTurn } from "./ciFix";
+import { ciDiagnosis, ciFixTurn, ciLog, ciVerdict } from "./ciFix";
 import type { AgentEvent } from "./types";
 
 const fired = {
@@ -27,4 +27,16 @@ it("never offers a push to a fork's branch", () => {
   const { text } = ciFixTurn(fired, "", { ...ws, crossRepo: true });
   expect(text).not.toContain("git push");
   expect(text).toContain("Don't push");
+});
+
+it("carries the CI log the watch already fetched", () => {
+  const first = { type: "user_message", text: "CI failed…\n<ci-log-18f>\n##[error] expected 3, got 2\n</ci-log-18f>" } as unknown as AgentEvent;
+  expect(ciLog([first])).toBe("##[error] expected 3, got 2");
+  expect(ciFixTurn(fired, "", ws, ciLog([first])).attachment.content).toContain("<ci-log>\n##[error] expected 3, got 2\n</ci-log>");
+});
+
+it("boils a diagnosis down to one plain sentence", () => {
+  expect(ciVerdict("## Cause\n\nThe **canary** test asserts `1 + 1 === 3`. Delete it.\n\n## Fix\n…")).toBe("The canary test asserts 1 + 1 === 3.");
+  expect(ciVerdict("")).toBe("");
+  expect(ciVerdict("x".repeat(200)).length).toBe(120);
 });

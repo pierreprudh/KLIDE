@@ -25,7 +25,10 @@ import { Toggle } from "../settings/controls";
 import { relativeTime } from "../../time";
 import { errMessage } from "../../errors";
 import { createListenerScope } from "../../tauriEvents";
-import { OpenInEditorIcon } from "../../icons";
+import { ErrorIcon } from "../../icons";
+import { ProviderModelMark } from "../../modelIdentity";
+import { readAgentRunEvents } from "../../agent/client";
+import { ciDiagnosis, ciVerdict } from "../../agent/ciFix";
 import { canStartCiFix, startCiFix } from "../../ciFixNavigation";
 
 /** The list selection that means "Watch CI", never a schedule id. */
@@ -160,16 +163,47 @@ export function CiWatchDetail({ watch, project }: { watch: CiWatch; project: str
   </>;
 }
 
+/** Kit's verdict for each firing, read from its Run once it has settled. */
+function useVerdicts(fired: CiWatchFired[]): Map<string, string | null> {
+  const [verdicts, setVerdicts] = useState(() => new Map<string, string | null>());
+  const ids = fired.map(f => f.runId).filter((id): id is string => !!id).join(",");
+  useEffect(() => {
+    let live = true;
+    for (const id of ids ? ids.split(",") : []) {
+      if (verdicts.get(id)) continue;
+      void readAgentRunEvents(id).then(events => {
+        // Still working: no verdict yet, and the row says so.
+        const settled = events.some(e => e.type === "run_result" || e.type === "run_error");
+        const verdict = settled ? ciVerdict(ciDiagnosis(events)) : null;
+        if (live) setVerdicts(prev => new Map(prev).set(id, verdict));
+      }).catch(() => {});
+    }
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids]);
+  return verdicts;
+}
+
 export function CiWatchHistory({ watch, onOpenRun }: { watch: CiWatch; onOpenRun: (id: string) => void }) {
   const fired = watch.info?.fired ?? [];
+  const verdicts = useVerdicts(fired);
   if (!fired.length) return <p className="scheduled-pane-empty">{watch.on ? "No failing checks yet." : "Turn on to watch your pull requests."}</p>;
-  return <ol>{fired.map(f => <li key={f.key}>
-    <button type="button" disabled={!f.runId} aria-label={`Open Run · #${f.prNumber} ${f.prTitle}`} title={`#${f.prNumber} ${f.prTitle}\n${f.checks.join(", ")}`}
-      onClick={() => f.runId && onOpenRun(f.runId)}>
-      <span className="scheduled-history-top"><span className="ci-watch-pr">#{f.prNumber} {f.prTitle}</span><span data-failed={f.error ? true : undefined}>{f.error ? "Not started" : relativeTime(f.at)}</span></span>
-      <span className="scheduled-history-bottom"><span className="ci-watch-checks">{f.checks.join(", ")}</span>{f.runId && !canStartCiFix() ? <OpenInEditorIcon size={12} /> : null}</span>
-      {f.error && <span className="scheduled-history-error">{f.error}</span>}
-    </button>
-    {f.runId && canStartCiFix() && <button type="button" className="ci-watch-fix" title="Fix it in a worktree at the failing commit — every edit is reviewed" onClick={() => startCiFix(f)}>Fix it</button>}
-  </li>)}</ol>;
+  return <ol className="ci-fires">{fired.map(f => {
+    const verdict = f.runId ? verdicts.get(f.runId) : undefined;
+    return <li key={f.key}>
+      <button type="button" className="ci-fire" disabled={!f.runId} aria-label={`Open Run · #${f.prNumber} ${f.prTitle}`}
+        onClick={() => f.runId && onOpenRun(f.runId)}>
+        <span className="ci-fire-head">
+          {f.provider ? <ProviderModelMark provider={f.provider as ProviderId} model={f.model} size={18} /> : null}
+          <span className="ci-fire-title">#{f.prNumber} {f.prTitle}</span>
+          <span className="ci-fire-time" data-failed={f.error ? true : undefined}>{f.error ? "Not started" : relativeTime(f.at)}</span>
+        </span>
+        <span className="ci-fire-checks">{f.checks.map(c => <span key={c}><ErrorIcon size={12} />{c}</span>)}</span>
+        {f.error
+          ? <span className="ci-fire-verdict">{f.error}</span>
+          : <span className="ci-fire-verdict" data-pending={verdict === null ? true : undefined}>{verdict === null ? "Kit is looking into it…" : verdict ?? ""}</span>}
+      </button>
+      {f.runId && canStartCiFix() && <button type="button" className="ci-watch-fix" title="Fix it in a worktree at the failing commit — every edit is reviewed" onClick={() => startCiFix(f)}>Fix it</button>}
+    </li>;
+  })}</ol>;
 }
