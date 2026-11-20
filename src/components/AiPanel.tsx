@@ -141,7 +141,7 @@ import { enabledRunSkills, enabledSkillsPrompt, enabledSkillsPromptParts, skillF
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { StackSideMenu } from "./ai/StackSideMenu";
-import { ConnectorsMenu } from "./ai/ConnectorsMenu";
+import { ConnectorsMenu } from "./lazySurfaces";
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";

@@ -39,27 +39,13 @@
 // every remote tool needs approval on first use; server annotations are advisory
 // (`agent/connector_tools.rs`).
 
+import { connectorPicture } from "../../connectorMarksMore";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  addGithubConnector,
-  cancelConnectorSignIn,
-  discoverConnectors,
-  isRemote,
-  listConnectors,
-  probeConnector,
-  removeConnector,
-  signInConnector,
-  signOutConnector,
-  upsertConnector,
-  usesSignIn,
-  type Connector,
-  type Discovered,
-  type Probe,
-  type ServerSpec,
-} from "../../ipc/connectors";
+import {addGithubConnector, discoverConnectors, isRemote, listConnectors, probeConnector, removeConnector, upsertConnector, type Connector, type Discovered, type Probe, type ServerSpec} from "../../ipc/connectors";
+import { cancelConnectorSignIn, signInConnector, signOutConnector, usesSignIn } from "../../ipc/connectorSignIn";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { githubAccounts } from "../../ipc/git";
-import { ConnectorMark, connectorBrand, connectorPicture, serverNames } from "../linkMark";
+import { ConnectorMark, connectorBrand, serverNames } from "../linkMark";
 import {
   CONNECTOR_CATALOG,
   catalogConnector,

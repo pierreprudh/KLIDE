@@ -18,6 +18,7 @@
 // listeners live on document / window, so a press inside the card stops at
 // <body> rather than closing the menu it belongs to.
 
+import "../../connectorMarksMore";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { listConnectors, upsertConnector, type Connector } from "../../ipc/connectors";

@@ -28,6 +28,14 @@ const DelegateLoginModalImpl = lazy(() =>
   import("./settings/DelegateLoginModal").then((m) => ({ default: m.DelegateLoginModal })),
 );
 
+// The "+" menu's Connectors row: off the first-paint path, since the menu
+// opens long after launch and the row carries the connector store's wire.
+const ConnectorsMenuImpl = lazy(() => import("./ai/ConnectorsMenu").then((m) => ({ default: m.ConnectorsMenu })));
+
+export function ConnectorsMenu(props: ComponentProps<typeof ConnectorsMenuImpl>) {
+  return <Suspense fallback={null}><ConnectorsMenuImpl {...props} /></Suspense>;
+}
+
 export function DelegateLoginModal(props: ComponentProps<typeof DelegateLoginModalImpl>) {
   return <Suspense fallback={null}><DelegateLoginModalImpl {...props} /></Suspense>;
 }

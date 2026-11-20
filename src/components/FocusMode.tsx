@@ -6,7 +6,7 @@ import { useLlamaSetupMode, isSelectedLlamaProvider, type LlamaSetupMode } from 
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import { StackSideMenu, type Stack } from "./ai/StackSideMenu";
-import { ConnectorsMenu } from "./ai/ConnectorsMenu";
+import { ConnectorsMenu } from "./lazySurfaces";
 import { sideQuestionDirective } from "./ai/sideQuestions";
 // FocusMode — Klide's chat-first workspace, blending the project/thread
 // command-centre pattern with an artifact-first agent home. A quiet left rail
