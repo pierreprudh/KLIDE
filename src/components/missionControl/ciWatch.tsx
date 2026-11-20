@@ -109,7 +109,7 @@ export function ciWatchStatus(watch: CiWatch): string {
 
 export function CiWatchListRow({ watch, project, current, onSelect }: { watch: CiWatch; project: string; current: boolean; onSelect: () => void }) {
   return <button type="button" className="scheduled-list-row" aria-current={current ? "page" : undefined} onClick={onSelect}>
-    <span className="scheduled-list-row-top"><strong>Watch CI</strong><span data-failed={watch.info?.lastError ? true : undefined}>{ciWatchStatus(watch)}</span></span>
+    <span className="scheduled-list-row-top"><ProviderModelMark provider={watch.provider} model={watch.model} size={18} /><strong>Watch CI</strong><span data-failed={watch.info?.lastError ? true : undefined}>{ciWatchStatus(watch)}</span></span>
     <span className="scheduled-list-row-meta">My pull requests<span aria-hidden="true"> · </span>{project}</span>
   </button>;
 }
