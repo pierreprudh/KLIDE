@@ -4,7 +4,8 @@ import type { ProviderId } from "../../agent/types";
 import { ProviderLogo } from "../ai/icons";
 import { AccountControl, GitHubAccountRow } from "./accounts";
 import { GhostButton, Panel, Row, SettingBlock, StatusText } from "./controls";
-import { DelegateLoginModal } from "./DelegateLoginModal";
+// Lazy: the sign-in terminal (xterm) stays out of the entry chunk.
+import { DelegateLoginModal } from "../lazySurfaces";
 import { ProviderWordmark } from "./providerWordmarks";
 
 type Provider = { id: string; title: string; description: string; accounts: boolean };
