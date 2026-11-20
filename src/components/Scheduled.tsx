@@ -147,7 +147,8 @@ export function Scheduled(props: Props) {
           {rows.map(row => <button type="button" className="scheduled-list-row" key={row.id} aria-current={!creating && row.id === selectedId ? "page" : undefined}
             title={`${row.name}${row.workspaceRoot ? `\n${row.workspaceRoot}` : ""}`}
             onClick={() => { setSelectedId(row.id); setCreating(false); setEditing(false); setError(null); setMenu(null); }}>
-            <span className="scheduled-list-row-top"><ProviderModelMark provider={row.provider as ProviderId} model={row.model} size={18} /><strong>{row.name}</strong><span data-failed={row.status === "failed" || undefined}>{statusName(row.status)}</span></span>
+            <ProviderModelMark provider={row.provider as ProviderId} model={row.model} size={18} />
+            <span className="scheduled-list-row-top"><strong>{row.name}</strong><span data-failed={row.status === "failed" || undefined}>{statusName(row.status)}</span></span>
             <span className="scheduled-list-row-meta">{cadence(row.intervalMs)}<span aria-hidden="true"> · </span>{workspaceName(row.workspaceRoot)}</span>
           </button>)}
           <div className="scheduled-pane-heading scheduled-subheading"><h2>Triggers</h2></div>
