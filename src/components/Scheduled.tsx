@@ -21,6 +21,7 @@ import { formatSpan } from "../time";
 import { CI_WATCH_ID, CiWatchDetail, CiWatchHistory, CiWatchListRow, useCiWatch } from "./missionControl/ciWatch";
 import { agentSourceLabel, useAgentOptions } from "./agentOptions";
 import { scheduledRunInput } from "../agent/scheduledRunInput";
+import { ProviderModelMark } from "../modelIdentity";
 import "./scheduled.css";
 
 type Props = {
@@ -146,6 +147,7 @@ export function Scheduled(props: Props) {
           {rows.map(row => <button type="button" className="scheduled-list-row" key={row.id} aria-current={!creating && row.id === selectedId ? "page" : undefined}
             title={`${row.name}${row.workspaceRoot ? `\n${row.workspaceRoot}` : ""}`}
             onClick={() => { setSelectedId(row.id); setCreating(false); setEditing(false); setError(null); setMenu(null); }}>
+            <ProviderModelMark provider={row.provider as ProviderId} model={row.model} size={18} />
             <span className="scheduled-list-row-top"><strong>{row.name}</strong><span data-failed={row.status === "failed" || undefined}>{statusName(row.status)}</span></span>
             <span className="scheduled-list-row-meta">{cadence(row.intervalMs)}<span aria-hidden="true"> · </span>{workspaceName(row.workspaceRoot)}</span>
           </button>)}
