@@ -5,6 +5,7 @@ import { publishKlideConvo, settleKlideConvo } from "./klideConvos";
 import { notify } from "./toast";
 import { watchScheduleStatus } from "./scheduleStatus";
 import { ciWatchTake } from "./ipc/ciWatch";
+import { klideBotTake } from "./ipc/klideBot";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("./agent/schedules", () => ({ listSchedules: vi.fn() }));
@@ -12,6 +13,8 @@ vi.mock("./klideConvos", () => ({ getKlideConvos: () => [], publishKlideConvo: v
 vi.mock("./conversationNavigation", () => ({ canOpenConversation: () => false, openConversation: vi.fn() }));
 vi.mock("./toast", () => ({ notify: vi.fn() }));
 vi.mock("./ipc/ciWatch", () => ({ ciWatchTake: vi.fn() }));
+vi.mock("./ipc/klideBot", () => ({ klideBotTake: vi.fn() }));
+vi.mock("./klideBotPost", () => ({ postKlideBotReply: vi.fn() }));
 
 const running: Schedule = {
   id: "schedule", revision: 1, target: { kind: "local" }, name: "Review", runId: "conversation", activeRunId: "conversation", mode: "plan", text: "Review changes", dueAt: 1,
@@ -24,6 +27,7 @@ beforeEach(() => {
   vi.mocked(listen).mockResolvedValue(() => {});
   vi.mocked(listSchedules).mockResolvedValue([]);
   vi.mocked(ciWatchTake).mockResolvedValue([]);
+  vi.mocked(klideBotTake).mockResolvedValue([]);
 });
 
 it("restores a hidden scheduled Run into the existing attention watcher candidates", async () => {
@@ -83,5 +87,21 @@ it("takes CI watch firings on load and on each nudge, toasting each once", async
   nudge({ payload: null });
   await vi.waitFor(() => expect(ciWatchTake).toHaveBeenCalledTimes(2));
   expect(notify).toHaveBeenCalledTimes(1);
+  stop();
+});
+
+it("offers a klide-bot draft with Post, and never posts it by itself", async () => {
+  vi.mocked(klideBotTake).mockResolvedValueOnce([{
+    key: "k", workspaceRoot: "/w", repo: "a/b", prNumber: 7, prTitle: "Rail", commentUrl: "u", author: "pierre",
+    excerpt: "@klide-bot why?", provider: "openrouter", model: "m", runId: "run_7", error: null, at: 1,
+    draft: "Because the rail holds groups.", postedUrl: null, announced: true, notified: true,
+  }]);
+  const stop = watchScheduleStatus();
+  await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(
+    expect.stringContaining("drafted a reply to @pierre on #7"),
+    expect.objectContaining({ actions: [expect.objectContaining({ label: "Post" })] }),
+  ));
+  const { postKlideBotReply } = await import("./klideBotPost");
+  expect(postKlideBotReply).not.toHaveBeenCalled();
   stop();
 });

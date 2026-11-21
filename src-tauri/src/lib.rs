@@ -1212,6 +1212,7 @@ pub fn run() {
                 connector_pool::warm();
                 agent::schedules::start(handle.clone());
                 agent::ci_watch::start(handle.clone());
+                agent::klide_bot::start(handle.clone());
             }
 
             // Open at a comfortable fraction of the display the window lands on,
@@ -1446,6 +1447,10 @@ pub fn run() {
             agent::ci_watch::ci_watch_set,
             agent::ci_watch::ci_watch_take,
             agent::ci_watch::ci_watch_fix_prepare,
+            agent::klide_bot::klide_bot_get,
+            agent::klide_bot::klide_bot_set,
+            agent::klide_bot::klide_bot_take,
+            agent::klide_bot::klide_bot_post,
             agent::schedules::agent_schedule_update,
             agent::schedules::agent_schedule_list,
             agent::schedules::agent_schedule_history,

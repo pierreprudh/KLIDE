@@ -245,7 +245,7 @@ fn prompt(pr: &FailingPr, logs: &str) -> String {
 
 /// The firing's Run: the watch's template, forced read-only, standalone and
 /// without any command authority the template might have carried.
-fn run_request(template: &StartRunRequest, run_id: &str, text: String) -> StartRunRequest {
+pub(super) fn run_request(template: &StartRunRequest, run_id: &str, text: String) -> StartRunRequest {
     let mut request = template.clone();
     request.mode = AgentMode::Plan;
     request.run_id = Some(run_id.to_string());
@@ -271,7 +271,7 @@ fn apple_string(text: &str) -> String {
 }
 
 /// A macOS notification from the service, which has no window to toast in.
-fn notify_mac(title: &str, body: &str) {
+pub(super) fn notify_mac(title: &str, body: &str) {
     #[cfg(target_os = "macos")]
     {
         let script = format!("display notification {} with title {}", apple_string(body), apple_string(title));

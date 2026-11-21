@@ -113,6 +113,25 @@ failed log the watch fetched, so the fix needs no connector call to find it.
 Run history shows each firing with the agent's mark, the failing checks, and
 Kit's verdict in one line once its Run settles.
 
+## klide-bot (event trigger)
+
+**klide-bot** sits under Triggers beside Watch CI (`agent/klide_bot.rs`), one per
+Workspace, with the same switch and agent/model pickers. The scheduled service
+polls the issue comments on your open PRs every two minutes. A comment counts
+when it names `@klide-bot` as a whole handle, was written after the switch was
+turned on, and its author has write access (`OWNER`, `MEMBER` or
+`COLLABORATOR`); the bot's own replies carry a `<!-- klide-bot -->` marker and
+never count. Each comment starts one read-only Run (the same forced Plan
+request as Watch CI) whose prompt fences the comment as a request, not
+instructions, and asks for a reply that follows the repository's own rules.
+
+When the Run settles, its last answer becomes a **draft**. Nothing is posted by
+itself: the app notifies, the window shows a toast with **Post** and **Open**,
+and Run history lists each mention with its draft. Post sends the draft as a
+reply on the PR under your GitHub account (`gh api …/issues/<n>/comments`),
+signed "— klide-bot", once. State is `klide-bot.json` in app data under
+`klide-bot.lock`.
+
 ## Controls and recovery
 
 Run now starts a fresh occurrence without moving a repeating schedule's next
