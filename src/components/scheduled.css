@@ -275,3 +275,7 @@
 .scheduled-history li > .ci-watch-fix { position: absolute; right: 6px; top: 35px; width: auto; display: block; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: 11px; padding: 3px 6px; }
 .scheduled-history li > .ci-watch-fix:hover { color: var(--fg); background: var(--bg-hover); }
 .ci-fire-checks > .klide-bot-comment { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* klide-bot's Post / Posted: one quiet icon on the card's comment line. */
+.scheduled-history li > .klide-bot-action, .scheduled-history li > span > .klide-bot-action { position: absolute; right: 6px; top: 32px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: none; border-radius: var(--radius-md); background: transparent; color: var(--fg); }
+.klide-bot-action:hover { color: var(--fg); background: var(--bg-hover); }
+.klide-bot-action[data-posted] { color: var(--fg-subtle); }

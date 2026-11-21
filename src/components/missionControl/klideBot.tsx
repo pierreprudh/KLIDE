@@ -8,6 +8,8 @@ import type { ProviderId } from "../../agent/types";
 import type { HarnessSettings } from "../../settingsStore";
 import { relativeTime } from "../../time";
 import { openExternal } from "../../externalLink";
+import { OpenInEditorIcon, SendIcon } from "../../icons";
+import { Tooltip } from "../Tooltip";
 import { ProviderModelMark } from "../../modelIdentity";
 import { TriggerDetail, TriggerListRow, triggerStatus, useTrigger, type Trigger } from "./trigger";
 
@@ -59,10 +61,13 @@ export function KlideBotHistory({ bot, onOpenRun }: { bot: KlideBot; onOpenRun: 
           ? <span className="ci-fire-verdict">{m.error}</span>
           : <span className="ci-fire-verdict" data-pending={!m.draft ? true : undefined}>{m.draft ? firstLine(m.draft) : "Kit is answering…"}</span>}
       </button>
-      {m.draft && !url && <button type="button" className="ci-watch-fix" title="Post this reply under your GitHub account, signed — klide-bot"
-        onClick={() => void postKlideBotReply(m).then(u => { if (u) setPosted(p => ({ ...p, [m.key]: u })); })}>Post</button>}
-      {url && <button type="button" className="ci-watch-fix" title={url}
-        onClick={() => void openExternal(url)}>Posted ↗</button>}
+      {m.draft && !url && <Tooltip label="Post reply" description="On GitHub under your account, signed — klide-bot">
+        <button type="button" className="klide-bot-action" aria-label="Post reply"
+          onClick={() => void postKlideBotReply(m).then(u => { if (u) setPosted(p => ({ ...p, [m.key]: u })); })}><SendIcon size={14} /></button>
+      </Tooltip>}
+      {url && <Tooltip label="Posted" description="View the reply on GitHub">
+        <button type="button" className="klide-bot-action" data-posted aria-label="View posted reply" onClick={() => void openExternal(url)}><OpenInEditorIcon size={14} /></button>
+      </Tooltip>}
     </li>;
   })}</ol>;
 }
