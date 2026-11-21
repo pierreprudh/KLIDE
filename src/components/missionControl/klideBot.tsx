@@ -8,8 +8,6 @@ import type { ProviderId } from "../../agent/types";
 import type { HarnessSettings } from "../../settingsStore";
 import { relativeTime } from "../../time";
 import { openExternal } from "../../externalLink";
-import { OpenInEditorIcon, SendIcon } from "../../icons";
-import { Tooltip } from "../Tooltip";
 import { ProviderModelMark } from "../../modelIdentity";
 import { TriggerDetail, TriggerListRow, triggerStatus, useTrigger, type Trigger } from "./trigger";
 
@@ -35,39 +33,36 @@ export function KlideBotDetail({ bot, project }: { bot: KlideBot; project: strin
   </TriggerDetail>;
 }
 
-/** The first line of a draft, plain. */
-function firstLine(text: string): string {
-  const line = text.split("\n").map(l => l.replace(/^#+\s*|[*_`>]/g, "").trim()).find(Boolean) ?? "";
-  return line.length > 120 ? `${line.slice(0, 119).trimEnd()}…` : line;
-}
 
 export function KlideBotHistory({ bot, onOpenRun }: { bot: KlideBot; onOpenRun: (id: string) => void }) {
   const [posted, setPosted] = useState<Record<string, string>>({});
   const mentions = bot.info?.mentions ?? [];
   if (!mentions.length) return <p className="scheduled-pane-empty">{bot.on ? "No mentions yet." : "Turn on to answer @klide-bot on your pull requests."}</p>;
-  return <ol className="ci-fires">{mentions.map(m => {
+  return <ol className="ci-fires bot-cards">{mentions.map(m => {
     const url = m.postedUrl ?? posted[m.key];
-    const status = m.error ? "Not answered" : url ? "Posted" : m.draft ? "Draft ready" : "Answering…";
-    return <li key={m.key}>
-      <button type="button" className="ci-fire" disabled={!m.runId} aria-label={`Open Run · #${m.prNumber} ${m.prTitle}`}
+    return <li key={m.key} className="bot-card">
+      <button type="button" className="bot-card-open" disabled={!m.runId} aria-label={`Open Run · #${m.prNumber} ${m.prTitle}`}
         onClick={() => m.runId && onOpenRun(m.runId)}>
         <span className="ci-fire-head">
           {m.provider ? <ProviderModelMark provider={m.provider as ProviderId} model={m.model} size={18} /> : null}
           <span className="ci-fire-title">#{m.prNumber} {m.prTitle}</span>
-          <span className="ci-fire-time" data-failed={m.error ? true : undefined}>{m.error ? status : relativeTime(m.at)}</span>
+          <span className="ci-fire-time" data-failed={m.error ? true : undefined}>{m.error ? "Not answered" : relativeTime(m.at)}</span>
         </span>
-        <span className="ci-fire-checks"><span className="klide-bot-comment">@{m.author}: {m.excerpt}</span></span>
-        {m.error
-          ? <span className="ci-fire-verdict">{m.error}</span>
-          : <span className="ci-fire-verdict" data-pending={!m.draft ? true : undefined}>{m.draft ? firstLine(m.draft) : "Kit is answering…"}</span>}
+        <span className="bot-card-comment">@{m.author}: {m.excerpt}</span>
       </button>
-      {m.draft && !url && <Tooltip label="Post reply" description="On GitHub under your account, signed — klide-bot">
-        <button type="button" className="klide-bot-action" aria-label="Post reply"
-          onClick={() => void postKlideBotReply(m).then(u => { if (u) setPosted(p => ({ ...p, [m.key]: u })); })}><SendIcon size={14} /></button>
-      </Tooltip>}
-      {url && <Tooltip label="Posted" description="View the reply on GitHub">
-        <button type="button" className="klide-bot-action" data-posted aria-label="View posted reply" onClick={() => void openExternal(url)}><OpenInEditorIcon size={14} /></button>
-      </Tooltip>}
+      {m.error
+        ? <p className="bot-card-note" data-failed>{m.error}</p>
+        : !m.draft
+          ? <p className="bot-card-note" data-pending>Kit is answering…</p>
+          : <>
+            <blockquote className="bot-card-draft">{m.draft}</blockquote>
+            <div className="bot-card-foot">
+              {url
+                ? <button type="button" className="bot-card-link" onClick={() => void openExternal(url)}>Posted · View on GitHub</button>
+                : <button type="button" className="bot-card-post" title="Posts on GitHub under your account, signed — klide-bot"
+                    onClick={() => void postKlideBotReply(m).then(u => { if (u) setPosted(p => ({ ...p, [m.key]: u })); })}>Post reply</button>}
+            </div>
+          </>}
     </li>;
   })}</ol>;
 }
