@@ -5357,8 +5357,7 @@ button:focus-visible .menu-leadout {
   margin: 0 0 10px;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding-left: 4px;
+  gap: 8px;
 }
 
 .klide-rail-folder {
@@ -5367,22 +5366,14 @@ button:focus-visible .menu-leadout {
   height: 36px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
+  gap: 9px;
+  padding: 0 10px 0 12px;
   border-radius: 12px;
-  /* No container: the project name reads as the rail's title beside the
-     Klide mark; only hover/open give it a quiet ground. */
-  background: transparent;
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--panel-border), var(--panel-shadow);
   color: var(--fg-strong);
   font-size: 13px;
-  font-weight: 500;
   text-align: left;
-  transition: background var(--motion-fast) var(--ease-out);
-}
-
-.klide-rail-folder:hover,
-.klide-rail-folder[aria-expanded="true"] {
-  background: var(--bg-hover);
 }
 
 .klide-rail-folder > svg {
@@ -5404,34 +5395,13 @@ button:focus-visible .menu-leadout {
   white-space: nowrap;
 }
 
-/* A folder's initial on a soft square — the card's only mark, and the
-   menu's for every other folder. */
 /* Klide's mark, beside the folder card rather than in it. */
 .klide-rail-app-mark {
-  width: 24px;
+  width: 28px;
   height: 36px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
-}
-
-.klide-rail-folder-mark {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-  color: var(--fg-strong);
-  font-size: 12px;
-}
-
-.klide-rail-folder-row .klide-rail-folder-mark {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  font-size: 11px;
 }
 
 .klide-rail-folder-menu {
@@ -5474,7 +5444,7 @@ button:focus-visible .menu-leadout {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 5px 8px 5px 5px;
+  padding: 6px 8px 6px 10px;
   border-radius: 9px;
   text-align: left;
   color: var(--fg);
