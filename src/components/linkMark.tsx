@@ -2,6 +2,7 @@ import { Globe } from "@phosphor-icons/react/dist/csr/Globe";
 import { Icon } from "../icons";
 import type { LinkSite } from "../linkIdentity";
 import type { ProviderId } from "../agent/types";
+import type { ReactNode } from "react";
 import { ProviderLogo, ToolIcon } from "./ai/icons";
 import { CONNECTOR_BRANDS, type ConnectorBrand } from "../connectorBrands";
 import { isRemote, type ServerSpec } from "../ipc/connectors";
@@ -33,6 +34,17 @@ const GITHUB_PATH =
 const NPM_PATH =
   "M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.001V8.667h5.334v5.332h-2.669zm12.001 0h-1.33v-4h-1.336v4h-1.335v-4h-1.33v4h-2.671V8.667h8.002v5.331zM10.665 10H12v2.667h-1.335V10z";
 
+// Marks the connector surfaces bring with them (`connectorMarksMore.ts`),
+// registered when one of those lazy chunks loads — before its first render:
+// more brand rows, and a drawer for companies' own pictures in colour.
+type PictureMark = (names: string, size: number) => ReactNode;
+let moreBrands: readonly ConnectorBrand[] = [];
+let pictureMark: PictureMark | null = null;
+export function registerConnectorMarks(brands: readonly ConnectorBrand[], picture: PictureMark) {
+  moreBrands = brands;
+  pictureMark = picture;
+}
+
 /** The brand a connector belongs to, read from every name it carries — its id,
  *  label, the URL host or the command line that starts it. Whole tokens only,
  *  so `sandbox` never reads as Box and `mirror` never as Miro. */
@@ -40,7 +52,8 @@ export function connectorBrand(...names: (string | null | undefined)[]): Connect
   const tokens = new Set(
     names.filter(Boolean).join(" ").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
   );
-  return CONNECTOR_BRANDS.find((brand) => brand.keywords.some((k) => tokens.has(k))) ?? null;
+  const match = (brand: ConnectorBrand) => brand.keywords.some((k) => tokens.has(k));
+  return CONNECTOR_BRANDS.find(match) ?? moreBrands.find(match) ?? null;
 }
 
 /** What a server spec says about whom it talks to: a URL's host, or the
@@ -79,7 +92,11 @@ export function ConnectorMark({
   tone?: "ink" | "brand";
 }) {
   const brand = connectorBrand(connector, label, serverNames(server));
-  if (!brand) return <ToolIcon name="connector_call" size={size} />;
+  if (!brand) {
+    // A picture is in colour by nature, so only where colour is asked for.
+    const picture = tone === "brand" ? pictureMark?.([connector, label, serverNames(server)].join(" "), size) : null;
+    return picture ?? <ToolIcon name="connector_call" size={size} />;
+  }
   const color = tone === "brand" && !inkOnly(brand.hex) ? `#${brand.hex}` : "currentColor";
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill={color} role="img" aria-label={brand.title} style={{ flexShrink: 0 }}>

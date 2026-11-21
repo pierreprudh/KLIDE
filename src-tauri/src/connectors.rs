@@ -510,9 +510,15 @@ fn toml_inline_table(raw: &str) -> BTreeMap<String, String> {
 /// an error naming the variable — a request sent with a literal `${TOKEN}` in
 /// its `Authorization` header fails later and says less.
 pub fn resolve(spec: &ServerSpec, workspace: Option<&Path>) -> Result<ServerSpec, String> {
+    // `${KLIDE_OAUTH}` is the signed-in token of the server it is sent to, so
+    // a remote spec's headers expand knowing their URL.
+    let url = match spec {
+        ServerSpec::Http(http) => Some(http.url.as_str()),
+        ServerSpec::Stdio(_) => None,
+    };
     let expand_map = |map: &BTreeMap<String, String>| -> Result<BTreeMap<String, String>, String> {
         map.iter()
-            .map(|(key, value)| Ok((key.clone(), expand(value, workspace)?)))
+            .map(|(key, value)| Ok((key.clone(), expand(value, workspace, url)?)))
             .collect()
     };
     Ok(match spec {
@@ -529,14 +535,17 @@ pub fn resolve(spec: &ServerSpec, workspace: Option<&Path>) -> Result<ServerSpec
 
 /// Replace each `${NAME}` in `raw`. Text around a reference is kept, so
 /// `Bearer ${TOKEN}` works; a value with no reference passes through untouched.
-fn expand(raw: &str, workspace: Option<&Path>) -> Result<String, String> {
+fn expand(raw: &str, workspace: Option<&Path>, server_url: Option<&str>) -> Result<String, String> {
     let mut out = String::new();
     let mut rest = raw;
     while let Some(start) = rest.find("${") {
         let Some(len) = rest[start..].find('}') else { break };
         let name = rest[start + 2..start + len].trim();
         out.push_str(&rest[..start]);
-        let value = if name == GITHUB_TOKEN_REF {
+        let value = if name == crate::connector_oauth::OAUTH_REF {
+            let url = server_url.ok_or("${KLIDE_OAUTH} only works in a remote connector's headers")?;
+            crate::connector_oauth::access_token(url)?
+        } else if name == GITHUB_TOKEN_REF {
             crate::git::github::klide_token().ok_or_else(|| {
                 "No GitHub account is signed in. Run `gh auth login`, or pick an account in Settings → Accounts."
                     .to_string()
@@ -602,6 +611,58 @@ pub(crate) async fn connectors_add_github() -> Result<Vec<Connector>, String> {
     .await?;
     crate::connector_pool::warm();
     Ok(all)
+}
+
+/// Sign in to a remote connector in the browser, then save it.
+///
+/// The connector may be new (a catalog card) or already stored (a row whose
+/// sign-in expired). Its headers gain `Authorization: Bearer ${KLIDE_OAUTH}`
+/// when they carry no `Authorization` of their own, and it is probed before it
+/// is saved, so a sign-in that "worked" but reaches nothing is this call's
+/// error rather than a row that fails later.
+#[tauri::command]
+pub(crate) async fn connectors_sign_in(mut connector: Connector) -> Result<Vec<Connector>, String> {
+    let all = crate::blocking::run(move || {
+        let ServerSpec::Http(http) = &mut connector.server else {
+            return Err("Only a remote connector signs in; a program takes its key in its environment".to_string());
+        };
+        if !http.headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")) {
+            http.headers.insert("Authorization".to_string(), format!("Bearer ${{{}}}", crate::connector_oauth::OAUTH_REF));
+        }
+        let url = http.url.clone();
+        crate::connector_oauth::sign_in(&url, |authorize| {
+            tauri_plugin_opener::open_url(authorize, None::<&str>).map_err(|e| format!("Could not open the browser: {e}"))
+        })?;
+        crate::mcp_client::probe(&resolve(&connector.server, None)?, PROBE_TIMEOUT)?;
+        connector.enabled = true;
+        upsert(connector)
+    })
+    .await?;
+    crate::connector_pool::warm();
+    Ok(all)
+}
+
+/// Stop waiting for a browser sign-in.
+#[tauri::command]
+pub(crate) async fn connectors_sign_in_cancel() -> Result<(), String> {
+    crate::connector_oauth::cancel();
+    Ok(())
+}
+
+/// Forget a remote connector's sign-in. The connector stays, switched off.
+#[tauri::command]
+pub(crate) async fn connectors_sign_out(id: String) -> Result<Vec<Connector>, String> {
+    crate::blocking::run(move || {
+        let Some(mut connector) = list().into_iter().find(|c| c.id == id) else {
+            return Ok(list());
+        };
+        if let ServerSpec::Http(http) = &connector.server {
+            crate::connector_oauth::sign_out(&http.url);
+        }
+        connector.enabled = false;
+        upsert(connector)
+    })
+    .await
 }
 
 /// Whether each enabled connector is connected right now, for the page.
@@ -719,10 +780,10 @@ http_headers = { X-MCP-Toolsets = "repos" }
     #[test]
     fn references_expand_in_place_and_a_missing_one_names_itself() {
         std::env::set_var("KLIDE_TEST_CONNECTOR_TOKEN", "s3cret");
-        assert_eq!(expand("Bearer ${KLIDE_TEST_CONNECTOR_TOKEN}", None).unwrap(), "Bearer s3cret");
-        assert_eq!(expand("plain value", None).unwrap(), "plain value");
-        assert_eq!(expand("a ${ KLIDE_TEST_CONNECTOR_TOKEN } b", None).unwrap(), "a s3cret b");
-        let error = expand("Bearer ${KLIDE_TEST_CONNECTOR_UNSET}", None).unwrap_err();
+        assert_eq!(expand("Bearer ${KLIDE_TEST_CONNECTOR_TOKEN}", None, None).unwrap(), "Bearer s3cret");
+        assert_eq!(expand("plain value", None, None).unwrap(), "plain value");
+        assert_eq!(expand("a ${ KLIDE_TEST_CONNECTOR_TOKEN } b", None, None).unwrap(), "a s3cret b");
+        let error = expand("Bearer ${KLIDE_TEST_CONNECTOR_UNSET}", None, None).unwrap_err();
         assert!(error.contains("KLIDE_TEST_CONNECTOR_UNSET"), "{error}");
     }
 

@@ -27,6 +27,7 @@ mod coordination;
 mod connectors;
 mod conversation_store;
 mod connector_pool;
+mod connector_oauth;
 mod coordination_bridge;
 mod custom_cli;
 mod machines;
@@ -1432,6 +1433,9 @@ pub fn run() {
             klide_skill::klide_skill_set,
             connectors::connectors_add_github,
             connectors::connectors_status,
+            connectors::connectors_sign_in,
+            connectors::connectors_sign_in_cancel,
+            connectors::connectors_sign_out,
             #[cfg(debug_assertions)]
             agent::design_feedback::agent_prepare_design_review,
             #[cfg(debug_assertions)]
