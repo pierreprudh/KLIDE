@@ -5395,8 +5395,6 @@ button:focus-visible .menu-leadout {
   white-space: nowrap;
 }
 
-/* A folder's initial on a soft square — the card's only mark, and the
-   menu's for every other folder. */
 /* Klide's mark, beside the folder card rather than in it. */
 .klide-rail-app-mark {
   width: 28px;
@@ -5404,25 +5402,6 @@ button:focus-visible .menu-leadout {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-}
-
-.klide-rail-folder-mark {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-  color: var(--fg-strong);
-  font-size: 12px;
-}
-
-.klide-rail-folder-row .klide-rail-folder-mark {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  font-size: 11px;
 }
 
 .klide-rail-folder-menu {
@@ -5465,7 +5444,7 @@ button:focus-visible .menu-leadout {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 5px 8px 5px 5px;
+  padding: 6px 8px 6px 10px;
   border-radius: 9px;
   text-align: left;
   color: var(--fg);

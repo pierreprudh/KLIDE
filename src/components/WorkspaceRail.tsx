@@ -383,14 +383,6 @@ function shortPath(path: string): string {
   return path.replace(/^\/Users\/[^/]+/, "~");
 }
 
-function FolderMark({ name }: { name: string }) {
-  return (
-    <span className="klide-rail-folder-mark" aria-hidden="true">
-      {(name.trim()[0] ?? "·").toUpperCase()}
-    </span>
-  );
-}
-
 /** How many folders the card's menu lists. The rest are File ▸ Open Recent's. */
 const FOLDER_MENU_LIMIT = 8;
 
@@ -523,7 +515,6 @@ function FolderCard({
                   if (!here) onSwitch(folder);
                 }}
               >
-                <FolderMark name={basename(folder)} />
                 <span className="klide-rail-folder-text">
                   <span className="klide-rail-folder-row-name">{basename(folder)}</span>
                   {waiting > 0 ? (
