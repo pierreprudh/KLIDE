@@ -98,7 +98,7 @@ it("offers a klide-bot draft with Post, and never posts it by itself", async () 
   }]);
   const stop = watchScheduleStatus();
   await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(
-    expect.stringContaining("drafted a reply to @pierre on #7"),
+    expect.stringContaining("drafted a reply on #7 — “why?”"),
     expect.objectContaining({ actions: [expect.objectContaining({ label: "Post" })] }),
   ));
   const { postKlideBotReply } = await import("./klideBotPost");

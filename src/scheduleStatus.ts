@@ -112,7 +112,10 @@ export function watchScheduleStatus(): () => void {
     }
     const runId = m.runId;
     if (runId) runIds.add(runId);
-    notify(`klide-bot drafted a reply to @${m.author} on #${m.prNumber} ${m.prTitle}`, {
+    // Two mentions on one PR must not read the same: quote the comment.
+    const asked = m.excerpt.replace(/@klide-bot\b[,:]?\s*/i, "").trim();
+    const quote = asked.length > 60 ? `${asked.slice(0, 59).trimEnd()}…` : asked;
+    notify(`klide-bot drafted a reply on #${m.prNumber} — “${quote}”`, {
       tone: "info", duration: 0, provider: m.provider,
       actions: [{ label: "Post", run: () => { void postKlideBotReply(m); } }],
       action: runId ? { label: "Open", run: () => { openConversation(runId); } } : undefined,
