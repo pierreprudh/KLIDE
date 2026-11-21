@@ -481,6 +481,9 @@ function FolderCard({
 
   return (
     <div className="klide-rail-folder-wrap" ref={wrapRef}>
+      {/* Klide's mark stands beside the selector, not inside it — the card is
+          the project's. */}
+      <span className="klide-rail-app-mark" aria-hidden="true"><KlideMark size={20} /></span>
       <button
         ref={buttonRef}
         type="button"
@@ -491,7 +494,6 @@ function FolderCard({
         title={root ? shortPath(root) : undefined}
         onClick={() => (open ? close(false) : setOpen(true))}
       >
-        <span className="klide-rail-app-mark" aria-hidden="true"><KlideMark size={18} /></span>
         <span className="klide-rail-folder-name">{name}</span>
         <SwitcherIcon size={12} />
       </button>
