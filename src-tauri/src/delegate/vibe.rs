@@ -115,10 +115,9 @@ impl Delegate for Vibe {
         ))
     }
 
-    /// Headless prose turn. `vibe -p` takes its prompt as a value, not from
-    /// stdin, so — like Cursor's positional prompt — the invocation moves
-    /// stdin into the `-p` argument with a shell wrapper that never evaluates
-    /// the prompt text.
+    /// Headless prose turn. `vibe -p` with no value reads the prompt from
+    /// stdin, which is how the runner sends it — no argv size limit, and the
+    /// text never passes through a shell.
     fn chat_args(&self, _cwd: &str, model: &str) -> Result<Vec<String>, String> {
         let mut args: Vec<String> = vec![
             "-p".into(),
@@ -135,20 +134,18 @@ impl Delegate for Vibe {
 
     fn chat_invocation(&self, cwd: &str, model: &str) -> Result<tokio::process::Command, String> {
         let cli = crate::cli::resolve_command(self.binary())?;
-        let args = self.chat_args(cwd, model)?;
-        // `vibe -p` wants the prompt as the flag's value; the runner pipes the
-        // conversation's newest message on stdin, so read it into a shell
-        // variable and hand it to `-p` as one argument.
-        let mut command = tokio::process::Command::new("sh");
+        let mut command = tokio::process::Command::new(cli);
         command
-            .args([
-                "-c",
-                "prompt=$(cat); exec \"$@\" -p \"$prompt\"",
-                "klide-vibe",
-            ])
-            .arg(&cli)
-            .args(&args[1..]); // skip the placeholder "-p"; the wrapper supplies its value
-        command.current_dir(cwd).envs(self.headless_env());
+            .current_dir(cwd)
+            .args(self.chat_args(cwd, model)?)
+            .envs(self.headless_env());
+        // `vibe` is a bundled Python: an inherited venv or PYTHONHOME aborts
+        // it at startup ("Fatal Python error: init_import_site"). The PTY
+        // launch scrubs these (`pty_host`); a headless turn — in the app or in
+        // `klide ptyd`, which inherits whatever started it — must too.
+        for var in PYTHON_ENV_VARS {
+            command.env_remove(var);
+        }
         let env = self.chat_source_env(cwd, model)?;
         command.args(self.chat_source_args(model, &env)?).envs(env);
         Ok(command)
@@ -318,6 +315,9 @@ fn user_text(text: &str) -> String {
         None => text.to_string(),
     }
 }
+
+/// Interpreter variables that break the bundled Python `vibe` binary.
+const PYTHON_ENV_VARS: [&str; 3] = ["PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"];
 
 struct VibeRunParser;
 
@@ -991,6 +991,25 @@ mod tests {
         write_generation(&dir, "quiescent", &[]);
         assert_eq!(Vibe.run_parser(&env).parse(&dir.to_string_lossy()).unwrap().status, "done");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_headless_turn_reads_stdin_and_drops_python_env() {
+        let Ok(command) = Vibe.chat_invocation("/tmp", "mistral-large-4-0") else {
+            return; // `vibe` not installed on this machine: nothing to build.
+        };
+        let std = command.as_std();
+        let args: Vec<_> = std.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, ["-p", "--trust", "--output", "text", "--model", "mistral-large-4-0"]);
+        assert!(!std.get_program().to_string_lossy().ends_with("sh"), "no shell wrapper");
+        let removed: Vec<_> = std
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        for var in PYTHON_ENV_VARS {
+            assert!(removed.iter().any(|r| r == var), "{var} is scrubbed");
+        }
     }
 
     #[test]
