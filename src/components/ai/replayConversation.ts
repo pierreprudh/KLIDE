@@ -282,6 +282,10 @@ export function eventsToConversation(
     msgs,
     updatedAt: typeof last?.ts === "number" ? last.ts : Date.now(),
     createdAt: typeof first?.ts === "number" ? first.ts : undefined,
+    // The Run's own pair, so a reopened background Run (a schedule, a CI
+    // watch firing, a klide-bot answer) keeps the agent it ran on rather than
+    // taking whatever the panel last held.
+    ...(meta ? { provider: meta.provider as ProviderId, model: meta.model } : {}),
   };
 }
 
