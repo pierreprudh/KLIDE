@@ -491,7 +491,7 @@ function FolderCard({
         title={root ? shortPath(root) : undefined}
         onClick={() => (open ? close(false) : setOpen(true))}
       >
-        <span className="klide-rail-app-mark" aria-hidden="true"><KlideMark size={18} /></span>
+        <FolderMark name={name} />
         <span className="klide-rail-folder-name">{name}</span>
         <SwitcherIcon size={12} />
       </button>
@@ -1591,6 +1591,12 @@ export function WorkspaceRail({
         {/* The drag region rides down here with the content: Tauri only moves
             the window for the element the pointer actually hits. */}
         <div className="klide-rail-inner" style={{ width: railWidth }} data-tauri-drag-region>
+          {/* The app's own mark lives in the title band, apart from the
+              folder card — the card is the project's, this is Klide's. */}
+          <span className="klide-rail-brand" aria-hidden="true" data-tauri-drag-region>
+            <KlideMark size={14} />
+            <span className="klide-rail-brand-name">Klide</span>
+          </span>
           <FolderCard
             root={activeProjectRoot}
             folders={railProjects}
