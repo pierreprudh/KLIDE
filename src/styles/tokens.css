@@ -5433,24 +5433,50 @@ button:focus-visible .menu-leadout {
   background-position: 6px 36px;
   background-repeat: no-repeat;
   background-color: var(--bg-elevated);
-  animation: klide-folder-menu-morph var(--motion-med) var(--ease-out);
+  /* No fill: once open, the clip lets go so the menu's shadow shows. */
+  animation: klide-folder-menu-morph 320ms var(--ease-soft);
   border-radius: var(--radius-xl);
   box-shadow: 0 0 0 1px var(--panel-border), var(--panel-shadow);
 }
 
 /* Unfolds from the card's own outline: the clip starts as the 36px card and
-   opens to the whole menu. A fade, no bounce. */
+   opens to the whole menu on a long, soft ease; the rows follow a beat behind
+   with a short rise. Closing folds it back into the card, quicker. No bounce. */
 @keyframes klide-folder-menu-morph {
-  from {
-    clip-path: inset(0 0 calc(100% - 36px) 0 round var(--radius-xl));
-  }
-  to {
-    clip-path: inset(0 0 0 0 round var(--radius-xl));
-  }
+  from { clip-path: inset(0 0 calc(100% - 36px) 0 round var(--radius-xl)); }
+  to   { clip-path: inset(0 0 0 0 round var(--radius-xl)); }
+}
+
+@keyframes klide-folder-menu-fold {
+  from { clip-path: inset(0 0 0 0 round var(--radius-xl)); }
+  to   { clip-path: inset(0 0 calc(100% - 36px) 0 round var(--radius-xl)); }
+}
+
+@keyframes klide-folder-menu-rows-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.klide-rail-folder-menu > * {
+  animation: klide-folder-menu-rows-in 260ms var(--ease-soft) 60ms both;
+}
+
+.klide-rail-folder-menu[data-closing] {
+  animation: klide-folder-menu-fold 200ms cubic-bezier(0.4, 0, 0.6, 1) both;
+}
+
+.klide-rail-folder-menu[data-closing] > * {
+  animation: klide-folder-menu-rows-out 120ms ease-out both;
+}
+
+@keyframes klide-folder-menu-rows-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .klide-rail-folder-menu { animation: none; }
+  .klide-rail-folder-menu,
+  .klide-rail-folder-menu > * { animation: none; }
 }
 
 .klide-rail-folder-list {

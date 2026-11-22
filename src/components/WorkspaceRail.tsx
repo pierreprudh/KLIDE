@@ -382,6 +382,9 @@ function shortPath(path: string): string {
   return path.replace(/^\/Users\/[^/]+/, "~");
 }
 
+/** Matches the `klide-folder-menu-fold` animation in tokens.css. */
+const FOLDER_MENU_CLOSE_MS = 200;
+
 /** How many folders the card's menu lists. The rest are File ▸ Open Recent's. */
 const FOLDER_MENU_LIMIT = 8;
 
@@ -402,6 +405,9 @@ function FolderCard({
   onCloneRepo?: (url: string) => Promise<void> | void;
 }) {
   const [open, setOpen] = useState(false);
+  // Closing plays the unfold backwards before the menu unmounts.
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<number | null>(null);
   const [cloning, setCloning] = useState(false);
   const [cloneUrl, setCloneUrl] = useState("");
   const [cloneError, setCloneError] = useState<string | null>(null);
@@ -412,12 +418,22 @@ function FolderCard({
   const name = root ? basename(root) : "Open a folder";
 
   function close(refocus: boolean) {
-    setOpen(false);
-    setCloning(false);
-    setCloneUrl("");
-    setCloneError(null);
     if (refocus) buttonRef.current?.focus();
+    if (closeTimer.current !== null) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    setClosing(true);
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      setClosing(false);
+      setOpen(false);
+      setCloning(false);
+      setCloneUrl("");
+      setCloneError(null);
+    }, reduced ? 0 : FOLDER_MENU_CLOSE_MS);
   }
+  useEffect(() => () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+  }, []);
 
   // A menu: the first entry takes focus when it opens, a press outside or
   // Escape puts it away.
@@ -494,6 +510,7 @@ function FolderCard({
           role="menu"
           aria-label="Folders"
           className="klide-rail-folder-menu"
+          data-closing={closing || undefined}
           onKeyDown={onMenuKey}
         >
           {/* The folders scroll on their own, so a long list never pushes
