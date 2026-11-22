@@ -493,7 +493,7 @@ function FolderCard({
           ref={menuRef}
           role="menu"
           aria-label="Folders"
-          className="klide-rail-folder-menu popover-enter"
+          className="klide-rail-folder-menu"
           onKeyDown={onMenuKey}
         >
           {/* The folders scroll on their own, so a long list never pushes
