@@ -383,7 +383,7 @@ function shortPath(path: string): string {
 }
 
 /** Matches the `klide-folder-menu-fold` animation in tokens.css. */
-const FOLDER_MENU_CLOSE_MS = 200;
+const FOLDER_MENU_CLOSE_MS = 340;
 
 /** How many folders the card's menu lists. The rest are File ▸ Open Recent's. */
 const FOLDER_MENU_LIMIT = 8;
