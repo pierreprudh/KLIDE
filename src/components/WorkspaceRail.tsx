@@ -41,10 +41,7 @@ import {
   type ReactNode,
 } from "react";
 import {
-  CheckIcon,
   ChevronIcon,
-  DownloadIcon,
-  FolderOpenIcon,
   CloseIcon,
   MoreIcon,
   NeedsYouIcon,
@@ -501,7 +498,6 @@ function FolderCard({
         >
           {/* The folders scroll on their own, so a long list never pushes
               Open folder… / Clone… out of reach. */}
-          <div className="klide-rail-folder-label" aria-hidden="true">Projects</div>
           <div className="klide-rail-folder-list">
           {folders.slice(0, FOLDER_MENU_LIMIT).map((folder) => {
             const here = folder === root;
@@ -528,7 +524,6 @@ function FolderCard({
                     <span className="klide-rail-folder-detail">{shortPath(folder)}</span>
                   )}
                 </span>
-                {here ? <CheckIcon size={14} /> : null}
               </button>
             );
           })}
@@ -567,7 +562,6 @@ function FolderCard({
                     onOpenFolder();
                   }}
                 >
-                  <FolderOpenIcon size={15} />
                   Open folder…
                 </button>
               ) : null}
@@ -578,7 +572,6 @@ function FolderCard({
                   className="klide-rail-folder-action"
                   onClick={() => setCloning(true)}
                 >
-                  <DownloadIcon size={15} />
                   Clone repository…
                 </button>
               ) : null}
