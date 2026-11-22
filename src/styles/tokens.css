@@ -5416,16 +5416,24 @@ button:focus-visible .menu-leadout {
      past the card it hangs from. */
   grid-template-columns: minmax(0, 1fr);
   gap: 2px;
-  padding: 5px;
-  border-radius: 12px;
+  padding: 6px;
+  border-radius: 16px;
   background: var(--bg-elevated);
   box-shadow: 0 0 0 1px var(--panel-border), var(--panel-shadow);
+}
+
+/* The list's one heading — small, quiet, aligned with the row text. */
+.klide-rail-folder-label {
+  padding: 4px 10px 4px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 15px;
 }
 
 .klide-rail-folder-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1px;
+  gap: 2px;
   max-height: min(300px, 50vh);
   overflow-y: auto;
 }
@@ -5443,16 +5451,20 @@ button:focus-visible .menu-leadout {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 6px 8px 6px 10px;
-  border-radius: 9px;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
   text-align: left;
   color: var(--fg);
+  transition: background var(--motion-fast) var(--ease-out);
 }
 
+/* Selection is a grey lift, not a colour (Design.md): hover ~5%, picked ~10%. */
 .klide-rail-folder-row:hover,
-.klide-rail-folder-row:focus-visible {
-  background: var(--menu-row-hover);
+.klide-rail-folder-row:focus-visible,
+.klide-rail-folder-action:hover,
+.klide-rail-folder-action:focus-visible {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 
 /* The fill is the folder menu's focus mark, so no outline on top of it —
@@ -5463,7 +5475,7 @@ button:focus-visible .menu-leadout {
 }
 
 .klide-rail-folder-row[aria-checked="true"] {
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
 }
 
 .klide-rail-folder-row > svg {
@@ -5476,12 +5488,12 @@ button:focus-visible .menu-leadout {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .klide-rail-folder-row-name {
   color: var(--fg-strong);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5508,28 +5520,31 @@ button:focus-visible .menu-leadout {
   vertical-align: -1px;
 }
 
+/* Open / Clone as menu rows under a fine divider — not pills. */
 .klide-rail-folder-actions {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 3px;
-  padding: 6px 0 2px;
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 6px;
   border-top: 1px solid var(--border);
 }
 
 .klide-rail-folder-action {
-  height: 24px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 0 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-  color: var(--fg-strong);
-  font-size: 12px;
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 13px;
+  text-align: left;
   transition: background var(--motion-fast) var(--ease-out);
 }
 
-.klide-rail-folder-action:hover,
-.klide-rail-folder-action:focus-visible {
-  background: color-mix(in srgb, var(--fg) 11%, transparent);
+.klide-rail-folder-action > svg {
+  flex-shrink: 0;
+  color: var(--fg-dim);
 }
 
 .klide-rail-folder-clone {
