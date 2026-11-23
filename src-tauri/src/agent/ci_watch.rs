@@ -225,9 +225,15 @@ fn strip_ansi(text: &str) -> String {
     out
 }
 
+/// The Run's first message. The conversation draws it as a card by parsing
+/// it back (`src/agent/ciWatchPrompt.ts`); `ci_watch_prompt.fixture.txt` is
+/// the one sample both sides test against, so a change here fails there.
 fn prompt(pr: &FailingPr, logs: &str) -> String {
+    prompt_fenced(pr, logs, &format!("ci-log-{:x}", transcripts::now_ms()))
+}
+
+fn prompt_fenced(pr: &FailingPr, logs: &str, fence: &str) -> String {
     let checks = pr.checks.iter().map(|(name, url)| format!("- {name} {url}")).collect::<Vec<_>>().join("\n");
-    let fence = format!("ci-log-{:x}", transcripts::now_ms());
     format!(
         "CI failed on my pull request #{number} \"{title}\" ({url}), commit {sha}.\n\n\
          Failing checks:\n{checks}\n\n\
@@ -781,6 +787,22 @@ mod tests {
         assert_eq!(log_excerpt("\u{feff}2026-11-18T22:00:52.7Z \u{1b}[1m\u{1b}[91merror\u{1b}[0m: boom\n2026-11-18T22:00:52.8Z ##[error]exit 1\n2026-11-18T22:00:53Z cleanup", 1000), "error: boom\n##[error]exit 1");
         assert_eq!(log_excerpt(raw, 1000), "8 vulnerabilities\n##[error]Process completed with exit code 1.");
         assert_eq!(apple_string(r#"a"b\"#), r#""a\"b\\""#);
+    }
+
+    #[test]
+    fn the_prompt_matches_the_fixture_the_card_parses() {
+        let pr = FailingPr {
+            number: 597,
+            title: "feat(klide-bot): answers in PR comments".into(),
+            url: "https://github.com/o/r/pull/597".into(),
+            head_sha: "24443c9aa".into(),
+            checks: vec![
+                ("Rust tests".into(), "https://github.com/o/r/actions/runs/1/job/2".into()),
+                ("Frontend".into(), "https://github.com/o/r/actions/runs/1/job/3".into()),
+            ],
+        };
+        let text = prompt_fenced(&pr, "test x ... FAILED\n##[error]exit 101", "ci-log-1a2b");
+        assert_eq!(text, include_str!("../../../src/agent/ci_watch_prompt.fixture.txt").trim_end_matches('\n'));
     }
 
     #[test]
