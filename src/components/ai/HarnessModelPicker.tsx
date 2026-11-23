@@ -290,7 +290,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
   return <div style={{ flex: fluid ? 1 : "0 1 112px", minWidth: 64, maxWidth: fluid ? undefined : 138 }}>
     <button type="button" ref={menu.triggerRef} disabled={disabled} aria-haspopup="menu" aria-expanded={menu.open}
       title={current ? `${current.provider} · ${current.model}` : model} style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: fluid ? "flex-start" : "flex-end", gap: 5,
-        width: "100%", height: 24, padding: "0 16px 0 2px", borderRadius: "var(--radius-sm)", border: "1px solid transparent",
+        width: "100%", height: 26, padding: "0 22px 0 8px", borderRadius: 12, border: "1px solid transparent",
         background: menu.open && !bareHover ? "var(--bg-hover)" : "transparent", boxShadow: "none", color: menu.open ? "var(--fg-strong)" : "var(--fg-subtle)",
         font: "inherit", fontSize: 11, fontWeight: 500, cursor: disabled ? "default" : "pointer",
         transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)" }}
@@ -302,7 +302,7 @@ export function HarnessModelPicker({ harness = "hermes", model, onChange, disabl
         {resolveModelLogo(current?.model ?? model, 13) ?? <ProviderLogo id={(current?.provider ?? harness) as ProviderId} size={13} />}
       </span>
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: fluid ? "left" : "right" }}>{(current?.model ?? (model || placeholder || "default")).split("/").pop()}</span>
-      <ChevronIcon size={12} style={{ position: "absolute", right: 2, color: "var(--fg-dim)", transform: menu.open ? "rotate(180deg)" : "none" }} />
+      <ChevronIcon size={12} style={{ position: "absolute", right: 7, flexShrink: 0, color: "var(--fg-dim)", transform: menu.open ? "rotate(180deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }} />
     </button>
     {presence.mounted && shownPos && createPortal(<div ref={menu.menuRef}
       style={{ position: "fixed", ...shownPos, width: 200, zIndex: Z.popover }}
