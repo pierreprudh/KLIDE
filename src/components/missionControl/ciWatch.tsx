@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ciWatchGet, ciWatchSet, type CiWatchFired, type CiWatchInfo } from "../../ipc/ciWatch";
+import { ciFailureStands, ciNowLabel, ciWatchGet, ciWatchSet, type CiWatchFired, type CiWatchInfo } from "../../ipc/ciWatch";
 import { isAutoProvider, providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import type { HarnessSettings } from "../../settingsStore";
@@ -199,12 +199,12 @@ export function CiWatchHistory({ watch, onOpenRun }: { watch: CiWatch; onOpenRun
           <span className="ci-fire-title">#{f.prNumber} {f.prTitle}</span>
           <span className="ci-fire-time" data-failed={f.error ? true : undefined}>{f.error ? "Not started" : relativeTime(f.at)}</span>
         </span>
-        <span className="ci-fire-checks">{f.checks.map(c => <span key={c}><ErrorIcon size={12} />{c}</span>)}</span>
+        <span className="ci-fire-checks">{f.checks.map(c => <span key={c}><ErrorIcon size={12} />{c}</span>)}{f.now && <span className="ci-fire-now" data-now={f.now}>{ciNowLabel(f.now)}</span>}</span>
         {f.error
           ? <span className="ci-fire-verdict">{f.error}</span>
           : <span className="ci-fire-verdict" data-pending={verdict === null ? true : undefined}>{verdict === null ? "Kit is looking into it…" : verdict ?? ""}</span>}
       </button>
-      {f.runId && canStartCiFix() && <button type="button" className="ci-watch-fix" title="Fix it in a worktree at the failing commit — every edit is reviewed" onClick={() => startCiFix(f)}>Fix it</button>}
+      {f.runId && canStartCiFix() && ciFailureStands(f.now) && <button type="button" className="ci-watch-fix" title="Fix it in a worktree at the failing commit — every edit is reviewed" onClick={() => startCiFix(f)}>Fix it</button>}
     </li>;
   })}</ol>;
 }

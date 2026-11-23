@@ -67,6 +67,27 @@ pub struct Fired {
     /// The open app posted the Klide notification (whatever screen it is on).
     #[serde(default)]
     notified: bool,
+    /// What became of the failure since it fired, followed by the same poll
+    /// that found it. `None`: still failed as fired.
+    #[serde(default)]
+    now: Option<Now>,
+}
+
+/// A firing after the fact. `Moved` and `Closed` are final: the commit is no
+/// longer the PR's, or the PR is gone.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Now {
+    /// A failed check is running again.
+    Running,
+    /// Every check that failed has passed since.
+    Passed,
+    /// Failed again after re-running.
+    Failing,
+    /// The PR has newer commits; those are watched on their own.
+    Moved,
+    /// The PR is no longer open (merged or closed).
+    Closed,
 }
 
 #[derive(Serialize)]
@@ -159,6 +180,54 @@ fn failing_prs(json: &str, since: i64) -> Result<Vec<FailingPr>, String> {
         });
     }
     Ok(out)
+}
+
+/// How many open PRs one poll lists. A full page can't tell "closed" from
+/// "past the page", so a PR missing from a full page is left as it was.
+const LIST_LIMIT: usize = 30;
+
+/// What became of a fired commit, from the same `gh pr list` the poll read:
+/// only the checks that failed count, by name. `None` leaves the firing as
+/// it is — nothing to say, or the first failure is still the news.
+fn now_for(prs: &[serde_json::Value], pr: u64, sha: &str, checks: &[String], was: Option<Now>) -> Option<Now> {
+    if matches!(was, Some(Now::Moved | Now::Closed)) {
+        return None;
+    }
+    let Some(view) = prs.iter().find(|p| p["number"].as_u64() == Some(pr)) else {
+        return (prs.len() < LIST_LIMIT).then_some(Now::Closed);
+    };
+    if view["headRefOid"].as_str().is_some_and(|head| head != sha) {
+        return Some(Now::Moved);
+    }
+    let rollup = view["statusCheckRollup"].as_array()?;
+    let mut seen = 0;
+    let (mut failed, mut running) = (false, false);
+    for check in rollup {
+        let name = check["name"].as_str().or(check["context"].as_str()).unwrap_or("");
+        if !checks.iter().any(|c| c == name) {
+            continue;
+        }
+        seen += 1;
+        let verdict = check["conclusion"].as_str().filter(|s| !s.is_empty()).or(check["state"].as_str()).unwrap_or("");
+        let pending = check["status"].as_str().is_some_and(|s| s != "COMPLETED") || matches!(verdict, "PENDING" | "EXPECTED" | "");
+        if pending {
+            running = true;
+        } else if FAILED.contains(&verdict) {
+            failed = true;
+        }
+    }
+    let next = if seen == 0 {
+        return None;
+    } else if running {
+        Now::Running
+    } else if failed {
+        // Still the failure that fired, until something ran in between.
+        if was.is_none() { return None; }
+        Now::Failing
+    } else {
+        Now::Passed
+    };
+    (Some(next) != was).then_some(next)
 }
 
 /// The repository and Actions job in a check's details URL
@@ -298,17 +367,19 @@ async fn poll_once(data: &Path, host: &std::sync::Arc<super::daemon::RunHost>) -
         let root = watch.workspace_root.clone();
         let since = watch.enabled_at;
         let listed = crate::blocking::run(move || {
+            let limit = LIST_LIMIT.to_string();
             let json = crate::git::github::gh_output(&root, &[
-                "pr", "list", "--author", "@me", "--state", "open", "--limit", "30",
+                "pr", "list", "--author", "@me", "--state", "open", "--limit", &limit,
                 "--json", "number,title,url,headRefOid,statusCheckRollup",
             ])?;
-            failing_prs(&json, since)
+            let prs: Vec<serde_json::Value> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            Ok((failing_prs(&json, since)?, prs))
         })
         .await;
         let root = watch.workspace_root.clone();
-        let (failing, error) = match listed {
-            Ok(prs) => (prs, None),
-            Err(e) => (Vec::new(), Some(e)),
+        let (failing, prs, error) = match listed {
+            Ok((failing, prs)) => (failing, Some(prs), None),
+            Err(e) => (Vec::new(), None, Some(e)),
         };
         let d = data.to_path_buf();
         let fired_keys: std::collections::HashSet<String> = crate::blocking::run(move || {
@@ -316,6 +387,14 @@ async fn poll_once(data: &Path, host: &std::sync::Arc<super::daemon::RunHost>) -
                 if let Some(w) = s.watches.iter_mut().find(|w| w.workspace_root == root) {
                     w.last_poll_at = Some(transcripts::now_ms());
                     w.last_error = error;
+                }
+                // Follow what this Workspace already fired on. A failed
+                // listing says nothing, so nothing changes.
+                for f in s.fired.iter_mut().filter(|f| f.workspace_root == root) {
+                    let (Some(prs), Some(sha)) = (&prs, fired_sha(&f.key)) else { continue };
+                    if let Some(next) = now_for(prs, f.pr_number, sha, &f.checks, f.now) {
+                        f.now = Some(next);
+                    }
                 }
                 s.fired.iter().map(|f| f.key.clone()).collect()
             })
@@ -358,6 +437,7 @@ async fn fire(
         at: transcripts::now_ms(),
         announced: false,
         notified: false,
+        now: None,
     };
     let (d, f) = (data.to_path_buf(), fired.clone());
     crate::blocking::run(move || {
@@ -474,6 +554,10 @@ pub fn start(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let Ok(data) = app.path().app_data_dir() else { return };
         let mut ensured = false;
+        // What every firing looked like at the last look, so a change the
+        // service wrote (a new firing, a re-run that passed) reaches the
+        // open cards and Mission Control without them polling.
+        let mut seen: Option<Vec<(String, Option<Now>)>> = None;
         loop {
             let d = data.clone();
             if crate::blocking::run(move || Ok(has_watches(&d))).await.unwrap_or(false) {
@@ -511,6 +595,16 @@ pub fn start(app: tauri::AppHandle) {
                     .unwrap_or(false);
                 if waiting {
                     let _ = app.emit("ci-watch:pending", ());
+                }
+                let d = data.clone();
+                let now: Option<Vec<(String, Option<Now>)>> = crate::blocking::run(move || Ok(read(&d)?.fired.iter().map(|f| (f.key.clone(), f.now)).collect()))
+                    .await
+                    .ok();
+                if let Some(now) = now {
+                    if seen.as_ref().is_some_and(|before| *before != now) {
+                        let _ = app.emit("ci-watch:fired", ());
+                    }
+                    seen = Some(now);
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -787,6 +881,44 @@ mod tests {
         assert_eq!(log_excerpt("\u{feff}2026-11-18T22:00:52.7Z \u{1b}[1m\u{1b}[91merror\u{1b}[0m: boom\n2026-11-18T22:00:52.8Z ##[error]exit 1\n2026-11-18T22:00:53Z cleanup", 1000), "error: boom\n##[error]exit 1");
         assert_eq!(log_excerpt(raw, 1000), "8 vulnerabilities\n##[error]Process completed with exit code 1.");
         assert_eq!(apple_string(r#"a"b\"#), r#""a\"b\\""#);
+    }
+
+    fn listing(head: &str, rollup: serde_json::Value) -> Vec<serde_json::Value> {
+        vec![serde_json::json!({ "number": 7, "headRefOid": head, "statusCheckRollup": rollup })]
+    }
+
+    #[test]
+    fn a_fired_failure_is_followed_through_a_re_run() {
+        let sha = "a".repeat(40);
+        let checks = vec!["Rust tests".to_string()];
+        let run = |status: &str, conclusion: &str| serde_json::json!([
+            { "name": "Rust tests", "status": status, "conclusion": conclusion },
+            { "name": "Frontend", "status": "COMPLETED", "conclusion": "FAILURE" },
+        ]);
+        // Still the failure that fired: no news.
+        assert_eq!(now_for(&listing(&sha, run("COMPLETED", "FAILURE")), 7, &sha, &checks, None), None);
+        // Re-run → running → passed; an unchanged state is not re-reported.
+        assert_eq!(now_for(&listing(&sha, run("IN_PROGRESS", "")), 7, &sha, &checks, None), Some(Now::Running));
+        assert_eq!(now_for(&listing(&sha, run("IN_PROGRESS", "")), 7, &sha, &checks, Some(Now::Running)), None);
+        assert_eq!(now_for(&listing(&sha, run("COMPLETED", "SUCCESS")), 7, &sha, &checks, Some(Now::Running)), Some(Now::Passed));
+        // A re-run that fails again says so.
+        assert_eq!(now_for(&listing(&sha, run("COMPLETED", "FAILURE")), 7, &sha, &checks, Some(Now::Running)), Some(Now::Failing));
+        // Legacy statuses carry only a state.
+        let legacy = serde_json::json!([{ "context": "Rust tests", "state": "PENDING" }]);
+        assert_eq!(now_for(&listing(&sha, legacy), 7, &sha, &checks, None), Some(Now::Running));
+    }
+
+    #[test]
+    fn a_new_commit_or_a_closed_pr_ends_the_story() {
+        let sha = "a".repeat(40);
+        let checks = vec!["Rust tests".to_string()];
+        assert_eq!(now_for(&listing(&"b".repeat(40), serde_json::json!([])), 7, &sha, &checks, None), Some(Now::Moved));
+        assert_eq!(now_for(&[], 7, &sha, &checks, Some(Now::Passed)), Some(Now::Closed));
+        // A full page can't tell closed from past the page.
+        let full: Vec<serde_json::Value> = (100..100 + LIST_LIMIT as u64).map(|n| serde_json::json!({ "number": n })).collect();
+        assert_eq!(now_for(&full, 7, &sha, &checks, None), None);
+        // Final states stay final.
+        assert_eq!(now_for(&listing(&sha, serde_json::json!([{ "name": "Rust tests", "status": "COMPLETED", "conclusion": "SUCCESS" }])), 7, &sha, &checks, Some(Now::Moved)), None);
     }
 
     #[test]

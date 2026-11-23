@@ -9,7 +9,22 @@ import type { StartAgentRunInput } from "../agent/types";
 export type CiWatchFired = {
   key: string; workspaceRoot: string; prNumber: number; prTitle: string; prUrl: string;
   checks: string[]; provider: string; model: string; runId: string | null; error: string | null; at: number; announced: boolean;
+  /** What became of the failure since, followed by the watch's own poll
+   *  (`Now` in ci_watch.rs). Absent: still failed as fired. */
+  now?: CiWatchNow | null;
 };
+
+export type CiWatchNow = "running" | "passed" | "failing" | "moved" | "closed";
+
+/** What became of a firing, in a word or two (Mission Control's row). */
+export function ciNowLabel(now: CiWatchNow): string {
+  return { running: "Running again", passed: "Passed since", failing: "Failed again", moved: "Newer commit", closed: "PR closed" }[now];
+}
+
+/** Whether "Fix it" still has something to fix. */
+export function ciFailureStands(now: CiWatchNow | null | undefined): boolean {
+  return !now || now === "running" || now === "failing";
+}
 
 export type CiWatchInfo = {
   enabled: boolean; provider: string | null; model: string | null;
