@@ -9,9 +9,11 @@ type Link = { start: number; end: number; members: number[]; direct?: boolean };
  * re-run (and no ResizeObserver is ever created) for them. */
 const EMPTY_LINKS: Link[] = [];
 
-/** A `Watching `cmd` as `shell`. …` tool row, read once per row instead of
- * once per observer message. */
-const WATCHING_RE = /^Watching `[^`]*` as `([^`]*)`\./;
+/** A `Watching `cmd` as `shell`. Finish your reply …` tool row, read once per
+ * row instead of once per observer message. The command is written raw and may
+ * hold backticks or newlines, so the shell id is anchored on the text after it
+ * (greedy `[\s\S]*` lands on the last ` as `…`. Finish`). */
+const WATCHING_RE = /^Watching `[\s\S]*` as `([^`]*)`\. Finish your reply/;
 
 /** Scan backward from a tool row to the assistant message that requested it,
  * stopping at the turn boundary. */
