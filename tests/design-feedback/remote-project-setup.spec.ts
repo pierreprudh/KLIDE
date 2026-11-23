@@ -1,0 +1,114 @@
+import { test, expect, type Page } from "@playwright/test";
+
+async function projectSetup(page: Page, extra = "", popup = false) {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto(`/preview/where-it-runs.html?needsProject=1&repoAccess=1&theme=dark&${popup ? "state=empty" : "settings=1"}&${extra}`);
+  if (popup) {
+    await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+    await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+    const dialog=page.getByRole("dialog",{name:"Add a machine"});
+    await dialog.getByRole("button",{name:"Direct SSH",exact:false}).click();
+    await dialog.getByRole("button",{name:"Add a machine",exact:true}).click();
+    await dialog.getByLabel("SSH host",{exact:true}).fill("dev@100.64.0.3");
+    await dialog.getByRole("button",{name:"Continue",exact:true}).click();
+  } else await page.getByRole("button", { name: "Continue setup", exact: true }).click();
+  return page.locator(".klide-machine-setup");
+}
+
+test("browse and create a remote clone destination without typing a path", async ({ page }) => {
+  const setup=await projectSetup(page,"",true);
+  await setup.getByRole("button",{name:"Browse folders",exact:true}).click();
+  const explorer=setup.getByRole("region",{name:"Remote folder explorer"});
+  await explorer.getByRole("button",{name:"Projects",exact:true}).click();
+  await expect(explorer.getByLabel("Remote location")).toHaveValue("/Users/remote/Projects");
+  await page.screenshot({path:"artifacts/design-feedback/remote-folder-explorer-dark.png"});
+  await explorer.getByRole("button",{name:"New folder",exact:true}).click();
+  await explorer.getByLabel("New folder name").fill("My new project");
+  await explorer.getByRole("button",{name:"Create folder",exact:true}).click();
+  await expect(explorer.getByLabel("Remote location")).toHaveValue("/Users/remote/Projects/My new project");
+  const dialog=page.getByRole("dialog"); const frame=(await dialog.boundingBox())!;
+  const footer=(await setup.locator(".klide-machine-setup-footer").boundingBox())!;
+  expect(footer.y+footer.height).toBeLessThan(frame.y+frame.height);
+  expect(await dialog.evaluate((el)=>el.scrollHeight<=el.clientHeight+1)).toBe(true);
+  await explorer.getByRole("button",{name:"Choose this folder",exact:true}).click();
+  await expect(setup.getByLabel("Remote folder",{exact:true})).toHaveValue("/Users/remote/Projects/My new project");
+  await setup.getByRole("button",{name:"Clone project here",exact:true}).click();
+  expect(await page.evaluate(()=>(window as any).__MACHINE_FOLDER_CREATED__)).toBe("/Users/remote/Projects/My new project");
+  await expect.poll(()=>page.evaluate(()=>(window as any).__MACHINE_SETUP_ACTIONS__)).toEqual(["clone"]);
+  expect(await page.evaluate(()=>(window as any).__MACHINE_CLONE_CHECKOUT__)).toBe("/Users/remote/Projects/My new project/project");
+});
+
+test("choosing Documents clones into a named project folder without typing", async ({ page }) => {
+  const setup = await projectSetup(page);
+  await setup.getByRole("button", { name: "Browse folders", exact: true }).click();
+  const explorer = setup.getByRole("region", { name: "Remote folder explorer" });
+  await explorer.getByRole("button", { name: "Documents", exact: true }).click();
+  await explorer.getByRole("button", { name: "Choose this folder", exact: true }).click();
+  await expect(setup.getByLabel("Remote folder", { exact: true })).toHaveValue("/Users/remote/Documents");
+  await expect(setup.getByText("Clone destination:", { exact: false })).toHaveText("Clone destination: /Users/remote/Documents/project");
+  await setup.getByRole("button", { name: "Clone project here", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__MACHINE_CLONE_CHECKOUT__)).toBe("/Users/remote/Documents/project");
+  await expect(setup.getByLabel("Remote folder", { exact: true })).toHaveValue("/Users/remote/Documents/project");
+});
+
+test("an existing checkout is scoped before its folder mapping is saved",async({page})=>{
+  const setup=await projectSetup(page);
+  await setup.getByRole("button",{name:"Browse folders",exact:true}).click();
+  const explorer=setup.getByRole("region",{name:"Remote folder explorer"});
+  await explorer.getByRole("button",{name:"Projects",exact:true}).click();
+  await explorer.getByRole("button",{name:"Existing project",exact:true}).click();
+  await explorer.getByRole("button",{name:"Choose this folder",exact:true}).click();
+  await setup.getByRole("button",{name:"Use this folder",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__MACHINE_REPOSITORY_CONFIGURE__?.path)).toBe("/Users/remote/Projects/Existing project");
+  expect(await page.evaluate(()=>(window as any).__MACHINE_SETUP_ACTIONS__)).toBeUndefined();
+});
+
+test("a failed folder listing cannot silently select a stale destination",async({page})=>{
+  const setup=await projectSetup(page,"failBrowse=1");
+  await setup.getByRole("button",{name:"Browse folders",exact:true}).click();
+  const explorer=setup.getByRole("region",{name:"Remote folder explorer"});
+  await expect(explorer.getByRole("alert")).toContainText("Permission denied");
+  await expect(explorer.getByRole("button",{name:"Choose this folder",exact:true})).toBeDisabled();
+  await explorer.getByRole("button",{name:"Cancel",exact:true}).click();
+  await expect(setup.getByLabel("Remote folder",{exact:true})).toHaveValue("~/code");
+});
+
+test("shared-account setup disconnects a personal login and grants read-only access to one repository",async({page})=>{
+  const setup=await projectSetup(page,"needsGhLogin=1&personalGithub=1");
+  await setup.getByRole("button",{name:"GitHub",exact:true}).click();
+  await expect(setup.getByRole("heading",{name:"Repository access",exact:true})).toBeVisible();
+  await expect(setup.getByRole("button",{name:"Connect this repository",exact:true})).toHaveCount(0);
+  await expect(setup.getByRole("button",{name:"Sign in to GitHub",exact:true})).toHaveCount(0);
+  await setup.getByRole("button",{name:"Disconnect example-user",exact:true}).click();
+  await expect(setup.getByLabel("Allow pushing to this repository")).not.toBeChecked();
+  await setup.getByRole("button",{name:"Connect this repository",exact:true}).click();
+  await expect(setup.getByRole("status")).toContainText("Repository-only access verified");
+  expect(await page.evaluate(()=>(window as any).__MACHINE_GITHUB_LOGOUT__)).toBe("example-user");
+  expect((await page.evaluate(()=>(window as any).__MACHINE_REPOSITORY_CONNECT__)).allowPush).toBe(false);
+  expect(await page.evaluate(()=>(window as any).__MACHINE_SETUP_ACTIONS__)).toBeUndefined();
+  await page.screenshot({path:"artifacts/design-feedback/repository-only-access-dark.png",fullPage:true});
+});
+
+test("repository-only setup fits the popup before and after personal-login cleanup",async({page})=>{
+  const setup=await projectSetup(page,"needsGhLogin=1&personalGithub=1",true);
+  await setup.getByRole("button",{name:"GitHub",exact:true}).click();
+  const dialog=page.getByRole("dialog");
+  await expect(setup.getByRole("button",{name:"Disconnect example-user",exact:true})).toBeVisible();
+  expect(await dialog.evaluate(el=>el.scrollHeight<=el.clientHeight+1)).toBe(true);
+  await setup.getByRole("button",{name:"Disconnect example-user",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Connect this repository",exact:true})).toBeVisible();
+  expect(await dialog.evaluate(el=>el.scrollHeight<=el.clientHeight+1)).toBe(true);
+  const frame=(await dialog.boundingBox())!;
+  const footer=(await setup.locator(".klide-machine-setup-footer").boundingBox())!;
+  expect(footer.y+footer.height).toBeLessThan(frame.y+frame.height);
+});
+
+test("an older running backend cannot fall back to personal GitHub sign-in",async({page})=>{
+  const setup=await projectSetup(page,"oldBackend=1");
+  await setup.getByRole("button",{name:"Clone project here",exact:true}).click();
+  await expect(setup.getByRole("status")).toContainText("Restart Klide");
+  expect(await page.evaluate(()=>(window as any).__MACHINE_SETUP_ACTIONS__)).toBeUndefined();
+  await setup.getByRole("button",{name:"GitHub",exact:true}).click();
+  await expect(setup.getByText("Restart Klide to load repository-only setup.",{exact:false})).toBeVisible();
+  await expect(setup.getByRole("button",{name:"Sign in to GitHub",exact:true})).toHaveCount(0);
+});

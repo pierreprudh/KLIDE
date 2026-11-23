@@ -187,7 +187,7 @@ pub fn ping_remote_main(host: &str, binary: &str, data_dir: &str) -> i32 {
     let transport = crate::pty_transport::Ssh { host, binary, data_dir, os: if binary.ends_with(".exe") { crate::remote_platform::HostOs::Windows } else { crate::remote_platform::HostOs::Linux } };
     match crate::pty_client::request_on(&transport, &Request::Ping) {
         Ok(Response::Pong { version, protocol, build, pid }) => {
-            if version != env!("CARGO_PKG_VERSION") || protocol != crate::pty_wire::PROTOCOL_VERSION {
+            if !crate::pty_wire::remote_host_compatible(&version, protocol) {
                 eprintln!("Remote host v{version}, protocol {protocol} is incompatible with this client (v{}, protocol {})",
                     env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION);
                 return 1;

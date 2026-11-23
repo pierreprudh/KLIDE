@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { setupPrompt, setupSignIn } from "./machineSetupPrompts";
+import { plainSetupOutput, setupPrompt, setupSignIn } from "./machineSetupPrompts";
 
 describe("graphical machine setup prompts", () => {
+  it("recognizes GitHub's confirmation with terminal cursor-save controls", () => {
+    const question = "? Authenticate Git with your GitHub credentials? (Y/n) ";
+    const output = `! Read more at https://gh.io/gh-expiring-tokens\r\n${question}\x1b7`;
+    expect(setupPrompt(output)).toEqual({ kind: "confirm", message: question.trim() });
+    expect(plainSetupOutput(output)).toBe(`! Read more at https://gh.io/gh-expiring-tokens\n${question}`);
+    expect(setupPrompt(`${output}\x1b[?25l`)).toEqual({ kind: "confirm", message: question.trim() });
+    // A subsequent cursor update must not hide the still-active question.
+    expect(setupPrompt(`${output}\x1b8`)).toEqual({ kind: "confirm", message: question.trim() });
+    // Keep the current-line rule: completed prompts must not reappear.
+    expect(setupPrompt(`${output}\r\nWaiting for authorization…\r\n`)).toBeNull();
+  });
   it("recognizes split and styled password prompts without matching earlier log lines", () => {
     expect(setupPrompt("mini-user@host's pass")).toBeNull();
     expect(setupPrompt("\x1b[32mmini-user@host's password: \x1b[0m")).toEqual({ kind: "password" });
@@ -30,5 +41,14 @@ describe("graphical machine setup prompts", () => {
     expect(setupSignIn("First copy your one-time code: ABCD-1234\nhttps://github.com/login/device\n", "gitHub")).toEqual({ url: "https://github.com/login/device", deviceCode: "ABCD-1234" });
     for (const url of ["javascript:alert(1)", "http://github.com/login/device", "https://github.com.evil.test/login", "https://user:secret@github.com/login"]) expect(setupSignIn(`${url}\n`, "gitHub").url).toBeNull();
     expect(setupSignIn("https://claude.ai/oauth/authorize", "prepare").url).toBeNull();
+  });
+  it("shows current GitHub device codes with either CLI format, even before the URL arrives", () => {
+    for (const output of ["! First copy your one-time code: ABCD-1234\n", "! One-time code (ABCD-1234) copied to clipboard\n"]) {
+      expect(setupSignIn(output, "gitHub")).toEqual({ url: null, deviceCode: "ABCD-1234" });
+      expect(setupSignIn(`${output}Press Enter to open https://github.com/login/device in your browser... `, "gitHub")).toEqual({ url: "https://github.com/login/device", deviceCode: "ABCD-1234" });
+    }
+    expect(setupSignIn("One-time code: AAAA-1111\nOne-time code (BBBB-2222) copied to clipboard\n", "gitHub").deviceCode).toBe("BBBB-2222");
+    expect(setupSignIn("One-time code (ABCD-12", "gitHub").deviceCode).toBeNull();
+    expect(setupSignIn("One-time code: ABCD-1234\n", "prepare").deviceCode).toBeNull();
   });
 });

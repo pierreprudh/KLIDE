@@ -145,7 +145,7 @@ import { ConnectorsMenu } from "./lazySurfaces";
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MachineIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
+import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateLoginModal, DelegateTerminalSurface, DesignMode, RemoteRunChanges } from "./lazySurfaces";
 import { promoteDesignOpener, registerDesignOpener } from "../designNavigation";
@@ -5858,17 +5858,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
           </div>
         </div>
-        {nativeRemoteMachine && <RemoteRunChanges key={currentId} runId={currentId} />}
         <div className="klide-ai-conversation-status">
-          {remoteMachine && (
-            <span
-              className="klide-ai-machine-label"
-              title={remoteConnectionError ?? `Runs on ${remoteMachine} — keeps going when this Mac sleeps. Reopening this conversation reattaches.`}
-            >
-              <MachineIcon size={12} />
-              {remoteMachine}{remoteConnectionError ? " · Reconnecting…" : ""}
-            </span>
-          )}
           {worktreeName ? (
             <div
               className="klide-ai-worktree-label"
@@ -5943,6 +5933,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               {acceptingChanges ? "Accepting…" : "Accept modification"}
             </button>
           )}
+          {remoteMachine && <RemoteRunChanges key={currentId} machineId={remoteMachine} runId={nativeRemoteMachine ? currentId : undefined} connectionError={remoteConnectionError} />}
           {/* Recorded participants and direct CLI invocation evidence. */}
           <AgentActivity
             msgs={msgs}

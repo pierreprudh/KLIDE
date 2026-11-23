@@ -101,7 +101,50 @@
 .klide-machine-session-tools { display: flex; justify-content: flex-end; }
 .klide-machine-log { flex: 1; height: 0; min-height: 100px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; margin: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--fg-subtle); font: 11px/1.5 var(--font-mono); }
 .klide-machine-fingerprint { font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere; }
-.klide-machine-browser-signin { display: grid; justify-items: start; gap: 8px; }
+.klide-machine-browser-signin { display: grid; justify-items: start; gap: 16px; min-width: 0; width: 100%; }
+.klide-remote-folders { display: grid; gap: 10px; min-width: 0; }
+.klide-remote-folder-address { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.klide-remote-folder-address input { flex: 1; width: 0; min-width: 0; font-size: 11px; }
+.klide-remote-folder-address .klide-button { padding-inline: 9px; }
+.klide-remote-folder-list { height: 140px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; padding: 5px; }
+.klide-remote-folder-list button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px; border: 0; background: transparent; color: var(--fg); text-align: left; border-radius: 7px; cursor: pointer; font: inherit; font-size: 12px; }
+.klide-remote-folder-list button:hover { background: var(--bg-hover); }
+.klide-remote-folder-list button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.klide-remote-folder-list p { padding: 8px; }
+.klide-remote-folder-create { display: flex; gap: 8px; min-width: 0; }
+.klide-remote-folder-create input { flex: 1; min-width: 0; width: 0; }
+.klide-remote-folders :is(button, input):focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.klide-repository-access { display: grid; gap: 10px; min-width: 0; }
+.klide-repository-access p { margin: 0; font-size: 12px; line-height: 1.6; }
+.klide-repository-account-warning { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+.klide-repository-push { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.klide-repository-author { overflow-wrap: anywhere; }
+.klide-machine-code { display: block; position: relative; width: 100%; max-width: 344px; min-width: 0; margin-block: 4px; color: var(--fg); }
+.klide-machine-code-readable { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.klide-machine-code-tiles { display: flex; align-items: center; gap: 5px; font: 500 22px/1 var(--font-mono); user-select: text; }
+.klide-machine-code-character { display: grid; place-items: center; flex: 1 1 0; min-width: 0; height: 46px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); box-sizing: border-box; }
+.klide-machine-code-separator { flex: 0 0 8px; text-align: center; color: var(--fg-subtle); font-size: 16px; }
+.klide-machine-code-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.klide-machine-code-actions > .klide-button:last-child:not(:first-child) { background: var(--control-primary-bg); border-color: var(--control-primary-bg); color: var(--control-primary-fg); }
+.klide-machine-code-actions > .klide-button:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+.klide-machine-session[data-signin="true"] > .klide-machine-log { flex: 1 1 100px; min-height: 70px; max-height: 160px; }
+.klide-machine-session[data-signin="true"] > .klide-machine-session-card { flex-shrink: 0; }
+.klide-machine-signin-panel { gap: 0; align-content: start; --slide-offset: 0 6px; animation: klide-signin-fade 210ms ease-out both, klide-signin-slide 400ms ease-out both; transition: border-color 400ms ease, border-radius 400ms ease, background 400ms ease; }
+.klide-machine-signin-content, .klide-machine-signin-verified { grid-area: 1 / 1; }
+.klide-machine-signin-content { display: grid; gap: 10px; min-height: 0; max-height: 240px; overflow: hidden; opacity: 1; transform: scale(1); transition: max-height 400ms ease, opacity 160ms ease, transform 400ms ease; }
+.klide-machine-signin-verified { display: flex; align-items: center; gap: 12px; min-height: 52px; visibility: hidden; opacity: 0; transform: translateY(5px) scale(.98); pointer-events: none; transition: opacity 210ms ease 100ms, transform 400ms ease, visibility 0s linear 400ms; }
+.klide-machine-signin-check { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border-radius: 50%; color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.klide-machine-signin-verified > span:last-child { display: grid; gap: 5px; }
+.klide-machine-signin-verified strong { font-size: 14px; font-weight: 500; color: var(--fg); }
+.klide-machine-signin-verified > span > span { font-size: 12px; line-height: 1.5; color: var(--fg-subtle); }
+.klide-machine-signin-panel[data-state="verified"] { border-color: color-mix(in srgb, var(--success) 30%, var(--border)); border-radius: 18px; }
+.klide-machine-signin-panel[data-state="verified"] .klide-machine-signin-content { max-height: 52px; opacity: 0; transform: scale(.96); pointer-events: none; }
+.klide-machine-signin-panel[data-state="verified"] .klide-machine-signin-verified { visibility: visible; opacity: 1; transform: none; transition-delay: 100ms, 0s, 0s; }
+@keyframes klide-signin-fade { from { filter: blur(3px); opacity: 0; } to { filter: blur(0); opacity: 1; } }
+@keyframes klide-signin-slide { from { translate: var(--slide-offset); } to { translate: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .klide-machine-signin-panel, .klide-machine-signin-content, .klide-machine-signin-verified { animation: none; transition: none; transform: none; }
+}
 .klide-add-machine-dialog .klide-machine-session { margin: 0; }
 .klide-add-machine-dialog .klide-machine-session[data-details="true"] { min-height: 150px; }
 .klide-machine-dialog-footer > :first-child { margin-right: auto; }

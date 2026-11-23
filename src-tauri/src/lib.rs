@@ -63,6 +63,8 @@ mod remote_platform;
 #[cfg(windows)]
 mod windows_detach;
 mod machine_setup;
+mod machine_files;
+mod machine_repository;
 mod machine_discovery;
 mod pty_transport;
 mod pty_frame;
@@ -1397,6 +1399,13 @@ pub fn run() {
             machine_install::machine_prepare_host,
             machine_setup::machine_setup_spawn,
             machine_setup::machine_setup_close,
+            machine_files::machine_remote_directories,
+            machine_files::machine_remote_create_directory,
+            machine_repository::machine_repository_context,
+            machine_repository::machine_repository_connect,
+            machine_repository::machine_repository_configure,
+            machine_repository::machine_github_accounts,
+            machine_repository::machine_github_logout,
             agent::remote_machine::machine_run_changes,
             custom_cli_upsert,
             custom_cli_remove,

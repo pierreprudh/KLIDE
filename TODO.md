@@ -57,6 +57,13 @@ must pass before merge; physical-machine acceptance remains separate.
   verify active-upgrade refusal and host sleep/reboot behavior. Real Linux
   `klide-box` acceptance remains open too.
 - [ ] Add native Windows ARM64 and Linux ARM64 helper builds after acceptance.
+- [x] Accept repository-only access on the shared Mac mini: disconnect the
+  earlier personal login, reuse the read-only repo key, clone into a named
+  project folder, verify repo-local identity and unchanged global config,
+  and complete a real remote conversation in its isolated worktree.
+- [ ] Accept the folder browser's explicit New folder action on physical
+  machines and repeat repository-only setup on Linux and Windows. Native
+  tests cover isolation/key generation; browser fixtures cover setup.
 
 ## Conductor follow-up — product and business line, 2026-11-05
 

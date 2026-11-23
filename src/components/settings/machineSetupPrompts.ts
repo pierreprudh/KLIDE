@@ -3,7 +3,9 @@ import type { MachineSetupAction } from "../../ipc/machines";
 export type SetupPrompt = { kind: "password" | "passphrase" | "code" | "interactive" } | { kind: "trust"; fingerprint: string | null } | { kind: "confirm"; message: string } | { kind: "enter" };
 
 export function plainSetupOutput(output: string): string {
-  return output.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
+  // gh's prompts use DEC save/restore cursor (ESC 7/8), not CSI sequences.
+  // Leaving these after (Y/n) hides the question from the form parser.
+  return output.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b[78]/g, "").replace(/\r/g, "");
 }
 
 /** Interpret prompts only at the current input line, never old log messages. */
@@ -26,14 +28,18 @@ export function setupPrompt(output: string): SetupPrompt | null {
 export function setupSignIn(output: string, action: MachineSetupAction): { url: string | null; deviceCode: string | null } {
   if (action !== "signIn" && action !== "gitHub") return { url: null, deviceCode: null };
   const text = plainSetupOutput(output);
+  // gh prints either "First copy your one-time code: XXXX-XXXX" or
+  // "One-time code (XXXX-XXXX) copied to clipboard". It can precede the URL.
+  const codes = [...text.matchAll(/(?:one[- ]time|device|verification)\s+code\s*(?::\s*|\(\s*|\s+)([A-Z\d]{4}-[A-Z\d]{4})\b/gi)];
+  const deviceCode = codes[codes.length - 1]?.[1] ?? null;
   for (const match of text.matchAll(/https:\/\/[^\s<>"'\x00-\x1f]+(?=[\s<>"'\x00-\x1f])/g)) {
     try {
       const url = new URL(match[0].replace(/[),.;]+$/, ""));
       const domains = action === "gitHub" ? ["github.com"] : ["claude.ai", "claude.com", "anthropic.com"];
       if (url.username || url.password || !domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) continue;
       if (!/(?:^|\/)(?:oauth|login|auth|authorize)(?:\/|$)/i.test(url.pathname)) continue;
-      return { url: url.href, deviceCode: text.match(/(?:one[- ]time|device|verification)\s+code[:\s]+([A-Z\d]{4}-[A-Z\d]{4})\b/i)?.[1] ?? null };
+      return { url: url.href, deviceCode };
     } catch { /* Incomplete URL while a PTY chunk is arriving. */ }
   }
-  return { url: null, deviceCode: null };
+  return { url: null, deviceCode };
 }
