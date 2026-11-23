@@ -739,8 +739,11 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   limit, `review-override` label. Done when three real PRs carry a review.
 - [ ] S0 — after a week of reviews that hold up: branch protection requires
   `review` on `main`.
+- [x] S0.5 — `@klide-bot` in a PR/issue comment gets a read-only OpenCode
+  answer (`klide-bot.yml`); inert until `OPENROUTER_API_KEY` + a model are set.
 - [ ] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
-  Issues, Statuses: write) and add `KLIDE_BOT_APP_ID` / `KLIDE_BOT_PRIVATE_KEY`.
+  Issues, Statuses: write) and add variable `KLIDE_BOT_APP_ID` / secret
+  `KLIDE_BOT_PRIVATE_KEY`.
 - [ ] S1 — workflows mint an App token and act as `klide-bot[bot]`, so its
   pushes trigger CI and the reviewer.
 - [ ] S2 — `/fix`, `/fix <instruction>`, `/fix model=…`: OpenCode on
