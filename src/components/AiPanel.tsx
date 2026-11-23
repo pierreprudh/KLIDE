@@ -187,6 +187,8 @@ import { extractPdfText } from "../ipc/pdf";
 import { AttachmentCard, AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
+import { CiFailureCard } from "./ai/CiFailureCard";
+import { parseCiWatchPrompt } from "../agent/ciWatchPrompt";
 import { parseConfigUsage } from "./ai/cliConfig";
 import { SlashMenu } from "./ai/SlashMenu";
 import { MentionMenu } from "./ai/MentionMenu";
@@ -4628,6 +4630,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               (a) => !a.dataUri && a.mime?.startsWith("image/"),
             );
             const hasText = m.content.trim().length > 0;
+            const ciPrompt = i === 0 ? parseCiWatchPrompt(m.content) : null;
             // The mark belongs to the message, not to the top of the turn. It
             // rides beside the bubble — or beside the attachment strip when a
             // turn carries no text — the way the response mark rides beside an
@@ -4724,7 +4727,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                     {hasText ? imagesBlock : null}
                     {hasText ? omittedBlock : null}
                     {hasText ? docsBlock : null}
-                    {hasText ? (
+                    {hasText && ciPrompt ? (
+                      // A CI watch firing's opening message: the facts as a
+                      // card; the instructions and log are for the model.
+                      beside(<div style={{ flex: 1, minWidth: 0 }}><CiFailureCard ci={ciPrompt} workspaceRoot={workspaceRoot} runId={currentId} /></div>)
+                    ) : hasText ? (
                       beside(
                         <div
                           style={{ minWidth: 0, background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 14, lineHeight: 1.58, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>

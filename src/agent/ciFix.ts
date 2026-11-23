@@ -8,6 +8,7 @@
 
 import type { AgentAttachment, AgentEvent } from "./types";
 import type { CiFixWorkspace, CiWatchFired } from "../ipc/ciWatch";
+import { parseCiWatchPrompt } from "./ciWatchPrompt";
 
 /** The last thing the read-only Run said: its diagnosis. */
 export function ciDiagnosis(events: AgentEvent[]): string {
@@ -37,8 +38,7 @@ export function ciVerdict(diagnosis: string): string {
 export function ciLog(events: AgentEvent[]): string {
   const first = events.find(e => e.type === "user_message");
   if (!first || first.type !== "user_message") return "";
-  const m = /<(ci-log-[0-9a-f]+)>\n([\s\S]*?)\n<\/\1>/.exec(first.text);
-  return m ? m[2].trim() : "";
+  return parseCiWatchPrompt(first.text)?.log ?? "";
 }
 
 export function ciFixTurn(f: CiWatchFired, diagnosis: string, ws: CiFixWorkspace, log = ""): { text: string; attachment: AgentAttachment } {

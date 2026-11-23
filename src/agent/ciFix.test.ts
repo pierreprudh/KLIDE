@@ -30,7 +30,8 @@ it("never offers a push to a fork's branch", () => {
 });
 
 it("carries the CI log the watch already fetched", () => {
-  const first = { type: "user_message", text: "CI failed…\n<ci-log-18f>\n##[error] expected 3, got 2\n</ci-log-18f>" } as unknown as AgentEvent;
+  const text = "CI failed on my pull request #7 \"t\" (https://github.com/o/r/pull/7), commit abc1234.\n\nFailing checks:\n- test https://x/1\n\n<ci-log-18f>\n##[error] expected 3, got 2\n</ci-log-18f>";
+  const first = { type: "user_message", text } as unknown as AgentEvent;
   expect(ciLog([first])).toBe("##[error] expected 3, got 2");
   expect(ciFixTurn(fired, "", ws, ciLog([first])).attachment.content).toContain("<ci-log>\n##[error] expected 3, got 2\n</ci-log>");
 });
