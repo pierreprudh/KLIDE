@@ -5561,15 +5561,6 @@ button:focus-visible .menu-leadout {
   white-space: nowrap;
 }
 
-/* Waiting on you, in words and in the waiting tone. */
-.klide-rail-folder-detail[data-waiting="true"] {
-  color: var(--warning);
-}
-
-.klide-rail-folder-detail > svg {
-  vertical-align: -1px;
-}
-
 /* Open / Clone as quiet text rows under a fine divider, aligned with the
    project names — not pills, no icons. */
 .klide-rail-folder-actions {

@@ -391,15 +391,12 @@ const FOLDER_MENU_LIMIT = 8;
 function FolderCard({
   root,
   folders,
-  waitingByFolder,
   onSwitch,
   onOpenFolder,
   onCloneRepo,
 }: {
   root: string | null;
   folders: readonly string[];
-  /** folder → how many of its conversations wait on you. */
-  waitingByFolder: ReadonlyMap<string, number>;
   onSwitch: (root: string) => void;
   onOpenFolder?: () => void;
   onCloneRepo?: (url: string) => Promise<void> | void;
@@ -518,7 +515,6 @@ function FolderCard({
           <div className="klide-rail-folder-list">
           {folders.slice(0, FOLDER_MENU_LIMIT).map((folder) => {
             const here = folder === root;
-            const waiting = waitingByFolder.get(folder) ?? 0;
             return (
               <button
                 key={folder}
@@ -533,13 +529,7 @@ function FolderCard({
               >
                 <span className="klide-rail-folder-text">
                   <span className="klide-rail-folder-row-name">{basename(folder)}</span>
-                  {waiting > 0 ? (
-                    <span className="klide-rail-folder-detail" data-waiting="true">
-                      <NeedsYouIcon size={11} /> {waiting} {waiting === 1 ? "needs" : "need"} you
-                    </span>
-                  ) : (
-                    <span className="klide-rail-folder-detail">{shortPath(folder)}</span>
-                  )}
+                  <span className="klide-rail-folder-detail">{shortPath(folder)}</span>
                 </span>
               </button>
             );
@@ -1319,15 +1309,6 @@ export function WorkspaceRail({
     return byId;
   }, [convos, railProjects]);
 
-  const waitingByFolder = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const id of needsYouIds) {
-      const folder = folderById.get(id);
-      if (folder) counts.set(folder, (counts.get(folder) ?? 0) + 1);
-    }
-    return counts;
-  }, [needsYouIds, folderById]);
-
   const sections = useMemo(
     () => railConversationSections(
       convos,
@@ -1602,7 +1583,6 @@ export function WorkspaceRail({
           <FolderCard
             root={activeProjectRoot}
             folders={railProjects}
-            waitingByFolder={waitingByFolder}
             onSwitch={(root) => {
               onNavigateAway?.();
               onSwitchProject(root);
