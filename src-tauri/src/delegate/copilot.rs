@@ -108,10 +108,16 @@ impl Delegate for Copilot {
     /// for this session only; the user's own servers stay as they are.
     fn mcp_wiring(&self, spec: &McpServerSpec) -> Option<McpWiring> {
         let path = format!("{}/{}.copilot-mcp.json", spec.config_dir, spec.file_stem);
-        let content = serde_json::json!({ "mcpServers": { MCP_SERVER: {
+        let mut content = serde_json::json!({ "mcpServers": { MCP_SERVER: {
             "type": "local", "command": spec.command, "args": spec.args,
             "env": spec.env_json(), "tools": ["*"],
         }}});
+        if let Some(args) = spec.connectors_args() {
+            content["mcpServers"][crate::connector_relay::SERVER_NAME] = serde_json::json!({
+                "type": "local", "command": spec.command, "args": args,
+                "env": spec.env_json(), "tools": ["*"],
+            });
+        }
         Some(McpWiring {
             args: vec!["--additional-mcp-config".into(), format!("@{path}")],
             files: vec![(path, content.to_string())],
@@ -557,6 +563,7 @@ mod tests {
                 secret_path: "/tmp/secret-file".into(),
                 config_dir: "/tmp/cfg".into(),
                 file_stem: "c-copilot".into(),
+                connectors: false,
             })
             .unwrap();
         assert_eq!(wiring.args, ["--additional-mcp-config", "@/tmp/cfg/c-copilot.copilot-mcp.json"]);

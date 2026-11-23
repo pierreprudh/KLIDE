@@ -187,6 +187,14 @@ pub enum BridgeRequest {
         #[serde(default)]
         tool_use_id: Option<String>,
     },
+    /// `klide mcp connectors`: the tools of the connectors switched on in
+    /// Klide (`connector_relay.rs`), and one call to one of them.
+    ConnectorList,
+    ConnectorCall {
+        name: String,
+        #[serde(default)]
+        arguments: serde_json::Value,
+    },
 }
 
 /// The bridge's answer: one JSON value, or one readable error line.
@@ -379,6 +387,14 @@ fn execute_inner(
         BridgeRequest::Orchestrate { request } => {
             return hooks.orchestrate.as_ref()
                 .ok_or("Mission orchestration is unavailable in this host.")?(session, request);
+        }
+        // The app's own pool answers, with the credentials it already holds;
+        // nothing about a connector crosses to the CLI but tools and results.
+        BridgeRequest::ConnectorList => {
+            return Ok(serde_json::json!({ "tools": crate::connector_relay::list(root) }));
+        }
+        BridgeRequest::ConnectorCall { name, arguments } => {
+            return crate::connector_relay::call(root, &name, arguments);
         }
         BridgeRequest::Permission { tool_name, input, tool_use_id } => {
             let ask = crate::agent::permission_relay::DelegatePermissionAsk { tool_name, input, tool_use_id };

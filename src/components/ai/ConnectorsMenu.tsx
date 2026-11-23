@@ -258,7 +258,7 @@ export function ConnectorsMenu({ onNavigate }: { onNavigate: () => void }) {
         aria-expanded={none ? undefined : open}
         className="klide-menu-connectors-row"
         data-open={open || undefined}
-        title={none ? "Connect Linear, Notion, GitHub and other MCP servers" : "The services the assistant can reach in Plan and Work"}
+        title={none ? "Connect Linear, Notion, GitHub and other MCP servers" : "The services the assistant can reach — Kit in Plan and Work, and agent apps like Claude Code"}
         onClick={(e) => (none ? manage() : open ? setOpen(false) : enterCard(e.detail === 0))}
         onMouseEnter={() => { if (!none) later(open ? 0 : HOVER_DELAY, () => setOpen(true)); }}
         onMouseLeave={() => { if (open) later(LEAVE_DELAY, () => setOpen(false)); else clearTimer(); }}
