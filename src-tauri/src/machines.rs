@@ -260,6 +260,7 @@ pub struct SetupFacts {
     pub host: String,
     pub claude: String,
     pub github: String,
+    pub github_scope: String,
     pub project: String,
 }
 
@@ -322,7 +323,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         facts: Vec::new(),
         target: None,
         checkout: checkout.clone(),
-        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), github: "unknown".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
+        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), github: "unknown".into(), github_scope: "repository".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
     // Re-validate at the point of use: the store is plain JSON, and a host
     // starting with `-` would be read as an ssh option (e.g. ProxyCommand).
@@ -334,9 +335,11 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     let target = crate::machine_install::detect_target(&machine.ssh_host);
     status.target = target.as_ref().ok().copied();
     let output = target.as_ref().map_err(Clone::clone).and_then(|target| {
-        let script = if target.os == crate::remote_platform::HostOs::Windows {
-            crate::remote_platform::powershell(&windows_probe(checkout.as_deref()))
+        let mut body = if target.os == crate::remote_platform::HostOs::Windows {
+            windows_probe(checkout.as_deref()).trim_end_matches("; exit 0").to_string()
         } else { probe_script(checkout.as_deref()) };
+        if let Some(root) = workspace_root { body.push_str(&crate::machine_repository::access_probe(root, target.os)); }
+        let script = if target.os == crate::remote_platform::HostOs::Windows { crate::remote_platform::powershell(&format!("{body}; exit 0")) } else { body };
         crate::machine_install::ssh(&machine.ssh_host, &script)
     });
     let elapsed = started.elapsed();
@@ -360,13 +363,15 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     status.facts.push(fact("Reached", format!("in {} ms", elapsed_ms(elapsed)), "ok", None));
 
     let mut problems: Vec<&str> = Vec::new();
-    let expected = format!("{} {} {}", env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION, env!("KLIDE_SOURCE_COMMIT"));
-    status.setup.host = match got("host") { Some(version) if version == expected => "ready", Some(_) => "outdated", None => "missing" }.into();
+    status.setup.host = match got("host") { Some(version) if crate::pty_wire::remote_host_identity_compatible(version) => "ready", Some(_) => "outdated", None => "missing" }.into();
     status.setup.claude = match (got("claude"), got("login")) { (Some(_), Some("true")) => "ready", (Some(_), _) => "needsLogin", _ => "missing" }.into();
     status.setup.github = match (got("ghVersion"), got("gh")) { (_, Some(_)) => "ready", (Some(_), _) => "needsLogin", _ => "missing" }.into();
+    if status.setup.github_scope == "repository" {
+        status.setup.github = if got("repositoryAccess") == Some("ready") { "ready" } else { "needsLogin" }.into();
+    }
     if checkout.is_some() { status.setup.project = if got("checkout") == Some("yes") { "ready" } else { "missing" }.into(); }
     match got("host") {
-        Some(version) if version == expected => status.facts.push(fact("Run host", "Installed · matches this app", "ok", None)),
+        Some(version) if crate::pty_wire::remote_host_identity_compatible(version) => status.facts.push(fact("Run host", "Installed · compatible with this app", "ok", None)),
         Some(version) => {
             problems.push("Run host needs updating in Settings → Machines");
             status.facts.push(fact("Run host", format!("{version} · update required"), "warn", None));
@@ -387,10 +392,13 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
             status.facts.push(fact("Claude Code", format!("{v} · not logged in"), "warn", Some(format!("ssh -t {} claude", machine.ssh_host))));
         }
     }
-    match got("gh") {
+    if status.setup.github_scope == "repository" {
+        status.facts.push(fact("GitHub", if got("repositoryAccess") == Some("ready") { "Repository-only key · access previously verified" } else { "Connect access for this repository only" }, "quiet", None));
+        if got("gh").is_some() { status.facts.push(fact("Personal GitHub login", "An account is still signed in on this shared remote OS account. Disconnect it in repository access.", "warn", None)); }
+    } else { match got("gh") {
         Some(account) => status.facts.push(fact("GitHub", format!("gh · {account}"), "ok", None)),
         None => status.facts.push(fact("GitHub", got("ghVersion").map(|version| format!("{version} · not signed in")).unwrap_or_else(|| "GitHub CLI not installed".into()), "quiet", Some(format!("ssh -t {} 'gh auth login && gh auth setup-git'", machine.ssh_host)))),
-    }
+    } }
     if let Some(path) = checkout.as_deref() {
         if got("checkout") == Some("yes") {
             let branch = got("branch").unwrap_or("detached");

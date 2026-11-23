@@ -145,7 +145,7 @@ import { ConnectorsMenu } from "./lazySurfaces";
 import { formatClock, formatDayStamp } from "../time";
 import { stampBefore } from "./ai/turnStamps";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MachineIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
+import { AttachIcon, CloseIcon, CompactIcon, CopyIcon, ExpandIcon, MemoryIcon, MissionWorkflowIcon, SparkleIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateLoginModal, DelegateTerminalSurface, DesignMode, RemoteRunChanges } from "./lazySurfaces";
 import { promoteDesignOpener, registerDesignOpener } from "../designNavigation";
@@ -187,6 +187,8 @@ import { extractPdfText } from "../ipc/pdf";
 import { AttachmentCard, AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
+import { CiFailureCard } from "./ai/CiFailureCard";
+import { parseCiWatchPrompt } from "../agent/ciWatchPrompt";
 import { parseConfigUsage } from "./ai/cliConfig";
 import { SlashMenu } from "./ai/SlashMenu";
 import { MentionMenu } from "./ai/MentionMenu";
@@ -4187,7 +4189,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         title={isLocalProvider ? (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · not reachable`) : isDelegateProvider(provider) ? (connected ? `${providerName(provider)} · CLI available` : `${providerName(provider)} · check CLI install/auth`) : (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · check API key`)}
         aria-label={`Provider: ${providerName(provider)}`}
         aria-haspopup="menu" aria-expanded={providerOpen}
-        style={{ display: "flex", alignItems: "center", gap: 7, maxWidth: 200, height: 24, padding: "0 6px", borderRadius: "var(--radius-sm)", background: providerOpen ? "var(--bg-hover)" : "transparent", color: providerOpen ? "var(--fg-strong)" : "var(--fg-subtle)", cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
+        style={{ display: "flex", alignItems: "center", gap: 7, maxWidth: 200, height: 26, padding: "0 9px 0 8px", borderRadius: 12, border: "1px solid transparent", background: providerOpen ? "var(--bg-hover)" : "transparent", color: providerOpen ? "var(--fg-strong)" : "var(--fg-subtle)", cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
         onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
         onMouseLeave={(e) => { if (!providerOpen) { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; } }}>
         <ProviderLogo id={provider} size={14} />
@@ -4628,6 +4630,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               (a) => !a.dataUri && a.mime?.startsWith("image/"),
             );
             const hasText = m.content.trim().length > 0;
+            const ciPrompt = i === 0 ? parseCiWatchPrompt(m.content) : null;
             // The mark belongs to the message, not to the top of the turn. It
             // rides beside the bubble — or beside the attachment strip when a
             // turn carries no text — the way the response mark rides beside an
@@ -4724,7 +4727,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                     {hasText ? imagesBlock : null}
                     {hasText ? omittedBlock : null}
                     {hasText ? docsBlock : null}
-                    {hasText ? (
+                    {hasText && ciPrompt ? (
+                      // A CI watch firing's opening message: the facts as a
+                      // card; the instructions and log are for the model.
+                      beside(<div style={{ flex: 1, minWidth: 0 }}><CiFailureCard ci={ciPrompt} workspaceRoot={workspaceRoot} runId={currentId} /></div>)
+                    ) : hasText ? (
                       beside(
                         <div
                           style={{ minWidth: 0, background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 14, lineHeight: 1.58, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>
@@ -5858,17 +5865,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
           </div>
         </div>
-        {nativeRemoteMachine && <RemoteRunChanges key={currentId} runId={currentId} />}
         <div className="klide-ai-conversation-status">
-          {remoteMachine && (
-            <span
-              className="klide-ai-machine-label"
-              title={remoteConnectionError ?? `Runs on ${remoteMachine} — keeps going when this Mac sleeps. Reopening this conversation reattaches.`}
-            >
-              <MachineIcon size={12} />
-              {remoteMachine}{remoteConnectionError ? " · Reconnecting…" : ""}
-            </span>
-          )}
           {worktreeName ? (
             <div
               className="klide-ai-worktree-label"
@@ -5943,6 +5940,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               {acceptingChanges ? "Accepting…" : "Accept modification"}
             </button>
           )}
+          {remoteMachine && <RemoteRunChanges key={currentId} machineId={remoteMachine} runId={nativeRemoteMachine ? currentId : undefined} connectionError={remoteConnectionError} />}
           {/* Recorded participants and direct CLI invocation evidence. */}
           <AgentActivity
             msgs={msgs}

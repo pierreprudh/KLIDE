@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.7.1 (2026-11-21) — Vibe, Connectors, Watch CI
+
+- **Vibe, Mistral's CLI, is the tenth Delegate.** Start a Vibe conversation in Focus or the workbench on your Mistral subscription (or an API key Klide stores where the CLI reads it, in the keychain). Its sessions appear in Mission Control from `$VIBE_HOME`'s session store, each message once, with the right running/done state and per-call token totals; Settings shows sign-in, the plan, saved accounts, the CLI's version and this week's tokens; models and context windows come from Vibe's own catalogue. Standalone Vibe chats run in the background host and survive quitting Klide. A headless Vibe turn edits inside the project without a Klide review card, like Codex and OpenCode; Vibe itself asks before touching anything outside the folder.
+- **Connectors.** Settings › Connectors is a grid of popular MCP servers with their marks, a filter, and the servers you can import from other tools. Remote servers sign in with OAuth (discovery, dynamic registration, PKCE over a loopback redirect, tokens in the Keychain with refresh — `connectors.json` never holds one). The composer's **+** menu switches connectors on and off for the conversation.
+- **Watch CI.** Mission Control › Scheduled can watch your open pull requests: a check that fails after the switch is on starts one read-only Run per commit with the failing log excerpt, and a notification (in the app on any screen, and from macOS). **Fix it** checks the failing commit out in its own worktree and starts a Work conversation there to make the smallest fix, run the check and push.
+- **Machine setup** asks for SSH usernames, fingerprints, passwords and provider sign-in through guided controls, with live readiness checks and the current step marked.
+- Scheduled rows and Run history are rounded cards with the agent's mark; the Delegate model picker shows the model's mark before its name; OpenRouter wears its new glyph and Grape colour; Focus's home cards cast a softer shadow.
+- The entry bundle is back under its 1 MB guard: the sign-in terminal and the profile menu load after first paint.
+
 ## 0.7.0 (2026-11-18) — Remote Machines, Safety, Workers
 
 - **Remote machines.** Settings › Machines discovers Tailscale peers and SSH aliases before manual setup; Klide installs its host on a Linux, macOS or Windows machine over SSH, and a conversation placed there runs natively — remote worktrees, streamed controls, durable replay, reconnection and remote diff inspection. Claude Code in tmux over SSH remains available.

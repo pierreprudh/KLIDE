@@ -63,6 +63,8 @@ mod remote_platform;
 #[cfg(windows)]
 mod windows_detach;
 mod machine_setup;
+mod machine_files;
+mod machine_repository;
 mod machine_discovery;
 mod pty_transport;
 mod pty_frame;
@@ -1398,6 +1400,13 @@ pub fn run() {
             machine_install::machine_prepare_host,
             machine_setup::machine_setup_spawn,
             machine_setup::machine_setup_close,
+            machine_files::machine_remote_directories,
+            machine_files::machine_remote_create_directory,
+            machine_repository::machine_repository_context,
+            machine_repository::machine_repository_connect,
+            machine_repository::machine_repository_configure,
+            machine_repository::machine_github_accounts,
+            machine_repository::machine_github_logout,
             agent::remote_machine::machine_run_changes,
             custom_cli_upsert,
             custom_cli_remove,
@@ -1666,10 +1675,8 @@ mod blocking_door_tests {
         "accounts_list",
         // lib.rs — hand off to the native menu
         "menu_sync_projects",
-        // missions.rs — Mission writes serialized behind the store's write
-        // gate (ADR-0002); a blocking closure cannot hold that State lock.
-        "mission_create",
-        "mission_save_task",
+        // missions.rs — Mission writes are `async fn` now and take the store's
+        // write gate inside a blocking closure (ADR-0002); nothing left here.
         // pty.rs — a mutex touch on an in-process session, or a spawn whose
         // cost is the fork itself
         "delegate_daemon_status",

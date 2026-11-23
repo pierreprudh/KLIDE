@@ -5355,15 +5355,19 @@ button:focus-visible .menu-leadout {
      theirs. */
   z-index: 3;
   margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .klide-rail-folder {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   height: 36px;
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 10px 0 7px;
+  padding: 0 10px 0 12px;
   border-radius: 12px;
   background: var(--bg-elevated);
   box-shadow: 0 0 0 1px var(--panel-border), var(--panel-shadow);
@@ -5391,41 +5395,30 @@ button:focus-visible .menu-leadout {
   white-space: nowrap;
 }
 
-/* A folder's initial on a soft square — the card's only mark, and the
-   menu's for every other folder. */
-/* The card's leading mark is the app's own logo; folder initials stay in the menu. */
+/* Klide's mark, beside the folder card rather than in it. */
 .klide-rail-app-mark {
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 36px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
 }
 
-.klide-rail-folder-mark {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-  color: var(--fg-strong);
-  font-size: 12px;
-}
-
-.klide-rail-folder-row .klide-rail-folder-mark {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  font-size: 11px;
+/* The menu is the card, grown: one surface that starts at the card's top
+   edge and unfolds downward, with the card's own row riding on top of it.
+   Open, the card drops its own ground and the menu's becomes it. */
+.klide-rail-folder[aria-expanded="true"] {
+  position: relative;
+  z-index: 6;
+  background: transparent;
+  box-shadow: none;
 }
 
 .klide-rail-folder-menu {
   position: absolute;
-  top: calc(100% + 6px);
-  transform-origin: top center;
-  left: 0;
+  top: 0;
+  /* Hangs from the card, not from the Klide mark beside it. */
+  left: 36px;
   right: 0;
   z-index: 5;
   display: grid;
@@ -5433,16 +5426,63 @@ button:focus-visible .menu-leadout {
      past the card it hangs from. */
   grid-template-columns: minmax(0, 1fr);
   gap: 2px;
-  padding: 5px;
-  border-radius: 12px;
-  background: var(--bg-elevated);
+  /* The card's 36px row sits in the top band, a hairline under it. */
+  padding: 42px 6px 6px;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-size: calc(100% - 12px) 1px;
+  background-position: 6px 36px;
+  background-repeat: no-repeat;
+  background-color: var(--bg-elevated);
+  /* No fill: once open, the clip lets go so the menu's shadow shows. */
+  animation: klide-folder-menu-morph 520ms cubic-bezier(0.25, 0.8, 0.25, 1);
+  border-radius: var(--radius-xl);
   box-shadow: 0 0 0 1px var(--panel-border), var(--panel-shadow);
+}
+
+/* Unfolds from the card's own outline: the clip starts as the 36px card and
+   opens to the whole menu on a long, soft ease; the rows follow a beat behind
+   with a short rise. Closing folds it back into the card, quicker. No bounce. */
+@keyframes klide-folder-menu-morph {
+  from { clip-path: inset(0 0 calc(100% - 36px) 0 round var(--radius-xl)); }
+  to   { clip-path: inset(0 0 0 0 round var(--radius-xl)); }
+}
+
+@keyframes klide-folder-menu-fold {
+  from { clip-path: inset(0 0 0 0 round var(--radius-xl)); }
+  to   { clip-path: inset(0 0 calc(100% - 36px) 0 round var(--radius-xl)); }
+}
+
+@keyframes klide-folder-menu-rows-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.klide-rail-folder-menu > * {
+  animation: klide-folder-menu-rows-in 400ms cubic-bezier(0.25, 0.8, 0.25, 1) 120ms both;
+}
+
+.klide-rail-folder-menu[data-closing] {
+  animation: klide-folder-menu-fold 340ms cubic-bezier(0.4, 0, 0.6, 1) both;
+}
+
+.klide-rail-folder-menu[data-closing] > * {
+  animation: klide-folder-menu-rows-out 200ms ease-out both;
+}
+
+@keyframes klide-folder-menu-rows-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-rail-folder-menu,
+  .klide-rail-folder-menu > * { animation: none; }
 }
 
 .klide-rail-folder-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1px;
+  gap: 2px;
   max-height: min(300px, 50vh);
   overflow-y: auto;
 }
@@ -5460,16 +5500,21 @@ button:focus-visible .menu-leadout {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 5px 8px 5px 5px;
-  border-radius: 9px;
+  gap: 10px;
+  padding: 7px 11px;
+  border-radius: var(--radius-lg);
   text-align: left;
   color: var(--fg);
+  transition: background var(--motion-fast) var(--ease-out);
 }
 
+/* Selection is a grey lift, not a colour — the same fills as Where it runs:
+   hover 5%, the current project 11%, marked by its fill alone. */
 .klide-rail-folder-row:hover,
-.klide-rail-folder-row:focus-visible {
-  background: var(--menu-row-hover);
+.klide-rail-folder-row:focus-visible,
+.klide-rail-folder-action:hover,
+.klide-rail-folder-action:focus-visible {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 
 /* The fill is the folder menu's focus mark, so no outline on top of it —
@@ -5480,7 +5525,7 @@ button:focus-visible .menu-leadout {
 }
 
 .klide-rail-folder-row[aria-checked="true"] {
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  background: color-mix(in srgb, var(--fg) 11%, transparent);
 }
 
 .klide-rail-folder-row > svg {
@@ -5493,12 +5538,12 @@ button:focus-visible .menu-leadout {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .klide-rail-folder-row-name {
   color: var(--fg-strong);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5516,37 +5561,31 @@ button:focus-visible .menu-leadout {
   white-space: nowrap;
 }
 
-/* Waiting on you, in words and in the waiting tone. */
-.klide-rail-folder-detail[data-waiting="true"] {
-  color: var(--warning);
-}
-
-.klide-rail-folder-detail > svg {
-  vertical-align: -1px;
-}
-
+/* Open / Clone as quiet text rows under a fine divider, aligned with the
+   project names — not pills, no icons. */
 .klide-rail-folder-actions {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 3px;
-  padding: 6px 0 2px;
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 6px;
   border-top: 1px solid var(--border);
 }
 
 .klide-rail-folder-action {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-  color: var(--fg-strong);
-  font-size: 12px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 11px;
+  border-radius: var(--radius-lg);
+  color: var(--fg-muted);
+  font-size: 13px;
+  text-align: left;
   transition: background var(--motion-fast) var(--ease-out);
 }
 
 .klide-rail-folder-action:hover,
 .klide-rail-folder-action:focus-visible {
-  background: color-mix(in srgb, var(--fg) 11%, transparent);
+  color: var(--fg-strong);
 }
 
 .klide-rail-folder-clone {
@@ -6976,6 +7015,7 @@ input.klide-rail-search:focus-visible {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
+  cursor: pointer;
   transform: translateY(0) scale(1);
   border-radius: 18px;
   transition:

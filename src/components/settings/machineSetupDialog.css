@@ -102,6 +102,23 @@
 .klide-machine-log { flex: 1; height: 0; min-height: 100px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; margin: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--fg-subtle); font: 11px/1.5 var(--font-mono); }
 .klide-machine-fingerprint { font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere; }
 .klide-machine-browser-signin { display: grid; justify-items: start; gap: 16px; min-width: 0; width: 100%; }
+.klide-remote-folders { display: grid; gap: 10px; min-width: 0; }
+.klide-remote-folder-address { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.klide-remote-folder-address input { flex: 1; width: 0; min-width: 0; font-size: 11px; }
+.klide-remote-folder-address .klide-button { padding-inline: 9px; }
+.klide-remote-folder-list { height: 140px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; padding: 5px; }
+.klide-remote-folder-list button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px; border: 0; background: transparent; color: var(--fg); text-align: left; border-radius: 7px; cursor: pointer; font: inherit; font-size: 12px; }
+.klide-remote-folder-list button:hover { background: var(--bg-hover); }
+.klide-remote-folder-list button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.klide-remote-folder-list p { padding: 8px; }
+.klide-remote-folder-create { display: flex; gap: 8px; min-width: 0; }
+.klide-remote-folder-create input { flex: 1; min-width: 0; width: 0; }
+.klide-remote-folders :is(button, input):focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.klide-repository-access { display: grid; gap: 10px; min-width: 0; }
+.klide-repository-access p { margin: 0; font-size: 12px; line-height: 1.6; }
+.klide-repository-account-warning { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+.klide-repository-push { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.klide-repository-author { overflow-wrap: anywhere; }
 .klide-machine-code { display: block; position: relative; width: 100%; max-width: 344px; min-width: 0; margin-block: 4px; color: var(--fg); }
 .klide-machine-code-readable { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .klide-machine-code-tiles { display: flex; align-items: center; gap: 5px; font: 500 22px/1 var(--font-mono); user-select: text; }

@@ -32,6 +32,7 @@ export type MachineStatus = {
     host: "ready" | "outdated" | "missing" | "unknown";
     claude: "ready" | "needsLogin" | "missing" | "unknown";
     github?: "ready" | "needsLogin" | "missing" | "unknown";
+    githubScope?: "repository" | "account";
     project: "ready" | "missing" | "unknown" | "notSelected";
   };
 };
@@ -41,6 +42,11 @@ export const REMOTE_PROVIDER = "claude-code";
 
 export function machinesList(): Promise<Machine[]> {
   return invoke<Machine[]>("machines_list");
+}
+
+export type RemoteChanges = { diff: string; status: string; worktree: string };
+export function machineRunChanges(runId: string): Promise<RemoteChanges> {
+  return invoke("machine_run_changes", { runId });
 }
 
 /** One SSH round trip — ask when a picker opens, not on every render. */
@@ -71,6 +77,21 @@ export async function machineRemove(id: string): Promise<Machine[]> {
 }
 
 export type MachineSetupAction = "connect" | "authorize" | "prepare" | "signIn" | "gitHub" | "clone";
+
+export type RemoteDirectories = { path: string; parent: string | null; entries: { name: string; path: string }[]; truncated: boolean };
+export function machineRemoteDirectories(id: string, path: string): Promise<RemoteDirectories> {
+  return invoke("machine_remote_directories", { id, path });
+}
+export function machineRemoteCreateDirectory(id: string, parent: string, name: string): Promise<RemoteDirectories> {
+  return invoke("machine_remote_create_directory", { id, parent, name });
+}
+
+export type RepositoryContext = { repository: string; authorName: string; authorEmail: string };
+export function machineRepositoryContext(workspaceRoot: string): Promise<RepositoryContext> { return invoke("machine_repository_context", { workspaceRoot }); }
+export function machineRepositoryConnect(id: string, workspaceRoot: string, allowPush: boolean | null): Promise<string> { return invoke("machine_repository_connect", { id, workspaceRoot, allowPush }); }
+export function machineRepositoryConfigure(id: string, workspaceRoot: string, path: string): Promise<void> { return invoke("machine_repository_configure", { id, workspaceRoot, path }); }
+export function machineGithubAccounts(id: string): Promise<string[]> { return invoke("machine_github_accounts", { id }); }
+export function machineGithubLogout(id: string, login: string): Promise<void> { return invoke("machine_github_logout", { id, login }); }
 
 /** Explicit setup action; omitted binaryPath downloads this revision's public helper. */
 export async function machineInstallHost(id: string, binaryPath?: string): Promise<void> {

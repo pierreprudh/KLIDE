@@ -7,6 +7,22 @@
 
 pub const PROTOCOL_VERSION: u32 = 3;
 
+/// Remote installations persist across desktop rebuilds. Release version and
+/// wire protocol are the compatibility contract; the source id is diagnostic.
+/// Bump the release version when a host behavior fix must reach installations,
+/// and the protocol when changing the client/host contract incompatibly.
+pub(crate) fn remote_host_compatible(version: &str, protocol: u32) -> bool {
+    version == env!("CARGO_PKG_VERSION") && protocol == PROTOCOL_VERSION
+}
+
+pub(crate) fn remote_host_identity_compatible(identity: &str) -> bool {
+    let fields: Vec<_> = identity.split_whitespace().collect();
+    if fields.len() != 3 {
+        return false;
+    }
+    fields[1].parse().is_ok_and(|protocol| remote_host_compatible(fields[0], protocol))
+}
+
 /// Which binary a process is running, captured once at start: the executable's
 /// length and modification time. The package version alone does not change on
 /// a rebuild, so without this a daemon started before `cargo build` would keep
@@ -251,6 +267,21 @@ mod tests {
     //! These source guards catch reintroduced module gates. Native CI builds
     //! and runtime smoke tests provide the platform acceptance separately.
     use super::*;
+
+    #[test]
+    fn remote_helper_survives_desktop_rebuilds_but_rejects_incompatible_versions() {
+        use super::{remote_host_identity_compatible, PROTOCOL_VERSION};
+        let version = env!("CARGO_PKG_VERSION");
+        for source in ["f909940f2c00dc97a8aa29e5e43a3025692e8927", "local-desktop-rebuild"] {
+            assert!(remote_host_identity_compatible(&format!("{version} {PROTOCOL_VERSION} {source}")), "compatible helper was rejected for source {source}");
+        }
+        assert!(!remote_host_identity_compatible(&format!("0.0.0 {PROTOCOL_VERSION} old")));
+        assert!(!remote_host_identity_compatible(&format!("{version} {} old", PROTOCOL_VERSION + 1)));
+        for malformed in ["", version, "invalid identity", "0.7.1 3 source extra"] {
+            assert!(!remote_host_identity_compatible(malformed));
+        }
+    }
+
 
     /// Is `src` gated as a whole? Matches the inner attribute as its own line,
     /// so a doc comment that merely *mentions* it doesn't count.

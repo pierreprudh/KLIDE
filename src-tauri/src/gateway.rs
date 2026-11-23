@@ -116,6 +116,60 @@ async fn gateway_running() -> bool {
         .is_ok()
 }
 
+/// What Settings shows when the proxy port answers beyond this machine.
+/// opencodex holds the user's provider credentials and serves them to
+/// whoever can reach the port; on loopback that is only this user's
+/// processes, but a bind on every interface would spend them from the whole
+/// network.
+fn exposure_warning() -> String {
+    format!(
+        "The gateway answers on port {GATEWAY_PORT} beyond this machine — anything on the \
+         network can spend the provider credentials the proxy holds. Stop it if that is not \
+         intended."
+    )
+}
+
+/// Whether the gateway port is reachable from beyond this machine.
+///
+/// Klide does not control how `ocx` binds, so the boundary is verified rather
+/// than assumed: a UDP connect to a public address makes the OS pick the
+/// primary interface's LAN address without sending anything, and a TCP probe
+/// of the gateway port on that address succeeds only when something listens
+/// on every interface (a loopback-only bind refuses it). `None` means the
+/// probe could not run — no route, or an offline machine — in which case no
+/// warning is shown, because nothing was measured.
+async fn gateway_reachable_off_loopback() -> Option<bool> {
+    let lan_ip = match tokio::task::spawn_blocking(|| {
+        let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        // A connected UDP socket never sends on its own; this only asks the
+        // OS which local address a packet would leave from.
+        sock.connect("8.8.8.8:53").ok()?;
+        Some(sock.local_addr().ok()?.ip())
+    })
+    .await
+    {
+        Ok(Some(ip)) => ip,
+        _ => return None,
+    };
+    if lan_ip.is_loopback() {
+        return Some(false);
+    }
+    let target = std::net::SocketAddr::new(lan_ip, GATEWAY_PORT);
+    match tokio::time::timeout(
+        Duration::from_millis(400),
+        tokio::net::TcpStream::connect(target),
+    )
+    .await
+    {
+        // Connected: something is listening on every interface.
+        Ok(Ok(_)) => Some(true),
+        // Refused: the port answers on loopback only.
+        Ok(Err(_)) => Some(false),
+        // A timeout is a dropped SYN (firewall): unreachable, not exposed.
+        Err(_) => Some(false),
+    }
+}
+
 /// `$CODEX_HOME/config.toml`, the file `ocx start` injects into — the same
 /// file the Codex adapter names for its status hook, so the two can never
 /// disagree about where the CLI's config lives.
@@ -164,6 +218,16 @@ async fn build_status(managed: bool, warning: Option<String>) -> GatewayStatus {
     let codex_routed = tokio::task::spawn_blocking(codex_routed_to_gateway)
         .await
         .unwrap_or(false);
+    // The proxy is a shared local credential endpoint. Verify the loopback
+    // boundary and carry the exposure as a warning rather than silently
+    // routing the user's keys through a port the whole network can reach.
+    let mut warning = warning;
+    if running && gateway_reachable_off_loopback().await == Some(true) {
+        warning = Some(match warning {
+            Some(existing) => format!("{existing}\n{}", exposure_warning()),
+            None => exposure_warning(),
+        });
+    }
     GatewayStatus {
         installed,
         running,
@@ -375,5 +439,14 @@ mod tests {
         assert_eq!(gateway_detail(true, false, false), "Installed and stopped.");
         assert!(gateway_detail(true, true, true).contains("started by Klide"));
         assert!(gateway_detail(true, true, false).contains("started outside Klide"));
+    }
+
+    #[test]
+    fn exposure_warning_names_the_port_and_the_stakes() {
+        let warning = exposure_warning();
+        // The fixed port, so the user can check it themselves.
+        assert!(warning.contains("10100"));
+        // What is actually at risk, not just "check your firewall".
+        assert!(warning.contains("credentials"));
     }
 }

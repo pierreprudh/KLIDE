@@ -1,16 +1,19 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { type Machine, type MachineStatus, type MachineSetupAction, type HostTarget } from "../../ipc/machines";
+import { type Machine, type MachineStatus, type MachineSetupAction, type HostTarget, machineRepositoryConfigure, machineRepositoryContext } from "../../ipc/machines";
 import { errMessage } from "../../errors";
 import { canVisitMachineSetupStep, machineSetupStep, type SetupStep } from "./machineSetupSteps";
 import { MachineSetupWaiting } from "./MachineSetupWaiting";
 import { machineSetupFailure } from "./machineSetupFailure";
+import { machineProjectClonePath } from "./machineProjectPath";
 import { MachineSshFields } from "./MachineSshFields";
 import { canConnectSshAddress } from "./machineSshAddress";
 import { machineGithubState } from "./machineChecklistState";
 import { MachineSetupChecklist } from "./MachineSetupChecklist";
 import { GhostButton } from "./controls";
 const SetupSession = lazy(() => import("./MachineSetupSession"));
+const FolderExplorer = lazy(() => import("./RemoteFolderExplorer"));
+const RepositoryAccess = lazy(() => import("./RemoteRepositoryAccess"));
 
 export function MachineSetup({ machine, status, checking, workspaceRoot, onCheck, onInstall, onProject, onConnection, onClose }: {
   machine: Machine; status: MachineStatus | null; checking: boolean; workspaceRoot: string | null;
@@ -31,12 +34,27 @@ export function MachineSetup({ machine, status, checking, workspaceRoot, onCheck
   const [progress, setProgress] = useState("");
   const [note, setNote] = useState("");
   const [advanced, setAdvanced] = useState(false);
-  const [path, setPath] = useState(status?.checkout ?? machine.checkouts?.[workspaceRoot ?? ""] ?? `~/code/${workspaceRoot?.split("/").filter(Boolean).pop() ?? "project"}`);
+  const [browsing, setBrowsing] = useState(false);
+  const [path, setPath] = useState(machine.checkouts?.[workspaceRoot ?? ""] ?? "~/code");
+  const [projectName, setProjectName] = useState(workspaceRoot?.split("/").filter(Boolean).pop() ?? "project");
+  const [loadingProjectName, setLoadingProjectName] = useState(false);
   const [offlineTarget, setOfflineTarget] = useState("linux:x86_64");
   const [host, setHost] = useState(machine.sshHost);
   const savedCheckout = machine.checkouts?.[workspaceRoot ?? ""];
   useEffect(() => { setHost(machine.sshHost); }, [machine.sshHost]);
-  useEffect(() => { setPath(savedCheckout ?? `~/code/${workspaceRoot?.split("/").filter(Boolean).pop() ?? "project"}`); }, [savedCheckout, workspaceRoot]);
+  useEffect(() => { setPath(savedCheckout ?? "~/code"); }, [savedCheckout, workspaceRoot]);
+  useEffect(() => {
+    let disposed = false;
+    setProjectName(workspaceRoot?.split("/").filter(Boolean).pop() ?? "project");
+    if (!workspaceRoot || status?.setup.githubScope !== "repository") { setLoadingProjectName(false); return; }
+    setLoadingProjectName(true);
+    void machineRepositoryContext(workspaceRoot).then((context) => {
+      if (!disposed) setProjectName(context.repository.split("/").pop()!);
+    }).catch(() => { /* Non-GitHub projects use the local project folder name. */ })
+      .finally(() => { if (!disposed) setLoadingProjectName(false); });
+    return () => { disposed = true; };
+  }, [workspaceRoot, status?.setup.githubScope]);
+  const clonePath = machineProjectClonePath(path, projectName, status?.target?.os === "windows");
   const target = status?.target;
   const selectedTarget = target ?? { os: offlineTarget.split(":")[0], arch: offlineTarget.split(":")[1] } as HostTarget;
   const githubState = machineGithubState(status);
@@ -80,7 +98,17 @@ export function MachineSetup({ machine, status, checking, workspaceRoot, onCheck
   }
   async function saveProject() {
     setProgress("Saving the remote folder"); setWorking(true); setNote("");
-    try { await onProject(path.trim()); }
+    try {
+      if (status?.setup.githubScope == null) throw new Error("Restart Klide to load repository-only setup.");
+      if (workspaceRoot && status?.setup.githubScope === "repository") await machineRepositoryConfigure(machine.id, workspaceRoot, path.trim());
+      await onProject(path.trim());
+    }
+    catch (reason) { setNote(errMessage(reason)); }
+    finally { setWorking(false); }
+  }
+  async function cloneProject() {
+    setWorking(true); setNote("");
+    try { if (status?.setup.githubScope == null) throw new Error("Restart Klide to load repository-only setup."); await onProject(clonePath); start("clone"); }
     catch (reason) { setNote(errMessage(reason)); }
     finally { setWorking(false); }
   }
@@ -116,8 +144,8 @@ export function MachineSetup({ machine, status, checking, workspaceRoot, onCheck
       {step === "connection" && status?.setup.connection !== "unsupported" && <><h3>Connect to your machine</h3><p>Use the account you sign in with on this machine.</p><MachineSshFields value={host} onChange={setHost} disabled={busy} />{!action && advanced && <label className="klide-machine-project">Machine system<select className="klide-field" value={target ? `${target.os}:${target.arch}` : offlineTarget} disabled={busy || !!target} onChange={(e) => setOfflineTarget(e.target.value)}><option value="linux:x86_64">Linux · Intel / AMD</option><option value="macos:aarch64">macOS · Apple silicon</option><option value="macos:x86_64">macOS · Intel</option><option value="windows:x86_64">Windows · Intel / AMD</option></select></label>}<div className="klide-machine-actions" hidden={running}><GhostButton disabled={busy || !canConnectSshAddress(host)} onClick={() => { void connect(); }}>Connect with SSH</GhostButton>{selectedTarget.os !== "windows" && <GhostButton disabled={busy || !canConnectSshAddress(host)} onClick={() => { void connect("authorize"); }}>Enable background access</GhostButton>}{!action && advanced && <GhostButton disabled={busy} onClick={() => { void download(); }}>Prepare setup files on this Mac</GhostButton>}</div>{!action && <GhostButton disabled={busy} onClick={() => setAdvanced((open) => !open)}>{advanced ? "Hide advanced options" : "Advanced options"}</GhostButton>}</>}
       {step === "software" && <><h3>Prepare this machine</h3><p>Install missing components on {system}. Your work and logins stay on this machine.</p><p>{target?.os === "macos" ? "Apple silicon and Intel Macs · Git needs Apple Command Line Tools." : target?.os === "windows" ? "Native Windows over OpenSSH · Git and GitHub CLI use winget." : "Ubuntu 24.04+ / Debian 13+ · Intel / AMD."}</p><div className="klide-machine-actions" hidden={running}><GhostButton disabled={busy} onClick={() => start("prepare")}>Install and continue</GhostButton>{status?.setup.claude !== "missing" && <GhostButton disabled={busy} onClick={() => { void installHost(); }}>Install Klide helper only</GhostButton>}</div></>}
       {step === "signIn" && <><h3>Sign in to Claude Code</h3><p>Connect your Claude account to this machine. We’ll show a browser sign-in link when it’s ready.</p><GhostButton disabled={busy} onClick={() => start("signIn")}>Sign in on this machine</GhostButton></>}
-      {step === "github" && <><h3>Connect GitHub</h3><p>{githubState === "missing" ? "GitHub CLI is not installed. It is optional for running Claude Code." : githubState === "unknown" ? "Check GitHub availability on this machine." : githubState === "ready" ? "GitHub is signed in on this machine. You can reconnect your account here." : "GitHub CLI is already installed. Sign in to use private repositories."}</p><div className="klide-machine-actions" hidden={running}>{githubState === "missing" ? <GhostButton disabled={busy || !canVisitMachineSetupStep("software", status, !!workspaceRoot)} onClick={() => { void changeStep("software"); }}>Installation options</GhostButton> : githubState === "unknown" ? <GhostButton disabled={busy} onClick={onCheck}>Check GitHub</GhostButton> : <GhostButton disabled={busy} onClick={() => start("gitHub")}>Sign in to GitHub</GhostButton>}</div></>}
-      {step === "project" && <><h3>Choose the remote project</h3><p>Use an existing Git checkout, or save a destination and clone this project’s origin there.</p><label className="klide-machine-project">Remote folder<input className="klide-field" value={path} onChange={(e) => setPath(e.target.value)} disabled={busy} placeholder="~/code/project" /></label><div className="klide-machine-actions" hidden={running}><GhostButton disabled={busy || !path.trim()} onClick={() => { void saveProject(); }}>Use this folder</GhostButton><GhostButton disabled={busy || path.trim() !== status?.checkout} onClick={() => start("clone")}>Clone project here</GhostButton><GhostButton disabled={busy} onClick={() => start("gitHub")}>Sign in to GitHub</GhostButton></div><p>Private repositories use the remote machine’s Git credentials.</p></>}
+      {step === "github" && <><h3>{status?.setup.githubScope === "repository" ? "Repository access" : "Connect GitHub"}</h3>{status?.setup.githubScope === "repository" && workspaceRoot ? <Suspense fallback={<MachineSetupWaiting>Checking repository access</MachineSetupWaiting>}><RepositoryAccess machineId={machine.id} workspaceRoot={workspaceRoot} ready={githubState === "ready"} onChange={onCheck} /></Suspense> : status?.setup.githubScope === "repository" ? <p>Open a project to connect access for that repository only. Personal GitHub login is not stored on this machine.</p> : status?.setup.githubScope == null ? <p>Restart Klide to load repository-only setup. Personal GitHub sign-in is unavailable in this older running app.</p> : <><p>{githubState === "missing" ? "GitHub CLI is not installed. It is optional for running Claude Code." : githubState === "unknown" ? "Check GitHub availability on this machine." : githubState === "ready" ? "GitHub is signed in on this machine. You can reconnect your account here." : "GitHub CLI is already installed. Sign in to use private repositories."}</p><div className="klide-machine-actions" hidden={running}>{githubState === "missing" ? <GhostButton disabled={busy || !canVisitMachineSetupStep("software", status, !!workspaceRoot)} onClick={() => { void changeStep("software"); }}>Installation options</GhostButton> : githubState === "unknown" ? <GhostButton disabled={busy} onClick={onCheck}>Check GitHub</GhostButton> : <GhostButton disabled={busy} onClick={() => start("gitHub")}>Sign in to GitHub</GhostButton>}</div></>}</>}
+      {step === "project" && <><h3>Choose the remote project</h3>{browsing ? <Suspense fallback={<MachineSetupWaiting>Opening remote folders</MachineSetupWaiting>}><FolderExplorer machineId={machine.id} onChoose={(folder) => { setPath(folder); setBrowsing(false); }} onCancel={() => setBrowsing(false)} /></Suspense> : <><p>Choose where to create the project folder, or select an existing checkout.</p><label className="klide-machine-project">Remote folder<input className="klide-field" value={path} onChange={(e) => setPath(e.target.value)} disabled={busy} placeholder="~/code" /></label><GhostButton disabled={busy} onClick={() => { if (status?.setup.githubScope == null) setNote("Restart Klide to load remote folder browsing."); else setBrowsing(true); }}>Browse folders</GhostButton><div className="klide-machine-actions" hidden={running}><GhostButton disabled={busy || !path.trim()} onClick={() => { void saveProject(); }}>Use this folder</GhostButton><GhostButton disabled={busy || loadingProjectName || !path.trim()} onClick={() => { void cloneProject(); }}>Clone project here</GhostButton>{status?.setup.githubScope !== "account" ? <GhostButton disabled={busy} onClick={() => { void changeStep("github"); }}>Repository access</GhostButton> : <GhostButton disabled={busy} onClick={() => start("gitHub")}>Sign in to GitHub</GhostButton>}</div>{!running && !loadingProjectName && path.trim() && <p>Clone destination: <strong>{clonePath}</strong></p>}<p>{status?.setup.githubScope === "repository" ? "Git author identity and repository access are saved to this checkout only." : "Private repositories use the remote machine’s Git credentials."}</p></>}</>}
       {step === "ready" && <><h3>{workspaceRoot ? "Ready for remote tasks" : "Machine ready"}</h3><p>{workspaceRoot ? "Select this machine in “Where it runs” when starting a Claude Code conversation. Reopen the conversation later to replay its output and stream live progress." : "Open a local project, then return here to choose its remote folder."} The remote machine must stay on.</p><GhostButton disabled={busy} onClick={onClose}>Done</GhostButton></>}
       {(working || checking) && <MachineSetupWaiting>{working ? progress : "Checking the machine"}</MachineSetupWaiting>}
       {note && <p role="status">{note}</p>}

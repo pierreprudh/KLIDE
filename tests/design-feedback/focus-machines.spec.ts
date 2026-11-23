@@ -6,6 +6,101 @@ async function enterManualSsh(page: Page) {
   await dialog.getByRole("button", { name: "Add a machine", exact: true }).click();
 }
 
+test("GitHub cursor controls do not hide confirmation or stall browser sign-in", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?settings=1&needsGhLogin=1&prompt=github&theme=klide-light");
+  await page.evaluate(() => { window.open = ((url: string) => { (window as any).__MACHINE_OPENED_URL__ = url; return null; }) as typeof window.open; });
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  const setup = page.locator(".klide-machine-setup");
+  await setup.getByRole("list", { name: "Setup progress" }).getByRole("button", { name: "GitHub", exact: true }).click();
+  await setup.getByRole("button", { name: "Sign in to GitHub", exact: true }).click();
+  await expect(setup.getByText("? Authenticate Git with your GitHub credentials? (Y/n)", { exact: true })).toBeVisible();
+  await expect(setup.getByLabel("Setup details")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(setup.getByLabel("Sign-in code", { exact: true })).toContainText("ABCD-1234");
+  await setup.getByRole("button", { name: "Hide details", exact: true }).click();
+  await expect(setup.getByLabel("Sign-in code", { exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Show details", exact: true }).click();
+  await expect(setup.getByLabel("Setup details")).toBeVisible();
+  await setup.getByRole("button", { name: "Open GitHub", exact: true }).click();
+  await expect(setup.getByText("GitHub verified", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("heading", { name: "Ready for remote tasks" })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__MACHINE_OPENED_URL__)).toBe("https://github.com/login/device");
+  expect(await page.evaluate(() => (window as any).__MACHINE_INPUTS__)).toEqual(["y\r", "\x1b[24;80R", "\r"]);
+  expect(await page.evaluate(() => (window as any).__MACHINE_SETUP_ACTIONS__)).toEqual(["gitHub"]);
+  await setup.getByRole("list", { name: "Setup progress" }).getByRole("button", { name: "GitHub", exact: true }).click();
+  await expect(setup.getByText("GitHub is signed in on this machine. You can reconnect your account here.")).toBeVisible();
+});
+
+for (const [surface, theme] of [["settings", "dark"], ["popup", "klide-light"], ["popup", "dark"]]) {
+  test(`${surface} shows and copies the GitHub code below the terminal in ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { (window as any).__COPIED_MACHINE_CODE__ = value; } } });
+    });
+    await page.goto(`/preview/where-it-runs.html?needsGhLogin=1&prompt=github&codeStyle=clipboard&theme=${theme}&${surface === "settings" ? "settings=1" : "state=empty"}`);
+    if (surface === "settings") await page.getByRole("button", { name: "Manage", exact: true }).click();
+    else {
+      await page.getByRole("button", { name: "Where it runs", exact: true }).click();
+      await page.getByRole("option", { name: "Add a machine", exact: true }).click();
+      await enterManualSsh(page);
+      await page.getByLabel("SSH host", { exact: true }).fill("mini-user@100.64.0.3");
+      await page.getByRole("dialog").getByRole("button", { name: "Continue", exact: true }).click();
+    }
+    const setup = page.locator(".klide-machine-setup");
+    await setup.getByRole("list", { name: "Setup progress" }).getByRole("button", { name: "GitHub", exact: true }).click();
+    await setup.getByRole("button", { name: "Sign in to GitHub", exact: true }).click();
+    await setup.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(setup.getByRole("heading", { name: "GitHub sign-in code", exact: true })).toBeVisible();
+    await expect(setup.getByLabel("Sign-in code", { exact: true })).toContainText("ABCD-1234");
+    await expect(setup.locator(".klide-machine-code-character")).toHaveCount(8);
+    await expect(setup.getByLabel("Setup details")).toBeVisible();
+    const log = (await setup.getByLabel("Setup details").boundingBox())!;
+    const codePanel = (await setup.locator(".klide-machine-signin-panel").boundingBox())!;
+    expect(codePanel.y).toBeGreaterThanOrEqual(log.y + log.height);
+    await setup.getByRole("button", { name: "Copy code", exact: true }).click();
+    await expect(setup.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => (window as any).__COPIED_MACHINE_CODE__)).toBe("ABCD-1234");
+    await expect(setup.getByRole("button", { name: "Open GitHub", exact: true })).toBeVisible();
+    expect(await setup.locator(".klide-machine-session-card").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    if (surface === "popup") {
+      const dialog = page.getByRole("dialog");
+      const frame = (await dialog.boundingBox())!;
+      const footer = (await setup.locator(".klide-machine-setup-footer").boundingBox())!;
+      expect(footer.y + footer.height).toBeLessThanOrEqual(frame.y + frame.height - 12);
+    }
+    await page.screenshot({ path: `artifacts/design-feedback/github-signin-code-${surface}-${theme}.png`, fullPage: surface === "settings" });
+  });
+}
+
+for (const success of [true, false]) {
+  test(`GitHub code ${success ? "morphs to verified only after successful login" : "never shows verified after a failed login"}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.goto(`/preview/where-it-runs.html?settings=1&needsGhLogin=1&prompt=github&holdGithub=1&theme=dark${success ? "" : "&failGithub=1"}`);
+    await page.evaluate(() => { window.open = (() => null) as typeof window.open; });
+    await page.getByRole("button", { name: "Manage", exact: true }).click();
+    const setup = page.locator(".klide-machine-setup");
+    await setup.getByRole("button", { name: "GitHub", exact: true }).click();
+    await setup.getByRole("button", { name: "Sign in to GitHub", exact: true }).click();
+    await setup.getByRole("button", { name: "Continue", exact: true }).click();
+    const panel = setup.locator(".klide-machine-signin-panel");
+    await expect(panel).toHaveAttribute("data-state", "code");
+    await setup.getByRole("button", { name: "Open GitHub", exact: true }).click();
+    await expect(panel).toHaveAttribute("data-state", "code");
+    await page.evaluate(() => (window as any).__MACHINE_GITHUB_COMPLETE__());
+    if (success) {
+      await expect(panel).toHaveAttribute("data-state", "verified");
+      await expect(setup.getByText("GitHub verified", { exact: true })).toBeVisible();
+      await expect(setup.getByRole("button", { name: "Copy code", exact: true })).toBeHidden();
+      await panel.evaluate(async (el) => { await Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => {}))); });
+      await panel.screenshot({ path: "artifacts/design-feedback/github-signin-verified-dark.png", animations: "disabled" });
+      await expect(setup.getByRole("heading", { name: "Ready for remote tasks" })).toBeVisible();
+    } else {
+      await expect(setup.getByRole("status").filter({ hasText: "Setup couldn’t finish" })).toBeVisible();
+      await expect(setup.locator('[data-state="verified"]')).toHaveCount(0);
+    }
+  });
+}
+
 test("the logo checklist updates from live checks without stopping an active installer", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
   await page.goto("/preview/where-it-runs.html?state=empty&needsInstall=1&hostReady=1&missingGh=1&liveChecklist=1&system=macos&theme=klide-light");
@@ -530,14 +625,14 @@ for (const viewport of [{ width: 681, height: 865 }, { width: 800, height: 600 }
       await dialog.getByLabel("SSH host", { exact: true }).fill("mini-user@100.64.0.3");
       await dialog.getByRole("button", { name: "Continue", exact: true }).click();
       await dialog.getByRole("button", { name: action, exact: true }).click();
-      await dialog.getByRole("button", { name: "Show details", exact: true }).click();
+      if (action !== "Sign in to GitHub") await dialog.getByRole("button", { name: "Show details", exact: true }).click();
       await expect(dialog.getByLabel("Setup details")).toBeVisible();
       if (state.includes("failConnect")) await expect(dialog.getByRole("status").filter({ hasText: "Remote Login" })).toBeVisible();
       expect((await dialog.boundingBox())!.height).toBe(frame!.height);
       expect(await dialog.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
       const terminal = await dialog.getByLabel("Setup details").boundingBox();
       const footer = await dialog.locator(".klide-machine-setup-footer").boundingBox();
-      expect(terminal!.height).toBeGreaterThan(100);
+      expect(terminal!.height).toBeGreaterThanOrEqual(action === "Sign in to GitHub" ? 70 : 100);
       expect(terminal!.y + terminal!.height).toBeLessThanOrEqual(footer!.y);
       expect(footer!.y + footer!.height).toBeLessThan(frame!.y + frame!.height);
       await page.screenshot({ path: `artifacts/design-feedback/add-machine-${state.split("=")[0]}-${viewport.height}.png` });

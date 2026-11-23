@@ -57,6 +57,13 @@ must pass before merge; physical-machine acceptance remains separate.
   verify active-upgrade refusal and host sleep/reboot behavior. Real Linux
   `klide-box` acceptance remains open too.
 - [ ] Add native Windows ARM64 and Linux ARM64 helper builds after acceptance.
+- [x] Accept repository-only access on the shared Mac mini: disconnect the
+  earlier personal login, reuse the read-only repo key, clone into a named
+  project folder, verify repo-local identity and unchanged global config,
+  and complete a real remote conversation in its isolated worktree.
+- [ ] Accept the folder browser's explicit New folder action on physical
+  machines and repeat repository-only setup on Linux and Windows. Native
+  tests cover isolation/key generation; browser fixtures cover setup.
 
 ## Conductor follow-up — product and business line, 2026-11-05
 
@@ -732,8 +739,11 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   limit, `review-override` label. Done when three real PRs carry a review.
 - [ ] S0 — after a week of reviews that hold up: branch protection requires
   `review` on `main`.
+- [x] S0.5 — `@klide-bot` in a PR/issue comment gets a read-only OpenCode
+  answer (`klide-bot.yml`); inert until `OPENROUTER_API_KEY` + a model are set.
 - [ ] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
-  Issues, Statuses: write) and add `KLIDE_BOT_APP_ID` / `KLIDE_BOT_PRIVATE_KEY`.
+  Issues, Statuses: write) and add variable `KLIDE_BOT_APP_ID` / secret
+  `KLIDE_BOT_PRIVATE_KEY`.
 - [ ] S1 — workflows mint an App token and act as `klide-bot[bot]`, so its
   pushes trigger CI and the reviewer.
 - [ ] S2 — `/fix`, `/fix <instruction>`, `/fix model=…`: OpenCode on

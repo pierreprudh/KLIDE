@@ -321,6 +321,13 @@ export const FocusGitIsland = memo(function FocusGitIsland({
         data-open={expanded || undefined}
         aria-hidden={!expanded}
         aria-label="Git graph preview"
+        /* Mirror of the compact window: a click anywhere on the expanded one
+           shrinks it back — unless the click ended a text selection (copying
+           a hash or subject). */
+        onClick={() => {
+          if (window.getSelection()?.toString()) return;
+          toggleExpanded();
+        }}
       >
         <div className="klide-focus-git-preview-header">
           <ProfilePicture avatarUrl={avatarUrl} initials={profileInitials} />

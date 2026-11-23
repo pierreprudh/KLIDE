@@ -23,6 +23,10 @@ let connected = false;
 let signedIn = false;
 let componentsInstalled = false;
 let promptSession: string | null = null;
+let githubPromptStage = 0;
+let githubSignedIn = false;
+let personalAccounts = params.has("personalGithub") ? ["example-user"] : [];
+const remoteFolders: Record<string, string[]> = { "/Users/remote": ["Documents", "Projects"], "/Users/remote/Documents": [], "/Users/remote/Projects": ["Existing project"], "/Users/remote/Projects/Existing project": [] };
 function emit(event: string, payload: unknown) {
   for (const [id, listener] of eventListeners) if (listener.event === event) callbacks.get(listener.handler)?.({ event, id, payload });
 }
@@ -30,9 +34,50 @@ function emit(event: string, payload: unknown) {
   transformCallback: (callback: (event: unknown) => void) => { const id = nextCallback++; callbacks.set(id, callback); return id; },
   unregisterCallback: (id: number) => { callbacks.delete(id); },
   invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
+    if (cmd === "machine_remote_directories" || cmd === "machine_remote_create_directory") {
+      if (params.has("failBrowse")) throw new Error("Permission denied while reading this remote folder");
+      let path = args.path === "~" ? "/Users/remote" : args.path as string;
+      if (cmd === "machine_remote_create_directory") {
+        path = `${args.parent}/${args.name}`;
+        remoteFolders[path] = [];
+        remoteFolders[args.parent as string].push(args.name as string);
+        (window as any).__MACHINE_FOLDER_CREATED__ = path;
+      }
+      if (!(path in remoteFolders)) throw new Error("Folder not found");
+      return { path, parent: path === "/Users/remote" ? "/Users" : path.slice(0, path.lastIndexOf("/")), entries: remoteFolders[path].map((name) => ({ name, path: `${path}/${name}` })), truncated: false };
+    }
+    if (cmd === "machine_repository_context") return { repository: "example/project", authorName: "Example Dev", authorEmail: "dev@example.test" };
+    if (cmd === "machine_github_accounts") return [...personalAccounts];
+    if (cmd === "machine_github_logout") { (window as any).__MACHINE_GITHUB_LOGOUT__ = args.login; personalAccounts = personalAccounts.filter((login) => login !== args.login); return; }
+    if (cmd === "machine_repository_connect") { (window as any).__MACHINE_REPOSITORY_CONNECT__ = args; githubSignedIn = true; return "Repository-only access verified."; }
+    if (cmd === "machine_repository_configure") { (window as any).__MACHINE_REPOSITORY_CONFIGURE__ = args; return; }
     if (cmd === "plugin:opener|open_url") { (window as any).__MACHINE_OPENED_URL__ = args.url; return; }
     if (cmd === "pty_write") {
       (window as any).__MACHINE_INPUTS__ = [...((window as any).__MACHINE_INPUTS__ ?? []), args.data];
+      if (params.get("prompt") === "github" && args.id === promptSession) {
+        if (githubPromptStage === 1 && args.data === "y\r") {
+          githubPromptStage = 2;
+          // Survey asks for the terminal size after confirmation. A form-only
+          // client that writes the answer but never replies to DSR stalls here.
+          setTimeout(() => emit("pty:data", { id: args.id, chunk: "\x1b7\x1b[?25l\x1b[999;999f\x1b[" }), 100);
+          setTimeout(() => emit("pty:data", { id: args.id, chunk: "6n" }), 150);
+        } else if (githubPromptStage === 2 && args.data === "\x1b[24;80R") {
+          githubPromptStage = 3;
+          const code = params.get("codeStyle") === "clipboard" ? "! One-time code (ABCD-1234) copied to clipboard" : "! First copy your one-time code: ABCD-1234";
+          setTimeout(() => emit("pty:data", { id: args.id, chunk: `\r\n${code}\r\n` }), 100);
+          setTimeout(() => emit("pty:data", { id: args.id, chunk: "Press Enter to open https://github.com/login/device in your browser... \x1b7" }), 250);
+        } else if (githubPromptStage === 3 && args.data === "\r") {
+          githubPromptStage = 4;
+          const finish = () => {
+            githubSignedIn = !params.has("failGithub");
+            emit("pty:data", { id: args.id, chunk: params.has("failGithub") ? "\r\nGitHub authentication failed.\r\n" : "\r\nAuthentication complete.\r\n" });
+            emit("machine-setup:exit", { id: args.id, success: !params.has("failGithub") });
+          };
+          if (params.has("holdGithub")) (window as any).__MACHINE_GITHUB_COMPLETE__ = finish;
+          else setTimeout(finish, 100);
+        }
+        return;
+      }
       if (args.id === promptSession) setTimeout(() => {
         connected = true; signedIn = true;
         emit("pty:data", { id: args.id, chunk: "\r\nSetup complete\r\n" });
@@ -44,6 +89,7 @@ function emit(event: string, payload: unknown) {
     if (cmd === "plugin:event|unlisten") { eventListeners.delete(args.eventId as number); return; }
     if (cmd === "machine_setup_close") { (window as any).__MACHINE_SETUP_CLOSES__ = [...((window as any).__MACHINE_SETUP_CLOSES__ ?? []), args.id]; return; }
     if (cmd === "machine_setup_spawn") {
+      if (args.action === "clone") (window as any).__MACHINE_CLONE_CHECKOUT__ = machines.find((machine) => machine.id === args.id)?.checkouts?.[args.workspaceRoot as string];
       (window as any).__MACHINE_SETUP_HOST__ = machines.find((machine) => machine.id === args.id)?.sshHost;
       (window as any).__MACHINE_SETUP_ACTIONS__ = [...((window as any).__MACHINE_SETUP_ACTIONS__ ?? []), args.action];
       if (params.has("liveChecklist") && args.action === "prepare") {
@@ -58,7 +104,9 @@ function emit(event: string, payload: unknown) {
           trust: "ED25519 key fingerprint is SHA256:abcdefghijklmnopqrstuvwxyz1234567890abcdefg.\r\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ",
           oauth: "Open https://claude.ai/oauth/authorize?state=example\r\nPaste code here if prompted > ",
           interactive: "Choose an account\r\nUse arrow keys to choose an account, then press Enter",
+          github: "! Read more at https://gh.io/gh-expiring-tokens\r\n? Authenticate Git with your GitHub credentials? (Y/n) \x1b7",
         };
+        if (params.get("prompt") === "github") githubPromptStage = 1;
         setTimeout(() => emit("pty:data", { id: args.terminalId, chunk: prompts[params.get("prompt")!] ?? "" }), 100);
         return;
       }
@@ -97,6 +145,7 @@ function emit(event: string, payload: unknown) {
       return { machines: machines.map((machine) => ({ label: machine.label ?? machine.id, sshHost: machine.sshHost, source: "saved", online: null, supported: true, detail: "Saved in Klide", machine })), message: args.method === "vpn" ? "Connect your VPN first, then choose or add an SSH address." : "Choose a saved machine or add an SSH address." };
     }
     if (cmd === "machine_save") {
+      (window as any).__MACHINE_SAVED__ = args.machine;
       if (params.has("failSave")) throw new Error("Could not save machine settings");
       const machine = args.machine as Machine;
       machines = [...machines.filter((m) => m.id !== machine.id), machine];
@@ -115,7 +164,7 @@ function emit(event: string, payload: unknown) {
         caption: params.has("unsupported") ? "This remote architecture does not have a published helper yet" : reachable ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: reachable ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
-        setup: { connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", github: params.has("missingGh") && !componentsInstalled ? "missing" : params.has("needsGhLogin") || params.has("missingGh") ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
+        setup: { connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", githubScope: params.has("oldBackend") ? undefined : params.has("repoAccess") ? "repository" : "account", github: params.has("missingGh") && !componentsInstalled ? "missing" : (params.has("needsGhLogin") || params.has("missingGh")) && !githubSignedIn ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
       };
     }
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];

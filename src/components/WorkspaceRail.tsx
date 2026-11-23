@@ -41,7 +41,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  CheckIcon,
   ChevronIcon,
   CloseIcon,
   MoreIcon,
@@ -383,13 +382,8 @@ function shortPath(path: string): string {
   return path.replace(/^\/Users\/[^/]+/, "~");
 }
 
-function FolderMark({ name }: { name: string }) {
-  return (
-    <span className="klide-rail-folder-mark" aria-hidden="true">
-      {(name.trim()[0] ?? "·").toUpperCase()}
-    </span>
-  );
-}
+/** Matches the `klide-folder-menu-fold` animation in tokens.css. */
+const FOLDER_MENU_CLOSE_MS = 340;
 
 /** How many folders the card's menu lists. The rest are File ▸ Open Recent's. */
 const FOLDER_MENU_LIMIT = 8;
@@ -397,20 +391,20 @@ const FOLDER_MENU_LIMIT = 8;
 function FolderCard({
   root,
   folders,
-  waitingByFolder,
   onSwitch,
   onOpenFolder,
   onCloneRepo,
 }: {
   root: string | null;
   folders: readonly string[];
-  /** folder → how many of its conversations wait on you. */
-  waitingByFolder: ReadonlyMap<string, number>;
   onSwitch: (root: string) => void;
   onOpenFolder?: () => void;
   onCloneRepo?: (url: string) => Promise<void> | void;
 }) {
   const [open, setOpen] = useState(false);
+  // Closing plays the unfold backwards before the menu unmounts.
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<number | null>(null);
   const [cloning, setCloning] = useState(false);
   const [cloneUrl, setCloneUrl] = useState("");
   const [cloneError, setCloneError] = useState<string | null>(null);
@@ -421,12 +415,22 @@ function FolderCard({
   const name = root ? basename(root) : "Open a folder";
 
   function close(refocus: boolean) {
-    setOpen(false);
-    setCloning(false);
-    setCloneUrl("");
-    setCloneError(null);
     if (refocus) buttonRef.current?.focus();
+    if (closeTimer.current !== null) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    setClosing(true);
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      setClosing(false);
+      setOpen(false);
+      setCloning(false);
+      setCloneUrl("");
+      setCloneError(null);
+    }, reduced ? 0 : FOLDER_MENU_CLOSE_MS);
   }
+  useEffect(() => () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+  }, []);
 
   // A menu: the first entry takes focus when it opens, a press outside or
   // Escape puts it away.
@@ -481,6 +485,9 @@ function FolderCard({
 
   return (
     <div className="klide-rail-folder-wrap" ref={wrapRef}>
+      {/* Klide's mark stands beside the selector, not inside it — the card is
+          the project's. */}
+      <span className="klide-rail-app-mark" aria-hidden="true"><KlideMark size={20} /></span>
       <button
         ref={buttonRef}
         type="button"
@@ -491,7 +498,6 @@ function FolderCard({
         title={root ? shortPath(root) : undefined}
         onClick={() => (open ? close(false) : setOpen(true))}
       >
-        <span className="klide-rail-app-mark" aria-hidden="true"><KlideMark size={18} /></span>
         <span className="klide-rail-folder-name">{name}</span>
         <SwitcherIcon size={12} />
       </button>
@@ -500,7 +506,8 @@ function FolderCard({
           ref={menuRef}
           role="menu"
           aria-label="Folders"
-          className="klide-rail-folder-menu popover-enter"
+          className="klide-rail-folder-menu"
+          data-closing={closing || undefined}
           onKeyDown={onMenuKey}
         >
           {/* The folders scroll on their own, so a long list never pushes
@@ -508,7 +515,6 @@ function FolderCard({
           <div className="klide-rail-folder-list">
           {folders.slice(0, FOLDER_MENU_LIMIT).map((folder) => {
             const here = folder === root;
-            const waiting = waitingByFolder.get(folder) ?? 0;
             return (
               <button
                 key={folder}
@@ -521,18 +527,10 @@ function FolderCard({
                   if (!here) onSwitch(folder);
                 }}
               >
-                <FolderMark name={basename(folder)} />
                 <span className="klide-rail-folder-text">
                   <span className="klide-rail-folder-row-name">{basename(folder)}</span>
-                  {waiting > 0 ? (
-                    <span className="klide-rail-folder-detail" data-waiting="true">
-                      <NeedsYouIcon size={11} /> {waiting} {waiting === 1 ? "needs" : "need"} you
-                    </span>
-                  ) : (
-                    <span className="klide-rail-folder-detail">{shortPath(folder)}</span>
-                  )}
+                  <span className="klide-rail-folder-detail">{shortPath(folder)}</span>
                 </span>
-                {here ? <CheckIcon size={13} /> : null}
               </button>
             );
           })}
@@ -581,7 +579,7 @@ function FolderCard({
                   className="klide-rail-folder-action"
                   onClick={() => setCloning(true)}
                 >
-                  Clone…
+                  Clone repository…
                 </button>
               ) : null}
             </div>
@@ -1311,15 +1309,6 @@ export function WorkspaceRail({
     return byId;
   }, [convos, railProjects]);
 
-  const waitingByFolder = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const id of needsYouIds) {
-      const folder = folderById.get(id);
-      if (folder) counts.set(folder, (counts.get(folder) ?? 0) + 1);
-    }
-    return counts;
-  }, [needsYouIds, folderById]);
-
   const sections = useMemo(
     () => railConversationSections(
       convos,
@@ -1594,7 +1583,6 @@ export function WorkspaceRail({
           <FolderCard
             root={activeProjectRoot}
             folders={railProjects}
-            waitingByFolder={waitingByFolder}
             onSwitch={(root) => {
               onNavigateAway?.();
               onSwitchProject(root);

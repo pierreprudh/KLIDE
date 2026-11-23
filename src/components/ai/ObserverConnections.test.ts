@@ -35,6 +35,12 @@ describe("observer connections", () => {
     const interrupted: Msg[] = [...msgs.slice(0, 6), { role: "user", content: "Hello" }, { role: "assistant", content: "Hi" }];
     expect(observerConnections(interrupted)[0].members).toEqual([5, 0, 2]);
   });
+  it("finds the shell id when the command itself holds backticks", () => {
+    const ticked = msgs.map(row => row.role === "tool"
+      ? { ...row, content: "Watching `sleep 5; echo `date`` as `shell_1`. Finish your reply now." }
+      : row);
+    expect(observerConnections(ticked)).toEqual([{ start: 0, end: 5, members: [5, 0, 2, 6] }]);
+  });
   it("does not guess a source for an unknown shell", () => {
     expect(observerConnections([...msgs.slice(0, 5), { role: "system", content: "Finished", observer: { shellId: "shell_10" } }])).toEqual([]);
   });

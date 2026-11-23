@@ -38,12 +38,34 @@ in `CONTEXT.md`.
    A Mac destination with the same processor can use this app's own executable
    after checking its exact version, protocol and source identity. Other
    targets download a checksum-verified helper from `host-<commit>` releases.
-   No GitHub CLI is needed on the Mac. Advanced setup accepts a matching
+   No GitHub CLI is needed on the Mac for helper installation. Advanced setup accepts a matching
    downloaded binary. The helper checks the exact package/protocol/source
-   signature and refuses to replace a host with active work.
+   signature and refuses to replace a host with active work. Once installed,
+   a helper is reused across desktop rebuilds with the same package version
+   and wire protocol; a different source commit alone does not require an update.
 4. Sign in to Claude Code on the destination and choose or clone its Git
-   checkout. Logins remain on that machine. Local unsaved files are not
+   checkout. Claude login remains on that machine. Local unsaved files are not
    automatically copied. Settings › Machines manages saved machines.
+   **Browse folders** opens the destination's folders over SSH, with Home,
+   Up and New folder. For cloning, choose a parent such as Documents;
+   **Clone project here** creates a subfolder named after the repository and
+   previews its full destination. Selecting that named project folder directly
+   reuses it rather than nesting another copy. Existing nonempty destinations
+   are refused by Git; their contents are kept. **Use this folder** still selects
+   an existing checkout directly.
+   Repository-only access keeps Git restricted: the guard accepts only Klide's
+   exact managed SSH command and an empty credential-helper reset. These settings
+   do not grant folder trust; arbitrary commands, filters and hooks remain blocked
+   until the person trusts the folder explicitly.
+   For private GitHub repos, **Repository access** registers a deploy key using
+   this Mac's GitHub account (repository admin access required). Personal
+   GitHub credentials are not copied or signed in on the remote machine.
+   Read-only access is the default; pushing requires an explicit choice.
+   Disconnect any earlier personal `gh` login using the named account action
+   in that step. Git author identity and the SSH command are saved with
+   `git config --local` in the chosen checkout. Other people sharing that OS
+   account can use the repo key, but it grants no access to other repositories
+   or personal GitHub API operations. Public repositories can clone anonymously.
 5. Select the machine above the Focus composer and launch a Claude Code
    task. Quit Klide or turn off the Mac, leaving the remote machine on.
    Reopen the conversation to replay missed output and resume live
@@ -352,9 +374,12 @@ Claude task in Klide, quit/reopen, then sleep/wake the Mac and confirm resumed
 streaming and Stop. These checks must not be called passed based on the
 controlled-process fixture.
 
-The package and wire protocol match on connect; source identity is checked
-before a new remote task. Existing local strict build checks still use binary
-size/mtime so a dev rebuild cannot leave the local daemon on stale code.
+Readiness, transport checks and new remote tasks share the same package-version
+and wire-protocol compatibility rule. Source identity remains diagnostic and is
+validated exactly when selecting and installing a replacement artifact. Changes
+that require a new remote runtime must bump the package version; incompatible
+wire changes must bump the protocol. Existing local strict build checks still
+use binary size/mtime so a dev rebuild cannot leave the local daemon on stale code.
 
 Manual transport check after installation:
 

@@ -505,7 +505,12 @@ behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
 / Refuse; the webview only picks a surface.
 
-### Where the product is (v0.7.0 released 2026-11-18)
+### Where the product is (v0.7.1 released 2026-11-21)
+
+0.7.1 (2026-11-21) added Vibe (Mistral's CLI) as the tenth Delegate, the
+Connectors grid with MCP OAuth sign-in and the composer "+" menu, Watch CI
+(a failing check on your PR → read-only diagnosis → Fix it worktree), and
+guided machine setup with live progress.
 
 0.7.0 shipped Library (Memory / Skills / Foundations), the Sections / Agent
 conversation sidebar, Scheduled under Mission Control, worker setup/checkCommand
