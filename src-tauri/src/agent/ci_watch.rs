@@ -611,6 +611,32 @@ fn fix_branch(pr: u64, sha: &str) -> String {
     format!("klide/fix-pr-{pr}-{}", &sha[..8])
 }
 
+/// A worktree on `branch` at one of a PR's commits, beside the checkout —
+/// the one an earlier call made when it already exists. Fix it and klide-bot's
+/// "Look into it" both land here.
+pub(super) async fn pr_worktree(root: String, pr: u64, sha: String, branch: String) -> Result<String, String> {
+    let (r, b) = (root.clone(), branch.clone());
+    let existing = crate::blocking::run(move || {
+        let existing = crate::git::git_output(&r, &["worktree", "list", "--porcelain"])?
+            .split("\n\n")
+            .find(|block| block.lines().any(|l| l == format!("branch refs/heads/{b}")))
+            .and_then(|block| block.lines().find_map(|l| l.strip_prefix("worktree ")).map(str::to_string));
+        if existing.is_none() {
+            // The PR's head may not be local yet (pushed from elsewhere).
+            crate::git::git_output(&r, &["fetch", "--quiet", "origin", &format!("refs/pull/{pr}/head")])?;
+        }
+        Ok(existing)
+    })
+    .await?;
+    match existing {
+        Some(path) => Ok(path),
+        None => {
+            let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
+            Ok(crate::git::worktree_add_from_commit_core(root, branch, None, None, quiet, Some(sha)).await?.path)
+        }
+    }
+}
+
 /// Check the failing commit out on its own branch, beside the checkout. A
 /// second click on the same firing returns the worktree the first one made.
 #[tauri::command]
@@ -626,8 +652,8 @@ pub async fn ci_watch_fix_prepare(app: tauri::AppHandle, key: String) -> Result<
     let pr = fired.pr_number;
     let branch = fix_branch(pr, &sha);
 
-    let (r, b, s2, checks) = (root.clone(), branch.clone(), sha.clone(), fired.checks.clone());
-    let facts = crate::blocking::run(move || {
+    let (r, s2, checks) = (root.clone(), sha.clone(), fired.checks.clone());
+    let (head_ref, cross_repo) = crate::blocking::run(move || {
         let view = crate::git::github::gh_output(&r, &["pr", "view", &pr.to_string(), "--json", "headRefName,isCrossRepository,state,headRefOid,statusCheckRollup"])
             .ok()
             .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok());
@@ -636,27 +662,10 @@ pub async fn ci_watch_fix_prepare(app: tauri::AppHandle, key: String) -> Result<
         }
         let head_ref = view.as_ref().and_then(|v| v["headRefName"].as_str()).map(str::to_string);
         let cross_repo = view.as_ref().and_then(|v| v["isCrossRepository"].as_bool()).unwrap_or(false);
-        let existing = crate::git::git_output(&r, &["worktree", "list", "--porcelain"])?
-            .split("\n\n")
-            .find(|block| block.lines().any(|l| l == format!("branch refs/heads/{b}")))
-            .and_then(|block| block.lines().find_map(|l| l.strip_prefix("worktree ")).map(str::to_string));
-        if existing.is_none() {
-            // The PR's head may not be local yet (pushed from elsewhere).
-            crate::git::git_output(&r, &["fetch", "--quiet", "origin", &format!("refs/pull/{pr}/head")])?;
-        }
-        Ok((head_ref, cross_repo, existing))
+        Ok((head_ref, cross_repo))
     })
     .await?;
-    let (head_ref, cross_repo, existing) = facts;
-    let cwd = match existing {
-        Some(path) => path,
-        None => {
-            let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
-            crate::git::worktree_add_from_commit_core(root, branch.clone(), None, None, quiet, Some(sha.clone()))
-                .await?
-                .path
-        }
-    };
+    let cwd = pr_worktree(root, pr, sha.clone(), branch.clone()).await?;
     Ok(FixWorkspace { cwd, branch, sha, head_ref, cross_repo })
 }
 

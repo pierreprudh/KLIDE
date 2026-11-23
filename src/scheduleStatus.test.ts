@@ -14,7 +14,8 @@ vi.mock("./conversationNavigation", () => ({ canOpenConversation: () => false, o
 vi.mock("./toast", () => ({ notify: vi.fn() }));
 vi.mock("./ipc/ciWatch", () => ({ ciWatchTake: vi.fn() }));
 vi.mock("./ipc/klideBot", () => ({ klideBotTake: vi.fn() }));
-vi.mock("./klideBotPost", () => ({ postKlideBotReply: vi.fn() }));
+vi.mock("./klideBotNavigation", () => ({ canLookIntoMention: () => true, lookIntoMention: vi.fn() }));
+vi.mock("./externalLink", () => ({ openExternal: vi.fn() }));
 
 const running: Schedule = {
   id: "schedule", revision: 1, target: { kind: "local" }, name: "Review", runId: "conversation", activeRunId: "conversation", mode: "plan", text: "Review changes", dueAt: 1,
@@ -90,18 +91,18 @@ it("takes CI watch firings on load and on each nudge, toasting each once", async
   stop();
 });
 
-it("offers a klide-bot draft with Post, and never posts it by itself", async () => {
+it("offers a klide-bot mention with Look into it, and starts nothing by itself", async () => {
   vi.mocked(klideBotTake).mockResolvedValueOnce([{
     key: "k", workspaceRoot: "/w", repo: "a/b", prNumber: 7, prTitle: "Rail", commentUrl: "u", author: "pierre",
-    excerpt: "@klide-bot why?", provider: "openrouter", model: "m", runId: "run_7", error: null, at: 1,
-    draft: "Because the rail holds groups.", postedUrl: null, announced: true, notified: true,
+    excerpt: "@klide-bot why?", body: "@klide-bot why?", provider: "openrouter", model: "m", at: 1,
+    announced: true, notified: true,
   }]);
   const stop = watchScheduleStatus();
   await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(
-    expect.stringContaining("drafted a reply on #7 — “why?”"),
-    expect.objectContaining({ actions: [expect.objectContaining({ label: "Post" })] }),
+    "@pierre mentioned klide-bot on #7 — “why?”",
+    expect.objectContaining({ actions: [expect.objectContaining({ label: "Look into it" })] }),
   ));
-  const { postKlideBotReply } = await import("./klideBotPost");
-  expect(postKlideBotReply).not.toHaveBeenCalled();
+  const { lookIntoMention } = await import("./klideBotNavigation");
+  expect(lookIntoMention).not.toHaveBeenCalled();
   stop();
 });

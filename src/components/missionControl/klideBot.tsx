@@ -1,14 +1,15 @@
 // Mission Control › Scheduled — klide-bot, the second trigger beside Watch CI.
-// A `@klide-bot` comment on one of your PRs starts a read-only Run; its answer
-// waits here as a draft, and Post sends it as a reply under your account.
-import { useState } from "react";
+// A `@klide-bot` comment on one of your PRs is brought to you: a notification
+// while Klide is open, and a card here. "Look into it" opens Kit in a worktree
+// at the PR's head; nothing runs or posts by itself.
 import { klideBotGet, klideBotSet, type KlideBotInfo } from "../../ipc/klideBot";
-import { postKlideBotReply } from "../../klideBotPost";
 import type { ProviderId } from "../../agent/types";
 import type { HarnessSettings } from "../../settingsStore";
 import { relativeTime } from "../../time";
 import { openExternal } from "../../externalLink";
 import { ProviderModelMark } from "../../modelIdentity";
+import { mentionAsk } from "../../agent/klideBotLook";
+import { canLookIntoMention, lookIntoMention } from "../../klideBotNavigation";
 import { TriggerDetail, TriggerListRow, triggerStatus, useTrigger, type Trigger } from "./trigger";
 
 export const KLIDE_BOT_ID = "__klide-bot__";
@@ -28,41 +29,26 @@ export function KlideBotListRow({ bot, project, current, onSelect }: { bot: Klid
 }
 
 export function KlideBotDetail({ bot, project }: { bot: KlideBot; project: string | null }) {
-  return <TriggerDetail trigger={bot} project={project} title={KLIDE_BOT_TITLE} status={triggerStatus(bot, "Listening")} emptyHint="Open a project to answer @klide-bot on its pull requests.">
-    <p className="scheduled-instructions">When someone with write access writes <code>@klide-bot</code> in a comment on one of your open pull requests in {project}, this agent reads the code and drafts a reply, following the repository's own rules. It runs read-only. Nothing is posted until you press Post: the reply goes out under your GitHub account, signed “— klide-bot”. Comments from before you turned this on are skipped.</p>
+  return <TriggerDetail trigger={bot} project={project} title={KLIDE_BOT_TITLE} status={triggerStatus(bot, "Listening")} mode="Work, when you ask" emptyHint="Open a project to hear about @klide-bot on its pull requests.">
+    <p className="scheduled-instructions">When someone with write access writes <code>@klide-bot</code> in a comment on one of your open pull requests in {project}, you get a notification while Klide is open. Look into it opens this agent in a worktree at the pull request's head, with the thread and diff attached. Nothing runs or posts until you choose to.</p>
   </TriggerDetail>;
 }
 
-
-export function KlideBotHistory({ bot, onOpenRun }: { bot: KlideBot; onOpenRun: (id: string) => void }) {
-  const [posted, setPosted] = useState<Record<string, string>>({});
+export function KlideBotHistory({ bot }: { bot: KlideBot }) {
   const mentions = bot.info?.mentions ?? [];
-  if (!mentions.length) return <p className="scheduled-pane-empty">{bot.on ? "No mentions yet." : "Turn on to answer @klide-bot on your pull requests."}</p>;
-  return <ol className="ci-fires bot-cards">{mentions.map(m => {
-    const url = m.postedUrl ?? posted[m.key];
-    return <li key={m.key} className="bot-card">
-      <button type="button" className="bot-card-open" disabled={!m.runId} aria-label={`Open Run · #${m.prNumber} ${m.prTitle}`}
-        onClick={() => m.runId && onOpenRun(m.runId)}>
-        <span className="ci-fire-head">
-          {m.provider ? <ProviderModelMark provider={m.provider as ProviderId} model={m.model} size={18} /> : null}
-          <span className="ci-fire-title">#{m.prNumber} {m.prTitle}</span>
-          <span className="ci-fire-time" data-failed={m.error ? true : undefined}>{m.error ? "Not answered" : relativeTime(m.at)}</span>
-        </span>
-        <span className="bot-card-comment">@{m.author}: {m.excerpt}</span>
-      </button>
-      {m.error
-        ? <p className="bot-card-note" data-failed>{m.error}</p>
-        : !m.draft
-          ? <p className="bot-card-note" data-pending>Kit is answering…</p>
-          : <>
-            <blockquote className="bot-card-draft">{m.draft}</blockquote>
-            <div className="bot-card-foot">
-              {url
-                ? <button type="button" className="bot-card-link" onClick={() => void openExternal(url)}>Posted · View on GitHub</button>
-                : <button type="button" className="bot-card-post" title="Posts on GitHub under your account, signed — klide-bot"
-                    onClick={() => void postKlideBotReply(m).then(u => { if (u) setPosted(p => ({ ...p, [m.key]: u })); })}>Post reply</button>}
-            </div>
-          </>}
-    </li>;
-  })}</ol>;
+  if (!mentions.length) return <p className="scheduled-pane-empty">{bot.on ? "No mentions yet." : "Turn on to hear about @klide-bot on your pull requests."}</p>;
+  const canLook = canLookIntoMention();
+  return <ol className="ci-fires bot-cards">{mentions.map(m => <li key={m.key} className="bot-card">
+    <span className="ci-fire-head">
+      {m.provider ? <ProviderModelMark provider={m.provider as ProviderId} model={m.model} size={18} /> : null}
+      <span className="ci-fire-title">#{m.prNumber} {m.prTitle}</span>
+      <span className="ci-fire-time">{relativeTime(m.at)}</span>
+    </span>
+    <span className="bot-card-comment">@{m.author}: {mentionAsk(m) || m.excerpt}</span>
+    <div className="bot-card-foot">
+      {m.commentUrl ? <button type="button" className="bot-card-link" onClick={() => void openExternal(m.commentUrl)}>View on GitHub</button> : null}
+      {canLook ? <button type="button" className="bot-card-look" title="Opens Kit in a worktree at the pull request's head"
+        onClick={() => lookIntoMention(m)}>Look into it</button> : null}
+    </div>
+  </li>)}</ol>;
 }

@@ -119,7 +119,7 @@ export function TriggerListRow({ trigger, name, meta, status, current, onSelect 
   </button>;
 }
 
-export function TriggerDetail({ trigger, project, title, status, emptyHint, children }: { trigger: AnyTrigger; project: string | null; title: string; status: string; emptyHint: string; children: ReactNode }) {
+export function TriggerDetail({ trigger, project, title, status, emptyHint, mode = "Plan", children }: { trigger: AnyTrigger; project: string | null; title: string; status: string; emptyHint: string; /** How the agent works when it does: a fired Run is Plan. */ mode?: string; children: ReactNode }) {
   const customProviders = useCustomProviders();
   const keylessProviders = useKeylessProviders();
   const llamaSetupMode = useLlamaSetupMode();
@@ -147,7 +147,7 @@ export function TriggerDetail({ trigger, project, title, status, emptyHint, chil
       <div className="scheduled-context" aria-label="Run settings">
         <span>This Mac</span>
         <span title={trigger.workspaceRoot ?? undefined}>{project}</span>
-        <span>Plan</span>
+        <span>{mode}</span>
       </div>
       <div className="ci-watch-agent" role="group" aria-label="Agent">
         <InlineMenu

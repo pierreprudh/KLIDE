@@ -143,6 +143,9 @@ import { attachmentsRoot } from "./ipc/pdf";
 import { registerConversationOpener, registerSessionReattacher } from "./conversationNavigation";
 import { registerScheduleOpener } from "./scheduleNavigation";
 import { registerCiFixOpener } from "./ciFixNavigation";
+import { registerKlideBotOpener } from "./klideBotNavigation";
+import { klideBotLook, type KlideBotMention } from "./ipc/klideBot";
+import { klideBotLookTurn } from "./agent/klideBotLook";
 import { ciWatchFixPrepare, type CiWatchFired } from "./ipc/ciWatch";
 import { ciDiagnosis, ciFixTurn, ciLog } from "./agent/ciFix";
 import { isScheduledRun } from "./scheduleStatus";
@@ -1211,6 +1214,50 @@ function App() {
   useEffect(() => {
     registerCiFixOpener(fired => { void startCiFixRef.current(fired); });
     return () => registerCiFixOpener(null);
+  }, []);
+
+  // "Look into it" on a klide-bot mention: a worktree at the PR's head, then a
+  // Work turn on Focus's canvas with the thread and diff attached.
+  const pendingLookRef = useRef<{ root: string; mention: KlideBotMention } | null>(null);
+  const lookRef = useRef<(m: KlideBotMention) => Promise<void>>(async () => {});
+  lookRef.current = async (m) => {
+    if (m.workspaceRoot !== workspaceRoot) {
+      pendingLookRef.current = { root: m.workspaceRoot, mention: m };
+      changeRoot(m.workspaceRoot);
+      return;
+    }
+    const preparing = notify(`Opening #${m.prNumber} in a worktree…`, { tone: "info", duration: 0 });
+    try {
+      const ws = await klideBotLook(m.key);
+      const turn = klideBotLookTurn(m, ws);
+      back();
+      if (!focusBase) enterFocus();
+      endFocusRaceWatch();
+      setAiPanelCwd(primaryPanelId, ws.cwd);
+      if (m.provider) {
+        setAiPanelProvider(primaryPanelId, m.provider as ProviderId);
+        if (m.model) updateAiPanelModel(primaryPanelId, m.model);
+      }
+      setFocusInitialMessage(turn.text);
+      setFocusInitialMachine(null);
+      setFocusInitialAttachments([turn.attachment]);
+      setFocusInitialMode("goal");
+      setFocusChatActive(true);
+    } catch (e) {
+      notify(`Couldn't open #${m.prNumber}: ${errMessage(e)}`, { tone: "error" });
+    } finally {
+      dismissToast(preparing);
+    }
+  };
+  useEffect(() => {
+    const pending = pendingLookRef.current;
+    if (!pending || pending.root !== workspaceRoot) return;
+    pendingLookRef.current = null;
+    void lookRef.current(pending.mention);
+  }, [workspaceRoot]);
+  useEffect(() => {
+    registerKlideBotOpener(m => { void lookRef.current(m); });
+    return () => registerKlideBotOpener(null);
   }, []);
 
   const [scheduledSelection, setScheduledSelection] = useState<{ id: string; version: number } | null>(null);

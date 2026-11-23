@@ -1459,7 +1459,7 @@ pub fn run() {
             agent::klide_bot::klide_bot_get,
             agent::klide_bot::klide_bot_set,
             agent::klide_bot::klide_bot_take,
-            agent::klide_bot::klide_bot_post,
+            agent::klide_bot::klide_bot_look,
             agent::schedules::agent_schedule_update,
             agent::schedules::agent_schedule_list,
             agent::schedules::agent_schedule_history,

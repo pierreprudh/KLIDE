@@ -121,16 +121,20 @@ polls the issue comments on your open PRs every two minutes. A comment counts
 when it names `@klide-bot` as a whole handle, was written after the switch was
 turned on, and its author has write access (`OWNER`, `MEMBER` or
 `COLLABORATOR`); the bot's own replies carry a `<!-- klide-bot -->` marker and
-never count. Each comment starts one read-only Run (the same forced Plan
-request as Watch CI) whose prompt fences the comment as a request, not
-instructions, and asks for a reply that follows the repository's own rules.
+never count.
 
-When the Run settles, its last answer becomes a **draft**. Nothing is posted by
-itself: the app notifies, the window shows a toast with **Post** and **Open**,
-and Run history lists each mention with its draft. Post sends the draft as a
-reply on the PR under your GitHub account (`gh api …/issues/<n>/comments`),
-signed "— klide-bot", once. State is `klide-bot.json` in app data under
-`klide-bot.lock`.
+Nothing runs by itself. While Klide is open, a new mention posts a macOS
+notification and a toast with **Look into it** and **GitHub**; one that came in
+while Klide was closed is shown when it opens, if less than a day old. Look
+into it (`klide_bot_look`) checks the PR's head out in a worktree
+`klide/pr-<n>-<sha8>` (the same one on a second click at the same commit) and
+opens a Focus Work conversation there on the switch's agent, with the PR's
+description, thread and diff attached as `PR #<n> thread.md`. Run history lists
+each mention with the same two actions. State is `klide-bot.json` in app data
+under `klide-bot.lock`.
+
+The public answer on GitHub is a separate thing: `.github/workflows/klide-bot.yml`
+answers the same mention as `klide-bot[bot]`, read-only, from GitHub Actions.
 
 ## Controls and recovery
 

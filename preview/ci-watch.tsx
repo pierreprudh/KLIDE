@@ -26,15 +26,15 @@ const realInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: st
   if (cmd === "agent_schedule_service_status") return { supported: true, installed: true, running: true, compatible: true, pid: 1, error: null };
   if (cmd === "agent_schedule_history") return [];
   if (cmd === "klide_bot_get") {
-    const m = (n: number, title: string, author: string, excerpt: string, ago: number, draft: string | null, posted: string | null = null) => ({
-      key: `b${n}${ago}`, workspaceRoot: "/Users/pierre/KLIDE", repo: "pierreprudh/KLIDE", prNumber: n, prTitle: title, commentUrl: "", author, excerpt,
-      provider: "anthropic", model: "claude-sonnet-5-5", runId: `run_b${n}`, error: null, at: now - ago, draft, postedUrl: posted, announced: true, notified: true,
+    const m = (n: number, title: string, author: string, excerpt: string, ago: number) => ({
+      key: `b${n}${ago}`, workspaceRoot: "/Users/pierre/KLIDE", repo: "pierreprudh/KLIDE", prNumber: n, prTitle: title, commentUrl: "https://github.com/x", author, excerpt, body: excerpt,
+      provider: "anthropic", model: "claude-sonnet-5-5", at: now - ago, announced: true, notified: true,
     });
     return { enabled: !OFF, provider: "anthropic", model: "claude-sonnet-5-5", enabledAt: now - 3600e3, lastPollAt: now - 40e3, lastError: null,
       mentions: [
-        m(552, "Pin dependency audit to high", "pierre", "@klide-bot why does the audit fail on moderate advisories?", 2 * 60e3, null),
-        m(548, "Rail: hold agent groups", "pierre", "@klide-bot is this the right place for the group order?", 50 * 60e3, "Yes — focusHistory.ts owns rail order; the group memory belongs there, not in WorkspaceRail."),
-        m(541, "Sandbox network card", "pierre", "@klide-bot summarize the risk here", 26 * 3600e3, "The card only widens loopback; nothing leaves the Mac without the toggle.", "https://github.com/x"),
+        m(552, "Pin dependency audit to high", "pierre", "@klide-bot why does the audit fail on moderate advisories?", 2 * 60e3),
+        m(548, "Rail: hold agent groups", "pierre", "@klide-bot is this the right place for the group order?", 50 * 60e3),
+        m(541, "Sandbox network card", "pierre", "@klide-bot summarize the risk here", 26 * 3600e3),
       ] };
   }
   if (cmd === "agent_read_run") {
@@ -46,6 +46,8 @@ const realInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: st
 };
 const { registerCiFixOpener } = await import("../src/ciFixNavigation");
 registerCiFixOpener(() => {});
+const { registerKlideBotOpener } = await import("../src/klideBotNavigation");
+registerKlideBotOpener(() => {});
 const { Scheduled } = await import("../src/components/Scheduled");
 const { CI_WATCH_ID } = await import("../src/components/missionControl/ciWatch");
 ReactDOM.createRoot(document.getElementById("root")!).render(

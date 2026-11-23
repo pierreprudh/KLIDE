@@ -205,7 +205,7 @@ export function Scheduled(props: Props) {
       <aside className="scheduled-pane scheduled-history" aria-label="Run history">
         <div className="scheduled-pane-heading"><h2>Run history</h2>{ciSelected ? (ciWatch.info?.fired.length ? <span>{ciWatch.info.fired.length}</span> : null) : botSelected ? (klideBot.info?.mentions.length ? <span>{klideBot.info.mentions.length}</span> : null) : history.length > 0 && <span>{history.length}</span>}</div>
         <div className="scheduled-history-scroll klide-scroll-slim">
-          {ciSelected ? <CiWatchHistory watch={ciWatch} onOpenRun={props.onOpenRun} /> : botSelected ? <KlideBotHistory bot={klideBot} onOpenRun={props.onOpenRun} /> : !history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
+          {ciSelected ? <CiWatchHistory watch={ciWatch} onOpenRun={props.onOpenRun} /> : botSelected ? <KlideBotHistory bot={klideBot} /> : !history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
             <button type="button" aria-label={`Open Run · ${shortWhen(run.startedAt)} · ${statusName(run.status)}`}
               title={`Scheduled ${when(run.scheduledAt)}${run.finishedAt ? ` · Finished ${when(run.finishedAt)}` : ""}`} onClick={() => props.onOpenRun(run.runId)}>
               <span className="scheduled-history-top"><time dateTime={new Date(run.startedAt).toISOString()}>{shortWhen(run.startedAt)}</time><span data-failed={run.status === "failed" || undefined}>{statusName(run.status)}</span></span>

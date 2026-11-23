@@ -768,7 +768,7 @@ async fn tick_service(
 #[cfg(unix)]
 pub(crate) fn start_service(data: PathBuf, host: std::sync::Arc<super::daemon::RunHost>) {
     super::ci_watch::start_service(data.clone(), host.clone());
-    super::klide_bot::start_service(data.clone(), host.clone());
+    super::klide_bot::start_service(data.clone());
     tauri::async_runtime::spawn(async move {
         loop {
             if let Err(error) = tick_service(&data, &host).await {

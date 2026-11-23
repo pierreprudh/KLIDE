@@ -1,6 +1,6 @@
-// klide_bot_* — Kit answering `@klide-bot` on your pull requests
-// (src-tauri/src/agent/klide_bot.rs). The scheduled service starts a
-// read-only Run per mention; its answer waits as a draft until you post it.
+// klide_bot_* — `@klide-bot` on your pull requests, brought to you
+// (src-tauri/src/agent/klide_bot.rs). The scheduled service records each
+// mention; "Look into it" opens Kit in a worktree at the PR's head.
 
 import { invoke } from "@tauri-apps/api/core";
 import { toStartRunRequest } from "../agent/client";
@@ -8,9 +8,8 @@ import type { StartAgentRunInput } from "../agent/types";
 
 export type KlideBotMention = {
   key: string; workspaceRoot: string; repo: string; prNumber: number; prTitle: string;
-  commentUrl: string; author: string; excerpt: string; provider: string; model: string;
-  runId: string | null; error: string | null; at: number;
-  draft: string | null; postedUrl: string | null; announced: boolean; notified: boolean;
+  commentUrl: string; author: string; excerpt: string; body: string;
+  provider: string; model: string; at: number; announced: boolean; notified: boolean;
 };
 
 export type KlideBotInfo = {
@@ -19,21 +18,29 @@ export type KlideBotInfo = {
   mentions: KlideBotMention[];
 };
 
+export type KlideBotLook = {
+  cwd: string; branch: string; sha: string;
+  headRef: string | null; crossRepo: boolean;
+  /** The PR's description, thread and diff — the attached note. */
+  context: string;
+};
+
 export function klideBotGet(workspaceRoot: string): Promise<KlideBotInfo> {
   return invoke("klide_bot_get", { workspaceRoot });
 }
 
-/** `input: null` turns the bot off. Rust forces each Run read-only (Plan). */
+/** `input: null` turns the bot off. The input only names the agent "Look
+ *  into it" opens on; nothing runs by itself. */
 export function klideBotSet(workspaceRoot: string, input: StartAgentRunInput | null): Promise<KlideBotInfo> {
   return invoke("klide_bot_set", { workspaceRoot, request: input ? toStartRunRequest(input) : null });
 }
 
-/** Drafts (and failures) not yet toasted, each returned once. */
+/** Mentions not yet toasted, each returned once. */
 export function klideBotTake(): Promise<KlideBotMention[]> {
   return invoke("klide_bot_take");
 }
 
-/** Post the draft as a signed reply under your GitHub account; the comment's URL. */
-export function klideBotPost(key: string): Promise<string> {
-  return invoke("klide_bot_post", { key });
+/** A worktree at the PR's head and the note the conversation starts with. */
+export function klideBotLook(key: string): Promise<KlideBotLook> {
+  return invoke("klide_bot_look", { key });
 }
