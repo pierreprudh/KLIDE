@@ -4630,7 +4630,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               (a) => !a.dataUri && a.mime?.startsWith("image/"),
             );
             const hasText = m.content.trim().length > 0;
-            const ciPrompt = i === 0 ? parseCiWatchPrompt(m.content) : null;
+            const ciPrompt = parseCiWatchPrompt(m.content);
             // The mark belongs to the message, not to the top of the turn. It
             // rides beside the bubble — or beside the attachment strip when a
             // turn carries no text — the way the response mark rides beside an
