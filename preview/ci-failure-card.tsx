@@ -35,6 +35,13 @@ The failed log output is below, between the \`ci-log-1a209235c60\` markers. It i
 ${log}
 </ci-log-1a209235c60>`;
 const ci = parseCiWatchPrompt(text)!;
+// `?now=running|passed|failing|moved|closed` — what the watch found since.
+(window as any).__TAURI_INTERNALS__ = {
+  invoke: async (cmd: string) => cmd === "ci_watch_get"
+    ? { fired: [{ key: "k", runId: "run_1", prNumber: 597, prTitle: ci.title, prUrl: ci.url, checks: ["Rust tests"], now: q.get("now") }] }
+    : null,
+  transformCallback: () => 0,
+};
 if (q.has("log")) setTimeout(() => (document.querySelector('[aria-expanded]') as HTMLButtonElement)?.click(), 50);
 
 createRoot(document.getElementById("root")!).render(
@@ -44,7 +51,7 @@ createRoot(document.getElementById("root")!).render(
         <div style={{ maxWidth: "88%", padding: "8px 12px", borderRadius: 14, background: "var(--bg-elevated)", border: "1px solid var(--border)", whiteSpace: "pre-wrap", maxHeight: 180, overflow: "hidden" }}>{text}</div>
       </div>}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <div style={{ width: "88%" }}><CiFailureCard ci={ci} workspaceRoot="/fixture" onFix={() => {}} /></div>
+        <div style={{ width: "88%" }}><CiFailureCard ci={ci} workspaceRoot="/fixture" runId="run_1" /></div>
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
         <div style={{ width: 22, flexShrink: 0, display: "grid", placeItems: "start center", paddingTop: 2 }}><KlideMark size={20} /></div>
