@@ -943,29 +943,38 @@ pub fn pty_spawn(
     watch_shell_title(app.clone(), id.clone(), shell_pid);
 
     std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
+        // Rate-limit output events: dense output (`cat big.log`, a compiler
+        // spew, a TUI redraw storm) would cross the IPC boundary once per
+        // read and flood the webview. The reader never sleeps — it hands
+        // chunks to a coalescer that emits at most once per frame
+        // (`spawn_pty_coalescer`), so throughput is untouched and a lone
+        // keystroke echo still goes out at once.
+        let mut buf = [0u8; 65536];
         let mut framer = crate::pty_frame::Utf8Framer::new();
+        let (tx, emitter) = spawn_pty_coalescer({
+            let app = app.clone();
+            let id = id.clone();
+            move |chunk| {
+                let _ = app.emit("pty:data", PtyChunk { id: id.clone(), chunk });
+            }
+        });
         loop {
             let (chunk, eof) = match reader.read(&mut buf) {
                 Ok(0) | Err(_) => (framer.finish(), true),
                 Ok(n) => (framer.push(&buf[..n]), false),
             };
-            if chunk.is_empty() {
-                // Either the child is gone, or this read ended inside a
-                // character and the whole of it is still pending.
-                if eof {
-                    break;
-                }
-                continue;
+            // An empty chunk: either the child is gone, or this read ended
+            // inside a character and the whole of it is still pending.
+            if !chunk.is_empty() && tx.send(chunk).is_err() {
+                break;
             }
-            let _ = app.emit(
-                "pty:data",
-                PtyChunk {
-                    id: id.clone(),
-                    chunk,
-                },
-            );
+            if eof {
+                break;
+            }
         }
+        // Every byte reaches the UI before the exit event does.
+        drop(tx);
+        let _ = emitter.join();
         let _ = child.wait();
         // The shell is gone (`exit`, or the user killed it). Drop it so the id
         // is free to spawn again, and tell the UI so the tab can close itself
@@ -977,6 +986,54 @@ pub fn pty_spawn(
     });
 
     Ok(())
+}
+
+/// One frame: the shortest gap between two `pty:data` emits of one session.
+const PTY_EMIT_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+/// A batch this big goes out without waiting for the frame to end.
+const PTY_EMIT_MAX: usize = 256 * 1024;
+
+/// Coalesce a PTY reader's chunks into at most one emit per frame without ever
+/// slowing the reader. The first chunk after a quiet frame is emitted at once
+/// (a keystroke echo never waits); chunks that arrive within a frame of the
+/// last emit are gathered and sent together when it ends. The bounded channel
+/// is the only backpressure — if the webview falls far behind, the reader
+/// blocks on `send`, exactly as the shell would on a full PTY. Dropping the
+/// sender flushes what is pending and ends the thread; join it before
+/// announcing exit so no output trails the exit event.
+fn spawn_pty_coalescer(
+    mut emit: impl FnMut(String) + Send + 'static,
+) -> (std::sync::mpsc::SyncSender<String>, std::thread::JoinHandle<()>) {
+    use std::sync::mpsc::{sync_channel, RecvTimeoutError, TryRecvError};
+    use std::time::Instant;
+    let (tx, rx) = sync_channel::<String>(256);
+    let handle = std::thread::spawn(move || {
+        let mut last_emit = Instant::now() - PTY_EMIT_FRAME;
+        loop {
+            let Ok(mut batch) = rx.recv() else { break };
+            let deadline = last_emit + PTY_EMIT_FRAME;
+            let mut closed = false;
+            while batch.len() < PTY_EMIT_MAX {
+                match rx.try_recv() {
+                    Ok(more) => batch.push_str(&more),
+                    Err(TryRecvError::Disconnected) => { closed = true; break; }
+                    Err(TryRecvError::Empty) => {
+                        let now = Instant::now();
+                        if now >= deadline { break; }
+                        match rx.recv_timeout(deadline - now) {
+                            Ok(more) => batch.push_str(&more),
+                            Err(RecvTimeoutError::Timeout) => break,
+                            Err(RecvTimeoutError::Disconnected) => { closed = true; break; }
+                        }
+                    }
+                }
+            }
+            emit(batch);
+            last_emit = Instant::now();
+            if closed { break; }
+        }
+    });
+    (tx, handle)
 }
 
 /// Tell one shell how big its window actually is. Per session now, so a split
@@ -1028,16 +1085,26 @@ pub(crate) fn spawn_machine_setup(
     shells.insert(id.clone(), Shell { writer, master: pair.master, cwd: None });
     drop(shells);
     std::thread::spawn(move || {
-        let mut bytes = [0u8; 4096];
+        // Same coalescing as the user-shell reader above.
+        let mut bytes = [0u8; 65536];
         let mut framer = crate::pty_frame::Utf8Framer::new();
+        let (tx, emitter) = spawn_pty_coalescer({
+            let app = app.clone();
+            let id = id.clone();
+            move |chunk| {
+                let _ = app.emit("pty:data", PtyChunk { id: id.clone(), chunk });
+            }
+        });
         loop {
             let (chunk, done) = match reader.read(&mut bytes) {
                 Ok(0) | Err(_) => (framer.finish(), true),
                 Ok(count) => (framer.push(&bytes[..count]), false),
             };
-            if !chunk.is_empty() { let _ = app.emit("pty:data", PtyChunk { id: id.clone(), chunk }); }
+            if !chunk.is_empty() && tx.send(chunk).is_err() { break; }
             if done { break; }
         }
+        drop(tx);
+        let _ = emitter.join();
         let success = child.wait().is_ok_and(|status| status.success());
         crate::machine_setup::finished(&id);
         if let Some(state) = app.try_state::<PtyState>() { state.shells.lock().unwrap().remove(&id); }
@@ -1811,6 +1878,40 @@ mod tests {
     //! bugs were: the account-switch guard asked only the in-process host, and
     //! stop/resize skipped the daemon whenever the persistence toggle was off.
     use super::*;
+
+    /// The reader is never slowed: a flood is gathered into a few emits, and
+    /// dropping the sender flushes the tail before the thread ends.
+    #[test]
+    fn coalescer_batches_a_flood_and_flushes_on_close() {
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = out.clone();
+        let (tx, handle) = spawn_pty_coalescer(move |chunk| sink.lock().unwrap().push(chunk));
+        let started = std::time::Instant::now();
+        for _ in 0..2000 {
+            tx.send("x".repeat(1024)).unwrap();
+        }
+        drop(tx);
+        handle.join().unwrap();
+        let emitted = out.lock().unwrap();
+        assert_eq!(emitted.iter().map(String::len).sum::<usize>(), 2000 * 1024);
+        assert!(emitted.len() < 100, "{} emits for 2000 chunks", emitted.len());
+        // ~2 MB through in well under the old 15 ms-per-chunk floor (30 s).
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    /// A lone keystroke echo after a quiet frame goes out at once.
+    #[test]
+    fn coalescer_emits_a_lone_chunk_without_waiting() {
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<std::time::Instant>();
+        let (tx, handle) = spawn_pty_coalescer(move |_| { let _ = seen_tx.send(std::time::Instant::now()); });
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let sent = std::time::Instant::now();
+        tx.send("a".into()).unwrap();
+        let at = seen_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert!(at.duration_since(sent) < std::time::Duration::from_millis(8));
+        drop(tx);
+        handle.join().unwrap();
+    }
 
     fn secret_meta(session_id: &str) -> pty_host::ScrollbackMeta {
         pty_host::ScrollbackMeta {

@@ -1288,16 +1288,24 @@ fn do_create_for_run(
 }
 
 #[tauri::command]
-pub fn mission_create(
-    state: tauri::State<'_, MissionStoreState>,
+pub async fn mission_create(
+    app: tauri::AppHandle,
     workspace_root: String,
     input: CreateMissionInput,
 ) -> Result<DurableMissionBundle, String> {
-    let _guard = state
-        .write_gate
-        .lock()
-        .map_err(|_| "Mission store is unavailable.".to_string())?;
-    do_create(&workspace_root, input)
+    // Creation is a directory, a Markdown file per task and the event log —
+    // real disk work, so it belongs on the blocking pool with the store's
+    // write gate taken inside the closure (the supervisor's Complete branch
+    // already proves the gate is holdable there).
+    crate::blocking::run(move || {
+        let state = app.state::<MissionStoreState>();
+        let _guard = state
+            .write_gate
+            .lock()
+            .map_err(|_| "Mission store is unavailable.".to_string())?;
+        do_create(&workspace_root, input)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1375,13 +1383,19 @@ fn scan_missions(
 }
 
 #[tauri::command]
-pub fn mission_save_task(
-    state: tauri::State<'_, MissionStoreState>,
+pub async fn mission_save_task(
+    app: tauri::AppHandle,
     workspace_root: String,
     mission_id: String,
     input: SaveMissionTaskInput,
 ) -> Result<DurableMissionBundle, String> {
-    do_save_task(&state, &workspace_root, &mission_id, input)
+    // Task edits rewrite two Markdown files and append an event — disk work
+    // under the write gate, off the main thread (blocking.rs).
+    crate::blocking::run(move || {
+        let state = app.state::<MissionStoreState>();
+        do_save_task(&state, &workspace_root, &mission_id, input)
+    })
+    .await
 }
 
 fn do_save_task(
@@ -1859,44 +1873,64 @@ async fn drive_mission_inner(
     workspace_root: &str,
     mission_id: &str,
 ) -> Result<(), String> {
+    // The decision reads the bundle from disk under the write gate — blocking
+    // work, so the whole block rides the blocking pool, matching the Complete
+    // branch below.
     let decision = {
-        let state = app.state::<MissionStoreState>();
-        let _guard = state
-            .write_gate
-            .lock()
-            .map_err(|_| "Mission store is unavailable.".to_string())?;
-        // Taken, not peeked: a request is consumed by exactly one pass, so a
-        // stale one cannot linger and fire after the operator moved on.
-        let requested = state
-            .requested
-            .lock()
-            .map_err(|_| "Mission supervisor is unavailable.".to_string())?
-            .remove(&mission_key(workspace_root, mission_id));
-        let bundle = load_bundle(workspace_root, mission_id)?;
-        supervisor_decision(&bundle, &fold_runtime(&bundle), requested.as_deref())?
+        let app_handle = app.clone();
+        let root = workspace_root.to_string();
+        let id = mission_id.to_string();
+        crate::blocking::run(move || {
+            let state = app_handle.state::<MissionStoreState>();
+            let _guard = state
+                .write_gate
+                .lock()
+                .map_err(|_| "Mission store is unavailable.".to_string())?;
+            // Taken, not peeked: a request is consumed by exactly one pass,
+            // so a stale one cannot linger and fire after the operator moved
+            // on.
+            let requested = state
+                .requested
+                .lock()
+                .map_err(|_| "Mission supervisor is unavailable.".to_string())?
+                .remove(&mission_key(&root, &id));
+            let bundle = load_bundle(&root, &id)?;
+            supervisor_decision(&bundle, &fold_runtime(&bundle), requested.as_deref())
+        })
+        .await?
     };
     match decision {
         SupervisorDecision::Wait => Ok(()),
         SupervisorDecision::Dispatch(task_id) => {
             if let Err(error) = dispatch_task(app, workspace_root, mission_id, &task_id).await {
-                let state = app.state::<MissionStoreState>();
-                let _guard = state
-                    .write_gate
-                    .lock()
-                    .map_err(|_| "Mission store is unavailable.".to_string())?;
-                let dir = mission_dir(workspace_root, mission_id, true)?;
-                let bundle = load_bundle_from_dir(&dir)?;
-                // Only a genuinely recorded dispatch failure parks the mission;
-                // a "not ready" race must not.
-                if dispatch_failure_should_park(&bundle, &task_id) {
-                    append_lifecycle_event(
-                        &dir,
-                        mission_id,
-                        MissionEvent::MissionParked {
-                            reason: format!("Task `{task_id}` could not start: {error}"),
-                        },
-                    )?;
-                }
+                // Only a genuinely recorded dispatch failure parks the
+                // mission; a "not ready" race must not.
+                let app_handle = app.clone();
+                let root = workspace_root.to_string();
+                let id = mission_id.to_string();
+                let failed_task = task_id.clone();
+                crate::blocking::run(move || {
+                    let state = app_handle.state::<MissionStoreState>();
+                    let _guard = state
+                        .write_gate
+                        .lock()
+                        .map_err(|_| "Mission store is unavailable.".to_string())?;
+                    let dir = mission_dir(&root, &id, true)?;
+                    let bundle = load_bundle_from_dir(&dir)?;
+                    if dispatch_failure_should_park(&bundle, &failed_task) {
+                        append_lifecycle_event(
+                            &dir,
+                            &id,
+                            MissionEvent::MissionParked {
+                                reason: format!(
+                                    "Task `{failed_task}` could not start: {error}"
+                                ),
+                            },
+                        )?;
+                    }
+                    Ok(())
+                })
+                .await?;
             }
             Ok(())
         }
@@ -1914,13 +1948,19 @@ async fn drive_mission_inner(
             }).await
         }
         SupervisorDecision::Park(reason) => {
-            let state = app.state::<MissionStoreState>();
-            let _guard = state
-                .write_gate
-                .lock()
-                .map_err(|_| "Mission store is unavailable.".to_string())?;
-            let dir = mission_dir(workspace_root, mission_id, true)?;
-            append_lifecycle_event(&dir, mission_id, MissionEvent::MissionParked { reason })
+            let app_handle = app.clone();
+            let root = workspace_root.to_string();
+            let id = mission_id.to_string();
+            crate::blocking::run(move || {
+                let state = app_handle.state::<MissionStoreState>();
+                let _guard = state
+                    .write_gate
+                    .lock()
+                    .map_err(|_| "Mission store is unavailable.".to_string())?;
+                let dir = mission_dir(&root, &id, true)?;
+                append_lifecycle_event(&dir, &id, MissionEvent::MissionParked { reason })
+            })
+            .await
         }
     }
 }
@@ -1984,29 +2024,41 @@ pub(crate) async fn drive_mission(
 #[tauri::command]
 pub async fn mission_approve(
     app: tauri::AppHandle,
-    state: tauri::State<'_, MissionStoreState>,
     workspace_root: String,
     mission_id: String,
     input: MissionApprovalInput,
 ) -> Result<DurableMissionBundle, String> {
     let auto_start = input.auto_start;
-    {
-        let _guard = state
-            .write_gate
-            .lock()
-            .map_err(|_| "Mission store is unavailable.".to_string())?;
-        let dir = mission_dir(&workspace_root, &mission_id, true)?;
-        let bundle = load_bundle_from_dir(&dir)?;
-        snapshot_approval(&dir, &bundle, input)?;
-        let refreshed = load_bundle_from_dir(&dir)?;
-        if !fold_runtime(&refreshed).approved {
-            append_event(&dir, &mission_id, MissionEvent::PlanApproved)?;
+    // Approval snapshots the plan and appends the event — several reads and
+    // writes under the store's write gate, so the body runs on the blocking
+    // pool with the gate taken inside the closure, like every other Mission
+    // write (ADR-0002).
+    crate::blocking::run({
+        let app = app.clone();
+        let workspace_root = workspace_root.clone();
+        let mission_id = mission_id.clone();
+        move || {
+            let state = app.state::<MissionStoreState>();
+            let _guard = state
+                .write_gate
+                .lock()
+                .map_err(|_| "Mission store is unavailable.".to_string())?;
+            let dir = mission_dir(&workspace_root, &mission_id, true)?;
+            let bundle = load_bundle_from_dir(&dir)?;
+            snapshot_approval(&dir, &bundle, input)?;
+            let refreshed = load_bundle_from_dir(&dir)?;
+            if !fold_runtime(&refreshed).approved {
+                append_event(&dir, &mission_id, MissionEvent::PlanApproved)?;
+            }
+            Ok(())
         }
-    }
+    })
+    .await?;
     if auto_start {
         drive_mission(app, workspace_root.clone(), mission_id.clone()).await?;
     }
-    load_bundle(&workspace_root, &mission_id)
+    // The bundle as it stands now that the supervisor may have dispatched.
+    crate::blocking::run(move || load_bundle(&workspace_root, &mission_id)).await
 }
 
 /// Change only the operator's execution policy, preserving every task's route
@@ -2056,26 +2108,35 @@ pub async fn mission_set_policy(
 #[tauri::command]
 pub async fn mission_request_task(
     app: tauri::AppHandle,
-    state: tauri::State<'_, MissionStoreState>,
     workspace_root: String,
     mission_id: String,
     task_id: String,
 ) -> Result<DurableMissionBundle, String> {
-    {
-        let _guard = state
-            .write_gate
-            .lock()
-            .map_err(|_| "Mission store is unavailable.".to_string())?;
-        let bundle = load_bundle(&workspace_root, &mission_id)?;
-        operator_request_gate(&bundle, &fold_runtime(&bundle), &task_id)?;
-        state
-            .requested
-            .lock()
-            .map_err(|_| "Mission supervisor is unavailable.".to_string())?
-            .insert(mission_key(&workspace_root, &mission_id), task_id);
-    }
+    // The gate check reads the bundle from disk; keep it under the write
+    // gate, but do the reading on the blocking pool rather than the runtime.
+    crate::blocking::run({
+        let app = app.clone();
+        let workspace_root = workspace_root.clone();
+        let mission_id = mission_id.clone();
+        move || {
+            let state = app.state::<MissionStoreState>();
+            let _guard = state
+                .write_gate
+                .lock()
+                .map_err(|_| "Mission store is unavailable.".to_string())?;
+            let bundle = load_bundle(&workspace_root, &mission_id)?;
+            operator_request_gate(&bundle, &fold_runtime(&bundle), &task_id)?;
+            state
+                .requested
+                .lock()
+                .map_err(|_| "Mission supervisor is unavailable.".to_string())?
+                .insert(mission_key(&workspace_root, &mission_id), task_id);
+            Ok(())
+        }
+    })
+    .await?;
     drive_mission(app, workspace_root.clone(), mission_id.clone()).await?;
-    load_bundle(&workspace_root, &mission_id)
+    crate::blocking::run(move || load_bundle(&workspace_root, &mission_id)).await
 }
 
 /// Called from the Delegate PTY exit sink. Settlement is durable evidence that

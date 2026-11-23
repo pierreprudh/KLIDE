@@ -90,3 +90,13 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 # a Tauri Linux build environment already pulls in beside webkit2gtk.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
+# Release hardening: strip keeps debug-symbol weight out of user bundles,
+# thin LTO and one codegen unit buy startup time and steady-state speed at
+# the cost of a slower release build — a trade this app should make.
+# Deliberately NOT `panic = "abort"`: `pdf_text.rs` parses untrusted PDFs
+# behind `catch_unwind`, and that containment only works with unwinding.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
