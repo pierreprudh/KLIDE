@@ -21,6 +21,18 @@ export function klideBotLookTurn(m: KlideBotMention, ws: KlideBotLook): { text: 
   const push = ws.crossRepo || !ws.headRef
     ? "This PR's branch can't be pushed from here."
     : `If a change is needed, commit it here; pushing is \`git push origin HEAD:${ws.headRef}\`.`;
-  const text = `@${m.author} asked about #${m.prNumber}: “${ask}” — take a look. ${push}`;
+  const url = `https://github.com/${m.repo}/pull/${m.prNumber}`;
+  const text = `@${m.author} asked about #${m.prNumber} "${m.prTitle}" (${url}): “${ask}” — take a look. ${push}`;
   return { text, attachment: { path: `PR #${m.prNumber} thread.md`, content: ws.context } };
+}
+
+/** The opening turn read back as facts, so the conversation draws it as a
+ *  PR card (`MentionCard`). `klideBotLookTurn` owns the format. */
+export type MentionTurn = { author: string; number: number; title: string; url: string; ask: string };
+
+const TURN = /^@(\S+) asked about #(\d+) "(.*)" \((https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+)\): “([\s\S]*)” — take a look\./;
+
+export function parseMentionTurn(text: string): MentionTurn | null {
+  const m = TURN.exec(text);
+  return m ? { author: m[1], number: Number(m[2]), title: m[3], url: m[4], ask: m[5] } : null;
 }

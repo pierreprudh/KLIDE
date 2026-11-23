@@ -188,6 +188,8 @@ import { AttachmentCard, AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { CliConfigCard } from "./ai/CliConfigCard";
 import { CiFailureCard } from "./ai/CiFailureCard";
+import { MentionCard } from "./ai/MentionCard";
+import { parseMentionTurn } from "../agent/klideBotLook";
 import { parseCiWatchPrompt } from "../agent/ciWatchPrompt";
 import { parseConfigUsage } from "./ai/cliConfig";
 import { SlashMenu } from "./ai/SlashMenu";
@@ -4631,6 +4633,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
             const hasText = m.content.trim().length > 0;
             const ciPrompt = i === 0 ? parseCiWatchPrompt(m.content) : null;
+            const mentionTurn = i === 0 && !ciPrompt ? parseMentionTurn(m.content) : null;
             // The mark belongs to the message, not to the top of the turn. It
             // rides beside the bubble — or beside the attachment strip when a
             // turn carries no text — the way the response mark rides beside an
@@ -4731,6 +4734,9 @@ This user request requires workspace inspection. Before answering, you MUST call
                       // A CI watch firing's opening message: the facts as a
                       // card; the instructions and log are for the model.
                       beside(<div style={{ flex: 1, minWidth: 0 }}><CiFailureCard ci={ciPrompt} workspaceRoot={workspaceRoot} runId={currentId} /></div>)
+                    ) : hasText && mentionTurn ? (
+                      // A klide-bot "Look into it": the PR and the question as a card.
+                      beside(<div style={{ flex: 1, minWidth: 0 }}><MentionCard turn={mentionTurn} workspaceRoot={workspaceRoot} /></div>)
                     ) : hasText ? (
                       beside(
                         <div
