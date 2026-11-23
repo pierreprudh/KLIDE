@@ -6,6 +6,7 @@ import { canStartCiFix, startCiFix } from "../../ciFixNavigation";
 import { notify } from "../../toast";
 import { ChevronIcon } from "../../icons";
 import { LinkMark } from "../linkMark";
+import { openGitPr } from "../../gitNavigation";
 import "./ciFailureCard.css";
 
 /** The message a CI watch firing opened its Run with, drawn as what it is:
@@ -19,6 +20,8 @@ export function CiFailureCard({ ci, workspaceRoot, runId, onFix }: { ci: CiWatch
   const fix = onFix ?? (fired && canStartCiFix() ? () => startCiFix(fired) : undefined);
   const go = (url: string) => void openExternal(url).catch(error => notify(String(error), { tone: "error" }));
   const names = ci.checks.map(c => c.name);
+  // One failed check: its job is the page worth opening. Several: the PR lists them.
+  const online = ci.checks.length === 1 ? ci.checks[0].url : ci.url;
   const failed = names.length === 0 ? "Checks failed" : `${names.join(", ")} failed`;
   return (
     <section className="ci-card" aria-label={`CI failed on pull request #${ci.number}`}>
@@ -35,11 +38,14 @@ export function CiFailureCard({ ci, workspaceRoot, runId, onFix }: { ci: CiWatch
         <span className="ci-card-sha" title="The commit the checks ran on">{ci.sha}</span>
       </div>
       <div className="ci-card-actions">
-        {ci.checks.map(c => (
-          <button key={c.url} type="button" className="ci-card-action" onClick={() => go(c.url)} title={`Open the ${c.name} job`}>
-            {ci.checks.length > 1 ? c.name : "Open job"}<span className="ci-card-arrow" aria-hidden="true">↗</span>
+        {workspaceRoot && (
+          <button type="button" className="ci-card-action" onClick={() => openGitPr(workspaceRoot, ci.number)} title="Open this pull request in the Git panel">
+            Open in Git panel<span className="ci-card-arrow" aria-hidden="true">↗</span>
           </button>
-        ))}
+        )}
+        <button type="button" className="ci-card-action" onClick={() => go(online)} title={online === ci.url ? "Open the pull request on GitHub" : `Open the failed ${ci.checks[0].name} job on GitHub`}>
+          Open in GitHub<span className="ci-card-arrow" aria-hidden="true">↗</span>
+        </button>
         {ci.log && (
           <button type="button" className="ci-card-action" aria-expanded={open} onClick={() => setOpen(o => !o)}>
             {open ? "Hide log" : "Show log"}<ChevronIcon open={open} size={12} />

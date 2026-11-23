@@ -44,7 +44,7 @@ createRoot(document.getElementById("root")!).render(
         <div style={{ maxWidth: "88%", padding: "8px 12px", borderRadius: 14, background: "var(--bg-elevated)", border: "1px solid var(--border)", whiteSpace: "pre-wrap", maxHeight: 180, overflow: "hidden" }}>{text}</div>
       </div>}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <div style={{ width: "88%" }}><CiFailureCard ci={ci} onFix={() => {}} /></div>
+        <div style={{ width: "88%" }}><CiFailureCard ci={ci} workspaceRoot="/fixture" onFix={() => {}} /></div>
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
         <div style={{ width: 22, flexShrink: 0, display: "grid", placeItems: "start center", paddingTop: 2 }}><KlideMark size={20} /></div>
