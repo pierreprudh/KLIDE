@@ -210,8 +210,12 @@ fn read_config_is_plain(dir: &Path) -> bool {
 fn entries_are_plain(listing: &str) -> bool {
     let mut tokens = listing.split('\0');
     while let (Some(scope), Some(entry)) = (tokens.next(), tokens.next()) {
-        let key = entry.split('\n').next().unwrap_or("");
-        if matches!(scope, "local" | "worktree") && !key_is_plain(key) {
+        let (key, value) = entry.split_once('\n').map_or((entry, None), |(key, value)| (key, Some(value)));
+        // An empty helper resets credential lookup; Klide's exact SSH command
+        // selects one managed key. Neither grants folder trust or enables hooks.
+        let managed = (key == "credential.helper" && value == Some(""))
+            || (key == "core.sshcommand" && value.is_some_and(crate::machine_repository::is_managed_ssh_command));
+        if matches!(scope, "local" | "worktree") && !key_is_plain(key) && !managed {
             return false;
         }
     }
@@ -353,6 +357,32 @@ mod tests {
         // A value cannot smuggle a scope: it stays inside its own entry.
         assert!(!entries_are_plain("local\0core.sshcommand\nx\nlocal\0core.bare\0"));
         assert!(entries_are_plain("local\0core.bare\0"), "a key with no value");
+    }
+
+    #[test]
+    fn repository_only_access_remains_restricted_without_blocking_worktrees() {
+        let root = scratch("repository-key");
+        assert!(git_unscoped().args(["init", "-q"]).current_dir(&root).status().unwrap().success());
+        let os = if cfg!(windows) { crate::remote_platform::HostOs::Windows } else { crate::remote_platform::HostOs::Linux };
+        let ssh = crate::machine_repository::ssh_command("pierreprudh/KLIDE", os);
+        for (key, value) in [("core.sshCommand", ssh.as_str()), ("credential.helper", "")] {
+            assert!(git_unscoped().arg("-C").arg(&root).args(["config", "--local", key, value]).status().unwrap().success());
+        }
+        assert!(read_config_is_plain(&root), "Klide's own repo-only settings must not pause Git");
+        let command = build(&root, false).unwrap();
+        let args: Vec<_> = command.get_args().map(|v| v.to_string_lossy().into_owned()).collect();
+        assert!(args.iter().any(|arg| arg == "core.hooksPath=/dev/null"), "repository hooks stay disabled");
+        assert!(git_unscoped().arg("-C").arg(&root).args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture"]).status().unwrap().success());
+        let tree = root.join("conversation");
+        assert!(build(&root, false).unwrap().args(["worktree", "add", "--detach"]).arg(&tree).arg("HEAD").output().unwrap().status.success());
+        assert!(read_config_is_plain(&tree), "conversation worktrees inherit the same safe settings");
+        for (key, value) in [("core.sshcommand", format!("{ssh}; echo injected")), ("credential.helper", "!echo injected".into()), ("filter.x.clean", "echo injected".into())] {
+            assert!(!entries_are_plain(&format!("local\0core.sshcommand\n{ssh}\0local\0credential.helper\n\0local\0{key}\n{value}\0")), "{key} must remain blocked");
+        }
+        for altered in [ssh.replace("IdentityAgent=none", "IdentityAgent=attacker"), ssh.replace("/key\"", "/key\"; echo injected"), ssh.replace("$HOME/.klide/repository-keys/", "$HOME/other/")] {
+            assert!(!crate::machine_repository::is_managed_ssh_command(&altered));
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

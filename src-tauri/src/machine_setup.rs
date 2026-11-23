@@ -70,12 +70,12 @@ fn script(
         SetupAction::Authorize => return Err("SSH authorization must use a local public key".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.sh").into(),
         SetupAction::SignIn => "exec claude auth login".into(),
-        SetupAction::GitHub => {
-            "gh auth login --hostname github.com --git-protocol https --web && gh auth setup-git"
-                .into()
-        }
+        SetupAction::GitHub => return Err("Open a project and connect repository-only access in the GitHub step. Personal GitHub login is not stored on remote machines.".into()),
         SetupAction::Clone => {
             let root = root.ok_or("Open a local project before cloning it remotely")?;
+            if crate::machine_repository::github_origin(root) {
+                return crate::machine_repository::clone_script(root, &machine.remote_checkout(root), os);
+            }
             let repo = crate::machines::origin_repo(root).ok_or(
                 "This project has no origin remote. Choose an existing remote checkout instead.",
             )?;
@@ -100,9 +100,10 @@ fn windows_script(
         SetupAction::Authorize => return Err("Use an existing authorized SSH key for Windows machines".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.ps1").into(),
         SetupAction::SignIn => "& claude auth login; exit $LASTEXITCODE".into(),
-        SetupAction::GitHub => "& gh auth login --hostname github.com --git-protocol https --web; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & gh auth setup-git; exit $LASTEXITCODE".into(),
+        SetupAction::GitHub => return Err("Open a project and connect repository-only access in the GitHub step. Personal GitHub login is not stored on remote machines.".into()),
         SetupAction::Clone => {
             let root=root.ok_or("Open a local project before cloning it remotely")?;
+            if crate::machine_repository::github_origin(root) { return crate::machine_repository::clone_script(root,&machine.remote_checkout(root),crate::remote_platform::HostOs::Windows).map(|body| format!("$ErrorActionPreference='Stop'; {} {body}",crate::remote_platform::WINDOWS_PATH)); }
             let repo=crate::machines::origin_repo(root).ok_or("This project has no origin remote. Choose an existing remote checkout instead.")?;
             safe_origin(&repo)?;
             format!("$destination={}; if (Test-Path -LiteralPath $destination) {{ throw 'The destination already exists. Choose an existing checkout or a different folder.' }}; New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null; & git clone -- {} $destination; exit $LASTEXITCODE",ps_path(&machine.remote_checkout(root)),ps_quote(&repo))
@@ -193,6 +194,13 @@ pub async fn machine_setup_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn personal_github_login_is_never_started_on_a_shared_remote_account() {
+        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default() };
+        for os in [crate::remote_platform::HostOs::Macos, crate::remote_platform::HostOs::Linux, crate::remote_platform::HostOs::Windows] {
+            assert!(script(&SetupAction::GitHub, &machine, None, os).unwrap_err().contains("repository-only"));
+        }
+    }
     #[cfg(unix)]
     #[test]
     fn closing_setup_terminates_its_process_without_closing_other_sessions() {

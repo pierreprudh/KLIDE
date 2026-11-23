@@ -1,0 +1,48 @@
+import { test, expect } from "@playwright/test";
+for (const theme of ["klide-light", "dark"]) test(`remote controls stay in one quiet row in ${theme}`, async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 700 });
+  await page.goto(`/preview/remote-run-controls.html?theme=${theme}`);
+  const controls = page.getByLabel("Remote task", { exact: true });
+  await expect(controls).toContainText("Dev mini");
+  await expect(controls).not.toContainText("machine-long");
+  expect(await page.evaluate(() => (window as any).__REMOTE_READS__)).toBe(0);
+  const trigger = controls.getByRole("button", { name: "View changes" });
+  const machine = await controls.locator(".klide-remote-controls-machine").boundingBox();
+  const button = await trigger.boundingBox();
+  expect(Math.abs(machine!.y + machine!.height / 2 - button!.y - button!.height / 2)).toBeLessThan(2);
+  await page.screenshot({ path: `artifacts/design-feedback/remote-controls-${theme}.png` });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Remote changes" });
+  await expect(dialog).toContainText("export const ready = true");
+  await expect(dialog.getByText("/Users/dev/.klide/run-host/worktrees/task-private-id")).not.toBeVisible();
+  await dialog.getByText("Working folder", { exact: true }).click();
+  await expect(dialog.getByText("/Users/dev/.klide/run-host/worktrees/task-private-id")).toBeVisible();
+  await dialog.getByRole("button", { name: "Refresh remote changes" }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__REMOTE_READS__)).toBe(2);
+  await page.screenshot({ path: `artifacts/design-feedback/remote-changes-${theme}.png` });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+test("empty changes and reconnect status remain readable on a narrow panel", async ({ page }) => {
+  await page.setViewportSize({ width: 460, height: 650 });
+  await page.goto("/preview/remote-run-controls.html?empty=1&reconnecting=1");
+  await expect(page.getByRole("status")).toHaveText("Reconnecting…");
+  await page.getByRole("button", { name: "View changes" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remote changes" });
+  await expect(dialog.getByText("No changes yet", { exact: true })).toBeVisible();
+  const bounds = (await dialog.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(460);
+  await page.mouse.click(4, 4);
+  await expect(dialog).toHaveCount(0);
+});
+test("a failed changes read explains recovery without an empty success state", async ({ page }) => {
+  await page.goto("/preview/remote-run-controls.html?error=1");
+  await page.getByRole("button", { name: "View changes" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remote changes" });
+  await expect(dialog.getByRole("alert")).toContainText("mini is offline");
+  await expect(dialog.getByText("No changes yet")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Close remote changes" }).click();
+  await expect(dialog).toHaveCount(0);
+});

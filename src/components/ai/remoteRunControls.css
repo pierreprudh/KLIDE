@@ -1,0 +1,27 @@
+.klide-remote-controls { display: flex; align-items: center; gap: 14px; min-width: 0; margin-left: auto; order: 99; font-size: 11px; color: var(--fg-subtle); }
+.klide-remote-controls-machine { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.klide-remote-controls-machine > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.klide-remote-controls-machine > svg { flex-shrink: 0; }
+.klide-remote-reconnecting { color: var(--warning); white-space: nowrap; }
+.klide-remote-changes-trigger { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 5px 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.klide-remote-changes-trigger:hover, .klide-remote-changes-trigger[aria-expanded="true"] { color: var(--fg); }
+.klide-remote-changes-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.klide-remote-changes-panel { position: fixed; box-sizing: border-box; max-height: min(480px, 65vh); display: flex; flex-direction: column; overflow: auto; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-elevated); color: var(--fg); box-shadow: 0 8px 32px rgb(0 0 0 / 10%); font: 12px/1.5 var(--font-ui); outline: none; }
+.klide-remote-changes-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.klide-remote-changes-panel > header > div { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.klide-remote-changes-panel > header strong { font-size: 13px; font-weight: 500; }
+.klide-remote-changes-panel > header span { color: var(--fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.klide-remote-changes-panel button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-subtle); cursor: pointer; }
+.klide-remote-changes-panel button:hover { background: var(--bg-hover); color: var(--fg); }
+.klide-remote-changes-panel button:disabled { opacity: .4; cursor: default; }
+.klide-remote-changes-panel > p { margin: 12px 16px; color: var(--fg-subtle); }
+.klide-remote-changes-panel > pre { margin: 0; padding: 16px; overflow: auto; font: 11px/1.6 var(--font-mono); white-space: pre; min-height: 0; }
+.klide-remote-changes-empty { padding: 30px 16px; text-align: center; }
+.klide-remote-changes-empty strong { font-weight: 500; }
+.klide-remote-changes-empty p { margin: 5px 0 0; color: var(--fg-subtle); }
+.klide-remote-changes-panel > details { border-top: 1px solid var(--border); padding: 10px 16px; color: var(--fg-subtle); }
+.klide-remote-changes-panel summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; font-size: 11px; }
+.klide-remote-changes-panel summary::-webkit-details-marker { display: none; }
+.klide-remote-changes-panel details[open] summary > svg { transform: rotate(180deg); }
+.klide-remote-changes-panel code { display: block; margin-top: 8px; overflow-wrap: anywhere; font-size: 10px; }
+@media (max-width: 520px) { .klide-remote-controls { gap: 8px; } .klide-remote-controls-machine > span:first-of-type { max-width: 110px; } }

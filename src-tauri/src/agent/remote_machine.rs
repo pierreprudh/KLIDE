@@ -204,11 +204,8 @@ pub(super) async fn start(
             }
         };
         match query(&binding, &Request::Ping)? {
-            Response::Pong { version, protocol, .. } if version == env!("CARGO_PKG_VERSION") && protocol == crate::pty_wire::PROTOCOL_VERSION => {},
+            Response::Pong { version, protocol, .. } if crate::pty_wire::remote_host_compatible(&version, protocol) => {},
             _ => return Err("Install the matching Run host in Settings → Machines before launching this task".into()),
-        }
-        if !matches!(query(&binding, &Request::RemoteIdentity)?, Response::RemoteIdentity { source } if source == env!("KLIDE_SOURCE_COMMIT")) {
-            return Err("Update the Run host in Settings → Machines to match this app revision before launching a new task".into());
         }
         if matches!(query(&binding, &Request::ChatStatus { run_id: id.clone() })?, Response::ChatStatus { status: Some(_), .. }) { return Err(run_host::busy(&id)); }
         let reader = crate::pty_client::subscribe_on(&transport(&binding))?;

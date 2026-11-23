@@ -132,7 +132,7 @@ are. A Conversation's Run happens on one Machine at a time.
 _Avoid_: box, host (that is the Run host, a process), environment
 
 **Remote machine**:
-A Linux computer Klide reaches over SSH — a rented server (VPS) or a spare
+A computer Klide reaches over SSH — a rented server (VPS), Mac or spare
 PC — with its own Machine logins and Remote checkout, which can stay on when
 this Mac sleeps. New Claude Code Conversations use a native SSH transport to
 `klide ptyd`, selected through Where it runs and configured in Settings → Machines.
@@ -142,6 +142,11 @@ terminal attachment. Remote Missions remain unsupported. See
 `docs/REMOTE_MACHINES.md`, setup in `scripts/remote-host/`.
 `agent/daemon_client.rs` is the local daemon client; `agent/remote_machine.rs`
 owns native SSH Conversation placement and replay.
+Remote GitHub project access uses a repository-specific SSH deploy key. The
+personal GitHub account used to register it stays on this Mac. Commit author
+name/email and Git access configuration are written to the remote checkout's
+local Git config, never the remote user's global config. A shared OS account
+can use that repository key; separate OS accounts are needed to isolate people.
 _Avoid_: cloud, VPS (one kind of Remote machine), server, remote host
 
 **Remote checkout**:

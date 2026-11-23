@@ -11,6 +11,7 @@ describe("providerFailureMessage", () => {
   it.each([
     "The background host needs an update. Finish its active terminal sessions before starting a new background chat.",
     "Could not confirm background run start: recv: timed out. Reopen the conversation to check its state before retrying.",
+    "Could not confirm remote task start: Git is paused in this folder: its Git settings can start programs. Trust the folder to use Git here. Reopen this conversation to check before retrying.",
   ])("does not blame credentials for a local run-host error", (message) => {
     expect(providerFailureMessage(message, "OpenCode")).toBe(message);
   });
