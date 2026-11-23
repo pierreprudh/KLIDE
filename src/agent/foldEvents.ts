@@ -305,7 +305,14 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       patch(existing.call);
       return existing.idx;
     }
+    // A tool step belongs to its own turn. On replay a delegate's first step
+    // (Claude Code's tool search) arrives before any assistant row of the
+    // turn exists; the last assistant row is then the *previous* answer, and
+    // hanging the step on it made that answer read as work before the answer,
+    // folded out of sight. The live path never hit this: it seeds the turn's
+    // row before the run starts.
     let host = lastAssistant();
+    if (host && rows.slice(host.idx + 1).some((row) => row.kind === "user")) host = null;
     if (!host) {
       const created = newAssistant();
       rows.push(created);
