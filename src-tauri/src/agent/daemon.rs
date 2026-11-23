@@ -308,6 +308,7 @@ impl RunHost {
             secret_path: secret_path.to_string_lossy().into(),
             config_dir: dir.to_string_lossy().into(),
             file_stem: stem,
+            connectors: crate::connector_relay::any_enabled(),
         });
         if let Some(w) = &wiring {
             for (path, contents) in &w.files {

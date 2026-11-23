@@ -18,8 +18,9 @@ fn main() {
         if args.first().map(String::as_str) == Some("mcp") {
             match args.get(1).map(String::as_str) {
                 Some("coordination") => klide_lib::mcp_server::serve_main(),
+                Some(klide_lib::connector_relay::SUBCOMMAND) => klide_lib::mcp_server::serve_connectors_main(),
                 _ => {
-                    eprintln!("usage: klide mcp coordination");
+                    eprintln!("usage: klide mcp coordination | klide mcp connectors");
                     std::process::exit(2);
                 }
             }

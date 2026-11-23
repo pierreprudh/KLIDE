@@ -335,6 +335,8 @@ Klide/
     │   ├── conversation_store.rs The Stored conversation index in SQLite under app data — metadata + ordered messages, one-time JSON import; the renderer holds it in memory
     │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config + `${VAR}` resolution + the GitHub preset
     │   ├── connector_pool.rs     Live connector sessions shared by every Run — lazy connect, reconnect on break, killed at exit
+    │   ├── connector_oauth.rs    MCP OAuth for a remote connector — discovery, dynamic registration, PKCE on a loopback redirect, Keychain tokens + refresh; `${KLIDE_OAUTH}` resolves per request
+    │   ├── connector_relay.rs    `klide mcp connectors` — the enabled connectors served to a Delegate CLI as a sibling MCP server (never under `klide`, so no allow rule covers it); answered by the app's pool over the bridge, no token leaves the app
     │   ├── search.rs             Find-in-files over a Workspace with ignore policy
     │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
     │   ├── workspace_trust.rs    Trusted folders (~/.klide/trusted-folders.json) — an untrusted folder opens restricted; read by git/cmd.rs
@@ -360,7 +362,7 @@ Klide/
     │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, effort + MCP wiring
     │   ├── coordination/         mod.rs: Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward · ops.rs: one core per operation (list/send/wait/cancel/read_result), one schema source, one reply text — the two doors only bind the actor
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
-    │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
+    │   ├── mcp_server.rs         `klide mcp coordination` / `klide mcp connectors` — embedded stdio MCP servers a Delegate runs; relay every tool call to the bridge
     │   ├── mcp_client.rs         Klide as an MCP client — one Session over stdio or Streamable HTTP: handshake, list tools, call one
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) — each owns its home (config/data dirs honouring CODEX_HOME / CLAUDE_CONFIG_DIR / XDG), label, login, accounts flag + home.rs the Env seam + source scan + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
@@ -867,7 +869,7 @@ enforce wrapper coverage for the git family.
 - [x] Reasoning effort — levels read from the provider/CLI rather than assumed
 - [x] Composer `/` command menu and ↑ / ↓ prompt history
 - [x] Workers — `spawn_subagent` can hand a task to a Delegate CLI as a gated, isolated Run of its own; with `background: true` the parent gets the child's Run id back at once and the report is delivered when it settles
-- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use; the Harness calls them (remote tools approval-gated per tool, including server-labelled reads) and GitHub connects in one click as the pinned account
+- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use; the Harness calls them (remote tools approval-gated per tool, including server-labelled reads) and GitHub connects in one click as the pinned account; hosted servers sign in through the browser (MCP OAuth), and Delegate CLIs get the same connectors through `klide mcp connectors`, under their own approval prompts
 - [x] Visuals — an `html` or `svg` fence renders as a sanitized, themed picture in the conversation
 - [x] Delegate CLI versions — each CLI's version on its Settings row, with its own updater beside it
 - [x] Background shells — `run_command(background: true)` + `read_command_output` / `kill_command`, run-scoped, reaped at settle; a shell can wake the conversation on exit

@@ -92,11 +92,19 @@ impl Delegate for Codex {
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        let args = [
+        let mut pairs = vec![
             format!("mcp_servers.klide.command={}", toml_str(&spec.command)),
             format!("mcp_servers.klide.args=[{args}]"),
             format!("mcp_servers.klide.env={env}"),
-        ]
+        ];
+        if let Some(connector_args) = spec.connectors_args() {
+            let server = crate::connector_relay::SERVER_NAME;
+            let list = connector_args.iter().map(|a| toml_str(a)).collect::<Vec<_>>().join(",");
+            pairs.push(format!("mcp_servers.{server}.command={}", toml_str(&spec.command)));
+            pairs.push(format!("mcp_servers.{server}.args=[{list}]"));
+            pairs.push(format!("mcp_servers.{server}.env={env}"));
+        }
+        let args = pairs
         .into_iter()
         .flat_map(|kv| ["-c".to_string(), kv])
         .collect::<Vec<_>>();
@@ -775,6 +783,15 @@ fn codex_item(item: &Value, completed: bool) -> Vec<StreamItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connectors_are_a_second_server_in_the_overrides() {
+        let pairs = |conn: bool| Codex.mcp_wiring(&McpServerSpec { command: "/k/klide".into(), args: vec!["mcp".into(), "coordination".into()], endpoint_path: "/data/ep.json".into(), session_id: "c:x".into(), secret_path: "/tmp/c.secret".into(), config_dir: "/tmp".into(), file_stem: "c".into(), connectors: conn }).unwrap().args.join(" ");
+        let on = pairs(true);
+        assert!(on.contains("mcp_servers.connectors.args=[\"mcp\",\"connectors\"]"), "{on}");
+        assert!(on.contains("mcp_servers.connectors.command=\"/k/klide\""));
+        assert!(!pairs(false).contains("mcp_servers.connectors"));
+    }
 
     // `thread.started` and `turn.failed` were captured from a real
     // `codex exec --json` run (codex-cli 0.154); the item lines follow the

@@ -27,6 +27,7 @@ mod coordination;
 mod connectors;
 mod conversation_store;
 mod connector_pool;
+pub mod connector_relay;
 mod connector_oauth;
 mod coordination_bridge;
 mod custom_cli;

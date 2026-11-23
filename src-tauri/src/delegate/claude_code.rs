@@ -134,7 +134,7 @@ impl Delegate for ClaudeCode {
     /// to clean up when the session ends.
     fn mcp_wiring(&self, spec: &McpServerSpec) -> Option<McpWiring> {
         let path = format!("{}/{}.claude-mcp.json", spec.config_dir, spec.file_stem);
-        let content = serde_json::json!({
+        let mut content = serde_json::json!({
             "mcpServers": {
                 "klide": {
                     "type": "stdio",
@@ -144,6 +144,16 @@ impl Delegate for ClaudeCode {
                 }
             }
         });
+        // A sibling, never under `klide`: `--allowedTools mcp__klide` must not
+        // pre-approve a write to someone's Notion.
+        if let Some(args) = spec.connectors_args() {
+            content["mcpServers"][crate::connector_relay::SERVER_NAME] = serde_json::json!({
+                "type": "stdio",
+                "command": spec.command,
+                "args": args,
+                "env": spec.env_json(),
+            });
+        }
         Some(McpWiring {
             args: vec!["--mcp-config".to_string(), path.clone()],
             env: vec![],
@@ -1451,9 +1461,31 @@ mod tests {
         assert_eq!(ClaudeCode.chat_stream_env(&spec_mcp), [("MCP_TOOL_TIMEOUT".to_string(), "3600000".to_string())]);
         assert!(ClaudeCode.chat_stream_env(&spec("", None, &[])).is_empty());
         let wiring = ClaudeCode
-            .mcp_wiring(&McpServerSpec { command: "klide".into(), args: vec![], endpoint_path: "/tmp/ep.json".into(), session_id: "c:claude-code".into(), secret_path: "/tmp/s.secret".into(), config_dir: "/tmp".into(), file_stem: "s".into() })
+            .mcp_wiring(&McpServerSpec { command: "klide".into(), args: vec![], endpoint_path: "/tmp/ep.json".into(), session_id: "c:claude-code".into(), secret_path: "/tmp/s.secret".into(), config_dir: "/tmp".into(), file_stem: "s".into(), connectors: false })
             .unwrap();
         assert!(wiring.env.is_empty());
+    }
+
+    #[test]
+    fn connectors_ride_a_sibling_server_klides_allow_rule_does_not_cover() {
+        let config = |conn: bool| -> serde_json::Value {
+            let wiring = ClaudeCode.mcp_wiring(&McpServerSpec { command: "/k/klide".into(), args: vec!["mcp".into(), "coordination".into()], endpoint_path: "/data/ep.json".into(), session_id: "c:x".into(), secret_path: "/tmp/c.secret".into(), config_dir: "/tmp".into(), file_stem: "c".into(), connectors: conn }).unwrap();
+            serde_json::from_str(&wiring.files[0].1).unwrap()
+        };
+        let on = config(true);
+        let server = &on["mcpServers"][crate::connector_relay::SERVER_NAME];
+        assert_eq!(server["args"], serde_json::json!(["mcp", "connectors"]));
+        assert_eq!(server["command"], "/k/klide");
+        assert_eq!(server["env"], on["mcpServers"]["klide"]["env"]);
+        assert!(config(false)["mcpServers"].get(crate::connector_relay::SERVER_NAME).is_none());
+        // The headless allow rule names Klide's own server only.
+        let wiring = McpWiring::default();
+        let args = ClaudeCode
+            .chat_stream_args("/tmp/ws", &ChatSpec { effort: None, model: "", resume: None, mcp: Some(&wiring), allowed_commands: &[] })
+            .unwrap();
+        let at = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[at + 1], "mcp__klide");
+        assert!(!args.iter().any(|a| a.contains(crate::connector_relay::SERVER_NAME)));
     }
 
     #[test]
