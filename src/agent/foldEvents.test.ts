@@ -467,6 +467,34 @@ describe("foldAgentEvents", () => {
       expect(toolMsg).toMatchObject({ toolName: "Edit", observedBy: "claude-code" });
     });
 
+    it("keeps each turn's answer when a delegate's next turn opens with a tool step", () => {
+      // The exact shape of a Claude Code thread on disk: each turn starts
+      // with the CLI's own ToolSearch, before any assistant row of that turn.
+      const observed = (toolCallId: string): AgentEvent[] => [
+        { type: "observed_tool_call", runId: RUN, toolCallId, provider: "claude-code", name: "ToolSearch", input: {}, summary: "ToolSearch", ts: at() },
+        { type: "observed_tool_result", runId: RUN, toolCallId, ok: true, content: "", ts: at() },
+      ];
+      const msgs = foldedToMsgs(foldAgentEvents([
+        userMessage("check notion tools"),
+        ...observed("toolu_a"),
+        assistantMessage("First answer."),
+        userMessage("and now?"),
+        ...observed("toolu_b"),
+        assistantMessage("Second answer."),
+      ]));
+      const roles = msgs.map((m) => m.role);
+      // The second turn's step sits after its own question, not under the first answer.
+      const secondUser = msgs.findIndex((m) => m.role === "user" && m.content === "and now?");
+      const stepB = msgs.findIndex((m) => m.role === "tool" && m.toolCallId === "toolu_b");
+      expect(stepB).toBeGreaterThan(secondUser);
+      // Neither answer is folded into a "worked for" line.
+      const firstAnswer = msgs.findIndex((m) => m.role === "assistant" && m.content === "First answer.");
+      // A fold covers [start, end); the row at `end` is the answer it closes.
+      for (const run of groupToolRuns(msgs)) {
+        expect(firstAnswer < run.start || firstAnswer >= run.end, `answer folded: ${roles.join(",")}`).toBe(true);
+      }
+    });
+
     it("keeps a delegate's sub-agent steps under the call that started them", () => {
       // Claude Code fanning out two sub-agents (2026-10-28): every step a
       // sub-agent takes names its `Agent` call. They are that sub-agent's
