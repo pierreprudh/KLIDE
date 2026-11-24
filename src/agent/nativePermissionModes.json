@@ -1,0 +1,53 @@
+{
+  "claude-code": [
+    { "id": "manual", "label": "Ask for approval", "description": "Claude Code asks through KLIDE before actions that need permission." },
+    { "id": "acceptEdits", "label": "Accept edits", "description": "Apply file edits automatically; other actions still need permission." },
+    { "id": "auto", "label": "Auto review", "description": "Claude Code’s safety classifier reviews actions for you. Requires a CLI and account that support auto mode." },
+    { "id": "plan", "label": "Plan", "description": "Use Claude Code’s native planning permissions." },
+    { "id": "dontAsk", "label": "Pre-approved only", "description": "Deny actions that would require a new approval." },
+    { "id": "bypassPermissions", "label": "Bypass permissions", "description": "Skip Claude Code’s normal permission checks for this conversation." }
+  ],
+  "codex": [
+    { "id": "read-only", "label": "Read only", "description": "Run Codex with its read-only sandbox." },
+    { "id": "workspace-write", "label": "Workspace access", "description": "Allow edits and commands inside Codex’s workspace sandbox. Actions that need an interactive answer may be denied in KLIDE." },
+    { "id": "auto-review", "label": "Approve for me", "description": "Use Codex’s automatic reviewer while keeping the workspace sandbox. Requires a CLI that supports automatic review." },
+    { "id": "full-access", "label": "Full access", "description": "Skip Codex approvals and sandbox restrictions for this conversation." }
+  ],
+  "opencode": [
+    { "id": "auto", "label": "Auto approve", "description": "Approve OpenCode’s pending tool requests. Its configured deny rules still apply." }
+  ],
+  "omp": [
+    { "id": "always-ask", "label": "Ask for approval", "description": "Ask before writes and execution. Actions that need an interactive answer may be denied in KLIDE." },
+    { "id": "always-ask-cached", "label": "Ask and remember", "description": "Use Oh My Pi’s cached file and folder grants; ungranted actions still ask." },
+    { "id": "write", "label": "Accept writes", "description": "Allow reads and writes; execution still needs permission." },
+    { "id": "yolo", "label": "Auto approve", "description": "Approve tool calls using Oh My Pi’s native yolo mode." }
+  ],
+  "amp": [],
+  "cursor": [
+    { "id": "configured", "label": "Configured permissions", "description": "Follow Cursor’s own permission rules. Actions without approval may be denied in KLIDE." },
+    { "id": "force", "label": "Force", "description": "Allow Cursor to run tools without confirmation using its native force option." }
+  ],
+  "factory": [
+    { "id": "read-only", "label": "Read only", "description": "Use Droid Exec’s default read-only permissions." },
+    { "id": "low", "label": "Low autonomy", "description": "Allow file edits and low-risk actions." },
+    { "id": "medium", "label": "Medium autonomy", "description": "Also allow development commands, installs, commits, pushes and pull requests." },
+    { "id": "high", "label": "High autonomy", "description": "Also allow broader automation, deployments and orchestration." },
+    { "id": "unsafe", "label": "Skip permissions", "description": "Skip Droid’s permission prompts. Effective command blocks still apply." }
+  ],
+  "copilot": [
+    { "id": "configured", "label": "Pre-approved tools", "description": "Allow edits and project-approved commands; other tools keep Copilot’s permission checks." },
+    { "id": "assisted", "label": "Assisted approval", "description": "Let Copilot’s native safety judge review permission requests. Requires a supported CLI and policy." },
+    { "id": "all-tools", "label": "Allow all tools", "description": "Approve tools automatically while retaining path and URL checks." },
+    { "id": "all", "label": "Allow all", "description": "Allow all tools, paths and URLs for this conversation." }
+  ],
+  "hermes": [
+    { "id": "configured", "label": "Configured permissions", "description": "Use Hermes’s configured approval mode and KLIDE’s permission relay." },
+    { "id": "yolo", "label": "YOLO", "description": "Skip Hermes’s normal command approvals for this turn." }
+  ],
+  "vibe": [
+    { "id": "ask", "label": "Ask for approval", "description": "Use Vibe’s ask agent. Actions that need an interactive answer may be denied in KLIDE." },
+    { "id": "accept-edits", "label": "Accept edits", "description": "Use Vibe’s native accept-edits agent." },
+    { "id": "smart-approve", "label": "Smart approve", "description": "Use Vibe’s native classifier to approve safe actions." },
+    { "id": "auto-approve", "label": "Auto approve", "description": "Use Vibe’s native agent that approves tool calls automatically." }
+  ]
+}

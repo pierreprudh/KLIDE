@@ -13,6 +13,7 @@
 // provided method does the assembly once.
 
 mod additional;
+pub(crate) mod native_permissions;
 mod hermes_acp;
 pub use additional::{AMP, CURSOR, FACTORY, HERMES};
 mod chat;

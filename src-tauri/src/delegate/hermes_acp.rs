@@ -278,6 +278,7 @@ pub(super) async fn run(
     adapter: &dyn Delegate,
     spec: &ChatSpec<'_>,
     cwd: &str,
+    native_permission_mode: Option<&str>,
     prompt: String,
     key: Option<&str>,
     emitted: &AtomicBool,
@@ -285,7 +286,7 @@ pub(super) async fn run(
 ) -> Result<String, String> {
     // Reuse the adapter's credential checks/environment, but ACP accepts no
     // chat flags. The selected model is applied through the protocol below.
-    let template = adapter.chat_invocation(cwd, spec.model)?;
+    let template = super::native_permissions::configure(adapter.chat_invocation(cwd, spec.model)?, adapter.id(), native_permission_mode)?;
     let mut command = Command::new(template.as_std().get_program());
     command.current_dir(cwd).arg("acp").envs(
         template
@@ -293,6 +294,9 @@ pub(super) async fn run(
             .get_envs()
             .filter_map(|(k, v)| v.map(|v| (k, v))),
     );
+    for (key, value) in template.as_std().get_envs() {
+        if value.is_none() { command.env_remove(key); }
+    }
     command.env("HERMES_ACP_SKIP_CONFIGURED_MCP", "1");
     command
         .stdin(Stdio::piped())

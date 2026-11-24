@@ -503,6 +503,8 @@ export type StartAgentRunInput = {
    *  if allowlisted. Connector writes and peer messages still prompt.
    *  Per-conversation, never persisted. */
   autoApproveCommands?: boolean;
+  /** Native agent permission mode, explicitly selected for this conversation. */
+  nativePermissionMode?: string;
   /** Optional command to run after an accepted edit/create. */
   testAfterEditCommand?: string;
   /** Set when the turn was a `/goal <objective>`: the model's "done" is

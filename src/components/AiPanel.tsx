@@ -26,6 +26,8 @@ import { ConversationSearchBar, type ConversationSearchHandle } from "./ai/Conve
 import { useConversationReveal } from "./ai/useConversationReveal";
 import { wakeTurnMode } from "./ai/wake";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
+import { NativePermissionSelector } from "./ai/NativePermissionSelector";
+import { nativePermissionMode, nativePermissionModes } from "../agent/nativePermissions";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
   Fragment,
@@ -909,6 +911,9 @@ export function AiPanel({
   }
   const msgs = conversationSession.messages;
   const provider = conversationSession.provider;
+  const [nativePermissions, setNativePermissions] = useState<Record<string, string | undefined>>({});
+  const nativePermissionKey = `${currentId}:${provider}`;
+  const selectedNativePermission = nativePermissionMode(provider, nativePermissions[nativePermissionKey]);
   const model = conversationSession.model;
   const [missionPresent, setMissionPresent] = useState(false);
   // Completion is durable Mission state; delivery is a normal persisted chat
@@ -1830,6 +1835,12 @@ export function AiPanel({
   // bar's standing note are the state, and a transient line above the
   // composer proved to be chrome nobody needed.
   function currentModeText(): string {
+    if (isDelegateId(provider)) {
+      if (delegateSession) return `${providerName(provider)} uses its native terminal permission controls.`;
+      const choices = nativePermissionModes(provider);
+      const choice = choices.find(item => item.id === (selectedNativePermission ?? "")) ?? choices[0];
+      return `${providerName(provider)} permissions: ${choice.label}. ${choice.description}`;
+    }
     return modeText({ effectiveMode, requireDiffReview, autoApproveCommands });
   }
   // /auto-mode and /review-mode imply Work mode (edits only happen there).
@@ -1857,8 +1868,10 @@ export function AiPanel({
     ...(uiConversation ? [{ name: "design", desc: "Edit the running UI directly, then send the changes to Kit", run: () => { setInput(""); setSlash(null); openDesign(); } }] : []),
     { name: "mission", desc: SLASH_DESC.mission, run: () => insertSlashPrefix(MISSION_PREFIX) },
     { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
-    { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
-    { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
+    ...(!providerDelegatesWork ? [
+      { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
+      { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
+    ] : []),
     { name: "clear", desc: SLASH_DESC.clear, run: () => {
       // One launching screen per surface: where the host owns it (Focus's
       // start stage), leave to it — the same door as "New task". The next
@@ -3622,7 +3635,8 @@ This user request requires workspace inspection. Before answering, you MUST call
       maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
       commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
       requireDiffReview,
-      autoApproveCommands: autoApproveCommands || undefined,
+      autoApproveCommands: selectedNativePermission ? false : autoApproveCommands || undefined,
+      nativePermissionMode: selectedNativePermission,
       testAfterEditCommand: testAfterEditCommand || undefined,
       goal: turn.goal,
       // Stars are the router's strongest preference and live only in this
@@ -5887,7 +5901,15 @@ This user request requires workspace inspection. Before answering, you MUST call
               full auto → review). Review is the calm default and stays
               branch-label monochrome; the two silenced-gate rungs carry the
               accent so they never read as default. */}
-          {effectiveMode === "goal" && onRequireDiffReviewChange && (
+          {isDelegateId(provider) && !delegateSession ? (
+            <NativePermissionSelector provider={provider} value={selectedNativePermission} disabled={streaming || serverStarting}
+              onChange={mode => {
+                setNativePermissions(previous => ({ ...previous, [nativePermissionKey]: mode }));
+                // Native review/ask modes must not inherit a previous KLIDE
+                // Full auto command grant through the permission relay.
+                onAutoApproveCommandsChange?.(false);
+              }} />
+          ) : effectiveMode === "goal" && !providerDelegatesWork && onRequireDiffReviewChange && (
             <button
               type="button"
               className={

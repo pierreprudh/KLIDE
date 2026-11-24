@@ -197,6 +197,7 @@ impl RunHost {
         std::fs::create_dir_all(&runs_dir).map_err(|e| e.to_string())?;
         request.command_allowlist = if scheduled {
             request.auto_approve_commands = None;
+            request.native_permission_mode = None;
             match request.workspace_root.as_deref() { Some(root) => command_allowlist::list(&runs_dir, root)?, None => Vec::new() }
         } else { delegate_allowed_commands(
             &request.provider,

@@ -174,6 +174,10 @@ pub struct StartRunRequest {
     /// persisted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_approve_commands: Option<bool>,
+    /// Explicit native CLI permission selection for this turn. Never changes
+    /// the agent's global configuration or grants authority to spawned runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_permission_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     /// Read-only side conversation, pinned durably on its first launch.

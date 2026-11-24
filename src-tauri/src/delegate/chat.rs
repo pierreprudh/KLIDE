@@ -166,6 +166,7 @@ pub async fn run_subscription_chat(
     run_id: Option<String>,
     delegate_session: Option<String>,
     allowed_commands: Vec<String>,
+    native_permission_mode: Option<String>,
     mcp: Option<super::McpWiring>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
@@ -187,6 +188,8 @@ pub async fn run_subscription_chat(
         Ok(())
     });
     let on_chunk = &channel;
+    super::native_permissions::validate(adapter.id(), native_permission_mode.as_deref())?;
+    let configure = |command| super::native_permissions::configure(command, adapter.id(), native_permission_mode.as_deref());
     let cwd = workspace_root.unwrap_or_else(|| ".".to_string());
     // The "default" sentinel means "no model picked" — hand the adapter an
     // empty model so it omits its model flag and the CLI uses its own default.
@@ -287,7 +290,7 @@ pub async fn run_subscription_chat(
         let emitted = AtomicBool::new(false);
         // No cold retry after an ACP prompt: tools may already have changed
         // files even if the transport failed before an event arrived.
-        match super::hermes_acp::run(adapter, &spec, &cwd, prompt, key.as_deref(), &emitted, on_chunk).await {
+        match super::hermes_acp::run(adapter, &spec, &cwd, native_permission_mode.as_deref(), prompt, key.as_deref(), &emitted, on_chunk).await {
             Ok(answer) => answer,
             Err(error) => {
                 if let Some(key) = key.as_deref() { forget_session(key); }
@@ -296,7 +299,7 @@ pub async fn run_subscription_chat(
         }
     } else { match adapter.chat_stream_invocation(&cwd, &spec) {
         Some(command) => {
-            let mut command = command?;
+            let mut command = configure(command?)?;
             if let Some(images) = &images { images.attach(&mut command); }
             let emitted = AtomicBool::new(false);
             match run_stream_turn(
@@ -323,9 +326,10 @@ pub async fn run_subscription_chat(
                     }
                     let _ = err;
                     let cold = ChatSpec { resume: None, ..spec };
-                    let mut command = adapter
+                    let command = adapter
                         .chat_stream_invocation(&cwd, &cold)
                         .ok_or_else(|| format!("{label} has no structured mode"))??;
+                    let mut command = configure(command)?;
                     let cold_images = if adapter.id() == "opencode" { Some(super::opencode_images::Images::stage(&messages, false).await?) } else { None };
                     if let Some(images) = &cold_images { images.attach(&mut command); }
                     run_stream_turn(
@@ -345,7 +349,7 @@ pub async fn run_subscription_chat(
             }
         }
         None => {
-            let mut command = adapter.chat_invocation(&cwd, model)?;
+            let mut command = configure(adapter.chat_invocation(&cwd, model)?)?;
             if adapter.id() == "hermes" {
                 if let Some(level) = effort.as_deref().filter(|level| crate::harness_source::EFFORT_LEVELS.contains(level)) {
                     command.args(["--reasoning", level]);
@@ -1287,7 +1291,7 @@ async fn installed_hermes_acp_streams_tools_and_resumes() {
     let id = "installed-hermes-acp-smoke";
     let first = run_subscription_chat(&super::HERMES, "Hermes", model.into(), None,
         vec![serde_json::json!({"role":"user","content":"Read note.txt and report its contents."})],
-        Some(root.clone()), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+        Some(root.clone()), Some(id.into()), None, vec![], None, None, &channel).await.unwrap();
     assert!(first.content.contains("acp-smoke-ok"), "{}", first.content);
     let remembered = remembered_session(&session_key(id, "hermes")).expect("ACP session recorded");
     {
@@ -1297,7 +1301,7 @@ async fn installed_hermes_acp_streams_tools_and_resumes() {
     }
     let second = run_subscription_chat(&super::HERMES, "Hermes", model.into(), None,
         vec![serde_json::json!({"role":"user","content":"Continue the same conversation."})],
-        Some(root), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+        Some(root), Some(id.into()), None, vec![], None, None, &channel).await.unwrap();
     assert!(second.content.contains("acp-resume-ok"), "{}", second.content);
     assert_eq!(remembered_session(&session_key(id, "hermes")).as_deref(), Some(remembered.as_str()));
     forget_session(&session_key(id, "hermes"));
@@ -1327,7 +1331,7 @@ async fn installed_copilot_streams_tools_and_resumes() {
     let id = "installed-copilot-smoke";
     let first = run_subscription_chat(&super::Copilot, "Copilot", String::new(), None,
         vec![serde_json::json!({"role":"user","content":"Read note.txt and reply with its contents only."})],
-        Some(root.clone()), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+        Some(root.clone()), Some(id.into()), None, vec![], None, None, &channel).await.unwrap();
     assert!(first.content.contains("copilot-smoke-ok"), "{}", first.content);
     let session = remembered_session(&session_key(id, "copilot")).expect("session recorded");
     {
@@ -1341,7 +1345,7 @@ async fn installed_copilot_streams_tools_and_resumes() {
             serde_json::json!({"role":"assistant","content":first.content}),
             serde_json::json!({"role":"user","content":"Repeat your previous reply, uppercased, nothing else. Use no tools."}),
         ],
-        Some(root.clone()), Some(id.into()), None, vec![], None, &channel).await.unwrap();
+        Some(root.clone()), Some(id.into()), None, vec![], None, None, &channel).await.unwrap();
     assert!(second.content.contains("COPILOT-SMOKE-OK"), "{}", second.content);
     forget_session(&session_key(id, "copilot"));
     let _ = std::fs::remove_dir_all(&root);
