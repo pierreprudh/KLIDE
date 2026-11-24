@@ -8,10 +8,9 @@ them.
 
 ## Dependency audit follow-up, 2026-11-18
 
-- [ ] Replace the temporary dev-only picomatch advisory exception with a
-  patched compatible release once available, then remove the exception from
-  `scripts/audit-dependencies.mjs`. See `docs/DEPENDENCY_AUDIT.md`. Production
-  and unrelated high/critical advisories remain blocked.
+- [x] Removed the dev-only picomatch advisory exception (2026-11-24): GitHub
+  withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18. The audit now blocks every
+  high/critical advisory with no exceptions. See `docs/DEPENDENCY_AUDIT.md`.
 
 ## Remote machines — native hosts and deployment, 2026-11-19
 
@@ -367,8 +366,8 @@ time, workspace trust first (every competitor has closed it).
   SSRF, the fixed gateway port 10100, the `hermes proxy` bearer.
 - [ ] Release: an auto-updater, so a security fix reaches an installed copy
   (notarization is tracked under v0.5.1).
-- [ ] Refresh `docs/competitors-2026-11-09.md`: it says Klide has no sandbox
-  and no user hooks.
+- [x] Refreshed `docs/competitors-2026-11-09.md` (local, 2026-11-24): the
+  sandbox and hooks rows now describe what shipped in 0.7.0.
 
 ## Harness follow-ups
 
@@ -741,11 +740,13 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   `review` on `main`.
 - [x] S0.5 — `@klide-bot` in a PR/issue comment gets a read-only OpenCode
   answer (`klide-bot.yml`); inert until `OPENROUTER_API_KEY` + a model are set.
-- [ ] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
+- [x] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
   Issues, Statuses: write) and add variable `KLIDE_BOT_APP_ID` / secret
-  `KLIDE_BOT_PRIVATE_KEY`.
-- [ ] S1 — workflows mint an App token and act as `klide-bot[bot]`, so its
-  pushes trigger CI and the reviewer.
+  `KLIDE_BOT_PRIVATE_KEY`. (App 5890720, 2026-11-23; it answered on #583 and
+  #603 as `klide-bot[bot]`.)
+- [ ] S1 — `review.yml` mints the App token too (only `klide-bot.yml` does
+  today), so the review and later `/fix` pushes act as `klide-bot[bot]` and
+  trigger CI.
 - [ ] S2 — `/fix`, `/fix <instruction>`, `/fix model=…`: OpenCode on
   `FIX_MODEL` fixes only the blocking findings, runs `tsc` + `vitest`, pushes
   one commit to the PR branch. Done when a planted break goes red → `/fix` →
