@@ -1,5 +1,6 @@
 // Throwaway page for the Watch CI row in Mission Control › Scheduled.
 //   http://localhost:1420/preview/ci-watch.html   ?theme=dark   ?state=off
+//   ?select=__klide-bot__ for the klide-bot trigger
 import ReactDOM from "react-dom/client";
 import "../src/styles/tokens.css";
 import "../src/components/scheduled.css";
@@ -25,6 +26,12 @@ const realInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: st
   if (cmd === "agent_schedule_list") return [sched("a", "Morning triage", 86_400_000), sched("b", "Weekly dependency check", 604_800_000)];
   if (cmd === "agent_schedule_service_status") return { supported: true, installed: true, running: true, compatible: true, pid: 1, error: null };
   if (cmd === "agent_schedule_history") return [];
+  // klide-bot (`?select=__klide-bot__`; `?bot=nokey` shows the missing-key state).
+  if (cmd === "klide_bot_settings" || cmd === "klide_bot_set_model") return {
+    repo: "pierreprudh/KLIDE", answerInstalled: true, reviewInstalled: true,
+    answerModel: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", reviewModel: params.get("bot") === "nokey" ? null : "openrouter/deepseek/deepseek-v4.1-flash",
+    keyedProviders: params.get("bot") === "nokey" ? [] : ["openrouter"], appIdentity: true,
+  };
   if (cmd === "agent_read_run") {
     const id = (args as { runId: string }).runId;
     if (id === "run_548") return [{ type: "user_message", text: "CI failed" }];
