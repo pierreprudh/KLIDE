@@ -33,14 +33,15 @@ task adds a brake and no speed.
 ### Task: automated review
 
 `.github/workflows/review.yml`, rulebook `.github/review/REVIEW.md`, agent
-config `.github/review/opencode.json`.
+`klide run` (docs/KLIDE_RUN.md).
 
 1. **Trigger** — a PR opens, reopens or leaves draft; a push follows a *failed*
    review; or someone with write access comments `/review` (optionally
-   `/review model=<opencode model>`). A push after a pass keeps the pass.
+   `/review model=<provider/model>`). A push after a pass keeps the pass.
    Docs-only PRs (`*.md`, `docs/`) pass without a run.
-2. **Does** — OpenCode (`opencode-ai`, pinned) runs read-only — edit, bash,
-   web and subagents denied, 40 steps at most — on `REVIEW_MODEL` through
+2. **Does** — Klide's own agent (`klide run`, the Linux binary from the
+   newest `host-<sha>` release) runs read-only — Plan mode, no edits, commands,
+   connectors or subagents, 40 tool turns at most — on `REVIEW_MODEL` through
    OpenRouter. It judges the diff against `REVIEW.md`, edits one sticky PR
    comment, and sets the `review` commit status: `success`, `failure`
    (blocking findings) or `error` (no verdict, or the run broke).

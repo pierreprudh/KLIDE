@@ -1,12 +1,13 @@
 # `klide run` — Klide as a CLI agent
 
-Status: step 1 slices 1–3 shipped 2026-11-24 (`src-tauri/src/agent/cli_run.rs`,
-end-to-end tests in `src-tauri/tests/cli_run.rs`). Slices 4–5 (CI) next.
+Status: step 1 shipped 2026-11-24 — slices 1–3 (`src-tauri/src/agent/cli_run.rs`,
+end-to-end tests in `src-tauri/tests/cli_run.rs`) and 4–5 (`.github/actions/klide`,
+klide-bot + review on `klide run`, OpenCode removed).
 TODO.md › klide-bot › S6.
 
 ## Why
 
-klide-bot answers in GitHub Actions through OpenCode. Pierre wants the bot
+klide-bot answered in GitHub Actions through OpenCode. Pierre wants the bot
 fully proprietary: Klide's own Harness, tools, permission engine and prompt,
 with no third-party agent in the path. The same command makes Klide usable
 from any terminal, script, Remote machine or other agent.
@@ -80,15 +81,17 @@ stops the Run cleanly).
    (args, request, prompt) and end to end (`tests/cli_run.rs`: answer → 0;
    `--work` without `--allow-commands` never runs a command; missing key →
    3; usage → 2). Checked live on OpenRouter.
-4. **Linux in CI.** A composite action `.github/actions/klide/` that
+4. ✅ **Linux in CI.** A composite action `.github/actions/klide/` that
    downloads `klide-linux-x86_64` from the newest `host-<sha>` release,
-   checks its `.sha256`, installs the WebKitGTK runtime libraries it links
-   against (`libwebkit2gtk-4.1-0 libgtk-3-0`; no display needed), and puts
-   it on `PATH`. Cache by sha.
-5. **Switch the bots.** `klide-bot.yml` and `review.yml` call `klide run
-   --model "$MODEL" -` instead of `opencode run`. Delete
-   `.github/klide-bot/opencode.json`. Done when klide-bot answers a PR
-   comment with no OpenCode installed.
+   checks its `.sha256`, keeps the first that answers `klide run --help`,
+   installs the WebKitGTK runtime libraries it links against
+   (`libwebkit2gtk-4.1-0 libgtk-3-0`; no display needed), and puts it on
+   `PATH`. Workflows use it from `main`
+   (`pierreprudh/KLIDE/.github/actions/klide@main`), never from a PR's tree.
+5. ✅ **Switch the bots.** `klide-bot.yml` and `review.yml` call `klide run
+   --model "$MODEL" --format json -` instead of `opencode run`; the answer
+   is the run's last assistant message. Both `opencode.json` configs are
+   gone. Done when klide-bot answers a PR comment with no OpenCode installed.
 
 ## Open questions
 
