@@ -759,7 +759,7 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   diagnosis exists with the Mac off. Klide's CI watch then shows the bot's
   comment instead of starting its own Run. (2026-11-24; key/model:
   `DEEPSEEK_API_KEY` + `KLIDE_BOT_MODEL`, PR #610.)
-- [ ] S6 — `klide run`: replace OpenCode with Klide's own Harness. Pierre wants
+- [ ] S6 — `klide run` (scope: `docs/KLIDE_RUN.md`): replace OpenCode with Klide's own Harness. Pierre wants
   the bot fully proprietary (2026-11-24). A headless subcommand of the same
   binary (`klide run --read-only --model <provider/model> "…"`) that runs the
   Rust agent loop with no window: workspace = cwd, keys from env vars (no
