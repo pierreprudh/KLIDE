@@ -9,8 +9,8 @@ import { ProviderLogo } from "./icons";
 import { NativePermissionIcon } from "./NativePermissionIcon";
 import "./NativePermissionSelector.css";
 
-export function NativePermissionSelector({ provider, value, onChange, disabled = false }: {
-  provider: ProviderId; value?: string; onChange: (mode: string | undefined) => void; disabled?: boolean;
+export function NativePermissionSelector({ provider, value, onChange, disabled = false, compact = false }: {
+  provider: ProviderId; value?: string; onChange: (mode: string | undefined) => void; disabled?: boolean; compact?: boolean;
 }) {
   const modes = nativePermissionModes(provider);
   const selected = modes.find(mode => mode.id === (value ?? "")) ?? modes[0];
@@ -26,15 +26,15 @@ export function NativePermissionSelector({ provider, value, onChange, disabled =
   if (!selected) return null;
   const close = () => { menu.close(); menu.triggerRef.current?.focus(); };
   return <>
-    <button ref={menu.triggerRef} type="button" className="klide-native-permission-trigger"
+    <button ref={menu.triggerRef} type="button" className={`klide-native-permission-trigger${compact ? " is-compact" : ""}`}
       disabled={disabled} aria-label={`${delegateLabel(provider)} permissions: ${selected.label}`}
       aria-haspopup="menu" aria-expanded={menu.open} aria-controls={menu.open ? menuId : undefined}
       title={disabled ? "Permissions can be changed after this turn finishes" : `Change ${delegateLabel(provider)} permissions · ${selected.description}`}
       onClick={() => menu.open ? close() : menu.openMenu()}
       onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); menu.openMenu(); } }}>
       <NativePermissionIcon provider={provider} mode={selected.id} size={18} />
-      <span>{selected.label.replace(/^Default · /, "")}</span>
-      <span aria-hidden="true" className="klide-native-permission-chevron">⌄</span>
+      {!compact && <span>{selected.label.replace(/^Default · /, "")}</span>}
+      {!compact && <span aria-hidden="true" className="klide-native-permission-chevron">⌄</span>}
     </button>
     {menu.open && menu.pos && createPortal(
       <div ref={menu.menuRef} id={menuId} role="menu" aria-label={`${delegateLabel(provider)} native permissions`}

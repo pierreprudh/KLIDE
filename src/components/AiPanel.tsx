@@ -5650,6 +5650,15 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
+              {isDelegateId(provider) && !delegateSession && (
+                <NativePermissionSelector provider={provider} value={selectedNativePermission} disabled={streaming || serverStarting} compact={width < 480}
+                  onChange={mode => {
+                    setNativePermissions(previous => ({ ...previous, [nativePermissionKey]: mode }));
+                    // Native review/ask modes must not inherit a previous KLIDE
+                    // Full auto command grant through the permission relay.
+                    onAutoApproveCommandsChange?.(false);
+                  }} />
+              )}
               <button ref={contextTriggerRef} type="button" aria-haspopup="dialog" aria-expanded={contextHover} aria-controls={contextHover ? contextPanelId : undefined} aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${compactOffered ? ", can be compacted" : ""}`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
                 onMouseEnter={(e) => { holdContextPanel(); openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -5901,15 +5910,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               full auto → review). Review is the calm default and stays
               branch-label monochrome; the two silenced-gate rungs carry the
               accent so they never read as default. */}
-          {isDelegateId(provider) && !delegateSession ? (
-            <NativePermissionSelector provider={provider} value={selectedNativePermission} disabled={streaming || serverStarting}
-              onChange={mode => {
-                setNativePermissions(previous => ({ ...previous, [nativePermissionKey]: mode }));
-                // Native review/ask modes must not inherit a previous KLIDE
-                // Full auto command grant through the permission relay.
-                onAutoApproveCommandsChange?.(false);
-              }} />
-          ) : effectiveMode === "goal" && !providerDelegatesWork && onRequireDiffReviewChange && (
+          {effectiveMode === "goal" && !providerDelegatesWork && onRequireDiffReviewChange && (
             <button
               type="button"
               className={
