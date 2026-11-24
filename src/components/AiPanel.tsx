@@ -5552,9 +5552,16 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
-              {/* Focus keeps the same footer order as the start-stage composer
-                  (FocusMode.tsx): the "+" leads, the provider follows — firing
-                  the first message must not shuffle the controls. */}
+              {isDelegateId(provider) && !delegateSession && (
+                <NativePermissionSelector provider={provider} value={selectedNativePermission} disabled={streaming || serverStarting} compact
+                  onChange={mode => {
+                    setNativePermissions(previous => ({ ...previous, [nativePermissionKey]: mode }));
+                    // Native review/ask modes must not inherit a previous KLIDE
+                    // Full auto command grant through the permission relay.
+                    onAutoApproveCommandsChange?.(false);
+                  }} />
+              )}
+              {/* Permissions sit between add-context and the agent picker. */}
               {variant === "focus" ? (
                 <div className="klide-focus-provider-control">
                   {providerControl}
@@ -5649,15 +5656,6 @@ This user request requires workspace inspection. Before answering, you MUST call
                     document.body
                   )}
                 </div>
-              )}
-              {isDelegateId(provider) && !delegateSession && (
-                <NativePermissionSelector provider={provider} value={selectedNativePermission} disabled={streaming || serverStarting} compact={width < 480}
-                  onChange={mode => {
-                    setNativePermissions(previous => ({ ...previous, [nativePermissionKey]: mode }));
-                    // Native review/ask modes must not inherit a previous KLIDE
-                    // Full auto command grant through the permission relay.
-                    onAutoApproveCommandsChange?.(false);
-                  }} />
               )}
               <button ref={contextTriggerRef} type="button" aria-haspopup="dialog" aria-expanded={contextHover} aria-controls={contextHover ? contextPanelId : undefined} aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent${compactOffered ? ", can be compacted" : ""}`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}

@@ -7,7 +7,7 @@
 }
 .klide-native-permission-trigger:hover { background: var(--bg-hover); color: var(--fg-strong); }
 .klide-native-permission-trigger:disabled { opacity: .55; cursor: default; }
-.klide-native-permission-trigger.is-compact { width: 28px; justify-content: center; padding: 0; }
+.klide-native-permission-trigger.is-compact { width: 24px; justify-content: center; padding: 0; }
 .klide-native-permission-chevron { color: var(--fg-dim); }
 .klide-native-permission-menu {
   position: fixed; width: min(320px, calc(100vw - 16px));
