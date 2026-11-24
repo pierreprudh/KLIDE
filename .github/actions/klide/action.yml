@@ -1,0 +1,43 @@
+# Put the Klide CLI on PATH: the Linux binary `linux-host.yml` builds from
+# `main` and publishes to a `host-<sha>` prerelease after its checks pass.
+# Integrity is the release's own .sha256; the binary is the newest one that
+# answers `klide run --help` (older helpers predate the command).
+# docs/KLIDE_RUN.md, slice 4.
+name: Klide CLI
+description: Install the `klide` binary from the newest host-<sha> release
+runs:
+  using: composite
+  steps:
+    - name: Runtime libraries
+      shell: bash
+      run: |
+        # The binary links WebKitGTK even though `klide run` opens no window.
+        sudo apt-get -o Acquire::Retries=3 update -qq
+        sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends libwebkit2gtk-4.1-0 libgtk-3-0 >/dev/null
+
+    - name: Install klide
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/klide-bin"
+        mkdir -p "$bin"
+        for tag in $(gh release list --repo "$REPO" --limit 20 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("host-"))] | sort_by(.createdAt) | reverse | .[:5] | .[].tagName'); do
+          dir="$RUNNER_TEMP/klide-$tag"
+          mkdir -p "$dir"
+          gh release download "$tag" --repo "$REPO" --dir "$dir" \
+            -p klide-linux-x86_64 -p klide-linux-x86_64.sha256 2>/dev/null || continue
+          (cd "$dir" && sha256sum --check --quiet klide-linux-x86_64.sha256) || continue
+          chmod +x "$dir/klide-linux-x86_64"
+          if timeout 20 "$dir/klide-linux-x86_64" run --help 2>/dev/null | grep -q '^usage: klide run'; then
+            install -m 0755 "$dir/klide-linux-x86_64" "$bin/klide"
+            echo "$bin" >> "$GITHUB_PATH"
+            echo "::notice::klide from $tag"
+            exit 0
+          fi
+        done
+        echo "::error::No host-<sha> release has a Linux klide with \`klide run\` yet — wait for linux-host.yml on main."
+        exit 1
