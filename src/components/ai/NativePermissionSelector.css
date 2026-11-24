@@ -1,11 +1,13 @@
 .klide-native-permission-trigger {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 7px; border: 1px solid var(--border); border-radius: 999px;
+  height: 24px; flex-shrink: 0;
+  padding: 0 6px; border: 1px solid transparent; border-radius: var(--radius-sm);
   color: var(--fg-subtle); background: transparent; font: inherit;
   font-size: 11px; cursor: pointer; white-space: nowrap;
 }
 .klide-native-permission-trigger:hover { background: var(--bg-hover); color: var(--fg-strong); }
 .klide-native-permission-trigger:disabled { opacity: .55; cursor: default; }
+.klide-native-permission-trigger.is-compact { width: 28px; justify-content: center; padding: 0; }
 .klide-native-permission-chevron { color: var(--fg-dim); }
 .klide-native-permission-menu {
   position: fixed; width: min(320px, calc(100vw - 16px));
