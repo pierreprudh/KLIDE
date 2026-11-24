@@ -395,7 +395,10 @@ time, workspace trust first (every competitor has closed it).
   beside the plain read Tools.
 - [ ] Preamble stop: DeepSeek ends a Run after "I'll start by reading…" with
   no tool call (7 of 90 benchmark trials, every arm). Diagnose in the run loop.
-- [ ] Measure the release bundle size before/after `rquickjs` (27 MB budget).
+- [x] Measured `rquickjs` (2026-11-24): release `klide` binary 45.82 MB at
+  560f0d1~1 → 47.02 MB at 560f0d1 (Code Mode), +1.20 MB (+2.6%), aarch64,
+  same release profile. Re-measure the `.app` against the 27 MB budget at
+  the next bundle.
 
 ## Orb follow-ups — remote work and continuity
 
