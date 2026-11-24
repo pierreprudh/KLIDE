@@ -14,6 +14,15 @@ them.
 
 ## Remote machines — native hosts and deployment, 2026-11-19
 
+- [ ] Host helper identity by Rust source, not commit (2026-11-24). An app
+  installs `host-<its commit>` and checks the helper's `ptyd version` names
+  that commit (`machine_install.rs`), so every push to main rebuilds four
+  platforms — 40 builds since 2026-11-20 for 11 merges that touched Rust,
+  queueing behind the free plan's five macOS runners. Key the release and the
+  version check on the `src-tauri` tree id (plus `Cargo.lock`) instead; a
+  docs or frontend merge then reuses the last build. PR builds were already
+  narrowed to host files and one macOS runner (`linux-host.yml`).
+
 Implemented in [PR #557](https://github.com/pierreprudh/KLIDE/pull/557):
 macOS (Apple silicon and Intel) and native Windows x86_64 over OpenSSH.
 Windows uses native processes and PowerShell; WSL is not required. Native CI
