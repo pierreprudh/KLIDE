@@ -754,6 +754,20 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   Pierre turns on Codex automatic reviews.
 - [ ] S4 (later) — automatic rework on a failed review, 2 tries, then
   `needs-pierre`. Waits until S2 has earned trust.
+- [ ] S5 — CI diagnosis in the cloud: a `workflow_run: completed` workflow
+  diagnoses a failed check on a PR and comments as `klide-bot[bot]`, so the
+  diagnosis exists with the Mac off. Klide's CI watch then shows the bot's
+  comment instead of starting its own Run. (2026-11-24; key/model:
+  `DEEPSEEK_API_KEY` + `KLIDE_BOT_MODEL`, PR #610.)
+- [ ] S6 — `klide run`: replace OpenCode with Klide's own Harness. Pierre wants
+  the bot fully proprietary (2026-11-24). A headless subcommand of the same
+  binary (`klide run --read-only --model <provider/model> "…"`) that runs the
+  Rust agent loop with no window: workspace = cwd, keys from env vars (no
+  Keychain on a runner), Plan mode by default, the same tool registry and
+  permission engine, the answer on stdout, the Transcript optional. Then a
+  Linux build in CI (release artifact or `cargo install` cached), and
+  `review.yml` / `klide-bot.yml` call `klide run` instead of `opencode run`.
+  Done when klide-bot answers a PR comment with no OpenCode installed.
 
 ## Stabilize v0.2
 
