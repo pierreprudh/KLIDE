@@ -430,6 +430,36 @@ See the [changelog](./CHANGELOG.md) for shipped milestones.
 
 ## Development
 
+### Keep macOS permissions across local rebuilds
+
+On your development Mac, install a reusable local signing identity once:
+
+```bash
+npm run macos:setup-signing
+npm run tauri build
+```
+
+Setup stores the private key in your login Keychain and trusts its certificate
+for code signing only. macOS may ask you to authenticate. Subsequent
+`npm run tauri build`, `npm run tauri bundle`, and `npm run tauri dev` automatically reuse
+that identity on this Mac. Keep the certificate: replacing it changes the
+app's identity and can bring back permission prompts. Expect one more Documents
+and Keychain authorization when switching from an ad-hoc build.
+
+In `tauri dev`, Cargo signs the executable before each launch, including Rust
+hot reloads, using the same identity as the installed app. Frontend hot reload
+works as usual. Use the npm command; invoking `npx tauri` bypasses this wrapper.
+CI and explicit `APPLE_SIGNING_IDENTITY` or
+`APPLE_CERTIFICATE` settings retain their own signing configuration. Use
+`KLIDE_DISTRIBUTION=1` to disable the local fallback for distribution builds.
+The local certificate does not provide Developer ID signing or notarization.
+See [Apple's code identity explanation](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements/).
+
+Verify development signing across two real Cargo rebuilds with
+`node --test scripts/macos-dev-signing-checks.mjs` on a Mac with the certificate
+installed. The check uses an isolated Rust fixture and leaves running Klide
+sessions alone.
+
 Run the relevant checks before submitting a change:
 
 ```bash
