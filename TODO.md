@@ -357,8 +357,10 @@ time, workspace trust first (every competitor has closed it).
   Server annotations still govern Plan eligibility, not permission to call.
 - [ ] Hooks: approval hashes `hooks.json` only; include the digests of the
   workspace scripts it calls.
-- [ ] Skills: key the opt-in on workspace path + a hash of `SKILL.md`, not
-  `file-{source}-{folder}`.
+- [x] Skills (2026-11-24): a workspace skill's opt-in is keyed on its
+  `SKILL.md` path + a hash of its text (`FileSystemSkill::opt_in_key`); home
+  skills keep their folder id. Workspace skills switched on before this start
+  off once.
 - [ ] ptyd: refuse a socket folder not owned by the current uid at 0700, check
   peer credentials, bound the pre-auth read.
 - [x] Design canvas proxy (2026-11-13): rejects any Host other than its
