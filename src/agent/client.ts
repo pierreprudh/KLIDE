@@ -34,6 +34,7 @@ type StartRunRequest = {
   commandTimeoutSecs?: number;
   requireDiffReview?: boolean;
   autoApproveCommands?: boolean;
+  nativePermissionMode?: string;
   testAfterEditCommand?: string;
   goal?: { objective: string; maxRounds?: number };
   delegateSession?: string;
@@ -86,6 +87,7 @@ export function toStartRunRequest(input: StartAgentRunInput): StartRunRequest {
     commandTimeoutSecs: input.commandTimeoutSecs,
     requireDiffReview: input.requireDiffReview,
     autoApproveCommands: input.autoApproveCommands,
+    nativePermissionMode: input.nativePermissionMode,
     testAfterEditCommand: input.testAfterEditCommand,
     goal: input.goal,
     delegateSession: input.delegateSession,

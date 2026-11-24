@@ -328,6 +328,7 @@ fn run_request(template: &StartRunRequest, run_id: &str, text: String) -> StartR
     request.auto_approve_commands = None;
     request.command_allowlist.clear();
     request.delegate_session = None;
+    request.native_permission_mode = None;
     request.conversation_history = None;
     request.retry = false;
     request.naming = None;

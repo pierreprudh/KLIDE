@@ -250,6 +250,7 @@ struct ProviderTurnRequest {
     /// to a delegate CLI so a headless turn can run what the user already said
     /// yes to. Empty for every provider whose tools Klide dispatches itself.
     allowed_commands: Vec<String>,
+    native_permission_mode: Option<String>,
     /// Klide's MCP server for a Delegate conversation (see
     /// [`RunSupervisor::delegate_mcp_wiring`]). `None` for every other provider.
     mcp: Option<crate::delegate::McpWiring>,
@@ -288,6 +289,7 @@ impl AgentProviderCaller for RealProviderCaller {
                     run_id: request.run_id,
                     delegate_session: request.delegate_session,
                     allowed_commands: request.allowed_commands,
+                    native_permission_mode: request.native_permission_mode,
                     mcp: request.mcp,
                     num_ctx: request.num_ctx,
                     num_predict: request.num_predict,
@@ -850,6 +852,7 @@ async fn run_subagent_to_completion(
         // which has no card to ask on and would otherwise park on its first
         // command, and its parent with it.
         auto_approve_commands: spec.auto_approve_commands,
+        native_permission_mode: None,
         parent_id: Some(spec.parent_id.clone()),
         side_question_of: None,
         mission_id: None,
@@ -2008,6 +2011,7 @@ async fn start_run(
     // Never accept renderer-supplied trust. Only the private, fingerprint-bound
     // approval store may populate this field.
     request.command_allowlist.clear();
+    crate::delegate::native_permissions::validate(&request.provider, request.native_permission_mode.as_deref())?;
     // Hold this turn's attachments to what the wires and the transcript can
     // take, before either sees them. Every producer enters here, so the
     // composers' own rules stay UX and this stays the invariant (see
@@ -2718,6 +2722,7 @@ async fn loop_body(
                     run_id: Some(id.clone()),
                     delegate_session: None,
                     allowed_commands: Vec::new(),
+                    native_permission_mode: None,
                     mcp: None,
                     num_ctx,
                     num_predict: request.num_predict,
@@ -3210,6 +3215,7 @@ async fn loop_body(
                 run_id: Some(id.clone()),
                 delegate_session: request.delegate_session.clone(),
                 allowed_commands: allowed_commands.clone(),
+                native_permission_mode: request.native_permission_mode.clone(),
                 mcp: mcp.clone(),
                 num_ctx,
                 num_predict: reply_budget_override.or(request.num_predict),
@@ -4154,6 +4160,7 @@ pub async fn agent_compact_conversation(
             run_id: Some(run_id.clone()),
             delegate_session: None,
             allowed_commands: Vec::new(),
+            native_permission_mode: None,
             mcp: None,
             num_ctx: None,
             num_predict: None,
@@ -5863,6 +5870,7 @@ mod provider_caller_tests {
                 run_id: None,
                 delegate_session: None,
                 allowed_commands: Vec::new(),
+                native_permission_mode: None,
                 mcp: None,
                 num_ctx: Some(1024),
                 num_predict: Some(128),

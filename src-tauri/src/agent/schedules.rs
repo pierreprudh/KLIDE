@@ -258,6 +258,7 @@ fn prepare_request(
     request.auto_approve_commands = None;
     request.command_allowlist.clear();
     request.delegate_session = None;
+    request.native_permission_mode = None;
     request.retry = false;
     request.naming = None;
     request.run_id = None;
@@ -737,6 +738,7 @@ async fn tick_service(
             request.run_id = claimed.history.last().map(|r| r.run_id.clone());
             request.conversation_history = None;
             request.delegate_session = None;
+            request.native_permission_mode = None;
             let runs = claimed.history.last().unwrap().runs_dir.clone().unwrap();
             let result = match claimed.target.available() {
                 Ok(()) => host.start_scheduled(request, runs).await,
@@ -852,7 +854,8 @@ mod tests {
 
     #[test]
     fn saved_trigger_survives_reopen_without_temporary_trust() {
-        let (path, request) = setup();
+        let (path, mut request) = setup();
+        request.native_permission_mode = Some("full-access".into());
         create(
             &path,
             request,
@@ -865,6 +868,7 @@ mod tests {
         let saved = list(&path).unwrap().pop().unwrap();
         assert_eq!(saved.status, Status::Pending);
         assert_eq!(saved.request.auto_approve_commands, None);
+        assert_eq!(saved.request.native_permission_mode, None);
         assert_eq!(saved.due_at, 2000);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

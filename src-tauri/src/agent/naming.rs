@@ -187,6 +187,7 @@ pub async fn name(namer: &PreferredModel, first_message: &str, workspace_root: O
         run_id: None,
         delegate_session: None,
         allowed_commands: Vec::new(),
+        native_permission_mode: None,
         mcp: None,
         num_ctx: None,
         num_predict: Some(NAME_TOKENS),

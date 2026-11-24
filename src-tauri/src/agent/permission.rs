@@ -141,7 +141,8 @@ impl GateSubject {
             mode: request.mode.clone(),
             disabled,
             lineage,
-            requested_full_auto: request.auto_approve_commands == Some(true),
+            requested_full_auto: request.auto_approve_commands == Some(true)
+                && request.native_permission_mode.is_none(),
             read_only_side_question: request.side_question_of.is_some(),
             script_offered,
             read_many_offered,
@@ -807,6 +808,15 @@ mod tests {
         request.mode = serde_json::from_value(serde_json::json!(mode)).unwrap();
         request.disabled_tools = disabled.iter().map(|d| d.to_string()).collect();
         request
+    }
+
+    #[test]
+    fn native_permission_selection_does_not_inherit_klide_full_auto() {
+        let mut request = subject_request("goal", &[]);
+        request.auto_approve_commands = Some(true);
+        assert!(GateSubject::from_request(&request).requested_full_auto);
+        request.native_permission_mode = Some("manual".into());
+        assert!(!GateSubject::from_request(&request).requested_full_auto);
     }
 
     #[test]

@@ -28,6 +28,7 @@ impl Followup {
         request.context = None;
         if matches!(self, Self::Observer(_)) {
             request.auto_approve_commands = Some(false);
+            request.native_permission_mode = None;
             request.require_diff_review = Some(true);
             request.mode = AgentMode::Plan;
             request.max_turns = Some(4);
@@ -123,6 +124,14 @@ mod tests {
             original.retry = true;
             assert!(!followup.prepare_request("parent", original).retry);
         }
+    }
+
+    #[test]
+    fn shell_notifications_do_not_borrow_native_permission_authority() {
+        let mut original = test_request("/tmp/workers", &[]);
+        original.native_permission_mode = Some("bypassPermissions".into());
+        let request = Followup::Observer("shell".into()).prepare_request("parent", original);
+        assert_eq!(request.native_permission_mode, None);
     }
 
     #[test]
