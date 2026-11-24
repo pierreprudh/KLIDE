@@ -78,6 +78,7 @@ Klide/
 │   ├── AGENT_COORDINATION.md      How Runs address each other — one journal, two doors
 │   ├── MISSION_ORCHESTRATION.md   Agent dispatch of approved tasks, exact-attempt inspection, and limits
 │   ├── MEMORY_ENGINE.md           All-in-one memory architecture + PR sequence
+│   ├── KLIDE_RUN.md               `klide run` — Klide's own agent as a CLI: command, behaviour, slices
 │   ├── MODEL_ROUTING.md           Auto model routing — the rule, the wire, what it deliberately is not
 │   ├── CONVERSATION_STORE.md      The conversation index: localStorage → JSON files → SQLite, migrations, failure behaviour
 │   ├── SOFTWARE_FACTORY.md        The factory that builds Klide (PR reviewer) + Klide as its control panel
@@ -368,6 +369,7 @@ Klide/
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── run_host.rs        The one Run host door — placement (app vs ptyd), admission, spawn + backstop, card answers, the one "active" rule
+    │       ├── cli_run.rs         `klide run` — the Harness as a one-shot CLI agent: Plan by default, `--work` / `--allow-commands`, every card refused, text or JSON out (docs/KLIDE_RUN.md)
     │       ├── daemon.rs          Background subscription chats — the Harness loop hosted in `klide ptyd`, survives app exit
     │       ├── daemon_client.rs   App-side proxy to those runs — start, reconnect, replay the durable gap, route Stop/approvals
     │       ├── stream_log.rs      Streamed output of a background turn — deltas merged per 150 ms, written without a disk wait
