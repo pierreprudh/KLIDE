@@ -26,6 +26,11 @@ export type Skill = {
    *  "Matt Pocock", "Personal", "Workspace (auto-generated)". User-
    *  defined and built-in skills leave this undefined. */
   group?: string;
+  /** What a filesystem skill's "on" is remembered under — Rust's
+   *  `FileSystemSkill::opt_in_key`. For a workspace skill it is the SKILL.md's
+   *  path plus a hash of its text, so an edit (or another project's skill of
+   *  the same name) starts off again. */
+  optInKey?: string;
 };
 
 // The tools the AI panel exposes — kept in sync with the Rust tool
@@ -274,7 +279,7 @@ export function saveSkills(list: Skill[]): void {
     localStorage.setItem(SKILLS_KEY, JSON.stringify(list));
     // Persist which filesystem skills are on, so the choice survives the
     // disk re-read on next launch (see loadFilesystemSkills).
-    const enabledFs = list.filter((s) => s.fromFile && s.enabled).map((s) => s.id);
+    const enabledFs = list.filter((s) => s.fromFile && s.enabled).map(optInKey);
     localStorage.setItem(ENABLED_FS_KEY, JSON.stringify(enabledFs));
   } catch {
     /* storage full or unavailable — skip */
@@ -356,6 +361,7 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
     fromFile: string;
     source: string;
     group: string;
+    optInKey: string;
   };
   let raw: FileSystemSkill[] = [];
   try {
@@ -382,9 +388,10 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
     description: s.description,
     instructions: s.instructions,
     tools: allIds,
-    enabled: enabledIds.has(s.id),
+    enabled: enabledIds.has(s.optInKey || s.id),
     fromFile: s.fromFile,
     group: s.group,
+    optInKey: s.optInKey || s.id,
   }));
 }
 
@@ -394,11 +401,17 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
  *  Skills panel re-reads every time it opens — never switches the skill back
  *  off. A skill the live list hasn't seen yet takes the scan's (saved) state. */
 export function mergeFilesystemSkills(prev: readonly Skill[], scanned: readonly Skill[]): Skill[] {
-  const liveEnabled = new Map(prev.filter((s) => s.fromFile).map((s) => [s.id, s.enabled]));
+  // Keyed on the opt-in key, not the id: a SKILL.md edited since the live
+  // list was read is a different opt-in and takes the scan's (off) state.
+  const liveEnabled = new Map(prev.filter((s) => s.fromFile).map((s) => [optInKey(s), s.enabled]));
   return [
     ...prev.filter((s) => !s.fromFile),
-    ...scanned.map((s) => (liveEnabled.has(s.id) ? { ...s, enabled: liveEnabled.get(s.id)! } : s)),
+    ...scanned.map((s) => (liveEnabled.has(optInKey(s)) ? { ...s, enabled: liveEnabled.get(optInKey(s))! } : s)),
   ];
+}
+
+function optInKey(skill: Skill): string {
+  return skill.optInKey || skill.id;
 }
 
 /** Mirrors `SkillCommandResult` in `src-tauri/src/skills.rs`. The name matches
