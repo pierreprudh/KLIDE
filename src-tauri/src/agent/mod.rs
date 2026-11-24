@@ -5,6 +5,7 @@ pub(crate) mod design_feedback;
 mod approval_store;
 pub(crate) mod skill_resources;
 pub(crate) mod daemon;
+pub(crate) mod cli_run;
 mod daemon_client;
 pub(crate) mod remote_machine;
 mod run_host;
