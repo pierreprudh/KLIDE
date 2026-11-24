@@ -362,8 +362,10 @@ time, workspace trust first (every competitor has closed it).
   `SKILL.md` path + a hash of its text (`FileSystemSkill::opt_in_key`); home
   skills keep their folder id. Workspace skills switched on before this start
   off once.
-- [ ] ptyd: refuse a socket folder not owned by the current uid at 0700, check
-  peer credentials, bound the pre-auth read.
+- [x] ptyd (2026-11-24): the socket folder must belong to the current uid
+  at 0700, every wire read is capped (`read_line_capped`, #554), and a peer
+  on another account is refused from its kernel credentials before a byte is
+  read (`getpeereid` / `SO_PEERCRED`).
 - [x] Design canvas proxy (2026-11-13): rejects any Host other than its
   bound `127.0.0.1:<port>` before serving the token script or contacting the
   upstream; includes a hostile-origin regression.
