@@ -94,8 +94,12 @@ icon, on any screen, and the window shows a toast with **Fix it** and **Open**.
 The window takes firings itself (`ci_watch_take`, on load and when the app
 nudges it with `ci-watch:pending`), so a firing that landed while Klide was
 closed is shown when it opens. Only a firing no open app claimed within 15 s
-falls back to an `osascript` notification, which macOS lists under Script
-Editor. State is `ci-watch.json` in app data, shared by the app and the
+falls back to a small Klide notification app, with Klide's name and logo.
+Development builds use this same sender because Tauri's development sender
+uses Terminal's identity. The helper is prepared automatically in
+`~/Library/Caches/com.pierre.klide/notifications-v1/Klide.app`; macOS may ask
+to allow its notifications the first time. Clicking an old helper notification
+does not repost it. State is `ci-watch.json` in app data, shared by the app and the
 service under `ci-watch.lock`.
 
 **Fix it** (toast, or the button beside a firing in Run history) checks the

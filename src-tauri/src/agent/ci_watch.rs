@@ -341,16 +341,13 @@ fn run_request(template: &StartRunRequest, run_id: &str, text: String) -> StartR
     request
 }
 
-fn apple_string(text: &str) -> String {
-    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 /// A macOS notification from the service, which has no window to toast in.
-fn notify_mac(title: &str, body: &str) {
+pub(super) fn notify_mac(title: &str, body: &str) {
     #[cfg(target_os = "macos")]
     {
-        let script = format!("display notification {} with title {}", apple_string(body), apple_string(title));
-        let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).output();
+        if let Err(error) = super::mac_notifications::send(title, body) {
+            eprintln!("Klide notification failed: {error}");
+        }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (title, body);
@@ -483,7 +480,7 @@ async fn fire(
     };
     // An open app posts a Klide-branded notification and marks the firing
     // announced within seconds. Only a firing nobody claimed falls back to
-    // osascript, which macOS shows under Script Editor.
+    // the Klide-branded notification helper.
     let (d, announce_key) = (data.to_path_buf(), fired.key.clone());
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
@@ -536,10 +533,9 @@ fn notify_native(app: &tauri::AppHandle, f: &Fired) {
         (None, e) => format!("Couldn't start a Run: {}", e.as_deref().unwrap_or("unknown error")),
     };
     let title = format!("CI failed · #{} {}", f.pr_number, project);
-    // A dev binary has no app bundle, so macOS drops the plugin's
-    // notification without a word; osascript at least shows up (under
-    // Script Editor). A bundled build posts as Klide.
-    if cfg!(debug_assertions) {
+    // The plugin uses Terminal's identity in development. Our applet has
+    // Klide's name and logo even when the dev binary has no app bundle.
+    if cfg!(all(debug_assertions, target_os = "macos")) {
         notify_mac(&title, &body);
         return;
     }
@@ -880,7 +876,6 @@ mod tests {
                    build\tUNKNOWN STEP\t2026-11-17T23:13:38.8Z Cleaning up orphan processes";
         assert_eq!(log_excerpt("\u{feff}2026-11-18T22:00:52.7Z \u{1b}[1m\u{1b}[91merror\u{1b}[0m: boom\n2026-11-18T22:00:52.8Z ##[error]exit 1\n2026-11-18T22:00:53Z cleanup", 1000), "error: boom\n##[error]exit 1");
         assert_eq!(log_excerpt(raw, 1000), "8 vulnerabilities\n##[error]Process completed with exit code 1.");
-        assert_eq!(apple_string(r#"a"b\"#), r#""a\"b\\""#);
     }
 
     fn listing(head: &str, rollup: serde_json::Value) -> Vec<serde_json::Value> {
