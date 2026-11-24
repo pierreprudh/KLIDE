@@ -356,8 +356,10 @@ time, workspace trust first (every competitor has closed it).
 - [x] Design canvas proxy (2026-11-13): rejects any Host other than its
   bound `127.0.0.1:<port>` before serving the token script or contacting the
   upstream; includes a hostile-origin regression.
-- [ ] Credential snapshots: write private atomically (`accounts.rs`), tighten
-  `~/.claude.json.klide-bak`, create scrollback logs 0600.
+- [x] Credential snapshots (2026-11-24): snapshots and live swaps are
+  written private and atomically, `~/.claude.json.klide-bak` too, and
+  scrollback logs + metas are created 0600 (an older log is tightened on its
+  next open).
 - [ ] Listeners: a stalled local connection still holds the single accept
   thread of the model-source bridge and the hook server.
 - [ ] Command rules: per-subcommand matching and deny rules, as Claude Code,
