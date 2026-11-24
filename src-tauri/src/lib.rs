@@ -1856,3 +1856,5 @@ mod plugin_registration_tests {
 
 #[cfg(debug_assertions)]
 pub fn design_pilot_main() { agent::design_pilot::cli_main(); }
+/// `klide run` — Klide's Harness as a one-shot CLI agent (agent/cli_run.rs).
+pub fn cli_run_main() -> ! { agent::cli_run::main() }

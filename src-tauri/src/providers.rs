@@ -1639,6 +1639,12 @@ fn env_fallback_names(entry: &ProviderEntry) -> (Option<&'static str>, Option<&'
     }
 }
 
+/// The environment variable a hosted Provider's key can come from, for an
+/// error that tells a terminal user what to set (`klide run`).
+pub(crate) fn key_env_var(id: &str) -> Option<&'static str> {
+    lookup(id).and_then(|entry| env_fallback_names(entry).0)
+}
+
 fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }

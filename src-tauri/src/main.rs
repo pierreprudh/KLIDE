@@ -10,6 +10,11 @@ fn main() {
         klide_lib::design_pilot_main();
         return;
     }
+    // `klide run "<task>"` — Klide's own agent from a terminal or CI, no
+    // window (agent/cli_run.rs, docs/KLIDE_RUN.md).
+    if std::env::args().nth(1).as_deref() == Some("run") {
+        klide_lib::cli_run_main();
+    }
     // `klide mcp coordination` serves the embedded MCP server over stdio for a
     // Delegate CLI Klide launched (mcp_server.rs). Same binary as the GUI and
     // the ptyd daemon below. Every platform: an MCP child has no PTY.
