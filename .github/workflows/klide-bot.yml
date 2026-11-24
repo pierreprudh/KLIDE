@@ -4,9 +4,10 @@ name: klide-bot
 # answers in the thread, like `@claude`. It never edits, runs commands or
 # pushes. Plan: docs/KLIDE_BOT.md.
 #
-# Setup: secret OPENROUTER_API_KEY and a model in the variable KLIDE_BOT_MODEL
-# (falls back to REVIEW_MODEL; an OpenCode model string such as
-# openrouter/<vendor>/<model>, a `:free` one costs nothing). Inert until set.
+# Setup: a key — secret OPENROUTER_API_KEY or DEEPSEEK_API_KEY — and a model
+# in the variable KLIDE_BOT_MODEL (falls back to REVIEW_MODEL; an OpenCode
+# model string such as openrouter/<vendor>/<model>, where a `:free` one costs
+# nothing, or deepseek/deepseek-chat on the DeepSeek key). Inert until set.
 # Optional identity: variable KLIDE_BOT_APP_ID + secret KLIDE_BOT_PRIVATE_KEY
 # from the `klide-bot` GitHub App, so replies come from klide-bot[bot] instead
 # of github-actions[bot].
@@ -56,11 +57,11 @@ jobs:
         id: decide
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
-          HAS_KEY: ${{ secrets.OPENROUTER_API_KEY != '' }}
+          HAS_KEY: ${{ secrets.OPENROUTER_API_KEY != '' || secrets.DEEPSEEK_API_KEY != '' }}
         run: |
           set -euo pipefail
           if [ -z "$MODEL" ] || [ "$HAS_KEY" != true ]; then
-            echo "::notice::KLIDE_BOT_MODEL/REVIEW_MODEL or OPENROUTER_API_KEY is not set; skipping"
+            echo "::notice::KLIDE_BOT_MODEL/REVIEW_MODEL or a key (OPENROUTER_API_KEY / DEEPSEEK_API_KEY) is not set; skipping"
             echo "run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -103,6 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENCODE_CONFIG: ${{ github.workspace }}/base/.github/klide-bot/opencode.json
           HEAD_SHA: ${{ steps.decide.outputs.head }}
         run: |
