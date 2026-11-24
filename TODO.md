@@ -366,8 +366,8 @@ time, workspace trust first (every competitor has closed it).
   SSRF, the fixed gateway port 10100, the `hermes proxy` bearer.
 - [ ] Release: an auto-updater, so a security fix reaches an installed copy
   (notarization is tracked under v0.5.1).
-- [ ] Refresh `docs/competitors-2026-11-09.md`: it says Klide has no sandbox
-  and no user hooks.
+- [x] Refreshed `docs/competitors-2026-11-09.md` (local, 2026-11-24): the
+  sandbox and hooks rows now describe what shipped in 0.7.0.
 
 ## Harness follow-ups
 
