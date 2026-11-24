@@ -8,10 +8,9 @@ them.
 
 ## Dependency audit follow-up, 2026-11-18
 
-- [ ] Replace the temporary dev-only picomatch advisory exception with a
-  patched compatible release once available, then remove the exception from
-  `scripts/audit-dependencies.mjs`. See `docs/DEPENDENCY_AUDIT.md`. Production
-  and unrelated high/critical advisories remain blocked.
+- [x] Removed the dev-only picomatch advisory exception (2026-11-24): GitHub
+  withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18. The audit now blocks every
+  high/critical advisory with no exceptions. See `docs/DEPENDENCY_AUDIT.md`.
 
 ## Remote machines — native hosts and deployment, 2026-11-19
 
@@ -351,13 +350,17 @@ time, workspace trust first (every competitor has closed it).
   workspace scripts it calls.
 - [ ] Skills: key the opt-in on workspace path + a hash of `SKILL.md`, not
   `file-{source}-{folder}`.
-- [ ] ptyd: refuse a socket folder not owned by the current uid at 0700, check
-  peer credentials, bound the pre-auth read.
+- [ ] ptyd: check peer credentials. Done (checked 2026-11-24): the socket
+  folder is refused unless owned by the current uid and forced to 0700
+  (`pty_daemon.rs`), and every wire read is bounded by `read_line_capped`
+  (#554).
 - [x] Design canvas proxy (2026-11-13): rejects any Host other than its
   bound `127.0.0.1:<port>` before serving the token script or contacting the
   upstream; includes a hostile-origin regression.
-- [ ] Credential snapshots: write private atomically (`accounts.rs`), tighten
-  `~/.claude.json.klide-bak`, create scrollback logs 0600.
+- [ ] Credential snapshots: tighten `~/.claude.json.klide-bak` (still a plain
+  `fs::write`), create scrollback logs 0600 (`pty_host.rs` opens them with
+  default mode). Done (checked 2026-11-24): snapshots and live swaps are
+  written private and atomically (`atomic_write_private`).
 - [ ] Listeners: a stalled local connection still holds the single accept
   thread of the model-source bridge and the hook server.
 - [ ] Command rules: per-subcommand matching and deny rules, as Claude Code,
@@ -741,11 +744,13 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   `review` on `main`.
 - [x] S0.5 — `@klide-bot` in a PR/issue comment gets a read-only OpenCode
   answer (`klide-bot.yml`); inert until `OPENROUTER_API_KEY` + a model are set.
-- [ ] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
+- [x] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
   Issues, Statuses: write) and add variable `KLIDE_BOT_APP_ID` / secret
-  `KLIDE_BOT_PRIVATE_KEY`.
-- [ ] S1 — workflows mint an App token and act as `klide-bot[bot]`, so its
-  pushes trigger CI and the reviewer.
+  `KLIDE_BOT_PRIVATE_KEY`. (App 5890720, 2026-11-23; it answered on #583 and
+  #603 as `klide-bot[bot]`.)
+- [ ] S1 — `review.yml` mints the App token too (only `klide-bot.yml` does
+  today), so the review and later `/fix` pushes act as `klide-bot[bot]` and
+  trigger CI.
 - [ ] S2 — `/fix`, `/fix <instruction>`, `/fix model=…`: OpenCode on
   `FIX_MODEL` fixes only the blocking findings, runs `tsc` + `vitest`, pushes
   one commit to the PR branch. Done when a planted break goes red → `/fix` →
