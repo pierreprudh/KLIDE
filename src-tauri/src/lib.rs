@@ -11,6 +11,7 @@ mod accounts;
 mod usage;
 mod adapters;
 mod blocking;
+mod bot_settings;
 mod cli;
 mod hermes_settings;
 mod harness_source;
@@ -1453,6 +1454,8 @@ pub fn run() {
             agent::design_feedback::agent_start_design_review,
             agent::agent_start_run,
             agent::schedules::agent_schedule_create,
+            bot_settings::klide_bot_settings,
+            bot_settings::klide_bot_set_model,
             agent::ci_watch::ci_watch_get,
             agent::ci_watch::ci_watch_set,
             agent::ci_watch::ci_watch_take,

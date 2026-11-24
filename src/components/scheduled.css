@@ -277,3 +277,14 @@
    can't hold another). */
 .scheduled-history li > .ci-watch-fix { position: absolute; right: 6px; top: 35px; width: auto; display: block; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: 11px; padding: 3px 6px; }
 .scheduled-history li > .ci-watch-fix:hover { color: var(--fg); background: var(--bg-hover); }
+
+/* klide-bot — a Triggers row; its two bots in the detail pane. */
+.klide-bot-mark { display: grid; place-items: center; width: 18px; height: 18px; color: var(--fg); }
+.klide-bot-row { padding: 14px 0; border-top: 1px solid var(--border); }
+.klide-bot-row:first-of-type { margin-top: 14px; }
+.klide-bot-row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.klide-bot-row-head > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.klide-bot-row-head strong { font-size: 13px; font-weight: 600; color: var(--fg-strong); }
+.klide-bot-row-head span { font-size: 12px; line-height: 1.45; color: var(--fg-subtle); }
+.klide-bot-actions-link { margin-top: 6px; padding: 3px 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--fg-subtle); cursor: pointer; }
+.klide-bot-actions-link:hover, .klide-bot-actions-link:focus-visible { color: var(--fg-strong); }
