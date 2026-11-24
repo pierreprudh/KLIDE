@@ -38,6 +38,8 @@ pub(crate) mod command_env;
 mod observers;
 pub(crate) mod schedules;
 pub(crate) mod ci_watch;
+#[cfg(target_os = "macos")]
+mod mac_notifications;
 pub(crate) mod workers;
 pub(crate) mod worker_slots;
 mod attention;
