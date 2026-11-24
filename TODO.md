@@ -350,17 +350,13 @@ time, workspace trust first (every competitor has closed it).
   workspace scripts it calls.
 - [ ] Skills: key the opt-in on workspace path + a hash of `SKILL.md`, not
   `file-{source}-{folder}`.
-- [ ] ptyd: check peer credentials. Done (checked 2026-11-24): the socket
-  folder is refused unless owned by the current uid and forced to 0700
-  (`pty_daemon.rs`), and every wire read is bounded by `read_line_capped`
-  (#554).
+- [ ] ptyd: refuse a socket folder not owned by the current uid at 0700, check
+  peer credentials, bound the pre-auth read.
 - [x] Design canvas proxy (2026-11-13): rejects any Host other than its
   bound `127.0.0.1:<port>` before serving the token script or contacting the
   upstream; includes a hostile-origin regression.
-- [ ] Credential snapshots: tighten `~/.claude.json.klide-bak` (still a plain
-  `fs::write`), create scrollback logs 0600 (`pty_host.rs` opens them with
-  default mode). Done (checked 2026-11-24): snapshots and live swaps are
-  written private and atomically (`atomic_write_private`).
+- [ ] Credential snapshots: write private atomically (`accounts.rs`), tighten
+  `~/.claude.json.klide-bak`, create scrollback logs 0600.
 - [ ] Listeners: a stalled local connection still holds the single accept
   thread of the model-source bridge and the hook server.
 - [ ] Command rules: per-subcommand matching and deny rules, as Claude Code,
