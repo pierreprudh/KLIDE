@@ -29,6 +29,7 @@
             }
           ],
           "glass" : true,
+          "hidden" : true,
           "image-name" : "klide-symbol-centered.svg",
           "name" : "klide-symbol-centered",
           "position" : {
@@ -54,6 +55,36 @@
       "translucency" : {
         "enabled" : true,
         "value" : 0.2
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "srgb:0.00000,0.00000,0.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ],
+          "hidden" : false,
+          "image-name" : "Repeat group 5.png",
+          "name" : "Repeat group 5"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
       }
     }
   ],
