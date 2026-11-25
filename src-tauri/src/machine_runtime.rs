@@ -83,7 +83,7 @@ pub fn binary(id: &str, runtime: &RemoteRuntime, os: HostOs) -> String {
 }
 pub fn install_sandbox(os: HostOs) -> Result<String, String> {
     match os {
-        HostOs::Macos => Ok("set -eu; test \"$(uname -m)\" = arm64 || { echo 'Docker Sandboxes needs an Apple silicon Mac' >&2; exit 1; }; export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; if ! command -v brew >/dev/null; then echo 'Install Homebrew, then retry.' >&2; exit 1; fi; brew install docker/tap/sbx".into()),
+        HostOs::Macos => Ok("set -eu; test \"$(uname -m)\" = arm64 || { echo 'Docker Sandboxes needs an Apple silicon Mac' >&2; exit 1; }; export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; if ! command -v brew >/dev/null; then echo 'Install Homebrew, then retry.' >&2; exit 1; fi; brew tap docker/tap; brew install docker/tap/sbx".into()),
         HostOs::Linux => Ok(r#"set -eu
 if ! test -r /dev/kvm || ! test -w /dev/kvm; then echo 'Local isolation requires accessible /dev/kvm. Enable KVM or nested virtualization with your VPS provider, then retry. Direct execution is available without KVM.' >&2; exit 1; fi
 if test "$(id -u)" = 0; then elevate=''; else elevate=sudo; fi
