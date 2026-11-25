@@ -7,8 +7,8 @@
 //! repository is trusted, wherever the worktree lives.
 //!
 //! The list lives in `~/.klide/trusted-folders.json`, never in the folder
-//! itself, so a repository cannot vouch for itself. It only grows: there is
-//! no "untrust" yet beyond editing that file.
+//! itself, so a repository cannot vouch for itself. Settings › Trusted
+//! folders lists it and removes an entry; nothing else takes trust away.
 
 use std::path::{Path, PathBuf};
 
@@ -77,6 +77,23 @@ fn grant_in(path: &Path, roots: &[String]) -> Result<(), String> {
     crate::durable::write_atomic(path, &bytes)
 }
 
+/// Take `root` off the list in `path`. Removes the entry itself, not a folder
+/// above it that still covers `root`; removing an absent entry is a no-op.
+fn revoke_in(path: &Path, root: &str) -> Result<(), String> {
+    let before = read_from(path);
+    let target = canonical(Path::new(root));
+    let folders: Vec<String> = before
+        .iter()
+        .filter(|folder| folder.as_path() != Path::new(root) && **folder != target)
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    if folders.len() == before.len() {
+        return Ok(());
+    }
+    let bytes = serde_json::to_vec_pretty(&Store { folders }).map_err(|e| e.to_string())?;
+    crate::durable::write_atomic(path, &bytes)
+}
+
 #[derive(serde::Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TrustStatus {
@@ -103,6 +120,28 @@ pub async fn workspace_trust_grant(roots: Vec<String>) -> Result<(), String> {
     crate::blocking::run(move || {
         let path = store_path().ok_or("No home folder to keep the trusted list in")?;
         grant_in(&path, &roots)
+    })
+    .await
+}
+
+/// The trusted folders, in the order they were trusted.
+#[tauri::command]
+pub async fn workspace_trust_list() -> Result<Vec<String>, String> {
+    crate::blocking::run(|| {
+        Ok(store_path()
+            .map(|path| read_from(&path).into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
+            .unwrap_or_default())
+    })
+    .await
+}
+
+/// Stop trusting one folder from the list. Its repository's own Git hooks and
+/// programs are off again from the next Git command.
+#[tauri::command]
+pub async fn workspace_trust_revoke(root: String) -> Result<(), String> {
+    crate::blocking::run(move || {
+        let path = store_path().ok_or("No home folder to keep the trusted list in")?;
+        revoke_in(&path, &root)
     })
     .await
 }
@@ -159,6 +198,28 @@ mod tests {
         grant_in(&store, &[root]).unwrap();
         assert_eq!(read_from(&store), vec![base.clone()]);
         assert!(grant_in(&store, &["relative/folder".into()]).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn revoking_removes_that_entry_and_leaves_the_rest() {
+        let base = scratch("revoke");
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(a.join("inner")).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let store = base.join("store.json");
+        grant_in(&store, &[a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()]).unwrap();
+        revoke_in(&store, &a.to_string_lossy()).unwrap();
+        let folders = read_from(&store);
+        assert_eq!(folders, vec![b.clone()]);
+        assert!(!is_trusted_by(&folders, &a.join("inner")));
+        // A folder that was never on the list, or a child of one, removes nothing.
+        revoke_in(&store, &b.join("missing").to_string_lossy()).unwrap();
+        assert_eq!(read_from(&store), vec![b.clone()]);
+        // An entry whose folder has since been deleted can still be removed.
+        std::fs::remove_dir_all(&b).unwrap();
+        revoke_in(&store, &b.to_string_lossy()).unwrap();
+        assert!(read_from(&store).is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

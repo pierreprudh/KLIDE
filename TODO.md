@@ -346,8 +346,9 @@ time, workspace trust first (every competitor has closed it).
   Klide starts goes through `git/cmd.rs`: always fsmonitor/`ext::`/editor/
   prompt off; restricted → hooks off, and Git paused unless the repo's own
   config is plain data (allowlist). Links to an untrusted folder still confirm.
-- [ ] Trust follow-ups: an "untrust" / trusted-folders list in Settings;
-  project hooks, workspace skills and project connectors could also wait on
+- [ ] Trust follow-ups: ~~an "untrust" / trusted-folders list in Settings~~
+  (done 2026-11-25: Settings › AI › Execution › Trusted folders, Remove per
+  folder; untested in the installed app); project hooks, workspace skills and project connectors could also wait on
   trust (not chosen for the first slice); installed-app check of the notification.
 - [x] Bound known secret reads (2026-11-13): native file/preflight checks now
   name GitHub CLI and agent login stores; the macOS command profile denies
