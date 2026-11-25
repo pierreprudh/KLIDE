@@ -164,7 +164,66 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
         providers::ModelsHandler::StaticPresets(presets) => {
             Ok(presets.iter().map(|m| (*m).to_string()).collect())
         }
+        providers::ModelsHandler::HuggingFaceCache => crate::blocking::run(|| Ok(mlx_installed_models())).await,
     }
+}
+
+/// The Hugging Face hub cache, where `mlx_lm` downloads models:
+/// `$HF_HUB_CACHE`, else `$HF_HOME/hub`, else `~/.cache/huggingface/hub` —
+/// the same order `huggingface_hub` resolves it.
+fn hf_hub_cache() -> Option<std::path::PathBuf> {
+    let set = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    set("HF_HUB_CACHE")
+        .or_else(|| set("HF_HOME").map(|home| home.join("hub")))
+        .or_else(|| crate::cli::home_dir_path().map(|home| home.join(".cache/huggingface/hub")))
+}
+
+/// The MLX models downloaded on this Mac — what `mlx_lm.server --model <repo>`
+/// loads without fetching anything. Read from disk on every call, so a model
+/// deleted or downloaded outside Klide shows up (or goes) at the next listing.
+pub(crate) fn mlx_installed_models() -> Vec<String> {
+    hf_hub_cache().map(|hub| mlx_models_in(&hub)).unwrap_or_default()
+}
+
+/// Repo ids (`org/name`) under one hub cache that hold a complete MLX model:
+/// a snapshot with `config.json` and at least one readable `.safetensors`
+/// (a broken blob link means the download never finished). MLX, because the
+/// cache also holds models `mlx_lm` can't serve (layout detectors, GGUF,
+/// full-precision PyTorch checkpoints): the repo is under `mlx-community`,
+/// names MLX, or its config carries MLX's `quantization` block.
+pub(crate) fn mlx_models_in(hub: &std::path::Path) -> Vec<String> {
+    let Ok(repos) = std::fs::read_dir(hub) else { return Vec::new() };
+    let mut found: Vec<String> = repos
+        .flatten()
+        .filter_map(|repo| {
+            let dir = repo.file_name().to_string_lossy().into_owned();
+            let (org, name) = dir.strip_prefix("models--")?.split_once("--")?;
+            let snapshot = std::fs::read_dir(repo.path().join("snapshots"))
+                .ok()?
+                .flatten()
+                .map(|s| s.path())
+                .find(|s| is_complete_snapshot(s))?;
+            let config = std::fs::read_to_string(snapshot.join("config.json")).unwrap_or_default();
+            let quantized = serde_json::from_str::<serde_json::Value>(&config)
+                .ok()
+                .is_some_and(|c| c.get("quantization").is_some());
+            let mlx = org == "mlx-community" || name.to_ascii_lowercase().contains("mlx") || quantized;
+            mlx.then(|| format!("{org}/{name}"))
+        })
+        .collect();
+    found.sort_by_key(|id| id.to_ascii_lowercase());
+    found
+}
+
+fn is_complete_snapshot(snapshot: &std::path::Path) -> bool {
+    // `metadata` follows the snapshot's symlink into `blobs/`, so a link whose
+    // blob is missing counts as absent.
+    snapshot.join("config.json").metadata().is_ok()
+        && std::fs::read_dir(snapshot).is_ok_and(|files| {
+            files.flatten().any(|f| {
+                f.path().extension().is_some_and(|e| e == "safetensors") && f.path().metadata().is_ok_and(|m| m.len() > 0)
+            })
+        })
 }
 
 /// A provider's prepaid balance, in USD. All fields optional: a provider may
@@ -1826,12 +1885,46 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn mlx_provider_models_returns_presets_without_polling_server() {
-        // Asserts against the live preset constant rather than a hardcoded
-        // copy, so adding an MLX preset doesn't silently rot this test.
-        let models = ai_provider_models("mlx".to_string()).await.unwrap();
-        assert_eq!(models, crate::providers::MLX_MODEL_PRESETS.to_vec());
+    /// One fake repo in a hub cache: `files` land in a snapshot as symlinks
+    /// into `blobs/`, the way `huggingface_hub` lays them out; a `None` body
+    /// leaves the link dangling (an interrupted download).
+    fn hub_repo(hub: &std::path::Path, repo: &str, files: &[(&str, Option<&str>)]) {
+        let root = hub.join(repo);
+        let snapshot = root.join("snapshots/abc123");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::create_dir_all(root.join("blobs")).unwrap();
+        for (name, body) in files {
+            let blob = root.join("blobs").join(format!("blob-{name}"));
+            if let Some(body) = body {
+                std::fs::write(&blob, body).unwrap();
+            }
+            std::os::unix::fs::symlink(&blob, snapshot.join(name)).unwrap();
+        }
+    }
+
+    #[test]
+    fn mlx_models_are_the_complete_mlx_downloads_in_the_hub_cache() {
+        let hub = std::env::temp_dir().join(format!("klide-hf-hub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&hub);
+        let weights = Some("weights");
+        hub_repo(&hub, "models--LiquidAI--LFM3-1.7B-MLX-4bit", &[("config.json", Some("{}")), ("model.safetensors", weights)]);
+        hub_repo(&hub, "models--mlx-community--gemma-4-E2B-it-qat-4bit", &[("config.json", Some("{}")), ("model.safetensors", weights)]);
+        // Quantized by mlx_lm.convert, uploaded under a name that doesn't say MLX.
+        hub_repo(&hub, "models--someone--tiny-q4", &[("config.json", Some(r#"{"quantization":{"bits":4}}"#)), ("model.safetensors", weights)]);
+        // Not MLX: a full-precision checkpoint mlx_lm would have to convert.
+        hub_repo(&hub, "models--Qwen--Qwen3-8B", &[("config.json", Some("{}")), ("model.safetensors", weights)]);
+        // Download interrupted: the weights link points at no blob.
+        hub_repo(&hub, "models--mlx-community--half-done", &[("config.json", Some("{}")), ("model.safetensors", None)]);
+        // No weights at all, and a dataset beside the models.
+        hub_repo(&hub, "models--mlx-community--config-only", &[("config.json", Some("{}"))]);
+        hub_repo(&hub, "datasets--mlx-community--traces", &[("config.json", Some("{}")), ("data.safetensors", weights)]);
+
+        assert_eq!(
+            mlx_models_in(&hub),
+            vec!["LiquidAI/LFM3-1.7B-MLX-4bit", "mlx-community/gemma-4-E2B-it-qat-4bit", "someone/tiny-q4"]
+        );
+        assert!(mlx_models_in(&hub.join("missing")).is_empty());
+        std::fs::remove_dir_all(&hub).unwrap();
     }
 
     /// A throwaway VIBE_HOME holding a `model_catalog_cache.json`, so the
