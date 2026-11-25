@@ -23,7 +23,7 @@ interactive terminal chat. Step 2 is a UI project and waits for step 1.
 | A subcommand front door | `main.rs` dispatches `klide mcp …`, `klide ptyd …`, `klide scheduled` before the GUI starts |
 | Keys without the Keychain | `providers::provider_key_in` reads `${VAR}` references and each Provider's env var |
 | Unattended safety | CI watch firings run in Plan mode with every Tool that waits for an approval removed (`tools::unattended_read_only_disabled_tool_names`) |
-| A Linux binary | `linux-host.yml` builds `klide` on ubuntu-24.04 on every push to `main` and publishes it to the `host-<sha>` prerelease with a `.sha256` |
+| A Linux binary | `linux-host.yml` builds `klide` on ubuntu-24.04 on every push to `main` that changes its source and publishes it to the `host-<source>` prerelease with a `.sha256` |
 
 So step 1 was a front door plus a terminal event sink, not a new agent.
 
@@ -82,7 +82,7 @@ stops the Run cleanly).
    `--work` without `--allow-commands` never runs a command; missing key →
    3; usage → 2). Checked live on OpenRouter.
 4. ✅ **Linux in CI.** A composite action `.github/actions/klide/` that
-   downloads `klide-linux-x86_64` from the newest `host-<sha>` release,
+   downloads `klide-linux-x86_64` from the newest `host-<source>` release,
    checks its `.sha256`, keeps the first that answers `klide run --help`,
    installs the WebKitGTK runtime libraries it links against
    (`libwebkit2gtk-4.1-0 libgtk-3-0`; no display needed), and puts it on

@@ -14,7 +14,8 @@ them.
 
 ## Remote machines — native hosts and deployment, 2026-11-19
 
-- [ ] Host helper identity by Rust source, not commit (2026-11-24). An app
+- [x] Host helper identity by Rust source, not commit (2026-11-24; done
+  2026-11-25: `host-<source>`, id over `scripts/remote-host/source-paths`). An app
   installs `host-<its commit>` and checks the helper's `ptyd version` names
   that commit (`machine_install.rs`), so every push to main rebuilds four
   platforms — 40 builds since 2026-11-20 for 11 merges that touched Rust,

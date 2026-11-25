@@ -1,0 +1,7 @@
+# What a Remote machine's helper is built from. Its identity is the git
+# hash of these trees' ids at HEAD (src-tauri/build.rs; linux-host.yml),
+# so a docs or frontend change keeps the published helper. Add a path here
+# when the binary starts including a file from outside these folders.
+src-tauri
+scripts/remote-host
+schemas

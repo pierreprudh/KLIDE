@@ -42,7 +42,7 @@ fn main() {
                     "{} {} {}",
                     env!("CARGO_PKG_VERSION"),
                     klide_lib::pty_daemon::protocol_version(),
-                    env!("KLIDE_SOURCE_COMMIT")
+                    env!("KLIDE_HOST_SOURCE")
                 );
                 return;
             }
