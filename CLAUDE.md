@@ -508,7 +508,13 @@ behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
 / Refuse; the webview only picks a surface.
 
-### Where the product is (v0.7.1 released 2026-11-21)
+### Where the product is (v0.7.2 released 2026-11-25)
+
+0.7.2 (2026-11-25) added `klide run` (the Harness as a one-shot CLI, which
+@klide-bot now runs on in GitHub Actions), connectors for every Delegate CLI
+through `klide mcp connectors`, native per-agent permission modes, Watch CI
+cards that follow a failure to its end, per-repository Remote setup, a stable
+local signing identity, and a batch of security and performance fixes.
 
 0.7.1 (2026-11-21) added Vibe (Mistral's CLI) as the tenth Delegate, the
 Connectors grid with MCP OAuth sign-in and the composer "+" menu, Watch CI
