@@ -40,7 +40,7 @@ task adds a brake and no speed.
    `/review model=<provider/model>`). A push after a pass keeps the pass.
    Docs-only PRs (`*.md`, `docs/`) pass without a run.
 2. **Does** — Klide's own agent (`klide run`, the Linux binary from the
-   newest `host-<sha>` release) runs read-only — Plan mode, no edits, commands,
+   newest `host-<source>` release) runs read-only — Plan mode, no edits, commands,
    connectors or subagents, 40 tool turns at most — on `REVIEW_MODEL` through
    OpenRouter. It judges the diff against `REVIEW.md`, edits one sticky PR
    comment, and sets the `review` commit status: `success`, `failure`

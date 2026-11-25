@@ -657,7 +657,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
         return Response::Err { message: "The remote Run host is being updated; reconnect before starting a task".into() };
     }
     match request {
-        Request::RemoteIdentity => Response::RemoteIdentity { source: env!("KLIDE_SOURCE_COMMIT").into() },
+        Request::RemoteIdentity => Response::RemoteIdentity { source: env!("KLIDE_HOST_SOURCE").into() },
         Request::RemoteChanges { run_id } => {
             match crate::agent::remote_machine::changes_on_host(&state.data_dir, &run_id) {
                 Ok((diff, status, worktree)) => Response::RemoteChanges { diff, status, worktree },

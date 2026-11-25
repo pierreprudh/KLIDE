@@ -1,10 +1,10 @@
 # Put the Klide CLI on PATH: the Linux binary `linux-host.yml` builds from
-# `main` and publishes to a `host-<sha>` prerelease after its checks pass.
+# `main` and publishes to a `host-<source>` prerelease after its checks pass.
 # Integrity is the release's own .sha256; the binary is the newest one that
 # answers `klide run --help` (older helpers predate the command).
 # docs/KLIDE_RUN.md, slice 4.
 name: Klide CLI
-description: Install the `klide` binary from the newest host-<sha> release
+description: Install the `klide` binary from the newest host-<source> release
 runs:
   using: composite
   steps:
@@ -39,5 +39,5 @@ runs:
             exit 0
           fi
         done
-        echo "::error::No host-<sha> release has a Linux klide with \`klide run\` yet — wait for linux-host.yml on main."
+        echo "::error::No host-<source> release has a Linux klide with \`klide run\` yet — wait for linux-host.yml on main."
         exit 1
