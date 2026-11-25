@@ -1327,6 +1327,8 @@ pub fn run() {
             git::git_status,
             workspace_trust::workspace_trust_status,
             workspace_trust::workspace_trust_grant,
+            workspace_trust::workspace_trust_list,
+            workspace_trust::workspace_trust_revoke,
             git::git_stage,
             git::git_unstage,
             git::git_commit,

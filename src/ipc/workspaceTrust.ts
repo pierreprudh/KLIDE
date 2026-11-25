@@ -18,3 +18,13 @@ export function workspaceTrustStatus(root: string): Promise<WorkspaceTrust> {
 export function trustWorkspaces(roots: string[]): Promise<void> {
   return invoke("workspace_trust_grant", { roots });
 }
+
+/** The trusted folders, in the order they were trusted. */
+export function trustedFolders(): Promise<string[]> {
+  return invoke<string[]>("workspace_trust_list");
+}
+
+/** Stop trusting one folder on the list. */
+export function untrustWorkspace(root: string): Promise<void> {
+  return invoke("workspace_trust_revoke", { root });
+}

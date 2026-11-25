@@ -69,9 +69,26 @@ export async function confirmLinkedFolder(
   );
 }
 
+// Trust changed somewhere else (Settings › Trusted folders): the open
+// folder's status is read again.
+const trustListeners = new Set<() => void>();
+
+/** Tell every open trust reader that the list changed. */
+export function trustListChanged() {
+  for (const listener of [...trustListeners]) listener();
+}
+
 /** The open folder's trust, and the one click that grants it. */
 export function useWorkspaceTrust(root: string | null, onTrusted?: (root: string) => void) {
   const [trust, setTrust] = useState<{ root: string; value: WorkspaceTrust } | null>(null);
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const listener = () => setVersion((n) => n + 1);
+    trustListeners.add(listener);
+    return () => {
+      trustListeners.delete(listener);
+    };
+  }, []);
   useEffect(() => {
     if (!root) return;
     let live = true;
@@ -83,12 +100,13 @@ export function useWorkspaceTrust(root: string | null, onTrusted?: (root: string
     return () => {
       live = false;
     };
-  }, [root]);
+  }, [root, version]);
   const trustFolder = useCallback(async () => {
     if (!root) return;
     await trustWorkspaces([root]);
     setTrust({ root, value: { trusted: true, gitPaused: false } });
     onTrusted?.(root);
+    trustListChanged();
   }, [root, onTrusted]);
   const current = trust && trust.root === root ? trust.value : null;
   return { restricted: current ? !current.trusted : false, gitPaused: current?.gitPaused ?? false, trustFolder };
