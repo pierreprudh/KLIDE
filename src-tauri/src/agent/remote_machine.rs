@@ -14,7 +14,15 @@ pub(crate) struct Binding {
     pub checkout: String,
     #[serde(default)]
     pub os: crate::remote_platform::HostOs,
+    #[serde(default)]
+    pub runtime: crate::machine_runtime::RemoteRuntime,
+    #[serde(default = "legacy_host_data")]
+    pub host_data: String,
+    #[serde(default)]
+    pub binary: Option<String>,
 }
+
+fn legacy_host_data() -> String { HOST_DATA.into() }
 
 fn binding_path(base: &Path, id: &str) -> Result<PathBuf, String> {
     validate_run_id(id)?;
@@ -34,9 +42,10 @@ pub(crate) fn binding(base: &Path, id: &str) -> Result<Option<Binding>, String> 
 fn transport(binding: &Binding) -> crate::pty_transport::Ssh<'_> {
     crate::pty_transport::Ssh {
         host: &binding.ssh_host,
-        binary: binding.os.binary(),
+        runtime: Some((&binding.machine_id, &binding.runtime)),
+        binary: binding.binary.as_deref().unwrap_or_else(|| binding.os.binary()),
         os: binding.os,
-        data_dir: HOST_DATA,
+        data_dir: &binding.host_data,
     }
 }
 
@@ -196,7 +205,10 @@ pub(super) async fn start(
                     || daemon_client::statuses(&app)?.contains_key(&id) { return Err(run_host::busy(&id)); }
                 let machine = crate::machines::get(machine_id.as_deref().ok_or("No remote machine selected")?).ok_or("Remote machine is no longer configured")?;
                 let root = request.workspace_root.as_deref().ok_or("Open a project before starting a remote task")?;
-                let binding = Binding { os: crate::machine_install::detect_target(&machine.ssh_host)?.os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root) };
+                let readiness = crate::machines::check(&machine, Some(root));
+                if !readiness.ready { return Err(readiness.caption); }
+                let os = readiness.target.ok_or("The destination system is unknown")?.os;
+                let binding = Binding { os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root), host_data: crate::machine_runtime::host_data(&machine.id, &machine.runtime), binary: Some(crate::machine_runtime::binary(&machine.id, &machine.runtime, os)), runtime: machine.runtime.clone() };
                 // Persist before sending: a dropped start response must never
                 // allow a later retry to silently create a local writer.
                 crate::durable::write_atomic_private(&binding_path(&base, &id)?, &serde_json::to_vec(&binding).map_err(|e| e.to_string())?)?;
@@ -771,6 +783,9 @@ mod tests {
         let placed = Binding {
             os: crate::remote_platform::HostOs::Linux,
             machine_id: "box".into(),
+            runtime: Default::default(),
+            host_data: HOST_DATA.into(),
+            binary: None,
             ssh_host: "my-box".into(),
             checkout: "~/code/project".into(),
         };

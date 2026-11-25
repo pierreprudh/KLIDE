@@ -14,11 +14,15 @@ let machines: Machine[] = [{ id: "cloud-dev", label: "Cloud development", sshHos
 let installed = false;
 let signedIn = false;
 let cloned = false;
+let isolated = false;
+let apiAuthorized = false;
 const setupActions: string[] = [];
 Object.assign(window, { __machineSetupActions: setupActions });
 const options = new URLSearchParams(location.search);
 mockIPC(async (command, args = {}) => {
     const payload = args as Record<string, unknown>;
+    if (command === "machine_api_keys") return [{ id: "test-key", label: "Testing key" }, { id: "other-key", label: "Other key" }];
+    if (command === "machine_authorize_api_key") { Object.assign(window, { __authorizedMachineKey: payload }); apiAuthorized = true; return null; }
     if (command === "machine_prepare_host" || command === "pty_resize" || command === "pty_write" || command === "machine_setup_close") return null;
     if (command === "machine_setup_spawn") {
       const id = payload.terminalId;
@@ -26,6 +30,7 @@ mockIPC(async (command, args = {}) => {
       setupActions.push(String(action));
       setTimeout(async () => {
         if (action === "signIn") signedIn = true;
+        if (action === "isolate") isolated = true;
         if (action === "clone") cloned = true;
         await emit("pty:data", { id, chunk: `Synthetic ${action} output\r\n` });
         await emit("machine-setup:exit", { id, success: true });
@@ -42,7 +47,7 @@ mockIPC(async (command, args = {}) => {
     if (command === "machine_save") {
       const machine = payload.machine as Machine;
       if (payload.creating && machines.some((m) => m.id === machine.id)) throw new Error("A machine with this ID already exists");
-      machines = [...machines.filter((m) => m.id !== machine.id), machine];
+      machines = machines.some((m) => m.id === machine.id) ? machines.map((m) => m.id === machine.id ? machine : m) : [...machines, machine];
       return machines;
     }
     if (command === "machine_remove") { machines = machines.filter((m) => m.id !== payload.id); return machines; }
@@ -50,11 +55,12 @@ mockIPC(async (command, args = {}) => {
       const machine = machines.find((m) => m.id === payload.id)!;
       const offline = options.has("offline");
       const needsSoftware = options.has("install") && !installed;
-      const loggedIn = signedIn || machine.id !== "home-server";
+      const loggedIn = machine.runtime?.credential === "apiKey" ? apiAuthorized : signedIn || machine.id !== "home-server";
+      const runtimeReady = machine.runtime?.execution !== "isolated" || isolated;
       const projectReady = !options.has("project") || cloned;
-      const ready = !offline && !needsSoftware && loggedIn && projectReady;
+      const ready = runtimeReady && !offline && !needsSoftware && loggedIn && projectReady;
       return { ...machine, label: machine.label ?? machine.id, ready, caption: offline ? "Offline" : ready ? "Ready to run Claude Code" : "Continue setup", checkout: machine.checkouts?.["/Users/me/app"] ?? "~/code/app",
-        setup: { connection: offline ? "offline" : "connected", host: needsSoftware ? "missing" : "ready", claude: loggedIn ? "ready" : "needsLogin", project: projectReady ? "ready" : "missing" }, facts: [
+        setup: { execution: runtimeReady ? "ready" : "missing", connection: offline ? "offline" : "connected", host: needsSoftware ? "missing" : "ready", claude: loggedIn ? "ready" : "needsLogin", project: projectReady ? "ready" : "missing" }, facts: [
         { label: "SSH", value: "Connected", tone: "ok" },
         { label: "Claude Code", value: ready ? "Logged in" : "Not logged in", tone: ready ? "ok" : "warn", ...(!ready ? { fix: "ssh -t dev@home-server claude" } : {}) },
       ] };

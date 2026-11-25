@@ -122,9 +122,9 @@ fn parse_unix(bytes: &[u8]) -> Result<RemoteDirectories, String> {
 }
 
 fn read(machine: &crate::machines::Machine, path: &str) -> Result<RemoteDirectories, String> {
-    let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
+    let os = crate::machine_runtime::target(&machine)?.os;
     let script = listing_script(path, os)?;
-    let out = crate::machine_install::ssh(&machine.ssh_host, &os.command(&script))?;
+    let out = crate::machine_runtime::ssh(&machine, &os.command(&script))?;
     if os != HostOs::Windows && !out.stderr.is_empty() {
         return Err(
             "Some folders could not be read. Check this remote account's folder permissions."
@@ -168,12 +168,12 @@ pub(crate) async fn machine_remote_create_directory(
         validate_path(&parent)?; validate_name(&name)?;
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
-        let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
+        let os = crate::machine_runtime::target(&machine)?.os;
         let path = format!("{}/{}", parent.trim_end_matches(['/', '\\']), name);
         let script = if os == HostOs::Windows {
             format!("$ErrorActionPreference='Stop'; New-Item -ItemType Directory -Path {} -ErrorAction Stop | Out-Null", ps_path(&path))
         } else { format!("umask 077\nmkdir -- {}", crate::machines::remote_path_word(&path)) };
-        crate::machine_install::ssh(&machine.ssh_host, &os.command(&script))?;
+        crate::machine_runtime::ssh(&machine, &os.command(&script))?;
         read(&machine, &path)
     }).await
 }

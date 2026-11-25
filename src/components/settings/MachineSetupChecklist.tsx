@@ -5,7 +5,7 @@ import { KlideMark, ProviderLogo } from "../ai/icons";
 import { canVisitMachineSetupStep, type SetupStep } from "./machineSetupSteps";
 import { machineSetupChecklist, type ChecklistAction } from "./machineChecklistState";
 
-const labels: Record<SetupStep, string> = { connection: "Connect", software: "Install", signIn: "Sign in", github: "GitHub", project: "Project", ready: "Ready" };
+const labels: Record<SetupStep, string> = { connection: "Connect", execution: "Execution", software: "Install", signIn: "Credentials", github: "GitHub", project: "Project", ready: "Ready" };
 
 export function MachineSetupChecklist({ status, workspace, active, action, busy, onSelect }: {
   status: MachineStatus | null; workspace: boolean; active: SetupStep; action: ChecklistAction | null; busy: boolean; onSelect: (step: SetupStep) => void;

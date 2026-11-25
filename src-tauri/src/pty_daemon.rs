@@ -184,7 +184,7 @@ pub fn prepare_upgrade_main(data_dir: &Path) -> i32 {
 
 /// Manual transport acceptance, without starting a Run or replacing a host.
 pub fn ping_remote_main(host: &str, binary: &str, data_dir: &str) -> i32 {
-    let transport = crate::pty_transport::Ssh { host, binary, data_dir, os: if binary.ends_with(".exe") { crate::remote_platform::HostOs::Windows } else { crate::remote_platform::HostOs::Linux } };
+    let transport = crate::pty_transport::Ssh { host, runtime: None, binary, data_dir, os: if binary.ends_with(".exe") { crate::remote_platform::HostOs::Windows } else { crate::remote_platform::HostOs::Linux } };
     match crate::pty_client::request_on(&transport, &Request::Ping) {
         Ok(Response::Pong { version, protocol, build, pid }) => {
             if !crate::pty_wire::remote_host_compatible(&version, protocol) {

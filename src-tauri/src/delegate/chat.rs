@@ -189,7 +189,19 @@ pub async fn run_subscription_chat(
     });
     let on_chunk = &channel;
     super::native_permissions::validate(adapter.id(), native_permission_mode.as_deref())?;
-    let configure = |command| super::native_permissions::configure(command, adapter.id(), native_permission_mode.as_deref());
+    let configure = |command| {
+        let mut command = super::native_permissions::configure(command, adapter.id(), native_permission_mode.as_deref())?;
+        // A durable remote host may have started before its key was authorized
+        // or rotated. Resolve the explicitly selected file for each CLI turn.
+        if adapter.id() == "claude-code" {
+            if let Ok(path) = std::env::var("KLIDE_REMOTE_API_KEY_FILE") {
+                let secret = std::fs::read_to_string(path).map_err(|_| "Authorize an API key in this machine’s setup before starting a task".to_string())?;
+                if secret.trim().is_empty() { return Err("The selected remote API key is empty".to_string()); }
+                command.env("ANTHROPIC_API_KEY", secret.trim());
+            }
+        }
+        Ok(command)
+    };
     let cwd = workspace_root.unwrap_or_else(|| ".".to_string());
     // The "default" sentinel means "no model picked" — hand the adapter an
     // empty model so it omits its model flag and the CLI uses its own default.

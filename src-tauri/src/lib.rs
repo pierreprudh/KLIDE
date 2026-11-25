@@ -65,6 +65,7 @@ mod remote_platform;
 #[cfg(windows)]
 mod windows_detach;
 mod machine_setup;
+mod machine_runtime;
 mod machine_files;
 mod machine_repository;
 mod machine_discovery;
@@ -1401,6 +1402,8 @@ pub fn run() {
             machine_install::machine_install_host,
             machine_install::machine_prepare_host,
             machine_setup::machine_setup_spawn,
+            machine_runtime::machine_api_keys,
+            machine_runtime::machine_authorize_api_key,
             machine_setup::machine_setup_close,
             machine_files::machine_remote_directories,
             machine_files::machine_remote_create_directory,
@@ -1708,6 +1711,7 @@ mod blocking_door_tests {
         ("machine_setup.rs", include_str!("machine_setup.rs")),
         ("machine_discovery.rs", include_str!("machine_discovery.rs")),
         ("machine_install.rs", include_str!("machine_install.rs")),
+        ("machine_runtime.rs", include_str!("machine_runtime.rs")),
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),
         ("connectors.rs", include_str!("connectors.rs")),

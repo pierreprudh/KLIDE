@@ -42,6 +42,13 @@ describe("graphical machine setup prompts", () => {
     for (const url of ["javascript:alert(1)", "http://github.com/login/device", "https://github.com.evil.test/login", "https://user:secret@github.com/login"]) expect(setupSignIn(`${url}\n`, "gitHub").url).toBeNull();
     expect(setupSignIn("https://claude.ai/oauth/authorize", "prepare").url).toBeNull();
   });
+  it("supports Docker sign-in during guided isolation without accepting foreign URLs", () => {
+    for (const action of ["sandboxLogin", "isolate"] as const) {
+      expect(setupSignIn("Open https://login.docker.com/activate\n", action).url).toBe("https://login.docker.com/activate");
+      expect(setupSignIn("Open https://docker.com.evil.test/activate\n", action).url).toBeNull();
+      expect(setupSignIn("Open https://claude.ai/oauth/authorize\n", action).url).toBeNull();
+    }
+  });
   it("shows current GitHub device codes with either CLI format, even before the URL arrives", () => {
     for (const output of ["! First copy your one-time code: ABCD-1234\n", "! One-time code (ABCD-1234) copied to clipboard\n"]) {
       expect(setupSignIn(output, "gitHub")).toEqual({ url: null, deviceCode: "ABCD-1234" });

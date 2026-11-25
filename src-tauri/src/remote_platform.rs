@@ -28,6 +28,7 @@ impl HostTarget {
     pub fn asset(self) -> Result<&'static str, String> {
         match (self.os, self.arch) {
             (HostOs::Linux, HostArch::X86_64) => Ok("klide-linux-x86_64"),
+            (HostOs::Linux, HostArch::Aarch64) => Ok("klide-linux-aarch64"),
             (HostOs::Macos, HostArch::X86_64) => Ok("klide-macos-x86_64"),
             (HostOs::Macos, HostArch::Aarch64) => Ok("klide-macos-aarch64"),
             (HostOs::Windows, HostArch::X86_64) => Ok("klide-windows-x86_64.exe"),

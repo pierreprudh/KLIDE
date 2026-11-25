@@ -214,9 +214,9 @@ pub(crate) async fn machine_repository_connect(
         let ctx = context(&workspace_root)?;
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
-        let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
+        let os = crate::machine_runtime::target(&machine)?.os;
         let hosts = github_known_hosts()?;
-        let prepared = crate::machine_install::ssh(&machine.ssh_host, &remote_command(os, &prepare_script(&ctx.repository, &hosts, os)))?;
+        let prepared = crate::machine_runtime::ssh(&machine, &remote_command(os, &prepare_script(&ctx.repository, &hosts, os)))?;
         let public_key = public_key_material(String::from_utf8_lossy(&prepared.stdout).lines().find(|line| line.starts_with("ssh-ed25519 ")).ok_or("The machine did not return a repository public key.")?)?;
         let endpoint = format!("repos/{}/keys", ctx.repository);
         let existing = crate::git::github::gh_output(&workspace_root, &["api", &endpoint, "--paginate", "--slurp"])
@@ -226,7 +226,7 @@ pub(crate) async fn machine_repository_connect(
         let directory = format!(".klide/repository-keys/{}", key_id(&ctx.repository));
         if allow_push.is_none() && found.is_none() {
             let clear = if os == HostOs::Windows { format!("Remove-Item -LiteralPath (Join-Path $HOME '{directory}/verified') -ErrorAction SilentlyContinue") } else { format!("rm -f -- \"$HOME/{directory}/verified\"") };
-            let _ = crate::machine_install::ssh(&machine.ssh_host, &remote_command(os, &clear));
+            let _ = crate::machine_runtime::ssh(&machine, &remote_command(os, &clear));
             return Err("This repository key was removed from GitHub. Reconnect repository access.".into());
         }
         if let Some(key) = &found {
@@ -250,7 +250,7 @@ pub(crate) async fn machine_repository_connect(
         } else {
             format!("set -e\nGIT_SSH_COMMAND={} git ls-remote --heads {} >/dev/null\numask 077\nprintf verified > \"$HOME/{directory}/verified\"", crate::delegate::shell_quote(&command), crate::delegate::shell_quote(&format!("git@github.com:{}.git", ctx.repository)))
         };
-        if let Err(error) = crate::machine_install::ssh(&machine.ssh_host, &remote_command(os, &verify)) {
+        if let Err(error) = crate::machine_runtime::ssh(&machine, &remote_command(os, &verify)) {
             if created && crate::git::github::gh_output(&workspace_root, &["api", "--method", "DELETE", &format!("{endpoint}/{deploy_key_id}")]).is_err() {
                 return Err(format!("Access verification failed and the new deploy key could not be removed. Remove key {deploy_key_id} in {}/settings/keys before retrying. {error}", format!("https://github.com/{}",ctx.repository)));
             }
@@ -337,7 +337,7 @@ pub(crate) async fn machine_repository_configure(
         let ctx=context(&workspace_root)?;
         let machine=crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
-        let os=crate::machine_install::detect_target(&machine.ssh_host)?.os;
+        let os=crate::machine_runtime::target(&machine)?.os;
         crate::machine_files::validate_path(&path)?;
         let checkout=path;
         let accepted=[format!("git@github.com:{}.git",ctx.repository),format!("git@github.com:{}",ctx.repository),format!("https://github.com/{}.git",ctx.repository),format!("https://github.com/{}",ctx.repository),format!("ssh://git@github.com/{}.git",ctx.repository)];
@@ -347,7 +347,7 @@ pub(crate) async fn machine_repository_configure(
         } else {
             format!("set -e\norigin=$(git -C {} remote get-url origin)\ncase \"$origin\" in {}) ;; *) echo 'This folder belongs to another repository' >&2; exit 1;; esac\n{config}",crate::machines::remote_path_word(&checkout),accepted.iter().map(|url|crate::delegate::shell_quote(url)).collect::<Vec<_>>().join("|"))
         };
-        crate::machine_install::ssh(&machine.ssh_host,&remote_command(os, &verify))?;
+        crate::machine_runtime::ssh(&machine,&remote_command(os, &verify))?;
         Ok(())
     }).await
 }
@@ -356,10 +356,10 @@ pub(crate) async fn machine_repository_configure(
 pub(crate) async fn machine_github_accounts(id: String) -> Result<Vec<String>, String> {
     crate::blocking::run(move || {
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
-        let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
+        let os = crate::machine_runtime::target(&machine)?.os;
         let script = if os == HostOs::Windows { "& gh auth status --hostname github.com --json hosts --jq '.hosts[\"github.com\"][] | .login'; exit 0" }
             else { "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; gh auth status --hostname github.com --json hosts --jq '.hosts[\"github.com\"][] | .login' 2>/dev/null || true" };
-        let out = crate::machine_install::ssh(&machine.ssh_host, &remote_command(os, script))?;
+        let out = crate::machine_runtime::ssh(&machine, &remote_command(os, script))?;
         Ok(String::from_utf8_lossy(&out.stdout).lines().filter(|login| !login.is_empty() && login.len() <= 39 && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).map(str::to_string).collect())
     }).await
 }
@@ -369,10 +369,10 @@ pub(crate) async fn machine_github_logout(id: String, login: String) -> Result<(
     crate::blocking::run(move || {
         if login.is_empty() || login.len() > 39 || !login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { return Err("Choose a GitHub account to disconnect.".into()); }
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
-        let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
+        let os = crate::machine_runtime::target(&machine)?.os;
         let script = if os == HostOs::Windows { format!("'y' | & gh auth logout --hostname github.com --user {}; exit $LASTEXITCODE",ps_quote(&login)) }
             else { format!("export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; printf 'y\\n' | gh auth logout --hostname github.com --user {}",crate::delegate::shell_quote(&login)) };
-        crate::machine_install::ssh(&machine.ssh_host,&remote_command(os, &script))?;
+        crate::machine_runtime::ssh(&machine,&remote_command(os, &script))?;
         Ok(())
     }).await
 }

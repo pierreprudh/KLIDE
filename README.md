@@ -385,6 +385,15 @@ The Rust harness checks capabilities when it advertises tools and again before e
 
 On macOS, **Settings → AI → Execution → Sandbox unreviewed commands** is on by default. Native commands admitted by full auto or wildcard project rules are contained: writes are limited to the Workspace, repository Git directory, temporary folders and designated tool caches, with additional protected paths. Network beyond loopback is off unless enabled separately. A command approved explicitly, for the Run, or by an exact project rule runs without that containment. A contained command can request `unsandboxed: true`, which requires approval when containment would otherwise apply. Linux and Windows do not implement this backend; Delegate CLIs and terminal sessions use their own execution policies.
 
+Remote setup offers **Direct** execution or an **Isolated** Linux Docker Sandbox.
+Choose a separate Claude subscription login, existing destination credentials,
+or explicitly authorize a saved Anthropic API key. Direct mode stores that key
+under the remote account’s permissions; isolated mode uses Docker’s host-side
+credential proxy. Isolated setup requires Docker Sandboxes and virtualization
+(Ubuntu/KVM or Apple silicon macOS); it never falls back to direct execution.
+See [Remote machines](docs/REMOTE_MACHINES.md#execution-and-credential-choices-2026-11-25)
+for storage details, platform limits and live acceptance status.
+
 Containment blocks named credential stores and common root `.env` files, but leaves other file reads and loopback reachable; it is not a general secret-isolation boundary. Credential-path command checks are best-effort scans, and outside-Workspace path warnings remain advisory for shell commands. Project hooks require approval of their configuration and run contained when containment is enabled on macOS. See the [Harness contract](docs/HARNESS_CONTRACT.md#command-containment) for exact scope and [open safety follow-ups](TODO.md#safety-review-follow-ups--2026-11-10).
 
 Read the [Harness contract](./docs/HARNESS_CONTRACT.md) for the trust model and [Harness schema](./docs/KLIDE_HARNESS_SCHEMA.md) for the tool interface.

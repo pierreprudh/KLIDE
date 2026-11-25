@@ -5,10 +5,14 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type MachineFactTone = "ok" | "warn" | "bad" | "quiet";
 
+export type MachineRuntime = { execution: "direct" | "isolated"; credential: "existing" | "subscription" | "apiKey" };
+export const DEFAULT_MACHINE_RUNTIME: MachineRuntime = { execution: "direct", credential: "existing" };
+
 export type Machine = {
   id: string;
   label?: string;
   sshHost: string;
+  runtime?: MachineRuntime;
   checkouts?: Record<string, string>;
 };
 
@@ -28,6 +32,7 @@ export type MachineStatus = {
   facts: MachineFact[];
   checkout: string | null;
   setup: {
+    execution?: "ready" | "missing" | "unknown";
     connection: "connected" | "offline" | "needsTrust" | "needsAuthentication" | "unsupported";
     host: "ready" | "outdated" | "missing" | "unknown";
     claude: "ready" | "needsLogin" | "missing" | "unknown";
@@ -66,6 +71,12 @@ export function subscribeMachines(listener: () => void): () => void {
 
 export async function machineSave(machine: Machine, creating: boolean): Promise<Machine[]> {
   const machines = await invoke<Machine[]>("machine_save", { machine, creating });
+  if (machine.runtime) {
+    const saved = machines.find((item) => item.id === machine.id)?.runtime;
+    if (!saved || saved.execution !== machine.runtime.execution || saved.credential !== machine.runtime.credential) {
+      throw new Error("Restart Klide to load execution and credential choices. The running backend did not save your selection.");
+    }
+  }
   for (const listener of listeners) listener();
   return machines;
 }
@@ -76,7 +87,7 @@ export async function machineRemove(id: string): Promise<Machine[]> {
   return machines;
 }
 
-export type MachineSetupAction = "connect" | "authorize" | "prepare" | "signIn" | "gitHub" | "clone";
+export type MachineSetupAction = "connect" | "authorize" | "isolate" | "installSandbox" | "sandboxLogin" | "prepare" | "signIn" | "gitHub" | "clone";
 
 export type RemoteDirectories = { path: string; parent: string | null; entries: { name: string; path: string }[]; truncated: boolean };
 export function machineRemoteDirectories(id: string, path: string): Promise<RemoteDirectories> {
@@ -104,4 +115,12 @@ export type MachineCandidate = { label: string; sshHost: string; source: "tailsc
 export type MachineDiscovery = { machines: MachineCandidate[]; message: string };
 export function machineDiscover(method: MachineConnectionMethod): Promise<MachineDiscovery> {
   return invoke("machine_discover", { method });
+}
+
+export type MachineApiKey = { id: string; label: string };
+export function machineApiKeys(): Promise<MachineApiKey[]> { return invoke("machine_api_keys"); }
+/** Only a key ID crosses IPC. Rust reads Keychain after this explicit action. */
+export async function machineAuthorizeApiKey(id: string, keyId: string): Promise<void> {
+  await invoke("machine_authorize_api_key", { id, keyId });
+  for (const listener of listeners) listener();
 }

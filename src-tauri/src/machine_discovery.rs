@@ -238,6 +238,7 @@ mod tests {
             label: Some("Saved dev".into()),
             ssh_host: "pierre@100.64.0.2".into(),
             checkouts: Default::default(),
+            runtime: Default::default(),
         };
         let value = serde_json::json!({"BackendState":"Running", "Self":{"HostName":"this-mac"}, "Peer":{
             "a":{"HostName":"linux", "OS":"linux", "TailscaleIPs":["100.64.0.2"], "Online":true},

@@ -14,14 +14,16 @@ export function machineSetupChecklist(status: MachineStatus | null, hasWorkspace
   const github = machineGithubState(status);
   const rows: ChecklistRow[] = [
     { step: "connection", label: "SSH connection", caption: connected ? "Connected" : "Connect machine", state: state(!!connected, !!status) },
+    { step: "execution", label: "Execution", caption: setup?.execution === "missing" ? "Prepare isolation" : connected ? "Choose direct or isolated" : "Waiting", state: state(!!connected && setup?.execution !== "missing", !!connected) },
     { step: "software", label: "Klide helper", caption: setup?.host === "ready" ? "Installed" : setup?.host === "outdated" ? "Update needed" : connected ? "Not installed" : "Waiting", state: state(setup?.host === "ready", !!connected) },
-    { step: "signIn", label: "Claude Code", caption: setup?.claude === "ready" ? "Validated" : setup?.claude === "needsLogin" ? "Installed · sign in" : connected ? "Not installed" : "Waiting", state: state(setup?.claude === "ready", !!connected) },
+    { step: "signIn", label: "Credentials", caption: setup?.claude === "ready" ? "Validated" : setup?.claude === "needsLogin" ? "Installed · sign in" : connected ? "Not installed" : "Waiting", state: state(setup?.claude === "ready", !!connected) },
     { step: "github", label: "GitHub", caption: setup?.githubScope === "repository" ? github === "ready" ? "Repository key configured" : "Repository access · optional" : github === "ready" ? "Signed in" : github === "needsLogin" ? "Installed · sign in" : github === "missing" ? "Not installed · optional" : "Not checked · optional", state: state(github === "ready", !!connected && github !== "unknown") },
     ...(hasWorkspace ? [{ step: "project" as const, label: "Project", caption: setup?.project === "ready" ? "Ready" : connected ? "Choose folder" : "Waiting", state: state(setup?.project === "ready", !!connected) }] : []),
     { step: "ready", label: "Ready to work", caption: status?.ready ? "All set" : "Setup remaining", state: status?.ready ? "done" : "waiting" },
   ];
   return rows.map((row) => {
     const active = (row.step === "connection" && (action === "connect" || action === "authorize")) ||
+      (row.step === "execution" && (action === "isolate" || action === "installSandbox" || action === "sandboxLogin")) ||
       (row.step === "software" && action === "host") ||
       (action === "prepare" && ((row.step === "software" && row.state !== "done") || (row.step === "signIn" && setup?.claude === "missing") || (row.step === "github" && github === "missing"))) ||
       (row.step === "signIn" && action === "signIn" && row.state !== "done") ||

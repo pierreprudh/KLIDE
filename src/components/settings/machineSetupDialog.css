@@ -159,3 +159,11 @@
   .klide-machine-methods > button, .klide-machine-candidates > button { padding: 10px 14px; }
   .klide-machine-connections > p { margin-bottom: 10px; }
 }
+
+/* Execution choices scroll with the form while navigation stays reachable. */
+.klide-add-machine-form { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.klide-add-machine-form-fields { display: grid; gap: 16px; min-height: 0; overflow-y: auto; }
+.klide-add-machine-form footer { flex-shrink: 0; }
+.klide-add-machine-form .klide-machine-choices > label { display: flex; gap: 10px; }
+.klide-add-machine-form .klide-machine-choices input[type="radio"] { width: auto; min-height: 0; margin-top: 3px; }
+.klide-add-machine-dialog .klide-machine-setup-copy { flex-shrink: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }

@@ -26,7 +26,7 @@ export function setupPrompt(output: string): SetupPrompt | null {
 }
 
 export function setupSignIn(output: string, action: MachineSetupAction): { url: string | null; deviceCode: string | null } {
-  if (action !== "signIn" && action !== "gitHub") return { url: null, deviceCode: null };
+  if (action !== "signIn" && action !== "gitHub" && action !== "sandboxLogin" && action !== "isolate") return { url: null, deviceCode: null };
   const text = plainSetupOutput(output);
   // gh prints either "First copy your one-time code: XXXX-XXXX" or
   // "One-time code (XXXX-XXXX) copied to clipboard". It can precede the URL.
@@ -35,9 +35,9 @@ export function setupSignIn(output: string, action: MachineSetupAction): { url: 
   for (const match of text.matchAll(/https:\/\/[^\s<>"'\x00-\x1f]+(?=[\s<>"'\x00-\x1f])/g)) {
     try {
       const url = new URL(match[0].replace(/[),.;]+$/, ""));
-      const domains = action === "gitHub" ? ["github.com"] : ["claude.ai", "claude.com", "anthropic.com"];
+      const domains = (action === "sandboxLogin" || action === "isolate") ? ["docker.com", "docker.io"] : action === "gitHub" ? ["github.com"] : ["claude.ai", "claude.com", "anthropic.com"];
       if (url.username || url.password || !domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) continue;
-      if (!/(?:^|\/)(?:oauth|login|auth|authorize)(?:\/|$)/i.test(url.pathname)) continue;
+      if (!/(?:^|\/)(?:oauth|login|auth|authorize)(?:\/|$)/i.test(url.pathname) && !((action === "sandboxLogin" || action === "isolate") && /(?:^|\/)(?:activate|device)(?:\/|$)/i.test(url.pathname))) continue;
       return { url: url.href, deviceCode };
     } catch { /* Incomplete URL while a PTY chunk is arriving. */ }
   }

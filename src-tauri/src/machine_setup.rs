@@ -49,6 +49,9 @@ pub async fn machine_setup_close(app: tauri::AppHandle, id: String) -> Result<()
 #[serde(rename_all = "camelCase")]
 pub enum SetupAction {
     Connect,
+    Isolate,
+    InstallSandbox,
+    SandboxLogin,
     Authorize,
     Prepare,
     SignIn,
@@ -66,10 +69,13 @@ fn script(
         return windows_script(action, machine, root);
     }
     let body = match action {
+        SetupAction::Isolate => return crate::machine_runtime::prepare_isolation(machine, os),
+        SetupAction::InstallSandbox => return crate::machine_runtime::install_sandbox(os),
+        SetupAction::SandboxLogin => return Ok("export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; exec sbx login".into()),
         SetupAction::Connect => "echo SSH connected".into(),
         SetupAction::Authorize => return Err("SSH authorization must use a local public key".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.sh").into(),
-        SetupAction::SignIn => "exec claude auth login".into(),
+        SetupAction::SignIn => format!("{} mkdir -p \"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}\"; exec claude auth login", crate::machine_runtime::credential_context(&machine.id, &machine.runtime, os)),
         SetupAction::GitHub => return Err("Open a project and connect repository-only access in the GitHub step. Personal GitHub login is not stored on remote machines.".into()),
         SetupAction::Clone => {
             let root = root.ok_or("Open a local project before cloning it remotely")?;
@@ -96,10 +102,11 @@ fn windows_script(
 ) -> Result<String, String> {
     use crate::remote_platform::{ps_path, ps_quote, WINDOWS_PATH};
     let body=match action {
+        SetupAction::Isolate | SetupAction::InstallSandbox | SetupAction::SandboxLogin => return Err("Isolated setup requires a Linux or Apple silicon SSH host".into()),
         SetupAction::Connect => "Write-Output 'SSH connected'".into(),
         SetupAction::Authorize => return Err("Use an existing authorized SSH key for Windows machines".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.ps1").into(),
-        SetupAction::SignIn => "& claude auth login; exit $LASTEXITCODE".into(),
+        SetupAction::SignIn => format!("{} & claude auth login; exit $LASTEXITCODE", crate::machine_runtime::credential_context(&machine.id, &machine.runtime, crate::remote_platform::HostOs::Windows)),
         SetupAction::GitHub => return Err("Open a project and connect repository-only access in the GitHub step. Personal GitHub login is not stored on remote machines.".into()),
         SetupAction::Clone => {
             let root=root.ok_or("Open a local project before cloning it remotely")?;
@@ -169,8 +176,10 @@ pub async fn machine_setup_spawn(
             let key = ssh_key::local_public_key(&home.join(".ssh"))?;
             os.command(&ssh_key::authorization_script(&key)?)
         } else {
-            let os = crate::machine_install::detect_target(&machine.ssh_host)?.os;
-            os.command(&script(&action, &machine, workspace_root.as_deref(), os)?)
+            let host_action = matches!(action, SetupAction::Isolate | SetupAction::InstallSandbox | SetupAction::SandboxLogin);
+            let os = if host_action { crate::machine_install::detect_target(&machine.ssh_host)?.os } else { crate::machine_runtime::target(&machine)?.os };
+            let command = os.command(&script(&action, &machine, workspace_root.as_deref(), os)?);
+            if host_action { command } else { crate::machine_runtime::wrap(&machine.id, &machine.runtime, &command, true) }
         };
         let mut command = CommandBuilder::new("ssh");
         command.args([
@@ -196,7 +205,7 @@ mod tests {
     use super::*;
     #[test]
     fn personal_github_login_is_never_started_on_a_shared_remote_account() {
-        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default() };
+        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default(), runtime: Default::default() };
         for os in [crate::remote_platform::HostOs::Macos, crate::remote_platform::HostOs::Linux, crate::remote_platform::HostOs::Windows] {
             assert!(script(&SetupAction::GitHub, &machine, None, os).unwrap_err().contains("repository-only"));
         }
@@ -238,6 +247,7 @@ mod tests {
             label: None,
             ssh_host: "dev@machine".into(),
             checkouts: Default::default(),
+            runtime: Default::default(),
         };
         let login = script(
             &SetupAction::SignIn,

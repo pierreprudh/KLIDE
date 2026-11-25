@@ -35,6 +35,7 @@ impl Transport for Local<'_> {
 
 pub(crate) struct Ssh<'a> {
     pub host: &'a str,
+    pub runtime: Option<(&'a str, &'a crate::machine_runtime::RemoteRuntime)>,
     pub binary: &'a str,
     pub data_dir: &'a str,
     pub os: crate::remote_platform::HostOs,
@@ -58,6 +59,14 @@ impl Ssh<'_> {
         } else {
             format!("export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; exec {} ptyd connect --ensure --data-dir {}",crate::machines::remote_path_word(self.binary),crate::machines::remote_path_word(self.data_dir))
         };
+        let remote = if let Some((id, runtime)) = self.runtime {
+            let context = crate::machine_runtime::credential_context(id, runtime, self.os);
+            // PowerShell context belongs inside the encoded command.
+            let body = if self.os == crate::remote_platform::HostOs::Windows {
+                crate::remote_platform::powershell(&format!("{context} {} & {} ptyd connect --ensure --data-dir {}; exit $LASTEXITCODE", crate::remote_platform::WINDOWS_PATH, crate::remote_platform::ps_path(self.binary), crate::remote_platform::ps_path(self.data_dir)))
+            } else { format!("{context} {remote}") };
+            crate::machine_runtime::wrap(id, runtime, &body, false)
+        } else { remote };
         let mut command = Command::new("ssh");
         command.args(crate::machines::SSH_OPTS).args([
             "-o",
@@ -388,6 +397,7 @@ mod tests {
     fn ssh_uses_no_tty_or_prompts_and_quotes_remote_paths() {
         let ssh = Ssh {
             host: "klide-box",
+            runtime: None,
             os: crate::remote_platform::HostOs::Linux,
             binary: "~/bin/it's klide",
             data_dir: "~/data/$(touch nope)",

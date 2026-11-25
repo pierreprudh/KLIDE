@@ -15,6 +15,12 @@ describe("guided SSH setup", () => {
     expect(machineSetupStep(null, true)).toBe("connection");
     for (const connection of ["offline", "needsTrust", "needsAuthentication"] as const) expect(machineSetupStep(status({ connection }), true)).toBe("connection");
   });
+  it("requires isolation before installation, credentials or project access", () => {
+    const missing = status({ execution: "missing" });
+    expect(machineSetupStep(missing, true)).toBe("execution");
+    expect(canVisitMachineSetupStep("execution", missing, true)).toBe(true);
+    for (const step of ["software", "signIn", "project", "ready"] as const) expect(canVisitMachineSetupStep(step, missing, true)).toBe(false);
+  });
   it("handles a missing helper, an upgrade and a missing provider before login", () => {
     for (const host of ["missing", "outdated", "unknown"] as const) expect(machineSetupStep(status({ host }), true)).toBe("software");
     expect(machineSetupStep(status({ claude: "missing" }), true)).toBe("software");

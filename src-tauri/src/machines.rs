@@ -9,7 +9,8 @@
 //!
 //! What this module owns: the store, the Remote checkout a workspace maps to,
 //! the exact command a spawn runs, and the readiness check. It never copies a
-//! login or a key to the machine — Machine logins stay on the machine.
+//! login to the machine. API-key provisioning is a separate, explicit action
+//! in `machine_runtime`; saved machine records never contain a secret.
 //!
 //! Store shape (managed by Settings › Machines):
 //! ```json
@@ -41,6 +42,8 @@ pub struct Machine {
     /// Local workspace root → Remote checkout path (`~/` allowed).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub checkouts: BTreeMap<String, String>,
+    #[serde(default)]
+    pub runtime: crate::machine_runtime::RemoteRuntime,
 }
 
 impl Machine {
@@ -218,6 +221,8 @@ pub fn remote_spawn_command(
         remote_path_word(&checkout),
         shell_quote(&program),
     );
+    let context = crate::machine_runtime::credential_context(&machine.id, &machine.runtime, crate::remote_platform::HostOs::Linux);
+    let remote = crate::machine_runtime::wrap(&machine.id, &machine.runtime, &if context.is_empty() { remote } else { format!("{context} {remote}") }, true);
     // `--` so even an unvalidated host can't be read as an ssh option.
     format!("ssh -t {} -- {} {}", SSH_OPTS.join(" "), shell_quote(&machine.ssh_host), shell_quote(&remote))
 }
@@ -262,6 +267,7 @@ pub struct SetupFacts {
     pub github: String,
     pub github_scope: String,
     pub project: String,
+    pub execution: String,
 }
 
 fn fact(label: &str, value: impl Into<String>, tone: &'static str, fix: Option<String>) -> Fact {
@@ -323,7 +329,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         facts: Vec::new(),
         target: None,
         checkout: checkout.clone(),
-        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), github: "unknown".into(), github_scope: "repository".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
+        setup: SetupFacts { execution: "unknown".into(), connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), github: "unknown".into(), github_scope: "repository".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
     // Re-validate at the point of use: the store is plain JSON, and a host
     // starting with `-` would be read as an ssh option (e.g. ProxyCommand).
@@ -334,13 +340,39 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     }
     let target = crate::machine_install::detect_target(&machine.ssh_host);
     status.target = target.as_ref().ok().copied();
-    let output = target.as_ref().map_err(Clone::clone).and_then(|target| {
+    // Connectivity is to the parent host. A missing sandbox is a setup
+    // problem, not an excuse to probe or launch directly on that host.
+    if target.is_ok() {
+        status.setup.connection = "connected".into();
+        status.setup.execution = "ready".into();
+        if machine.runtime.isolated() {
+            match crate::machine_runtime::target(machine) {
+                Ok(inner) => status.target = Some(inner),
+                Err(_) => {
+                    status.setup.execution = "missing".into();
+                    status.caption = "Prepare isolated environment".into();
+                    status.facts.push(fact("Execution", "Isolation selected · environment not ready. Direct execution is blocked.", "warn", None));
+                    return status;
+                }
+            }
+        }
+    }
+    let execution_target = status.target.ok_or_else(|| target.as_ref().err().cloned().unwrap_or_else(|| "Unknown machine system".into()));
+    let output = execution_target.as_ref().map_err(Clone::clone).and_then(|target| {
         let mut body = if target.os == crate::remote_platform::HostOs::Windows {
             windows_probe(checkout.as_deref()).trim_end_matches("; exit 0").to_string()
         } else { probe_script(checkout.as_deref()) };
         if let Some(root) = workspace_root { body.push_str(&crate::machine_repository::access_probe(root, target.os)); }
+        let context = crate::machine_runtime::credential_context(&machine.id, &machine.runtime, target.os);
+        let binary = crate::machine_runtime::binary(&machine.id, &machine.runtime, target.os);
+        if target.os == crate::remote_platform::HostOs::Windows {
+            body = body.replace("(Join-Path $HOME '.klide/bin/klide.exe')", &crate::remote_platform::ps_path(&binary));
+        } else {
+            body = body.replace("\"$HOME/.klide/bin/klide\"", &remote_path_word(&binary));
+        }
+        let body = format!("{context} {body}");
         let script = if target.os == crate::remote_platform::HostOs::Windows { crate::remote_platform::powershell(&format!("{body}; exit 0")) } else { body };
-        crate::machine_install::ssh(&machine.ssh_host, &script)
+        crate::machine_runtime::ssh(machine, &script)
     });
     let elapsed = started.elapsed();
     let out = match output {
@@ -357,9 +389,14 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
             return status;
         }
     };
-    let p = parse_probe(&out);
+    let mut p = parse_probe(&out);
+    if machine.runtime.credential == crate::machine_runtime::Credential::ApiKey && !crate::machine_runtime::api_key_authorized(machine, target.as_ref().map(|t| t.os).unwrap_or_default()) {
+        p.insert("login".into(), "false".into());
+    }
     status.setup.connection = "connected".into();
     let got = |k: &str| p.get(k).map(String::as_str).filter(|v| !v.is_empty());
+    status.facts.push(fact("Execution", if machine.runtime.isolated() { "Isolated · Docker Sandbox · Linux" } else { "Direct · remote account permissions" }, "quiet", None));
+    status.facts.push(fact("Credentials", match machine.runtime.credential { crate::machine_runtime::Credential::Existing => "Existing destination login / environment", crate::machine_runtime::Credential::Subscription => "Separate Claude subscription login", crate::machine_runtime::Credential::ApiKey => "Selected Anthropic API key" }, "quiet", None));
     status.facts.push(fact("Reached", format!("in {} ms", elapsed_ms(elapsed)), "ok", None));
 
     let mut problems: Vec<&str> = Vec::new();
@@ -501,6 +538,7 @@ mod tests {
             label: None,
             ssh_host: "klide-box".into(),
             checkouts: BTreeMap::from([("/Users/me/src/app".into(), "/srv/app".into())]),
+            runtime: Default::default(),
         }
     }
 

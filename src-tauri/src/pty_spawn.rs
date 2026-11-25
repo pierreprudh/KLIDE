@@ -294,6 +294,7 @@ mod tests {
 
     fn klide_box() -> crate::machines::Machine {
         crate::machines::Machine {
+            runtime: Default::default(),
             id: "klide-box".into(),
             label: None,
             ssh_host: "klide-box".into(),

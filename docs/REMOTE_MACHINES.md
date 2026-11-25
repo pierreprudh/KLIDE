@@ -488,3 +488,62 @@ interrupting the installed host. Linux smoke tests have bounded deadlines and
 progress diagnostics. The first Linux release binaries compiled, but their
 unflushed relay smoke tests stalled and hit the workflow deadline; those runs
 are not acceptance evidence. The corrected Linux workflow run 44116806131 passed both controlled-process smoke tests. Actual Claude and sleep/wake acceptance on the user’s machine remains outstanding.
+
+## Execution and credential choices (2026-11-25)
+
+New machine setup offers **Direct** or **Isolated** execution. Direct keeps the
+existing SSH installation flow and uses the selected remote OS account's
+permissions. It is suitable for a dedicated VPS; it does not protect that
+account's other files, credentials or reachable services from the agent.
+Existing machine records retain direct execution and their existing destination
+credentials. New records default to a separate Claude subscription profile.
+
+Isolated execution uses a named, mountless **Docker Sandbox** on the SSH host.
+One guided setup action installs a missing runtime, opens Docker sign-in and
+creates the sandbox; the individual actions remain available for recovery. No host
+workspace path is passed; shared skills and static MCP access are disabled at
+creation. Project browsing, repository access, cloning, helper installation,
+transcript transport and task execution all target the sandbox. Runtime failure
+never falls back to the parent SSH account. Isolation runs Linux, including on
+an Apple silicon Mac; macOS-specific testing needs a separate macOS VM reached
+by SSH. Ubuntu hosts require usable KVM (nested virtualization on a VPS).
+Windows and Intel Macs keep direct support; this isolated setup targets Linux
+and Apple silicon. Docker's network policy remains the authority for access to
+private services; filesystem isolation is not a promise that all network
+services are unreachable. The remote host and its administrator remain trusted.
+
+The **Credentials** step offers:
+
+- **Subscription:** sign into a separate destination Claude profile. Authentication
+  variables for API keys and alternative providers are cleared. The resulting
+  login stays on the destination; no personal Mac login is copied.
+- **API key:** select a saved Anthropic Keychain entry and explicitly authorize
+  sending it to the named destination. The renderer handles key IDs and labels,
+  never key values. Rust transfers the secret over SSH stdin, without a TTY,
+  command-line argument or local temporary file. Direct execution stores a
+  permission-restricted key file, accessible to that remote account and its
+  agents. Isolated execution stores a sandbox-scoped service secret with `sbx`;
+  Docker's host-side proxy supplies the credential outside the sandbox. On
+  headless Linux, Docker may use permission-protected file storage instead of
+  an encrypted desktop keyring. API usage is billed separately. Deleting a
+  local key does not revoke the destination copy: revoke it with the provider.
+- **Existing destination credentials:** deliberately reuse the credentials
+  already configured in the selected execution environment.
+
+Only Anthropic API keys are offered because remote execution currently supports
+Claude Code. Environment references and other providers are not copied. Browser
+sign-in is interactive setup; subsequent execution does not depend on this Mac
+remaining online. A task can still wait for an approval or question.
+
+Each new conversation persists its execution mode, credential profile, helper
+path and Run host directory. Changing a saved machine does not relocate its
+existing conversations. Separate profiles have separate durable hosts, and a
+selected direct API key is resolved again for each CLI turn so authorization or
+rotation after installation does not leave a daemon using stale credentials.
+
+Implementation reference: [Docker Sandbox architecture](https://docs.docker.com/ai/sandboxes/architecture/),
+[credential storage](https://docs.docker.com/ai/sandboxes/configuration/credentials/),
+[installation prerequisites](https://docs.docker.com/ai/sandboxes/install/).
+Automated policy and UI checks do not replace live acceptance on the testing
+mini and a KVM-capable VPS; that acceptance and publication of matching helpers
+remain required before calling the isolated path deployment-verified.

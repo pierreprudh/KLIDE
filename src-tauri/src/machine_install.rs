@@ -3,14 +3,21 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-fn run(command: &mut Command) -> Result<Output, String> {
+fn run(command: &mut Command) -> Result<Output, String> { run_input(command, None) }
+
+fn run_input(command: &mut Command, input: Option<Vec<u8>>) -> Result<Output, String> {
     use std::io::Read;
     use std::process::Stdio;
+    if input.is_some() { command.stdin(Stdio::piped()); }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+    let writer = input.map(|bytes| {
+        let mut pipe = child.stdin.take().expect("piped SSH stdin");
+        std::thread::spawn(move || { use std::io::Write; pipe.write_all(&bytes) })
+    });
     let mut stdout = child.stdout.take().ok_or("No setup stdout")?;
     let mut stderr = child.stderr.take().ok_or("No setup stderr")?;
     let output = std::thread::spawn(move || {
@@ -46,6 +53,7 @@ fn run(command: &mut Command) -> Result<Output, String> {
             .map_err(|_| "Setup error reader stopped")?
             .map_err(|e| e.to_string())?,
     };
+    if let Some(writer) = writer { writer.join().map_err(|_| "SSH input writer stopped")?.map_err(|_| "Could not send SSH input")?; }
     if out.status.success() {
         Ok(out)
     } else {
@@ -63,6 +71,11 @@ pub(crate) fn ssh(host: &str, script: &str) -> Result<Output, String> {
         host,
         script,
     ]))
+}
+
+pub(crate) fn ssh_input(host: &str, script: &str, input: Vec<u8>) -> Result<Output, String> {
+    crate::machines::validate_ssh_host(host)?;
+    run_input(Command::new("ssh").args(crate::machines::SSH_OPTS).args(["-o", "StrictHostKeyChecking=yes", "-T", "--", host, script]), Some(input))
 }
 
 pub(crate) fn detect_target(host: &str) -> Result<crate::remote_platform::HostTarget, String> {
@@ -248,7 +261,7 @@ pub async fn machine_prepare_host(
 /// Stage and validate before replacing anything. The remote advisory lock is
 /// also held by `ptyd connect --ensure` through its version check and startup,
 /// so a new Run cannot race the install's idle check.
-fn install_script(staged: &str, os: crate::remote_platform::HostOs) -> String {
+fn install_script_in(staged: &str, os: crate::remote_platform::HostOs, data: &str, destination: &str) -> String {
     use crate::remote_platform::{ps_path, ps_quote, HostOs};
     let expected = format!(
         "{} {} {}",
@@ -257,13 +270,15 @@ fn install_script(staged: &str, os: crate::remote_platform::HostOs) -> String {
         env!("KLIDE_SOURCE_COMMIT")
     );
     if os == HostOs::Windows {
-        os.command(&format!("$ErrorActionPreference='Stop'; $stage={}; try {{ & $stage ptyd install --expected {} --destination {} --data-dir {}; $code=$LASTEXITCODE }} finally {{ Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue }}; exit $code", ps_path(staged), ps_quote(&expected), ps_path(os.binary()), ps_path("~/.klide/run-host")))
+        os.command(&format!("$ErrorActionPreference='Stop'; $stage={}; try {{ & $stage ptyd install --expected {} --destination {} --data-dir {}; $code=$LASTEXITCODE }} finally {{ Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue }}; exit $code", ps_path(staged), ps_quote(&expected), ps_path(destination), ps_path(data)))
     } else {
         format!(
-            "sh -c {} -- {} {}",
+            "sh -c {} -- {} {} {} {}",
             crate::delegate::shell_quote(include_str!("../../scripts/remote-host/install-host.sh")),
             crate::machines::remote_path_word(staged),
-            crate::delegate::shell_quote(&expected)
+            crate::delegate::shell_quote(&expected),
+            crate::machines::remote_path_word(destination),
+            crate::machines::remote_path_word(data)
         )
     }
 }
@@ -278,7 +293,7 @@ pub async fn machine_install_host(
     crate::blocking::run(move || {
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
-        let target = detect_target(&machine.ssh_host)?;
+        let target = crate::machine_runtime::target(&machine)?;
         let binary = match binary_path {
             Some(path) => PathBuf::from(path),
             None => artifact(&cache, target)?,
@@ -286,6 +301,17 @@ pub async fn machine_install_host(
         let metadata = std::fs::metadata(&binary).map_err(|e| e.to_string())?;
         if !metadata.is_file() {
             return Err("Choose the extracted native klide binary".into());
+        }
+        if machine.runtime.isolated() {
+            let relative = format!(".klide/bin/klide-stage-{}-{}", std::process::id(), crate::pty_host::now_ms());
+            let staged = format!("~/{relative}");
+            let copy = format!("set -eu; umask 077; mkdir -p \"$HOME/.klide/bin\"; cat > {}", crate::machines::remote_path_word(&staged));
+            let command = crate::machine_runtime::wrap(&machine.id, &machine.runtime, &copy, false);
+            ssh_input(&machine.ssh_host, &command, std::fs::read(&binary).map_err(|e| e.to_string())?)?;
+            let data = crate::machine_runtime::host_data(&machine.id, &machine.runtime);
+            let install = format!("{} {}", crate::machine_runtime::credential_context(&machine.id, &machine.runtime, target.os), install_script_in(&staged, target.os, &data, &crate::machine_runtime::binary(&machine.id, &machine.runtime, target.os)));
+            crate::machine_runtime::ssh(&machine, &install)?;
+            return Ok(());
         }
         let extension = if target.os == crate::remote_platform::HostOs::Windows { ".exe" } else { "" };
         let relative = format!(".klide/bin/klide-stage-{}-{}{extension}", std::process::id(), crate::pty_host::now_ms());
@@ -298,7 +324,14 @@ pub async fn machine_install_host(
         // destination relative to the OpenSSH user's home on every platform.
         let host = scp_host(&machine.ssh_host);
         run(Command::new("scp").args(crate::machines::SSH_OPTS).args(["-o", "StrictHostKeyChecking=yes", "--"]).arg(&binary).arg(format!("{host}:{relative}")))?;
-        ssh(&machine.ssh_host, &install_script(&staged, target.os))?;
+        let install = install_script_in(&staged, target.os, &crate::machine_runtime::host_data(&machine.id, &machine.runtime), &crate::machine_runtime::binary(&machine.id, &machine.runtime, target.os));
+        let context = crate::machine_runtime::credential_context(&machine.id, &machine.runtime, target.os);
+        let install = if target.os == crate::remote_platform::HostOs::Windows {
+            // Encoded PowerShell is a complete command, so place context in its
+            // parent shell rather than concatenate PowerShell with cmd.exe.
+            target.os.command(&format!("{context} & {install}; exit $LASTEXITCODE"))
+        } else { format!("{context} {install}") };
+        ssh(&machine.ssh_host, &install)?;
         Ok(())
     })
     .await
@@ -339,6 +372,7 @@ pub fn install_main(destination: &Path, data_dir: &Path, expected: &str) -> i32 
         let owner = crate::process_lock::exclusive(&data_dir.join("daemon-owner.lock"))?;
         eprintln!("Installing the matching helper");
         let stage = std::env::current_exe().map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(destination.parent().ok_or("Missing host installation directory")?).map_err(|e| e.to_string())?;
         let temporary = destination.with_extension("installing");
         std::fs::copy(&stage, &temporary).map_err(|e| e.to_string())?;
         #[cfg(unix)]
