@@ -141,6 +141,35 @@ at-most-once, not exactly-once effects across a crash. Original
 conversation-bound records migrate on read; an in-flight legacy occurrence
 retains its original id for recovery, while future occurrences get fresh ids.
 
+## klide-bot activity
+
+Scheduled → Triggers → klide-bot keeps the GitHub answer/review settings in the
+middle pane and shows **Bot activity** on the right. The list reads PR conversation
+comments from the last 30 days through the pinned GitHub account, independently
+of the local scheduled service and whether the GitHub answer bot is enabled.
+It loads on selection, refreshes every two minutes while visible, and has a
+manual Refresh action. Errors remain visible instead of appearing as an empty
+history. Trusted human `@klide-bot` mentions and `/review` requests appear beside
+the answer bot's replies and the review workflow's results. Bot results require
+the workflow marker and a recognized bot account. Edited sticky reviews sort
+by their update time so the newest verdict is visible. Issue-only comments are
+excluded. The panel shows when it last checked GitHub.
+
+All / Mentions / Reviews segments filter the same loaded activity, with a
+highlighted selection and keyboard arrow navigation. Mentions includes human
+mentions and bot replies; Reviews includes review requests and results. Each
+PR keeps its events together, newest first, with the latest two visible and
+older events expandable. Existing comments do not carry request/reply linkage,
+so the grouping preserves their individual timestamps and labels.
+
+**View on GitHub** opens the exact comment. On human mentions, **Look into it** revalidates the
+comment and current PR state, gathers the description, paginated thread and
+diff, and opens the current local agent in Plan mode in a worktree at the PR
+head. A second click at the same head reuses that worktree and preserves local
+work. Closed or merged PRs remain readable on GitHub but cannot start a new
+investigation. The opening turn asks for findings before changes and never
+posts a reply or pushes. This is separate from the bot's public GitHub answer.
+
 ## Future Remote machine target
 
 Schedules and occurrences persist an explicit execution target. This Mac is the

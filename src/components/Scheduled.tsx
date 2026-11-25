@@ -19,7 +19,7 @@ import { ScheduleSelect, type ScheduleSelectOption } from "./ScheduleSelect";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { formatSpan } from "../time";
 import { CI_WATCH_ID, CiWatchDetail, CiWatchHistory, CiWatchListRow, useCiWatch } from "./missionControl/ciWatch";
-import { KLIDE_BOT_ID, KlideBotDetail, KlideBotListRow, useKlideBot } from "./missionControl/klideBot";
+import { KLIDE_BOT_ID, KlideBotDetail, KlideBotListRow, KlideBotMentions, useKlideBot } from "./missionControl/klideBot";
 import { agentSourceLabel, useAgentOptions } from "./agentOptions";
 import { scheduledRunInput } from "../agent/scheduledRunInput";
 import { ProviderModelMark } from "../modelIdentity";
@@ -60,7 +60,7 @@ export function Scheduled(props: Props) {
   const selected = rows.find(row => row.id === selectedId);
   const ciWatch = useCiWatch(props.workspaceRoot, props.defaultProvider, props.defaultModel, props.harnessSettings);
   const ciSelected = selectedId === CI_WATCH_ID && !creating;
-  const klideBot = useKlideBot(props.workspaceRoot);
+  const klideBot = useKlideBot(props.workspaceRoot, selectedId === KLIDE_BOT_ID && !creating);
   const botSelected = selectedId === KLIDE_BOT_ID && !creating;
 
   useEffect(() => { if (props.initialSelectedId) { setSelectedId(props.initialSelectedId); setCreating(false); setEditing(false); } }, [props.initialSelectedId, props.selectionVersion]);
@@ -202,10 +202,10 @@ export function Scheduled(props: Props) {
           </div>
         </> : <div className="scheduled-empty"><strong>{loading ? "Loading schedules…" : "No schedules yet"}</strong><p>Choose New schedule to get started.</p></div>}
       </main>
-      <aside className="scheduled-pane scheduled-history" aria-label="Run history">
-        <div className="scheduled-pane-heading"><h2>Run history</h2>{ciSelected ? (ciWatch.info?.fired.length ? <span>{ciWatch.info.fired.length}</span> : null) : !botSelected && history.length > 0 && <span>{history.length}</span>}</div>
+      <aside className="scheduled-pane scheduled-history" aria-label={botSelected ? "Bot activity" : "Run history"}>
+        <div className="scheduled-pane-heading"><h2>{botSelected ? "Bot activity" : "Run history"}</h2>{botSelected ? (klideBot.mentions.items.length ? <span>{klideBot.mentions.items.length}</span> : null) : ciSelected ? (ciWatch.info?.fired.length ? <span>{ciWatch.info.fired.length}</span> : null) : history.length > 0 && <span>{history.length}</span>}</div>
         <div className="scheduled-history-scroll klide-scroll-slim">
-          {ciSelected ? <CiWatchHistory watch={ciWatch} onOpenRun={props.onOpenRun} /> : botSelected ? <p className="scheduled-pane-empty">Answers and reviews run in GitHub Actions — their history is there.</p> : !history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
+          {ciSelected ? <CiWatchHistory watch={ciWatch} onOpenRun={props.onOpenRun} /> : botSelected ? <KlideBotMentions bot={klideBot} /> : !history.length ? <p className="scheduled-pane-empty">{selected ? "No runs yet." : "Select a schedule to see its runs."}</p> : <ol>{[...history].reverse().map(run => <li key={run.runId}>
             <button type="button" aria-label={`Open Run · ${shortWhen(run.startedAt)} · ${statusName(run.status)}`}
               title={`Scheduled ${when(run.scheduledAt)}${run.finishedAt ? ` · Finished ${when(run.finishedAt)}` : ""}`} onClick={() => props.onOpenRun(run.runId)}>
               <span className="scheduled-history-top"><time dateTime={new Date(run.startedAt).toISOString()}>{shortWhen(run.startedAt)}</time><span data-failed={run.status === "failed" || undefined}>{statusName(run.status)}</span></span>

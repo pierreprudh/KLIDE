@@ -143,6 +143,8 @@ import { attachmentsRoot } from "./ipc/pdf";
 import { registerConversationOpener, registerSessionReattacher } from "./conversationNavigation";
 import { registerScheduleOpener } from "./scheduleNavigation";
 import { registerCiFixOpener } from "./ciFixNavigation";
+import { registerKlideBotOpener } from "./klideBotNavigation";
+import type { BotMention } from "./ipc/klideBot";
 import { ciWatchFixPrepare, type CiWatchFired } from "./ipc/ciWatch";
 import { ciDiagnosis, ciFixTurn, ciLog } from "./agent/ciFix";
 import { isScheduledRun } from "./scheduleStatus";
@@ -1211,6 +1213,46 @@ function App() {
   useEffect(() => {
     registerCiFixOpener(fired => { void startCiFixRef.current(fired); });
     return () => registerCiFixOpener(null);
+  }, []);
+
+  // Mentions use the current local agent. The GitHub bot's model is independent.
+  const pendingMentionRef = useRef<BotMention | null>(null);
+  const mentionRootRef = useRef(workspaceRoot);
+  mentionRootRef.current = workspaceRoot;
+  const lookIntoMentionRef = useRef<(m: BotMention) => Promise<void>>(async () => {});
+  lookIntoMentionRef.current = async m => {
+    if (m.workspaceRoot !== workspaceRoot) {
+      pendingMentionRef.current = m;
+      changeRoot(m.workspaceRoot);
+      return;
+    }
+    const preparing = notify(`Opening PR #${m.prNumber} in a worktree…`, { tone: "info", duration: 0 });
+    try {
+      const { prepareMentionTurn } = await import("./agent/klideBotLook");
+      const { workspace: ws, turn } = await prepareMentionTurn(m);
+      if (mentionRootRef.current !== m.workspaceRoot) return;
+      back();
+      if (!focusBase) enterFocus();
+      endFocusRaceWatch();
+      setAiPanelCwd(primaryPanelId, ws.cwd);
+      setFocusInitialMessage(turn.text);
+      setFocusInitialMachine(null);
+      setFocusInitialAttachments([turn.attachment]);
+      setFocusInitialMode("plan");
+      setFocusChatActive(true);
+    } catch (e) {
+      notify(`Couldn't open PR #${m.prNumber}: ${errMessage(e)}`, { tone: "error" });
+    } finally { dismissToast(preparing); }
+  };
+  useEffect(() => {
+    const pending = pendingMentionRef.current;
+    if (!pending || pending.workspaceRoot !== workspaceRoot) return;
+    pendingMentionRef.current = null;
+    void lookIntoMentionRef.current(pending);
+  }, [workspaceRoot]);
+  useEffect(() => {
+    registerKlideBotOpener(m => lookIntoMentionRef.current(m));
+    return () => registerKlideBotOpener(null);
   }, []);
 
   const [scheduledSelection, setScheduledSelection] = useState<{ id: string; version: number } | null>(null);

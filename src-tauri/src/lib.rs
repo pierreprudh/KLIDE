@@ -12,6 +12,7 @@ mod usage;
 mod adapters;
 mod blocking;
 mod bot_settings;
+mod bot_mentions;
 mod cli;
 mod hermes_settings;
 mod harness_source;
@@ -1459,6 +1460,8 @@ pub fn run() {
             agent::schedules::agent_schedule_create,
             bot_settings::klide_bot_settings,
             bot_settings::klide_bot_set_model,
+            bot_mentions::klide_bot_mentions,
+            bot_mentions::klide_bot_look,
             agent::ci_watch::ci_watch_get,
             agent::ci_watch::ci_watch_set,
             agent::ci_watch::ci_watch_take,
@@ -1720,6 +1723,7 @@ mod blocking_door_tests {
         ("models.rs", include_str!("models.rs")),
         ("coordination/mod.rs", include_str!("coordination/mod.rs")),
         ("storage.rs", include_str!("storage.rs")),
+        ("bot_mentions.rs", include_str!("bot_mentions.rs")),
         ("providers.rs", include_str!("providers.rs")),
         ("agent/mod.rs", include_str!("agent/mod.rs")),
         ("agent/schedules.rs", include_str!("agent/schedules.rs")),

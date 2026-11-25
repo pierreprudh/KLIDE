@@ -26,6 +26,18 @@ const realInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: st
   if (cmd === "agent_schedule_list") return [sched("a", "Morning triage", 86_400_000), sched("b", "Weekly dependency check", 604_800_000)];
   if (cmd === "agent_schedule_service_status") return { supported: true, installed: true, running: true, compatible: true, pid: 1, error: null };
   if (cmd === "agent_schedule_history") return [];
+  if (cmd === "klide_bot_mentions") {
+    if (params.get("mentions") === "error") throw new Error("GitHub is unavailable. Check your connection and retry.");
+    if (params.get("mentions") === "loading") return new Promise(() => {});
+    if (params.get("mentions") === "empty") return [];
+    return [
+      { workspaceRoot: "/Users/pierre/KLIDE", repo: "pierreprudh/KLIDE", prNumber: 603, commentId: 4, commentUrl: "https://github.com/pierreprudh/KLIDE/pull/603#issuecomment-4", author: "github-actions[bot]", body: "<!-- klide-review --> verdict=pass sha=abc\n**Review** · model\n\nReview complete. No blocking issues found.\n\nVERDICT: PASS", at: now - 30_000, kind: "review", verdict: "pass" },
+      { workspaceRoot: "/Users/pierre/KLIDE", repo: "pierreprudh/KLIDE", prNumber: 603, commentId: 3, commentUrl: "https://github.com/pierreprudh/KLIDE/pull/603#issuecomment-3", author: "pierreprudh", body: "/review", at: now - 60_000, kind: "review_request" },
+      { workspaceRoot: "/Users/pierre/KLIDE", repo: "pierreprudh/KLIDE", prNumber: 603, commentId: 5, commentUrl: "https://github.com/pierreprudh/KLIDE/pull/603#issuecomment-5", author: "klide-bot[bot]", body: "<!-- klide-bot -->\nYes, the existing worktree is reused.", at: now - 90_000, kind: "reply" },
+      { workspaceRoot: "/Users/pierre/KLIDE", repo: "pierreprudh/KLIDE", prNumber: 603, commentId: 1, commentUrl: "https://github.com/pierreprudh/KLIDE/pull/603#issuecomment-1", author: "pierreprudh", body: "@klide-bot does Look into it reuse the same worktree if I click twice?", at: now - 120_000 },
+      { workspaceRoot: "/Users/pierre/KLIDE", repo: "pierreprudh/KLIDE", prNumber: 597, commentId: 2, commentUrl: "https://github.com/pierreprudh/KLIDE/pull/597#issuecomment-2", author: "pierreprudh", body: "@klide-bot explain this pull request in three simple bullet points and tell me the riskiest part.", at: now - 3_600_000 },
+    ];
+  }
   // klide-bot (`?select=__klide-bot__`; `?bot=nokey` shows the missing-key state).
   if (cmd === "klide_bot_settings" || cmd === "klide_bot_set_model") return {
     repo: "pierreprudh/KLIDE", answerInstalled: true, reviewInstalled: true,
@@ -41,6 +53,10 @@ const realInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: st
 };
 const { registerCiFixOpener } = await import("../src/ciFixNavigation");
 registerCiFixOpener(() => {});
+const { registerKlideBotOpener } = await import("../src/klideBotNavigation");
+registerKlideBotOpener(async () => {
+  (window as unknown as { __mentionOpened: boolean }).__mentionOpened = true;
+});
 const { Scheduled } = await import("../src/components/Scheduled");
 const { CI_WATCH_ID } = await import("../src/components/missionControl/ciWatch");
 ReactDOM.createRoot(document.getElementById("root")!).render(
