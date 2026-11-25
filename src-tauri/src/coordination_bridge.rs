@@ -44,6 +44,7 @@
 //! slice (a Stop hook that blocks with the inbox as reason).
 
 use crate::coordination::ops::{self, CoordinationHost};
+use crate::loopback_server::Slot;
 use crate::coordination::{
     self, CoordinationActor, CoordinationCommand, CoordinationCommandOutcome,
     CoordinationResultStatus, CoordinationRunRegistration, CoordinationRunState,
@@ -51,7 +52,7 @@ use crate::coordination::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 /// Hard ceiling on one blocking wait — the core's, so the request thread
@@ -61,9 +62,6 @@ const MAX_BODY_BYTES: usize = 256 * 1024;
 /// Requests being served at once. Each may block in a two-minute wait, so the
 /// bound is on threads, not on work; past it the bridge answers 503.
 pub const MAX_IN_FLIGHT: usize = 64;
-/// tiny_http reads a body this small into memory before handing the request
-/// over, so dropping such a request never touches the socket again.
-const BUFFERED_BODY_BYTES: usize = 1024;
 
 /// What one bound Delegate session acts as. Filled by the app at spawn time
 /// (pty.rs), read by the bridge on every request.
@@ -678,24 +676,6 @@ pub fn start_bridge_server(
     })
 }
 
-/// One serving thread, returned to the pool when dropped.
-struct Slot(Arc<AtomicUsize>);
-
-impl Slot {
-    fn take(counter: &Arc<AtomicUsize>, max: usize) -> Option<Slot> {
-        counter
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < max).then_some(n + 1))
-            .ok()
-            .map(|_| Slot(counter.clone()))
-    }
-}
-
-impl Drop for Slot {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
 fn json_response(code: u16, response: &BridgeResponse) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     let payload = serde_json::to_string(response).unwrap_or_else(|_| "{\"ok\":false}".to_string());
     tiny_http::Response::from_string(payload)
@@ -705,44 +685,14 @@ fn json_response(code: u16, response: &BridgeResponse) -> tiny_http::Response<st
         )
 }
 
-/// Whether tiny_http already holds this request's whole body in memory, so
-/// answering and dropping it on the accept thread cannot block on the socket.
-fn body_is_buffered(request: &tiny_http::Request) -> bool {
-    let expects_continue = request.headers().iter().any(|h| h.field.equiv("Expect"));
-    match request.body_length() {
-        None | Some(0) => true,
-        Some(n) => n <= BUFFERED_BODY_BYTES && !expects_continue,
-    }
-}
-
-/// Answer a request the bridge will not serve, without reading its body. A
-/// buffered one is answered right here; one with body bytes still on the
-/// socket is answered on a counted thread (dropping it drains them), and with
-/// no thread free it is parked rather than let a stalled client hold the
-/// accept loop.
+/// Answer a request the bridge will not serve, without reading its body
+/// (`loopback_server::answer`).
 fn answer(request: tiny_http::Request, code: u16, response: BridgeResponse, slot: Option<Slot>) {
-    if body_is_buffered(&request) {
-        let _ = request.respond(json_response(code, &response));
-        return;
-    }
-    match slot {
-        Some(slot) => {
-            std::thread::spawn(move || {
-                let _slot = slot;
-                let _ = request.respond(json_response(code, &response));
-            });
-        }
-        None => abandon(request, code, response),
-    }
+    crate::loopback_server::answer(request, json_response(code, &response), slot);
 }
 
-/// Write the answer, then leak the connection instead of dropping it: tiny_http
-/// would otherwise drain the declared body into one allocation of that size,
-/// and a claimed exabyte aborts the app. A hostile request costs one parked
-/// connection, never the process. No Klide client ever gets here.
 fn abandon(request: tiny_http::Request, code: u16, response: BridgeResponse) {
-    let stream = request.upgrade("klide-abandoned", json_response(code, &response));
-    std::mem::forget(stream);
+    crate::loopback_server::abandon(request, json_response(code, &response));
 }
 
 /// Serve one `POST /coord/<token>/<session_id>` carrying a [`BridgeRequest`].
@@ -1054,6 +1004,7 @@ fn set_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
     use crate::coordination::{CoordinationDeliveryState, CoordinationEnvelopeKind, CoordinationEvent};
 

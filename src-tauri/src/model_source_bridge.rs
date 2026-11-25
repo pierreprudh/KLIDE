@@ -244,8 +244,11 @@ fn apply_effort(body: &mut Value, provider: &str, path: &str, effort: Option<&st
 fn header(name: &str, value: &str) -> Header {
     Header::from_bytes(name, value).expect("valid HTTP header")
 }
+fn error_response(status: u16, message: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    Response::from_string(json!({"type":"error","error":{"type":if status==429{"rate_limit_error"}else{"api_error"},"message":message}}).to_string()).with_status_code(status).with_header(header("Content-Type","application/json"))
+}
 fn error(request: tiny_http::Request, status: u16, message: &str) {
-    let _=request.respond(Response::from_string(json!({"type":"error","error":{"type":if status==429{"rate_limit_error"}else{"api_error"},"message":message}}).to_string()).with_status_code(status).with_header(header("Content-Type","application/json")));
+    let _ = request.respond(error_response(status, message));
 }
 fn start(
     server: Server,
@@ -265,6 +268,7 @@ fn start(
     std::thread::Builder::new()
         .name("klide-source-bridge".into())
         .spawn(move || {
+            let rejecting = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             while !stop.load(Ordering::Relaxed) {
                 let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(200)) else {
                     continue;
@@ -276,15 +280,15 @@ fn start(
                                 && h.value.as_str().strip_prefix("Bearer ") == Some(&token))
                     });
                 if !authorized {
-                    // Answering drains the body the caller declared, into one
-                    // allocation of that size, on this accept thread. A
-                    // stranger's large claim is left unread instead.
+                    // Never read a stranger's body here (loopback_server): a
+                    // large claim is left unread, a small one answered off
+                    // this thread when its bytes are still on the socket.
                     if request.body_length().is_some_and(|len| len > UNAUTHORIZED_BODY_MAX) {
-                        let stream = request.upgrade("klide-abandoned", tiny_http::Response::empty(401));
-                        std::mem::forget(stream);
+                        crate::loopback_server::abandon(request, tiny_http::Response::empty(401));
                         continue;
                     }
-                    error(request, 401, "Invalid source bridge credential.");
+                    let slot = crate::loopback_server::Slot::take(&rejecting, REJECTING_MAX);
+                    crate::loopback_server::answer(request, error_response(401, "Invalid source bridge credential."), slot);
                     continue;
                 }
                 let (http, resolve, model, routing) = (http.clone(), resolve.clone(), model.clone(), routing.clone());
@@ -298,6 +302,8 @@ fn start(
 /// The most an unauthenticated caller may make this bridge read before it
 /// hangs up. No real client is refused: a routed CLI always carries the token.
 const UNAUTHORIZED_BODY_MAX: usize = 64 * 1024;
+/// Rejections answered on their own thread at once; past it they are parked.
+const REJECTING_MAX: usize = 8;
 
 fn normalize_system_messages(input: &mut Value) -> Result<(), String> {
     let messages = input["messages"]
@@ -705,6 +711,32 @@ mod tests {
         )
         .unwrap();
         (base, stop, receiver)
+    }
+    /// A caller that declares a body and never sends it does not hold the
+    /// accept thread: the next caller is still answered.
+    #[test]
+    fn a_stalled_stranger_does_not_hold_up_the_next_caller() {
+        use std::io::{BufRead, Write};
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        start(server, "test-only-token".into(), stop.clone(), Arc::new(|| Err("unused".into())), "m".into(), None).unwrap();
+        let status = move |head: &str| {
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream.write_all(head.as_bytes()).unwrap();
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(stream.try_clone().unwrap()).read_line(&mut line);
+            (line, stream)
+        };
+        let stalled = std::thread::spawn(move || {
+            status("POST /v1/messages HTTP/1.1\r\nHost: x\r\nContent-Length: 4096\r\n\r\n")
+        });
+        std::thread::sleep(Duration::from_millis(400));
+        let (line, _next) = status("POST /v1/messages HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n");
+        assert!(line.contains(" 401"), "next caller answered: {line:?}");
+        stop.store(true, Ordering::Relaxed);
+        drop(stalled);
     }
     #[test]
     fn system_reminders_precede_the_chat_for_strict_api_providers() {

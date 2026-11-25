@@ -154,6 +154,10 @@ pub struct HookSignal {
 
 type OnChange = Box<dyn Fn(HookSignal) + Send>;
 
+/// Hooks served at once. A hook is a few KB answered in microseconds; the
+/// bound only matters when callers stall.
+const HOOK_SERVING_MAX: usize = 16;
+
 /// Bind 127.0.0.1 on an ephemeral port and serve hook posts on one thread.
 /// The thread lives for the app's lifetime — delegate sessions come and go,
 /// the listener stays.
@@ -167,41 +171,48 @@ pub fn start_hook_server(statuses: StatusMap, on_change: OnChange) -> Result<Hoo
         .ok_or_else(|| "hook server has no IP port".to_string())?;
     let token = fresh_token()?;
     let thread_token = token.clone();
+    let on_change = Arc::new(Mutex::new(on_change));
     std::thread::spawn(move || {
-        for mut request in server.incoming_requests() {
+        let serving = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for request in server.incoming_requests() {
             // Before a byte of the body: a caller without the token, or one
             // that declares more than a hook ever sends, is not read. tiny_http
             // would otherwise drain the declared length into one allocation.
+            // A body still on the socket is read on a counted thread, never
+            // here, so a stalled caller cannot hold up the next hook
+            // (loopback_server).
             let known = request.url().split('?').next().unwrap_or("").trim_matches('/').split('/').nth(1) == Some(thread_token.as_str());
             if request.body_length().is_some_and(|len| len > 64 * 1024) {
-                let stream = request.upgrade("klide-abandoned", tiny_http::Response::empty(413));
-                std::mem::forget(stream);
+                crate::loopback_server::abandon(request, tiny_http::Response::empty(413));
                 continue;
             }
+            let slot = crate::loopback_server::Slot::take(&serving, HOOK_SERVING_MAX);
             if !known {
-                let _ = request.respond(tiny_http::Response::empty(403));
+                crate::loopback_server::answer(request, tiny_http::Response::empty(403), slot);
                 continue;
             }
-            let method = request.method().to_string();
-            // The body is the CLI's own event JSON (Claude pipes stdin through
-            // curl; the Codex shim forwards its JSON argv value). Capped read:
-            // a hook body is a few KB, anything huge is not for us.
-            let mut body = String::new();
-            use std::io::Read;
-            let _ = request
-                .as_reader()
-                .take(64 * 1024)
-                .read_to_string(&mut body);
-            let url = request.url().to_string();
-            let code = handle_hook_request(
-                &method,
-                &url,
-                &body,
-                &thread_token,
-                &statuses,
-                on_change.as_ref(),
-            );
-            let _ = request.respond(tiny_http::Response::empty(code));
+            let Some(slot) = slot else {
+                crate::loopback_server::answer(request, tiny_http::Response::empty(503), None);
+                continue;
+            };
+            let (token, statuses, on_change) = (thread_token.clone(), statuses.clone(), on_change.clone());
+            std::thread::spawn(move || {
+                let _slot = slot;
+                let mut request = request;
+                let method = request.method().to_string();
+                // The body is the CLI's own event JSON (Claude pipes stdin through
+                // curl; the Codex shim forwards its JSON argv value). Capped read:
+                // a hook body is a few KB, anything huge is not for us.
+                let mut body = String::new();
+                use std::io::Read;
+                let _ = request.as_reader().take(64 * 1024).read_to_string(&mut body);
+                let url = request.url().to_string();
+                let code = {
+                    let on_change = on_change.lock().unwrap_or_else(|e| e.into_inner());
+                    handle_hook_request(&method, &url, &body, &token, &statuses, on_change.as_ref())
+                };
+                let _ = request.respond(tiny_http::Response::empty(code));
+            });
         }
     });
     Ok(HookServer { port, token })
@@ -721,6 +732,35 @@ mod tests {
             Some("cc-real-1"),
             "body survives the HTTP layer"
         );
+    }
+
+    /// A caller with the token that declares a body and never sends it does
+    /// not hold the accept thread: the next hook still lands.
+    #[test]
+    fn a_stalled_hook_does_not_hold_up_the_next_one() {
+        use std::io::{BufRead, Write};
+        let statuses: StatusMap = Default::default();
+        let (_seen, on_change) = collecting();
+        let server = start_hook_server(statuses.clone(), on_change).unwrap();
+        let (port, token) = (server.port, server.token.clone());
+        let status = move |head: String| {
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            stream.write_all(head.as_bytes()).unwrap();
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(stream.try_clone().unwrap()).read_line(&mut line);
+            (line, stream)
+        };
+        let stalled_head = format!("POST /hook/{token}/sess:claude-code/working HTTP/1.1\r\nHost: x\r\nContent-Length: 4096\r\n\r\n");
+        let stalled = std::thread::spawn({
+            let status = status.clone();
+            move || status(stalled_head)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let (line, _next) = status(format!("POST /hook/{token}/sess:codex/waiting HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n"));
+        assert!(line.contains(" 204"), "next hook answered: {line:?}");
+        assert_eq!(statuses.lock().unwrap().get("sess:codex").unwrap().0, AgentStatus::Waiting);
+        drop(stalled);
     }
 
     #[test]

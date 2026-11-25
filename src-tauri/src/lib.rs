@@ -31,6 +31,7 @@ mod connector_pool;
 pub mod connector_relay;
 mod connector_oauth;
 mod coordination_bridge;
+mod loopback_server;
 mod custom_cli;
 mod machines;
 mod custom_providers;

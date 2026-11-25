@@ -382,8 +382,10 @@ time, workspace trust first (every competitor has closed it).
   written private and atomically, `~/.claude.json.klide-bak` too, and
   scrollback logs + metas are created 0600 (an older log is tightened on its
   next open).
-- [ ] Listeners: a stalled local connection still holds the single accept
-  thread of the model-source bridge and the hook server.
+- [x] Listeners: a stalled local connection still holds the single accept
+  thread of the model-source bridge and the hook server. Fixed 2026-11-25:
+  all three tiny_http listeners share `loopback_server.rs` (no body read on
+  the accept thread; counted threads; parked past the cap).
 - [ ] Command rules: per-subcommand matching and deny rules, as Claude Code,
   VS Code and Zed do; a sandbox backend off macOS.
 - [ ] Not verified by the review: background shells escaping the group kill via
