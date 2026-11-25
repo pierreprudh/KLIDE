@@ -349,6 +349,11 @@ pub(super) enum TurnDecision {
     /// channel and returned no answer and no tool call. `content` is what to
     /// show if the loop chooses not to resample (its retries are spent).
     Runaway { content: Vec<AgentContentBlock> },
+    /// The model said it was finished but sent nothing: no text, no thinking,
+    /// no tool call. DeepSeek does this after a tool result (the 2026-11-16
+    /// benchmark's "preamble stops" were this turn, hidden behind the opening
+    /// line). `content` is the notice to show if the loop stops asking again.
+    Empty { content: Vec<AgentContentBlock> },
     /// The model requested one or more tools. `content` is the assistant body
     /// (thinking + text + tool-call blocks); `tool_calls` are the normalized,
     /// id-stamped calls the loop executes in order.
@@ -485,6 +490,18 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
         // the reply never started — pointing the user at num_ctx there sends
         // them to tune the wrong number.
         let runaway = is_reasoning_runaway(response, &content_text);
+        if !runaway && answer_text.trim().is_empty() && response.stop_reason.as_deref() != Some("length") {
+            return TurnStep {
+                assistant_message,
+                decision: TurnDecision::Empty {
+                    content: vec![AgentContentBlock::Text {
+                        text: "_⚠ The model sent an empty reply, twice, and wrote no answer. \
+Ask again, or try another model._"
+                            .into(),
+                    }],
+                },
+            };
+        }
         if runaway {
             answer_text.push_str(
                 "\n\n---\n_⚠ The model spent its entire reply budget on internal reasoning \

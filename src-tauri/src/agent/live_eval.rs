@@ -243,15 +243,16 @@ async fn code_mode_benchmark() {
         }
         _ => None,
     }).sum();
+    // The run's last reply, as sent. Falling back to an earlier non-empty one
+    // reported empty final turns as "the model stopped after its preamble"
+    // (2026-11-16); an empty last reply is recorded as null.
     let final_answer = events.iter().rev().find_map(|e| match e {
-        AgentEvent::AssistantMessage { content, timing: Some(_), .. } => {
-            let text: String = content.iter().filter_map(|b| match b {
-                AgentContentBlock::Text { text } => Some(text.as_str()), _ => None,
-            }).collect();
-            (!text.trim().is_empty()).then_some(text)
-        }
+        AgentEvent::AssistantMessage { content, timing: Some(_), .. } => Some(content.iter().filter_map(|b| match b {
+            AgentContentBlock::Text { text } => Some(text.as_str()), _ => None,
+        }).collect::<String>()),
         _ => None,
-    });
+    }).filter(|text| !text.trim().is_empty());
+    let status = super::transcripts::read_summary(&runs, id).ok().map(|s| s.status);
     let sum = |f: fn(&AgentUsage) -> Option<u64>| complete_usage_sum(&provider_usages, f);
     std::fs::write(base.join("native-result.json"), serde_json::to_vec_pretty(&serde_json::json!({
         "elapsedSeconds": elapsed, "error": outcome.err(), "codeModeOffered": offered, "readManyOffered": read_many_offered,
@@ -262,7 +263,7 @@ async fn code_mode_benchmark() {
         "modelRequests": provider_usages.len(),
         "toolCalls": events.iter().filter(|e| matches!(e, AgentEvent::ToolCallStarted {..})).count(),
         "scriptCalls": script_ids.len(), "nestedToolCalls": nested,
-        "finalAnswer": final_answer,
+        "finalAnswer": final_answer, "status": status,
         "transcript": super::transcripts::transcript_path(&runs, id),
     })).unwrap()).unwrap();
 }
