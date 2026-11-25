@@ -271,6 +271,13 @@ baseline; unchecked items below are verification or specific remaining gaps.
   "failed" for a cancelled worker while its row says Cancelled. The wording
   is fixed (2026-11-02): a cancelled worker's result and background report
   say "was cancelled"; the parent ignoring instructions remains open.
+  2026-11-25: the `spawn_subagent` description now leads with the three
+  rules (background, the named agent/model, one call per worker). In isolation
+  (`scripts/prompt-ab/spawn_subagent_ab.py`, DeepSeek v4.1 Flash, 3 runs
+  each) the old text already passed background and named model; old 10/12, new
+  11/12, within noise. The 11-01 failure did not reproduce without the real
+  conversation, so its cause is likely context (Kit prompt, long history),
+  not the description. Reproduce it in the app before changing more.
 - [x] Worker capacity at admission (2026-10-27): API workers wait in a fair
   queue for one of 4 app-wide slots (15 since 2026-11-02), in front of the child Run
   (`agent/worker_slots.rs`), "Queued behind N running API workers" on the
