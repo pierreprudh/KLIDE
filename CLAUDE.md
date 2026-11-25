@@ -364,6 +364,7 @@ Klide/
     │   ├── coordination/         mod.rs: Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward · ops.rs: one core per operation (list/send/wait/cancel/read_result), one schema source, one reply text — the two doors only bind the actor
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` / `klide mcp connectors` — embedded stdio MCP servers a Delegate runs; relay every tool call to the bridge
+    │   ├── loopback_server.rs    The accept-loop rules every tiny_http loopback listener shares — no body read on the accept thread, counted threads, parked past the cap
     │   ├── mcp_client.rs         Klide as an MCP client — one Session over stdio or Streamable HTTP: handshake, list tools, call one
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) — each owns its home (config/data dirs honouring CODEX_HOME / CLAUDE_CONFIG_DIR / XDG), label, login, accounts flag + home.rs the Env seam + source scan + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
