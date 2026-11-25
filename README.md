@@ -1,14 +1,11 @@
 <p align="center">
-  <img src=".github/assets/klide-banner.png" alt="Klide — a workspace for coding agents" width="100%" />
+  <img src=".github/assets/klide-banner.jpg" alt="Klide — a workspace for coding agents" width="100%" />
 </p>
 
 <h1 align="center">Your agents. Your models. One workspace.</h1>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/klide-app-icon-dark.svg" />
-    <img src=".github/assets/klide-app-icon-light.svg" alt="Klide app icon" width="96" />
-  </picture>
+  <img src=".github/assets/klide-app-icon.png" alt="Klide app icon" width="96" />
 </p>
 
 <p align="center">
