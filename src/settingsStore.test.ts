@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { memoryStorage } from "./testStorage";
 import {
   SETTINGS,
   decodeSetting,
@@ -12,6 +13,28 @@ import {
 } from "./settingsStore";
 
 beforeEach(() => resetSettingsCacheForTests());
+afterEach(() => vi.unstubAllGlobals());
+
+describe("remembered native permissions", () => {
+  it("restores each agent's last mode after a reload and remembers returning to default", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    setSetting(SETTINGS.nativePermissions, { "claude-code": "bypassPermissions", codex: "auto-review" });
+    resetSettingsCacheForTests();
+    expect(getSetting(SETTINGS.nativePermissions)).toEqual({ "claude-code": "bypassPermissions", codex: "auto-review" });
+    setSetting(SETTINGS.nativePermissions, { ...getSetting(SETTINGS.nativePermissions), codex: "" });
+    resetSettingsCacheForTests();
+    expect(getSetting(SETTINGS.nativePermissions)).toEqual({ "claude-code": "bypassPermissions" });
+  });
+
+  it("discards malformed, removed and cross-agent modes from saved preferences", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    for (const value of [null, [], 1, { codex: "bypassPermissions", "claude-code": 3, unknown: "auto-review" }]) {
+      localStorage.setItem(SETTINGS.nativePermissions.key, JSON.stringify(value));
+      resetSettingsCacheForTests();
+      expect(getSetting(SETTINGS.nativePermissions)).toEqual({});
+    }
+  });
+});
 
 describe("decodeSetting", () => {
   it("keeps historical formats readable", () => {

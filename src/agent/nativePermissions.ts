@@ -17,7 +17,7 @@ const DEFAULTS: Record<keyof typeof catalog, string> = {
 };
 
 /** The runner and menu share one catalog. An empty id preserves the existing
- * adapter invocation; explicit overrides never cross conversation/agent keys. */
+ * adapter invocation; explicit overrides are validated for their agent. */
 export function nativePermissionModes(provider: string): NativePermissionMode[] {
   if (!isDelegateId(provider)) return [];
   return [{ id: "", label: `Default · ${DEFAULTS[provider]}`, description: provider === "amp"
@@ -27,4 +27,11 @@ export function nativePermissionModes(provider: string): NativePermissionMode[] 
 
 export function nativePermissionMode(provider: string, selected: string | undefined): string | undefined {
   return selected && nativePermissionModes(provider).some(mode => mode.id === selected) ? selected : undefined;
+}
+
+/** Persist only modes that still exist for the agent that owns them. */
+export function normalizeNativePermissions(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([provider, mode]) =>
+    typeof mode === "string" && nativePermissionMode(provider, mode) !== undefined));
 }

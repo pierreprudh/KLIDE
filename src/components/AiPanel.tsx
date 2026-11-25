@@ -911,9 +911,8 @@ export function AiPanel({
   }
   const msgs = conversationSession.messages;
   const provider = conversationSession.provider;
-  const [nativePermissions, setNativePermissions] = useState<Record<string, string | undefined>>({});
-  const nativePermissionKey = `${currentId}:${provider}`;
-  const selectedNativePermission = nativePermissionMode(provider, nativePermissions[nativePermissionKey]);
+  const [nativePermissions, setNativePermissions] = useSetting(SETTINGS.nativePermissions);
+  const selectedNativePermission = nativePermissionMode(provider, nativePermissions[provider]);
   const model = conversationSession.model;
   const [missionPresent, setMissionPresent] = useState(false);
   // Completion is durable Mission state; delivery is a normal persisted chat
@@ -5555,7 +5554,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               {isDelegateId(provider) && !delegateSession && (
                 <NativePermissionSelector provider={provider} value={selectedNativePermission} disabled={streaming || serverStarting} compact
                   onChange={mode => {
-                    setNativePermissions(previous => ({ ...previous, [nativePermissionKey]: mode }));
+                    setNativePermissions(previous => ({ ...previous, [provider]: mode ?? "" }));
                     // Native review/ask modes must not inherit a previous KLIDE
                     // Full auto command grant through the permission relay.
                     onAutoApproveCommandsChange?.(false);
