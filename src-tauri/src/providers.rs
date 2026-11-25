@@ -18,7 +18,7 @@
 //! - `models` — how `ai_provider_models` lists models. Ollama has its
 //!   `/api/tags`, Anthropic has `/v1/models` with `x-api-key` +
 //!   `anthropic-version`, OpenAI-family has `/v1/models` with bearer
-//!   auth, MLX skips the server entirely and returns a static preset list.
+//!   auth, MLX skips the server entirely and lists the Hugging Face cache.
 //! - `subscription` — the CLI delegate spec, if any. Carries the
 //!   per-CLI command builder and model cache as function pointers, since
 //!   each CLI has its own argument shape.
@@ -186,8 +186,12 @@ pub enum ModelsHandler {
     AnthropicModels,
     /// `GET {models_url}` with bearer auth.
     OpenAiModels,
-    /// No HTTP call — return a hardcoded preset list (e.g. MLX).
+    /// No HTTP call — return a hardcoded preset list (e.g. Vertex).
     StaticPresets(&'static [&'static str]),
+    /// No HTTP call — the MLX models downloaded into the Hugging Face cache
+    /// (`models::mlx_installed_models`). The row's presets are still offered
+    /// beside them, as not-yet-downloaded suggestions.
+    HuggingFaceCache,
     /// Subscription CLI — handled by `subscription_models` (cache + fallback).
     Subscription,
 }
@@ -393,7 +397,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         // mlx_lm.server's /v1/models is expensive/noisy and can interfere
         // with prompt processing. Klide treats MLX model selection as
         // an explicit configured value instead of polling the server.
-        models: ModelsHandler::StaticPresets(MLX_MODEL_PRESETS),
+        models: ModelsHandler::HuggingFaceCache,
         subscription: None,
         default_model: Some(MLX_DEFAULT_MODEL),
         presets: MLX_MODEL_PRESETS,
@@ -3408,13 +3412,13 @@ Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_i
     }
 
     #[test]
-    fn mlx_uses_static_preset_models_not_the_server() {
-        // The old code had an in-line `if provider == "mlx"` carve-out
-        // for static presets. It's now a property of the entry.
+    fn mlx_lists_its_downloads_not_the_server() {
+        // mlx_lm.server reports only the model it loaded, so MLX lists the
+        // Hugging Face cache — a property of the entry, not an id carve-out.
         let entry = lookup("mlx").expect("mlx");
         assert!(
-            matches!(entry.models, ModelsHandler::StaticPresets(_)),
-            "mlx models should be static presets, got {:?}",
+            matches!(entry.models, ModelsHandler::HuggingFaceCache),
+            "mlx models should come from the Hugging Face cache, got {:?}",
             entry.models
         );
     }
