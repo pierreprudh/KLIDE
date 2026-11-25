@@ -14,6 +14,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { normalizeThemeId, type ThemeId } from "./theme";
 import { providerDefaultModel } from "./agent/providerCatalog";
+import { normalizeNativePermissions } from "./agent/nativePermissions";
 import { isPixelNatureOrder, type PixelNatureOrder } from "./components/pixelNatureEngine";
 
 export type HarnessSettings = {
@@ -444,6 +445,11 @@ export const SETTINGS = {
       keywords: "ai model assistant provider default",
     },
   } as SettingDef<string>,
+  nativePermissions: {
+    key: "klide.nativePermissions",
+    fallback: () => ({}),
+    normalize: normalizeNativePermissions,
+  } as SettingDef<Record<string, string>>,
   /** Global default for "require diff review" (auto-accept off). Each AI
    *  panel keeps its own in-memory override on top of this. */
   requireDiffReview: {

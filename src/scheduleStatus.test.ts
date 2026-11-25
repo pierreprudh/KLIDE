@@ -5,7 +5,6 @@ import { publishKlideConvo, settleKlideConvo } from "./klideConvos";
 import { notify } from "./toast";
 import { watchScheduleStatus } from "./scheduleStatus";
 import { ciWatchTake } from "./ipc/ciWatch";
-import { klideBotTake } from "./ipc/klideBot";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("./agent/schedules", () => ({ listSchedules: vi.fn() }));
@@ -13,9 +12,6 @@ vi.mock("./klideConvos", () => ({ getKlideConvos: () => [], publishKlideConvo: v
 vi.mock("./conversationNavigation", () => ({ canOpenConversation: () => false, openConversation: vi.fn() }));
 vi.mock("./toast", () => ({ notify: vi.fn() }));
 vi.mock("./ipc/ciWatch", () => ({ ciWatchTake: vi.fn() }));
-vi.mock("./ipc/klideBot", () => ({ klideBotTake: vi.fn() }));
-vi.mock("./klideBotNavigation", () => ({ canLookIntoMention: () => true, lookIntoMention: vi.fn() }));
-vi.mock("./externalLink", () => ({ openExternal: vi.fn() }));
 
 const running: Schedule = {
   id: "schedule", revision: 1, target: { kind: "local" }, name: "Review", runId: "conversation", activeRunId: "conversation", mode: "plan", text: "Review changes", dueAt: 1,
@@ -28,7 +24,6 @@ beforeEach(() => {
   vi.mocked(listen).mockResolvedValue(() => {});
   vi.mocked(listSchedules).mockResolvedValue([]);
   vi.mocked(ciWatchTake).mockResolvedValue([]);
-  vi.mocked(klideBotTake).mockResolvedValue([]);
 });
 
 it("restores a hidden scheduled Run into the existing attention watcher candidates", async () => {
@@ -88,21 +83,5 @@ it("takes CI watch firings on load and on each nudge, toasting each once", async
   nudge({ payload: null });
   await vi.waitFor(() => expect(ciWatchTake).toHaveBeenCalledTimes(2));
   expect(notify).toHaveBeenCalledTimes(1);
-  stop();
-});
-
-it("offers a klide-bot mention with Look into it, and starts nothing by itself", async () => {
-  vi.mocked(klideBotTake).mockResolvedValueOnce([{
-    key: "k", workspaceRoot: "/w", repo: "a/b", prNumber: 7, prTitle: "Rail", commentUrl: "u", author: "pierre",
-    excerpt: "@klide-bot why?", body: "@klide-bot why?", provider: "openrouter", model: "m", at: 1,
-    announced: true, notified: true,
-  }]);
-  const stop = watchScheduleStatus();
-  await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(
-    "@pierre mentioned klide-bot on #7 — “why?”",
-    expect.objectContaining({ actions: [expect.objectContaining({ label: "Look into it" })] }),
-  ));
-  const { lookIntoMention } = await import("./klideBotNavigation");
-  expect(lookIntoMention).not.toHaveBeenCalled();
   stop();
 });

@@ -1,0 +1,36 @@
+.klide-native-permission-trigger {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; flex-shrink: 0;
+  padding: 0 6px; border: 1px solid transparent; border-radius: 12px;
+  color: var(--fg-subtle); background: transparent; font: inherit;
+  font-size: 11px; cursor: pointer; white-space: nowrap;
+  transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
+}
+.klide-native-permission-trigger:hover:not(:disabled),
+.klide-native-permission-trigger[aria-expanded="true"] { background: var(--bg-hover); color: var(--fg-strong); }
+.klide-native-permission-trigger:disabled { opacity: .55; cursor: default; }
+.klide-native-permission-trigger.is-compact { width: 24px; justify-content: center; padding: 0; }
+.klide-native-permission-chevron { color: var(--fg-dim); }
+.klide-native-permission-menu {
+  position: fixed; width: min(320px, calc(100vw - 16px));
+  max-height: min(640px, 75vh); overflow-y: auto; padding: 6px;
+  border: 1px solid var(--panel-border); border-radius: 12px;
+  background: var(--bg-elevated); color: var(--fg);
+  box-shadow: var(--panel-shadow); font: 12px var(--font-ui);
+}
+.klide-native-permission-heading { display: flex; align-items: center; gap: 8px; padding: 8px; color: var(--fg-strong); font-weight: 600; }
+.klide-native-permission-menu > p { margin: 0 8px 8px; color: var(--fg-subtle); font-size: 11px; }
+.klide-native-permission-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 8px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--fg-strong); font: inherit; text-align: left; cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out);
+}
+.klide-native-permission-option:hover, .klide-native-permission-option:focus-visible { background: var(--menu-row-hover); }
+.klide-native-permission-option[aria-checked="true"] { background: var(--menu-row-active); }
+.klide-native-permission-option > span:last-child { width: 12px; flex-shrink: 0; color: var(--accent); }
+.klide-native-permission-option-content { display: flex; align-items: flex-start; gap: 9px; }
+.klide-native-permission-option-content > img { margin-top: 1px; }
+.klide-native-permission-option strong { display: block; font-weight: 500; }
+.klide-native-permission-option small { display: block; margin-top: 3px; color: var(--fg-subtle); font-size: 11px; line-height: 1.45; }
+.klide-native-permission-trigger:focus-visible, .klide-native-permission-option:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }

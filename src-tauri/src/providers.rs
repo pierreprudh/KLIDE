@@ -1639,6 +1639,12 @@ fn env_fallback_names(entry: &ProviderEntry) -> (Option<&'static str>, Option<&'
     }
 }
 
+/// The environment variable a hosted Provider's key can come from, for an
+/// error that tells a terminal user what to set (`klide run`).
+pub(crate) fn key_env_var(id: &str) -> Option<&'static str> {
+    lookup(id).and_then(|entry| env_fallback_names(entry).0)
+}
+
 fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
@@ -2719,6 +2725,7 @@ pub(crate) struct ProviderTurn {
     /// subscription-CLI path reads them: a delegate runs its own permission
     /// layer, and a headless turn has no terminal to answer it in.
     pub allowed_commands: Vec<String>,
+    pub native_permission_mode: Option<String>,
     /// Klide's MCP server for this conversation, when the Harness registered
     /// the Delegate as a coordination Run. Only the subscription-CLI path
     /// reads it; every other provider gets Klide's native Tools instead.
@@ -2810,6 +2817,7 @@ pub(crate) async fn dispatch(
         run_id,
         delegate_session,
         allowed_commands,
+        native_permission_mode,
         mcp,
         num_ctx,
         num_predict,
@@ -2858,6 +2866,7 @@ pub(crate) async fn dispatch(
                 run_id,
                 delegate_session,
                 allowed_commands,
+                native_permission_mode,
                 mcp,
                 on_chunk,
             )

@@ -91,4 +91,10 @@ describe("mergeFilesystemSkills", () => {
     const out = mergeFilesystemSkills([own, fs("gone", true)], [fs("new", true)]);
     expect(out.map((s) => [s.id, s.enabled])).toEqual([["mine", true], ["new", true]]);
   });
+
+  it("an edited SKILL.md does not inherit the live 'on'", () => {
+    const on = { ...fs("deploy", true), optInKey: "/p/.klide/skills/deploy/SKILL.md#aaa" };
+    const edited = { ...fs("deploy", false), optInKey: "/p/.klide/skills/deploy/SKILL.md#bbb" };
+    expect(mergeFilesystemSkills([on], [edited])[0].enabled).toBe(false);
+  });
 });

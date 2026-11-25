@@ -105,7 +105,7 @@ fn artifact(cache: &Path, target: crate::remote_platform::HostTarget) -> Result<
     }
     let asset = target.asset()?;
     let cache = cache.join(asset);
-    let source = env!("KLIDE_SOURCE_COMMIT");
+    let source = env!("KLIDE_HOST_SOURCE");
     if source.len() != 40 || !source.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err("This development build has no published remote helper. Choose a matching downloaded binary in Advanced.".into());
     }
@@ -117,7 +117,7 @@ fn artifact(cache: &Path, target: crate::remote_platform::HostTarget) -> Result<
     let base = format!("https://github.com/pierreprudh/KLIDE/releases/download/host-{source}");
     let download_error = |e: reqwest::Error| {
         if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-            format!("The matching {} helper for app revision {} has not been published yet. Retry when its build is available. This is not a connection problem.", asset, &source[..7])
+            format!("The matching {} helper for host source {} has not been published yet. Retry when its build is available. This is not a connection problem.", asset, &source[..7])
         } else {
             format!("Could not download the matching remote helper. Check this computer’s connection and retry. {e}")
         }
@@ -208,7 +208,7 @@ fn current_app_artifact(target: crate::remote_platform::HostTarget) -> Option<Pa
             _ => return None,
         };
         let executable = std::env::current_exe().ok()?;
-        let expected = format!("{} {} {}", env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION, env!("KLIDE_SOURCE_COMMIT"));
+        let expected = format!("{} {} {}", env!("CARGO_PKG_VERSION"), crate::pty_wire::PROTOCOL_VERSION, env!("KLIDE_HOST_SOURCE"));
         checked_local_artifact(target, HostTarget { os: HostOs::Macos, arch }, &executable, &expected)
     }
     #[cfg(any(not(target_os = "macos"), test))]
@@ -222,7 +222,7 @@ fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_cache_dir()
         .map_err(|e| e.to_string())?
         .join("remote-host")
-        .join(env!("KLIDE_SOURCE_COMMIT")))
+        .join(env!("KLIDE_HOST_SOURCE")))
 }
 
 /// Download on this Mac only; the saved machine may be switched off.
@@ -254,7 +254,7 @@ fn install_script(staged: &str, os: crate::remote_platform::HostOs) -> String {
         "{} {} {}",
         env!("CARGO_PKG_VERSION"),
         crate::pty_wire::PROTOCOL_VERSION,
-        env!("KLIDE_SOURCE_COMMIT")
+        env!("KLIDE_HOST_SOURCE")
     );
     if os == HostOs::Windows {
         os.command(&format!("$ErrorActionPreference='Stop'; $stage={}; try {{ & $stage ptyd install --expected {} --destination {} --data-dir {}; $code=$LASTEXITCODE }} finally {{ Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue }}; exit $code", ps_path(staged), ps_quote(&expected), ps_path(os.binary()), ps_path("~/.klide/run-host")))
@@ -323,10 +323,10 @@ pub fn install_main(destination: &Path, data_dir: &Path, expected: &str) -> i32 
             "{} {} {}",
             env!("CARGO_PKG_VERSION"),
             crate::pty_wire::PROTOCOL_VERSION,
-            env!("KLIDE_SOURCE_COMMIT")
+            env!("KLIDE_HOST_SOURCE")
         );
         if actual != expected {
-            return Err("The host binary does not match this app revision".into());
+            return Err("The host binary does not match this app's host source".into());
         }
         eprintln!("Waiting for installation access");
         let _lease = crate::process_lock::exclusive(&data_dir.join("upgrade.lock"))?;

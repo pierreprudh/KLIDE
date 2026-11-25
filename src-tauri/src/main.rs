@@ -10,6 +10,11 @@ fn main() {
         klide_lib::design_pilot_main();
         return;
     }
+    // `klide run "<task>"` — Klide's own agent from a terminal or CI, no
+    // window (agent/cli_run.rs, docs/KLIDE_RUN.md).
+    if std::env::args().nth(1).as_deref() == Some("run") {
+        klide_lib::cli_run_main();
+    }
     // `klide mcp coordination` serves the embedded MCP server over stdio for a
     // Delegate CLI Klide launched (mcp_server.rs). Same binary as the GUI and
     // the ptyd daemon below. Every platform: an MCP child has no PTY.
@@ -18,8 +23,9 @@ fn main() {
         if args.first().map(String::as_str) == Some("mcp") {
             match args.get(1).map(String::as_str) {
                 Some("coordination") => klide_lib::mcp_server::serve_main(),
+                Some(klide_lib::connector_relay::SUBCOMMAND) => klide_lib::mcp_server::serve_connectors_main(),
                 _ => {
-                    eprintln!("usage: klide mcp coordination");
+                    eprintln!("usage: klide mcp coordination | klide mcp connectors");
                     std::process::exit(2);
                 }
             }
@@ -36,7 +42,7 @@ fn main() {
                     "{} {} {}",
                     env!("CARGO_PKG_VERSION"),
                     klide_lib::pty_daemon::protocol_version(),
-                    env!("KLIDE_SOURCE_COMMIT")
+                    env!("KLIDE_HOST_SOURCE")
                 );
                 return;
             }

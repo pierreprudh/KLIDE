@@ -67,6 +67,27 @@ pub struct Fired {
     /// The open app posted the Klide notification (whatever screen it is on).
     #[serde(default)]
     notified: bool,
+    /// What became of the failure since it fired, followed by the same poll
+    /// that found it. `None`: still failed as fired.
+    #[serde(default)]
+    now: Option<Now>,
+}
+
+/// A firing after the fact. `Moved` and `Closed` are final: the commit is no
+/// longer the PR's, or the PR is gone.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Now {
+    /// A failed check is running again.
+    Running,
+    /// Every check that failed has passed since.
+    Passed,
+    /// Failed again after re-running.
+    Failing,
+    /// The PR has newer commits; those are watched on their own.
+    Moved,
+    /// The PR is no longer open (merged or closed).
+    Closed,
 }
 
 #[derive(Serialize)]
@@ -161,6 +182,54 @@ fn failing_prs(json: &str, since: i64) -> Result<Vec<FailingPr>, String> {
     Ok(out)
 }
 
+/// How many open PRs one poll lists. A full page can't tell "closed" from
+/// "past the page", so a PR missing from a full page is left as it was.
+const LIST_LIMIT: usize = 30;
+
+/// What became of a fired commit, from the same `gh pr list` the poll read:
+/// only the checks that failed count, by name. `None` leaves the firing as
+/// it is — nothing to say, or the first failure is still the news.
+fn now_for(prs: &[serde_json::Value], pr: u64, sha: &str, checks: &[String], was: Option<Now>) -> Option<Now> {
+    if matches!(was, Some(Now::Moved | Now::Closed)) {
+        return None;
+    }
+    let Some(view) = prs.iter().find(|p| p["number"].as_u64() == Some(pr)) else {
+        return (prs.len() < LIST_LIMIT).then_some(Now::Closed);
+    };
+    if view["headRefOid"].as_str().is_some_and(|head| head != sha) {
+        return Some(Now::Moved);
+    }
+    let rollup = view["statusCheckRollup"].as_array()?;
+    let mut seen = 0;
+    let (mut failed, mut running) = (false, false);
+    for check in rollup {
+        let name = check["name"].as_str().or(check["context"].as_str()).unwrap_or("");
+        if !checks.iter().any(|c| c == name) {
+            continue;
+        }
+        seen += 1;
+        let verdict = check["conclusion"].as_str().filter(|s| !s.is_empty()).or(check["state"].as_str()).unwrap_or("");
+        let pending = check["status"].as_str().is_some_and(|s| s != "COMPLETED") || matches!(verdict, "PENDING" | "EXPECTED" | "");
+        if pending {
+            running = true;
+        } else if FAILED.contains(&verdict) {
+            failed = true;
+        }
+    }
+    let next = if seen == 0 {
+        return None;
+    } else if running {
+        Now::Running
+    } else if failed {
+        // Still the failure that fired, until something ran in between.
+        if was.is_none() { return None; }
+        Now::Failing
+    } else {
+        Now::Passed
+    };
+    (Some(next) != was).then_some(next)
+}
+
 /// The repository and Actions job in a check's details URL
 /// (`https://github.com/<owner>/<repo>/actions/runs/<run>/job/<job>`). The job,
 /// not the run: a run's log is refused while its other jobs are still going,
@@ -251,7 +320,7 @@ fn prompt_fenced(pr: &FailingPr, logs: &str, fence: &str) -> String {
 
 /// The firing's Run: the watch's template, forced read-only, standalone and
 /// without any command authority the template might have carried.
-pub(super) fn run_request(template: &StartRunRequest, run_id: &str, text: String) -> StartRunRequest {
+fn run_request(template: &StartRunRequest, run_id: &str, text: String) -> StartRunRequest {
     let mut request = template.clone();
     request.mode = AgentMode::Plan;
     request.run_id = Some(run_id.to_string());
@@ -259,6 +328,7 @@ pub(super) fn run_request(template: &StartRunRequest, run_id: &str, text: String
     request.auto_approve_commands = None;
     request.command_allowlist.clear();
     request.delegate_session = None;
+    request.native_permission_mode = None;
     request.conversation_history = None;
     request.retry = false;
     request.naming = None;
@@ -272,16 +342,13 @@ pub(super) fn run_request(template: &StartRunRequest, run_id: &str, text: String
     request
 }
 
-fn apple_string(text: &str) -> String {
-    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 /// A macOS notification from the service, which has no window to toast in.
 pub(super) fn notify_mac(title: &str, body: &str) {
     #[cfg(target_os = "macos")]
     {
-        let script = format!("display notification {} with title {}", apple_string(body), apple_string(title));
-        let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).output();
+        if let Err(error) = super::mac_notifications::send(title, body) {
+            eprintln!("Klide notification failed: {error}");
+        }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (title, body);
@@ -298,17 +365,19 @@ async fn poll_once(data: &Path, host: &std::sync::Arc<super::daemon::RunHost>) -
         let root = watch.workspace_root.clone();
         let since = watch.enabled_at;
         let listed = crate::blocking::run(move || {
+            let limit = LIST_LIMIT.to_string();
             let json = crate::git::github::gh_output(&root, &[
-                "pr", "list", "--author", "@me", "--state", "open", "--limit", "30",
+                "pr", "list", "--author", "@me", "--state", "open", "--limit", &limit,
                 "--json", "number,title,url,headRefOid,statusCheckRollup",
             ])?;
-            failing_prs(&json, since)
+            let prs: Vec<serde_json::Value> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            Ok((failing_prs(&json, since)?, prs))
         })
         .await;
         let root = watch.workspace_root.clone();
-        let (failing, error) = match listed {
-            Ok(prs) => (prs, None),
-            Err(e) => (Vec::new(), Some(e)),
+        let (failing, prs, error) = match listed {
+            Ok((failing, prs)) => (failing, Some(prs), None),
+            Err(e) => (Vec::new(), None, Some(e)),
         };
         let d = data.to_path_buf();
         let fired_keys: std::collections::HashSet<String> = crate::blocking::run(move || {
@@ -316,6 +385,14 @@ async fn poll_once(data: &Path, host: &std::sync::Arc<super::daemon::RunHost>) -
                 if let Some(w) = s.watches.iter_mut().find(|w| w.workspace_root == root) {
                     w.last_poll_at = Some(transcripts::now_ms());
                     w.last_error = error;
+                }
+                // Follow what this Workspace already fired on. A failed
+                // listing says nothing, so nothing changes.
+                for f in s.fired.iter_mut().filter(|f| f.workspace_root == root) {
+                    let (Some(prs), Some(sha)) = (&prs, fired_sha(&f.key)) else { continue };
+                    if let Some(next) = now_for(prs, f.pr_number, sha, &f.checks, f.now) {
+                        f.now = Some(next);
+                    }
                 }
                 s.fired.iter().map(|f| f.key.clone()).collect()
             })
@@ -358,6 +435,7 @@ async fn fire(
         at: transcripts::now_ms(),
         announced: false,
         notified: false,
+        now: None,
     };
     let (d, f) = (data.to_path_buf(), fired.clone());
     crate::blocking::run(move || {
@@ -403,7 +481,7 @@ async fn fire(
     };
     // An open app posts a Klide-branded notification and marks the firing
     // announced within seconds. Only a firing nobody claimed falls back to
-    // osascript, which macOS shows under Script Editor.
+    // the Klide-branded notification helper.
     let (d, announce_key) = (data.to_path_buf(), fired.key.clone());
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
@@ -456,10 +534,9 @@ fn notify_native(app: &tauri::AppHandle, f: &Fired) {
         (None, e) => format!("Couldn't start a Run: {}", e.as_deref().unwrap_or("unknown error")),
     };
     let title = format!("CI failed · #{} {}", f.pr_number, project);
-    // A dev binary has no app bundle, so macOS drops the plugin's
-    // notification without a word; osascript at least shows up (under
-    // Script Editor). A bundled build posts as Klide.
-    if cfg!(debug_assertions) {
+    // The plugin uses Terminal's identity in development. Our applet has
+    // Klide's name and logo even when the dev binary has no app bundle.
+    if cfg!(all(debug_assertions, target_os = "macos")) {
         notify_mac(&title, &body);
         return;
     }
@@ -474,6 +551,10 @@ pub fn start(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let Ok(data) = app.path().app_data_dir() else { return };
         let mut ensured = false;
+        // What every firing looked like at the last look, so a change the
+        // service wrote (a new firing, a re-run that passed) reaches the
+        // open cards and Mission Control without them polling.
+        let mut seen: Option<Vec<(String, Option<Now>)>> = None;
         loop {
             let d = data.clone();
             if crate::blocking::run(move || Ok(has_watches(&d))).await.unwrap_or(false) {
@@ -511,6 +592,16 @@ pub fn start(app: tauri::AppHandle) {
                     .unwrap_or(false);
                 if waiting {
                     let _ = app.emit("ci-watch:pending", ());
+                }
+                let d = data.clone();
+                let now: Option<Vec<(String, Option<Now>)>> = crate::blocking::run(move || Ok(read(&d)?.fired.iter().map(|f| (f.key.clone(), f.now)).collect()))
+                    .await
+                    .ok();
+                if let Some(now) = now {
+                    if seen.as_ref().is_some_and(|before| *before != now) {
+                        let _ = app.emit("ci-watch:fired", ());
+                    }
+                    seen = Some(now);
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -611,32 +702,6 @@ fn fix_branch(pr: u64, sha: &str) -> String {
     format!("klide/fix-pr-{pr}-{}", &sha[..8])
 }
 
-/// A worktree on `branch` at one of a PR's commits, beside the checkout —
-/// the one an earlier call made when it already exists. Fix it and klide-bot's
-/// "Look into it" both land here.
-pub(super) async fn pr_worktree(root: String, pr: u64, sha: String, branch: String) -> Result<String, String> {
-    let (r, b) = (root.clone(), branch.clone());
-    let existing = crate::blocking::run(move || {
-        let existing = crate::git::git_output(&r, &["worktree", "list", "--porcelain"])?
-            .split("\n\n")
-            .find(|block| block.lines().any(|l| l == format!("branch refs/heads/{b}")))
-            .and_then(|block| block.lines().find_map(|l| l.strip_prefix("worktree ")).map(str::to_string));
-        if existing.is_none() {
-            // The PR's head may not be local yet (pushed from elsewhere).
-            crate::git::git_output(&r, &["fetch", "--quiet", "origin", &format!("refs/pull/{pr}/head")])?;
-        }
-        Ok(existing)
-    })
-    .await?;
-    match existing {
-        Some(path) => Ok(path),
-        None => {
-            let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
-            Ok(crate::git::worktree_add_from_commit_core(root, branch, None, None, quiet, Some(sha)).await?.path)
-        }
-    }
-}
-
 /// Check the failing commit out on its own branch, beside the checkout. A
 /// second click on the same firing returns the worktree the first one made.
 #[tauri::command]
@@ -652,8 +717,8 @@ pub async fn ci_watch_fix_prepare(app: tauri::AppHandle, key: String) -> Result<
     let pr = fired.pr_number;
     let branch = fix_branch(pr, &sha);
 
-    let (r, s2, checks) = (root.clone(), sha.clone(), fired.checks.clone());
-    let (head_ref, cross_repo) = crate::blocking::run(move || {
+    let (r, b, s2, checks) = (root.clone(), branch.clone(), sha.clone(), fired.checks.clone());
+    let facts = crate::blocking::run(move || {
         let view = crate::git::github::gh_output(&r, &["pr", "view", &pr.to_string(), "--json", "headRefName,isCrossRepository,state,headRefOid,statusCheckRollup"])
             .ok()
             .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok());
@@ -662,10 +727,27 @@ pub async fn ci_watch_fix_prepare(app: tauri::AppHandle, key: String) -> Result<
         }
         let head_ref = view.as_ref().and_then(|v| v["headRefName"].as_str()).map(str::to_string);
         let cross_repo = view.as_ref().and_then(|v| v["isCrossRepository"].as_bool()).unwrap_or(false);
-        Ok((head_ref, cross_repo))
+        let existing = crate::git::git_output(&r, &["worktree", "list", "--porcelain"])?
+            .split("\n\n")
+            .find(|block| block.lines().any(|l| l == format!("branch refs/heads/{b}")))
+            .and_then(|block| block.lines().find_map(|l| l.strip_prefix("worktree ")).map(str::to_string));
+        if existing.is_none() {
+            // The PR's head may not be local yet (pushed from elsewhere).
+            crate::git::git_output(&r, &["fetch", "--quiet", "origin", &format!("refs/pull/{pr}/head")])?;
+        }
+        Ok((head_ref, cross_repo, existing))
     })
     .await?;
-    let cwd = pr_worktree(root, pr, sha.clone(), branch.clone()).await?;
+    let (head_ref, cross_repo, existing) = facts;
+    let cwd = match existing {
+        Some(path) => path,
+        None => {
+            let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
+            crate::git::worktree_add_from_commit_core(root, branch.clone(), None, None, quiet, Some(sha.clone()))
+                .await?
+                .path
+        }
+    };
     Ok(FixWorkspace { cwd, branch, sha, head_ref, cross_repo })
 }
 
@@ -795,7 +877,44 @@ mod tests {
                    build\tUNKNOWN STEP\t2026-11-17T23:13:38.8Z Cleaning up orphan processes";
         assert_eq!(log_excerpt("\u{feff}2026-11-18T22:00:52.7Z \u{1b}[1m\u{1b}[91merror\u{1b}[0m: boom\n2026-11-18T22:00:52.8Z ##[error]exit 1\n2026-11-18T22:00:53Z cleanup", 1000), "error: boom\n##[error]exit 1");
         assert_eq!(log_excerpt(raw, 1000), "8 vulnerabilities\n##[error]Process completed with exit code 1.");
-        assert_eq!(apple_string(r#"a"b\"#), r#""a\"b\\""#);
+    }
+
+    fn listing(head: &str, rollup: serde_json::Value) -> Vec<serde_json::Value> {
+        vec![serde_json::json!({ "number": 7, "headRefOid": head, "statusCheckRollup": rollup })]
+    }
+
+    #[test]
+    fn a_fired_failure_is_followed_through_a_re_run() {
+        let sha = "a".repeat(40);
+        let checks = vec!["Rust tests".to_string()];
+        let run = |status: &str, conclusion: &str| serde_json::json!([
+            { "name": "Rust tests", "status": status, "conclusion": conclusion },
+            { "name": "Frontend", "status": "COMPLETED", "conclusion": "FAILURE" },
+        ]);
+        // Still the failure that fired: no news.
+        assert_eq!(now_for(&listing(&sha, run("COMPLETED", "FAILURE")), 7, &sha, &checks, None), None);
+        // Re-run → running → passed; an unchanged state is not re-reported.
+        assert_eq!(now_for(&listing(&sha, run("IN_PROGRESS", "")), 7, &sha, &checks, None), Some(Now::Running));
+        assert_eq!(now_for(&listing(&sha, run("IN_PROGRESS", "")), 7, &sha, &checks, Some(Now::Running)), None);
+        assert_eq!(now_for(&listing(&sha, run("COMPLETED", "SUCCESS")), 7, &sha, &checks, Some(Now::Running)), Some(Now::Passed));
+        // A re-run that fails again says so.
+        assert_eq!(now_for(&listing(&sha, run("COMPLETED", "FAILURE")), 7, &sha, &checks, Some(Now::Running)), Some(Now::Failing));
+        // Legacy statuses carry only a state.
+        let legacy = serde_json::json!([{ "context": "Rust tests", "state": "PENDING" }]);
+        assert_eq!(now_for(&listing(&sha, legacy), 7, &sha, &checks, None), Some(Now::Running));
+    }
+
+    #[test]
+    fn a_new_commit_or_a_closed_pr_ends_the_story() {
+        let sha = "a".repeat(40);
+        let checks = vec!["Rust tests".to_string()];
+        assert_eq!(now_for(&listing(&"b".repeat(40), serde_json::json!([])), 7, &sha, &checks, None), Some(Now::Moved));
+        assert_eq!(now_for(&[], 7, &sha, &checks, Some(Now::Passed)), Some(Now::Closed));
+        // A full page can't tell closed from past the page.
+        let full: Vec<serde_json::Value> = (100..100 + LIST_LIMIT as u64).map(|n| serde_json::json!({ "number": n })).collect();
+        assert_eq!(now_for(&full, 7, &sha, &checks, None), None);
+        // Final states stay final.
+        assert_eq!(now_for(&listing(&sha, serde_json::json!([{ "name": "Rust tests", "status": "COMPLETED", "conclusion": "SUCCESS" }])), 7, &sha, &checks, Some(Now::Moved)), None);
     }
 
     #[test]

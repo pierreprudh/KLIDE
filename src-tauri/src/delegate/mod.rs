@@ -13,6 +13,7 @@
 // provided method does the assembly once.
 
 mod additional;
+pub(crate) mod native_permissions;
 mod hermes_acp;
 pub use additional::{AMP, CURSOR, FACTORY, HERMES};
 mod chat;
@@ -92,6 +93,7 @@ pub struct ChatSpec<'a> {
 /// (as the server's own `env`, because MCP clients hand a stdio child a
 /// filtered environment, not the CLI's), and where a config file may be
 /// written when the CLI reads its MCP servers from one.
+#[derive(Clone)]
 pub struct McpServerSpec {
     pub command: String,
     pub args: Vec<String>,
@@ -108,6 +110,9 @@ pub struct McpServerSpec {
     pub config_dir: String,
     /// Filesystem-safe stem for any config file this session writes.
     pub file_stem: String,
+    /// Also start `klide mcp connectors` (`connector_relay.rs`): the
+    /// connectors switched on in Klide, as a second server beside this one.
+    pub connectors: bool,
 }
 
 impl McpServerSpec {
@@ -123,6 +128,13 @@ impl McpServerSpec {
                 self.secret_path.as_str(),
             ),
         ]
+    }
+
+    /// The argv of the connectors server, when this session gets one. Same
+    /// binary, same environment; only the subcommand differs.
+    fn connectors_args(&self) -> Option<Vec<String>> {
+        self.connectors
+            .then(|| vec!["mcp".to_string(), crate::connector_relay::SUBCOMMAND.to_string()])
     }
 
     fn env_json(&self) -> serde_json::Value {

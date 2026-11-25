@@ -33,6 +33,13 @@ pub(crate) struct FileSystemSkill {
     /// Human-readable provenance label for grouping in the modal — e.g.
     /// "Vercel", "Matt Pocock", "Personal", "Workspace".
     group: String,
+    /// What the person's "on" is remembered under. A workspace skill comes
+    /// with the repository, so an agent or a clone can write it: its key is
+    /// the SKILL.md's path plus a hash of its text, and turning a `deploy`
+    /// skill on in one project neither turns on another project's `deploy`
+    /// nor survives an edit to the file. A home skill is the person's own
+    /// install and keeps its folder id.
+    opt_in_key: String,
 }
 
 fn parse_skill_md(raw: &str, folder: &str) -> (String, String, String) {
@@ -108,6 +115,17 @@ fn parse_skill_provenance(raw: &str) -> (String, String) {
 /// Map (source, author, repository) to a display group label for the
 /// modal. The grouping is "where did this come from" — so install
 /// paths, publisher, and self-authored all show up distinctly.
+/// See [`FileSystemSkill::opt_in_key`].
+fn skill_opt_in_key(source: &str, id: &str, skill_file: &std::path::Path, text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    if !source.starts_with("workspace-") {
+        return id.to_string();
+    }
+    let path = std::fs::canonicalize(skill_file).unwrap_or_else(|_| skill_file.to_path_buf());
+    let hash: String = Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    format!("{}#{hash}", path.to_string_lossy())
+}
+
 fn skill_group_label(source: &str, author: &str, repository: &str) -> String {
     // Workspace folders always show as their own group, regardless of author.
     if source == "workspace-agents" {
@@ -256,6 +274,7 @@ pub(crate) fn scan_filesystem_skills(
             let (author, repository) = parse_skill_provenance(&raw);
             let group = skill_group_label(source, &author, &repository);
             let id = format!("file-{source}-{folder}");
+            let opt_in_key = skill_opt_in_key(source, &id, &skill_file, &raw);
             out.push(FileSystemSkill {
                 id,
                 name: if name.is_empty() {
@@ -272,6 +291,7 @@ pub(crate) fn scan_filesystem_skills(
                 from_file: skill_file.to_string_lossy().to_string(),
                 source: (*source).to_string(),
                 group,
+                opt_in_key,
             });
         }
     }
@@ -460,6 +480,7 @@ mod tests {
             from_file: String::new(),
             source: source.to_string(),
             group: String::new(),
+            opt_in_key: String::new(),
         };
         let kept = first_of_each_name(vec![
             row("workspace-agents", "software-factory"),
@@ -468,6 +489,26 @@ mod tests {
         ]);
         let ids: Vec<&str> = kept.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["file-workspace-agents-software-factory", "file-home-agents-tdd"]);
+    }
+
+    #[test]
+    fn a_workspace_skill_opt_in_follows_its_path_and_text() {
+        let dir = std::env::temp_dir().join(format!("klide-skill-key-{}", std::process::id()));
+        let (a, b) = (dir.join("a/.klide/skills/deploy/SKILL.md"), dir.join("b/.klide/skills/deploy/SKILL.md"));
+        for file in [&a, &b] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "deploy").unwrap();
+        }
+        let id = "file-workspace-klide-deploy";
+        let key_a = skill_opt_in_key("workspace-klide", id, &a, "deploy");
+        // Same folder name in another project: not the same opt-in.
+        assert_ne!(key_a, skill_opt_in_key("workspace-klide", id, &b, "deploy"));
+        // One edit to the file: asked again.
+        assert_ne!(key_a, skill_opt_in_key("workspace-klide", id, &a, "deploy, and push"));
+        assert_eq!(key_a, skill_opt_in_key("workspace-klide", id, &a, "deploy"));
+        // The person's own install keeps its folder id.
+        assert_eq!(skill_opt_in_key("home-claude", "file-home-claude-tdd", &a, "x"), "file-home-claude-tdd");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

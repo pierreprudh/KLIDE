@@ -5,6 +5,7 @@ pub(crate) mod design_feedback;
 mod approval_store;
 pub(crate) mod skill_resources;
 pub(crate) mod daemon;
+pub(crate) mod cli_run;
 mod daemon_client;
 pub(crate) mod remote_machine;
 mod run_host;
@@ -38,7 +39,8 @@ pub(crate) mod command_env;
 mod observers;
 pub(crate) mod schedules;
 pub(crate) mod ci_watch;
-pub(crate) mod klide_bot;
+#[cfg(target_os = "macos")]
+mod mac_notifications;
 pub(crate) mod workers;
 pub(crate) mod worker_slots;
 mod attention;
@@ -249,6 +251,7 @@ struct ProviderTurnRequest {
     /// to a delegate CLI so a headless turn can run what the user already said
     /// yes to. Empty for every provider whose tools Klide dispatches itself.
     allowed_commands: Vec<String>,
+    native_permission_mode: Option<String>,
     /// Klide's MCP server for a Delegate conversation (see
     /// [`RunSupervisor::delegate_mcp_wiring`]). `None` for every other provider.
     mcp: Option<crate::delegate::McpWiring>,
@@ -287,6 +290,7 @@ impl AgentProviderCaller for RealProviderCaller {
                     run_id: request.run_id,
                     delegate_session: request.delegate_session,
                     allowed_commands: request.allowed_commands,
+                    native_permission_mode: request.native_permission_mode,
                     mcp: request.mcp,
                     num_ctx: request.num_ctx,
                     num_predict: request.num_predict,
@@ -849,6 +853,7 @@ async fn run_subagent_to_completion(
         // which has no card to ask on and would otherwise park on its first
         // command, and its parent with it.
         auto_approve_commands: spec.auto_approve_commands,
+        native_permission_mode: None,
         parent_id: Some(spec.parent_id.clone()),
         side_question_of: None,
         mission_id: None,
@@ -2007,6 +2012,7 @@ async fn start_run(
     // Never accept renderer-supplied trust. Only the private, fingerprint-bound
     // approval store may populate this field.
     request.command_allowlist.clear();
+    crate::delegate::native_permissions::validate(&request.provider, request.native_permission_mode.as_deref())?;
     // Hold this turn's attachments to what the wires and the transcript can
     // take, before either sees them. Every producer enters here, so the
     // composers' own rules stay UX and this stays the invariant (see
@@ -2648,6 +2654,10 @@ async fn loop_body(
     // Bounded, because a model that does this twice is not going to stop.
     const MAX_RUNAWAY_RESAMPLES: usize = 2;
     let mut runaway_resamples = 0usize;
+    // An empty reply is asked again once; a second in a row ends the Run on
+    // a notice rather than on silence.
+    const MAX_EMPTY_RESAMPLES: usize = 1;
+    let mut empty_resamples = 0usize;
     // The `/goal` finish line (`goal.rs`): whether this Run has changed the
     // workspace — an applied edit or a command — and how many "done" claims
     // the gate has already sent back. Both stay zero on an ordinary turn.
@@ -2717,6 +2727,7 @@ async fn loop_body(
                     run_id: Some(id.clone()),
                     delegate_session: None,
                     allowed_commands: Vec::new(),
+                    native_permission_mode: None,
                     mcp: None,
                     num_ctx,
                     num_predict: request.num_predict,
@@ -3209,6 +3220,7 @@ async fn loop_body(
                 run_id: Some(id.clone()),
                 delegate_session: request.delegate_session.clone(),
                 allowed_commands: allowed_commands.clone(),
+                native_permission_mode: request.native_permission_mode.clone(),
                 mcp: mcp.clone(),
                 num_ctx,
                 num_predict: reply_budget_override.or(request.num_predict),
@@ -3402,11 +3414,30 @@ async fn loop_body(
                 })?;
                 continue;
             }
+            TurnDecision::Empty { .. } if empty_resamples < MAX_EMPTY_RESAMPLES => {
+                empty_resamples += 1;
+                // Same shape as a runaway: the empty turn leaves the history
+                // (a model continues from its own silence), and the nudge
+                // rides once with the retry.
+                messages.pop();
+                inject_context(
+                    &mut messages,
+                    &mut emit,
+                    &id,
+                    steering::steering_system_message(steering::EMPTY_REPLY_NUDGE),
+                )?;
+                emit(AgentEvent::SteeringInjected {
+                    run_id: id.clone(),
+                    reason: "The model sent an empty reply — asking again".into(),
+                    ts: now_ms(),
+                })?;
+                continue;
+            }
             // Either a normal answer, or a runaway whose resamples are spent —
             // in which case `decide_turn` has already attached the notice that
             // explains the empty reply. A run that cannot get a word out is
             // finished, not retryable.
-            TurnDecision::Final { content } | TurnDecision::Runaway { content } => {
+            TurnDecision::Final { content } | TurnDecision::Runaway { content } | TurnDecision::Empty { content } => {
                 emit(AgentEvent::AssistantMessage {
                     run_id: id.clone(),
                     message_id: assistant_id,
@@ -4153,6 +4184,7 @@ pub async fn agent_compact_conversation(
             run_id: Some(run_id.clone()),
             delegate_session: None,
             allowed_commands: Vec::new(),
+            native_permission_mode: None,
             mcp: None,
             num_ctx: None,
             num_predict: None,
@@ -5304,6 +5336,21 @@ mod turn_decision_tests {
         }
     }
 
+    /// A reply with no text, no thinking and no tool call, that the provider
+    /// says it finished on purpose, is not an answer: it is told apart from a
+    /// real one so the loop can ask again.
+    #[test]
+    fn a_reply_with_nothing_in_it_is_empty_not_final() {
+        for stop in [None, Some("stop"), Some("end_turn")] {
+            let mut empty = response("  \n\n", None, vec![]);
+            empty.stop_reason = stop.map(str::to_string);
+            assert!(matches!(decide_turn(&empty, 0, 0).decision, TurnDecision::Empty { .. }), "{stop:?}");
+        }
+        // Thinking alone is promoted to the answer, not treated as empty.
+        let thought = response("", Some("The answer is 4."), vec![]);
+        assert!(matches!(decide_turn(&thought, 0, 0).decision, TurnDecision::Final { .. }));
+    }
+
     /// Same `stop_reason`, opposite shapes: text present means the model was
     /// answering and got cut off; text absent means it never started.
     #[test]
@@ -5862,6 +5909,7 @@ mod provider_caller_tests {
                 run_id: None,
                 delegate_session: None,
                 allowed_commands: Vec::new(),
+                native_permission_mode: None,
                 mcp: None,
                 num_ctx: Some(1024),
                 num_predict: Some(128),
@@ -8889,6 +8937,57 @@ mod run_loop_tests {
             "a recovered run carries no failure notice: {}",
             answers[0]
         );
+    }
+
+    /// The 2026-11-16 benchmark shape: the model announces a step, calls a
+    /// tool, then sends back nothing. The empty reply is asked again instead
+    /// of ending the run on silence, and the run settles on the real answer.
+    #[tokio::test]
+    async fn an_empty_reply_after_a_tool_is_asked_again() {
+        let (runs_dir, root) = sandbox("empty-reply");
+        std::fs::write(format!("{root}/greeting.txt"), "hello world\n").unwrap();
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn(
+                "I'll start by reading greeting.txt.",
+                vec![scripted_tool_call("call_read", "read_file", serde_json::json!({ "path": "greeting.txt" }))],
+            ),
+            scripted_turn("", vec![]),
+            scripted_turn("It says hello world.", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("empty-run"));
+        drive_loop(sup.clone(), &runs_dir, "empty-run", test_request(&root, &[]), caller).await;
+
+        assert_eq!(read_summary(&runs_dir, "empty-run").unwrap().status, "done");
+        assert_eq!(last_assistant_text(&runs_dir, "empty-run").as_deref(), Some("It says hello world."));
+        let events = read_events(&runs_dir, "empty-run").unwrap();
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::SteeringInjected { reason, .. } if reason.contains("empty reply"))),
+            "the retry is explained, not hidden"
+        );
+        let empties = events.iter().filter(|e| matches!(e,
+            AgentEvent::AssistantMessage { content, .. } if !content.iter().any(|b| matches!(b,
+                AgentContentBlock::Text { text } if !text.trim().is_empty())))).count();
+        assert_eq!(empties, 0, "the empty turn reaches no one");
+    }
+
+    /// A model that keeps answering with nothing settles on a notice that
+    /// says so, rather than looping to the turn cap or ending blank.
+    #[tokio::test]
+    async fn repeated_empty_replies_settle_with_an_explanation() {
+        let (runs_dir, root) = sandbox("empty-twice");
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("", vec![]),
+            scripted_turn("", vec![]),
+            scripted_turn("", vec![]),
+            scripted_turn("never reached", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("empty-twice-run"));
+        drive_loop(sup.clone(), &runs_dir, "empty-twice-run", test_request(&root, &[]), caller).await;
+
+        assert_eq!(read_summary(&runs_dir, "empty-twice-run").unwrap().status, "done");
+        let text = last_assistant_text(&runs_dir, "empty-twice-run").unwrap_or_default();
+        assert!(text.contains("empty reply"), "the user is told why: {text:?}");
+        assert!(!text.contains("never reached"));
     }
 
     /// Two runaways in a row exhaust the resamples, and the run settles on the

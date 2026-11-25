@@ -1,13 +1,49 @@
 # Native SSH hosts. Each asset is uploaded only after its target's checks pass.
+#
+# A helper is named after the source it is built from, not the commit:
+# `host-<id>`, where id = `git ls-tree HEAD -- <scripts/remote-host/source-paths>
+# | git hash-object --stdin` (src-tauri/build.rs computes the same id, and an
+# app installs the helper published for it — machine_install.rs). A main push
+# that leaves those trees alone does not run; one whose source already has all
+# four helpers published skips the build. Main builds are never cancelled. A
+# PR builds only when it touches the host itself — the files below — and on
+# one macOS runner, not two: the free plan runs five macOS jobs at once across
+# the whole repo.
 name: Native host binaries
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-  pull_request:
+    # Everything the helper's id covers (scripts/remote-host/source-paths),
+    # plus how it is built and checked.
     paths:
       - 'src-tauri/**'
+      - 'scripts/remote-host/**'
+      - 'schemas/**'
+      - 'tests/remote-*-smoke.py'
+      - 'tests/windows-openssh-smoke.ps1'
+      - '.github/workflows/linux-host.yml'
+  pull_request:
+    paths:
+      # The host: PTY daemon and wire, Remote machines, the run host, and
+      # what the smoke tests below exercise.
+      - 'src-tauri/src/pty*.rs'
+      - 'src-tauri/src/remote_platform.rs'
+      - 'src-tauri/src/machine*.rs'
+      - 'src-tauri/src/machine_setup/**'
+      - 'src-tauri/src/process_lock.rs'
+      - 'src-tauri/src/windows_detach.rs'
+      - 'src-tauri/src/durable.rs'
+      - 'src-tauri/src/delegate/child.rs'
+      - 'src-tauri/src/agent/remote_machine.rs'
+      - 'src-tauri/src/agent/daemon*.rs'
+      - 'src-tauri/src/agent/run_host.rs'
+      - 'src-tauri/src/main.rs'
+      # How it is built.
+      - 'src-tauri/build.rs'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
       - 'scripts/remote-host/**'
       - 'tests/remote-*-smoke.py'
       - 'tests/windows-openssh-smoke.ps1'
@@ -21,24 +57,49 @@ permissions:
   contents: read
 
 jobs:
+  identity:
+    runs-on: ubuntu-24.04
+    outputs:
+      id: ${{ steps.id.outputs.id }}
+      published: ${{ steps.id.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Host source id and published helpers
+        id: id
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mapfile -t paths < <(grep -v -e '^#' -e '^[[:space:]]*$' scripts/remote-host/source-paths)
+          id=$(git ls-tree HEAD -- "${paths[@]}" | git hash-object --stdin)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          published=false
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            have=$(gh release view "host-$id" --json assets --jq '[.assets[].name | select(endswith(".sha256"))] | length' 2>/dev/null || echo 0)
+            if [ "$have" -ge 4 ]; then published=true; fi
+          fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "::notice::Host source $id — published: $published"
+
   build:
+    needs: identity
+    if: ${{ needs.identity.outputs.published != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            asset: klide-linux-x86_64
-          - runner: macos-15
-            asset: klide-macos-aarch64
-          - runner: macos-15-intel
-            asset: klide-macos-x86_64
-          - runner: windows-2025
-            asset: klide-windows-x86_64.exe
+        # main publishes all four. A PR checks three: Intel macOS runs the
+        # same code as Apple Silicon and would take a second macOS runner.
+        include: >-
+          ${{ fromJSON(format('[{0}{1}]',
+            '{"runner":"ubuntu-24.04","asset":"klide-linux-x86_64"},
+             {"runner":"macos-15","asset":"klide-macos-aarch64"},
+             {"runner":"windows-2025","asset":"klide-windows-x86_64.exe"}',
+            github.event_name != 'pull_request' && ',{"runner":"macos-15-intel","asset":"klide-macos-x86_64"}' || '')) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
     env:
       PYTHONUTF8: "1"
-      KLIDE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      KLIDE_HOST_SOURCE: ${{ needs.identity.outputs.id }}
       PROFILE: ${{ github.event_name == 'pull_request' && 'debug' || 'release' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -131,8 +192,8 @@ jobs:
           retention-days: 7
 
   publish:
-    if: ${{ always() && !cancelled() && github.event_name != 'pull_request' }}
-    needs: build
+    if: ${{ always() && !cancelled() && github.event_name != 'pull_request' && needs.build.result != 'skipped' }}
+    needs: [identity, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -146,6 +207,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMIT: ${{ github.sha }}
+          HOST_SOURCE: ${{ needs.identity.outputs.id }}
           GH_REPO: ${{ github.repository }}
         run: |
           shopt -s nullglob
@@ -155,8 +217,8 @@ jobs:
             exit 0
           fi
           (cd host-assets && sha256sum --check ./*.sha256)
-          tag="host-${SOURCE_COMMIT}"
+          tag="host-${HOST_SOURCE}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --target "$SOURCE_COMMIT" --prerelease --title "SSH helpers ${SOURCE_COMMIT:0:7}" --notes "Matching native Klide SSH helpers. Each asset passed native disconnect/replay and installer smoke tests on its target. A missing target is still building or needs its checks rerun."
+            gh release create "$tag" --target "$SOURCE_COMMIT" --prerelease --title "SSH helpers ${HOST_SOURCE:0:7}" --notes "Matching native Klide SSH helpers for host source ${HOST_SOURCE}, first built from ${SOURCE_COMMIT}. Each asset passed native disconnect/replay and installer smoke tests on its target. A missing target is still building or needs its checks rerun."
           fi
           gh release upload "$tag" host-assets/* --clobber

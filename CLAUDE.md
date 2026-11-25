@@ -78,6 +78,7 @@ Klide/
 │   ├── AGENT_COORDINATION.md      How Runs address each other — one journal, two doors
 │   ├── MISSION_ORCHESTRATION.md   Agent dispatch of approved tasks, exact-attempt inspection, and limits
 │   ├── MEMORY_ENGINE.md           All-in-one memory architecture + PR sequence
+│   ├── KLIDE_RUN.md               `klide run` — Klide's own agent as a CLI: command, behaviour, slices
 │   ├── MODEL_ROUTING.md           Auto model routing — the rule, the wire, what it deliberately is not
 │   ├── CONVERSATION_STORE.md      The conversation index: localStorage → JSON files → SQLite, migrations, failure behaviour
 │   ├── SOFTWARE_FACTORY.md        The factory that builds Klide (PR reviewer) + Klide as its control panel
@@ -335,6 +336,8 @@ Klide/
     │   ├── conversation_store.rs The Stored conversation index in SQLite under app data — metadata + ordered messages, one-time JSON import; the renderer holds it in memory
     │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config + `${VAR}` resolution + the GitHub preset
     │   ├── connector_pool.rs     Live connector sessions shared by every Run — lazy connect, reconnect on break, killed at exit
+    │   ├── connector_oauth.rs    MCP OAuth for a remote connector — discovery, dynamic registration, PKCE on a loopback redirect, Keychain tokens + refresh; `${KLIDE_OAUTH}` resolves per request
+    │   ├── connector_relay.rs    `klide mcp connectors` — the enabled connectors served to a Delegate CLI as a sibling MCP server (never under `klide`, so no allow rule covers it); answered by the app's pool over the bridge, no token leaves the app
     │   ├── search.rs             Find-in-files over a Workspace with ignore policy
     │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
     │   ├── workspace_trust.rs    Trusted folders (~/.klide/trusted-folders.json) — an untrusted folder opens restricted; read by git/cmd.rs
@@ -360,12 +363,14 @@ Klide/
     │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, effort + MCP wiring
     │   ├── coordination/         mod.rs: Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward · ops.rs: one core per operation (list/send/wait/cancel/read_result), one schema source, one reply text — the two doors only bind the actor
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
-    │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
+    │   ├── mcp_server.rs         `klide mcp coordination` / `klide mcp connectors` — embedded stdio MCP servers a Delegate runs; relay every tool call to the bridge
+    │   ├── loopback_server.rs    The accept-loop rules every tiny_http loopback listener shares — no body read on the accept thread, counted threads, parked past the cap
     │   ├── mcp_client.rs         Klide as an MCP client — one Session over stdio or Streamable HTTP: handshake, list tools, call one
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) — each owns its home (config/data dirs honouring CODEX_HOME / CLAUDE_CONFIG_DIR / XDG), label, login, accounts flag + home.rs the Env seam + source scan + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── run_host.rs        The one Run host door — placement (app vs ptyd), admission, spawn + backstop, card answers, the one "active" rule
+    │       ├── cli_run.rs         `klide run` — the Harness as a one-shot CLI agent: Plan by default, `--work` / `--allow-commands`, every card refused, text or JSON out (docs/KLIDE_RUN.md)
     │       ├── daemon.rs          Background subscription chats — the Harness loop hosted in `klide ptyd`, survives app exit
     │       ├── daemon_client.rs   App-side proxy to those runs — start, reconnect, replay the durable gap, route Stop/approvals
     │       ├── stream_log.rs      Streamed output of a background turn — deltas merged per 150 ms, written without a disk wait
@@ -379,7 +384,6 @@ Klide/
     │       ├── process.rs         One lifecycle for every command a Run starts — process group, bounded capture, exit from wait() with a 1 s drain, cancel-aware wait (background.rs is its registry)
     │       ├── sandbox.rs         Containment for a command nobody read first — a macOS Seatbelt profile (writes by path, network on or loopback-only) wrapped around the shell by process.rs. A command the full-auto rung or a wildcard rule let run gets one (project, temp, tool caches; git hooks + config closed; no network beyond loopback unless Settings opens it) and can ask to leave it with `unsandboxed: true`, which always raises a card; a command a person approved runs as before. the switch is Settings › AI (`~/.klide/sandbox.json`, read in Rust so no run request can ask for less); `KLIDE_COMMAND_SANDBOX=0` also turns it off
     │       ├── ci_watch.rs        Watch CI — the scheduled service polls `gh` for your open PRs; a check that fails after the switch starts one read-only Run per commit with the failed log excerpt, plus a macOS notification
-    │       ├── klide_bot.rs       klide-bot — `@klide-bot` in a comment on your open PR (author with write access, after the switch) becomes a notification while Klide is open; Look into it opens Kit in a worktree at the PR's head with the thread attached. Nothing runs or posts by itself (the GitHub reply is `.github/workflows/klide-bot.yml`)
     │       ├── hooks.rs           Project hooks — `.klide/hooks.json` runs the person's own commands before a tool call (non-zero refuses it), after one, and when the Run settles. Nothing runs until a person allows that exact text (sha256 kept in app data; no rung answers the card; only a conversation is asked), and every hook runs in the command sandbox
     │       ├── compaction.rs      Summary compaction — the cut, the notes, what a marker keeps (`effective_events`)
 │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
@@ -505,7 +509,13 @@ behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
 / Refuse; the webview only picks a surface.
 
-### Where the product is (v0.7.1 released 2026-11-21)
+### Where the product is (v0.7.2 released 2026-11-25)
+
+0.7.2 (2026-11-25) added `klide run` (the Harness as a one-shot CLI, which
+@klide-bot now runs on in GitHub Actions), connectors for every Delegate CLI
+through `klide mcp connectors`, native per-agent permission modes, Watch CI
+cards that follow a failure to its end, per-repository Remote setup, a stable
+local signing identity, and a batch of security and performance fixes.
 
 0.7.1 (2026-11-21) added Vibe (Mistral's CLI) as the tenth Delegate, the
 Connectors grid with MCP OAuth sign-in and the composer "+" menu, Watch CI
@@ -868,7 +878,7 @@ enforce wrapper coverage for the git family.
 - [x] Reasoning effort — levels read from the provider/CLI rather than assumed
 - [x] Composer `/` command menu and ↑ / ↓ prompt history
 - [x] Workers — `spawn_subagent` can hand a task to a Delegate CLI as a gated, isolated Run of its own; with `background: true` the parent gets the child's Run id back at once and the report is delivered when it settles
-- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use; the Harness calls them (remote tools approval-gated per tool, including server-labelled reads) and GitHub connects in one click as the pinned account
+- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use; the Harness calls them (remote tools approval-gated per tool, including server-labelled reads) and GitHub connects in one click as the pinned account; hosted servers sign in through the browser (MCP OAuth), and Delegate CLIs get the same connectors through `klide mcp connectors`, under their own approval prompts
 - [x] Visuals — an `html` or `svg` fence renders as a sanitized, themed picture in the conversation
 - [x] Delegate CLI versions — each CLI's version on its Settings row, with its own updater beside it
 - [x] Background shells — `run_command(background: true)` + `read_command_output` / `kill_command`, run-scoped, reaped at settle; a shell can wake the conversation on exit

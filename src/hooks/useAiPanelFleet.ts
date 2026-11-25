@@ -450,11 +450,7 @@ export function createFleetController(
     }
     switch (intent.kind) {
       case "resume-run": {
-        const { panelId } = takeSeat(intent, {
-          provider: intent.convo.provider,
-          model: intent.convo.model ?? undefined,
-          cwd: intent.convo.cwd ?? undefined,
-        });
+        const { panelId } = takeSeat(intent, { cwd: intent.convo.cwd ?? undefined });
         registry.set(`run:${intent.runId}`, panelId);
         dispatch({ type: "resume-targeted", panelId, convo: intent.convo });
         return panelId;

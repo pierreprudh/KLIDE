@@ -1132,26 +1132,30 @@ fn parse_command_list(body: &str) -> Option<CliCommands> {
 /// shape is `mcp.servers.<name>` + `disabled`, so a v2 install gets that one
 /// rather than leaning on the migration. Both were seen to connect on 2.0.27.
 fn mcp_config(spec: &McpServerSpec, v2: bool) -> serde_json::Value {
-    let mut command = vec![spec.command.clone()];
-    command.extend(spec.args.iter().cloned());
-    if v2 {
-        return serde_json::json!({
-            "mcp": { "servers": { "klide": {
-                "type": "local",
-                "command": command,
-                "environment": spec.env_json(),
-                "disabled": false,
-            } } }
-        });
+    let mut servers = vec![("klide", spec.args.clone())];
+    if let Some(args) = spec.connectors_args() {
+        servers.push((crate::connector_relay::SERVER_NAME, args));
     }
-    serde_json::json!({
-        "$schema": "https://opencode.ai/config.json",
-        "mcp": { "klide": {
+    let entry = |args: &[String]| {
+        let mut command = vec![spec.command.clone()];
+        command.extend(args.iter().cloned());
+        let mut server = serde_json::json!({
             "type": "local",
             "command": command,
             "environment": spec.env_json(),
-            "enabled": true,
-        } }
+        });
+        // V2 says `disabled: false`, V1 `enabled: true`.
+        if v2 { server["disabled"] = false.into() } else { server["enabled"] = true.into() }
+        server
+    };
+    let map: serde_json::Map<String, serde_json::Value> =
+        servers.iter().map(|(name, args)| (name.to_string(), entry(args))).collect();
+    if v2 {
+        return serde_json::json!({ "mcp": { "servers": map } });
+    }
+    serde_json::json!({
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": map
     })
 }
 
@@ -1368,9 +1372,15 @@ mod tests {
             secret_path: "/tmp/c.secret".into(),
             config_dir: "/tmp".into(),
             file_stem: "c".into(),
+            connectors: false,
         };
         let v1 = mcp_config(&spec, false);
         assert_eq!(v1["mcp"]["klide"]["command"], serde_json::json!(["/k/klide", "mcp", "coordination"]));
+        assert!(v1["mcp"].get("connectors").is_none());
+        let with = McpServerSpec { connectors: true, ..spec.clone() };
+        assert_eq!(mcp_config(&with, false)["mcp"]["connectors"]["command"], serde_json::json!(["/k/klide", "mcp", "connectors"]));
+        assert_eq!(mcp_config(&with, false)["mcp"]["connectors"]["enabled"], true);
+        assert_eq!(mcp_config(&with, true)["mcp"]["servers"]["connectors"]["disabled"], false);
         assert_eq!(v1["mcp"]["klide"]["enabled"], true);
         let v2 = mcp_config(&spec, true);
         assert!(v2["mcp"].get("klide").is_none(), "v2 has no top-level server names");

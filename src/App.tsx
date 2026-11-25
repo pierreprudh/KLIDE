@@ -144,8 +144,7 @@ import { registerConversationOpener, registerSessionReattacher } from "./convers
 import { registerScheduleOpener } from "./scheduleNavigation";
 import { registerCiFixOpener } from "./ciFixNavigation";
 import { registerKlideBotOpener } from "./klideBotNavigation";
-import { klideBotLook, type KlideBotMention } from "./ipc/klideBot";
-import { klideBotLookTurn } from "./agent/klideBotLook";
+import type { BotMention } from "./ipc/klideBot";
 import { ciWatchFixPrepare, type CiWatchFired } from "./ipc/ciWatch";
 import { ciDiagnosis, ciFixTurn, ciLog } from "./agent/ciFix";
 import { isScheduledRun } from "./scheduleStatus";
@@ -1216,47 +1215,43 @@ function App() {
     return () => registerCiFixOpener(null);
   }, []);
 
-  // "Look into it" on a klide-bot mention: a worktree at the PR's head, then a
-  // Work turn on Focus's canvas with the thread and diff attached.
-  const pendingLookRef = useRef<{ root: string; mention: KlideBotMention } | null>(null);
-  const lookRef = useRef<(m: KlideBotMention) => Promise<void>>(async () => {});
-  lookRef.current = async (m) => {
+  // Mentions use the current local agent. The GitHub bot's model is independent.
+  const pendingMentionRef = useRef<BotMention | null>(null);
+  const mentionRootRef = useRef(workspaceRoot);
+  mentionRootRef.current = workspaceRoot;
+  const lookIntoMentionRef = useRef<(m: BotMention) => Promise<void>>(async () => {});
+  lookIntoMentionRef.current = async m => {
     if (m.workspaceRoot !== workspaceRoot) {
-      pendingLookRef.current = { root: m.workspaceRoot, mention: m };
+      pendingMentionRef.current = m;
       changeRoot(m.workspaceRoot);
       return;
     }
-    const preparing = notify(`Opening #${m.prNumber} in a worktree…`, { tone: "info", duration: 0 });
+    const preparing = notify(`Opening PR #${m.prNumber} in a worktree…`, { tone: "info", duration: 0 });
     try {
-      const ws = await klideBotLook(m.key);
-      const turn = klideBotLookTurn(m, ws);
+      const { prepareMentionTurn } = await import("./agent/klideBotLook");
+      const { workspace: ws, turn } = await prepareMentionTurn(m);
+      if (mentionRootRef.current !== m.workspaceRoot) return;
       back();
       if (!focusBase) enterFocus();
       endFocusRaceWatch();
       setAiPanelCwd(primaryPanelId, ws.cwd);
-      if (m.provider) {
-        setAiPanelProvider(primaryPanelId, m.provider as ProviderId);
-        if (m.model) updateAiPanelModel(primaryPanelId, m.model);
-      }
       setFocusInitialMessage(turn.text);
       setFocusInitialMachine(null);
       setFocusInitialAttachments([turn.attachment]);
-      setFocusInitialMode("goal");
+      setFocusInitialMode("plan");
       setFocusChatActive(true);
     } catch (e) {
-      notify(`Couldn't open #${m.prNumber}: ${errMessage(e)}`, { tone: "error" });
-    } finally {
-      dismissToast(preparing);
-    }
+      notify(`Couldn't open PR #${m.prNumber}: ${errMessage(e)}`, { tone: "error" });
+    } finally { dismissToast(preparing); }
   };
   useEffect(() => {
-    const pending = pendingLookRef.current;
-    if (!pending || pending.root !== workspaceRoot) return;
-    pendingLookRef.current = null;
-    void lookRef.current(pending.mention);
+    const pending = pendingMentionRef.current;
+    if (!pending || pending.workspaceRoot !== workspaceRoot) return;
+    pendingMentionRef.current = null;
+    void lookIntoMentionRef.current(pending);
   }, [workspaceRoot]);
   useEffect(() => {
-    registerKlideBotOpener(m => { void lookRef.current(m); });
+    registerKlideBotOpener(m => lookIntoMentionRef.current(m));
     return () => registerKlideBotOpener(null);
   }, []);
 

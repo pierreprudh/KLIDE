@@ -11,6 +11,8 @@ mod accounts;
 mod usage;
 mod adapters;
 mod blocking;
+mod bot_settings;
+mod bot_mentions;
 mod cli;
 mod hermes_settings;
 mod harness_source;
@@ -27,8 +29,10 @@ mod coordination;
 mod connectors;
 mod conversation_store;
 mod connector_pool;
+pub mod connector_relay;
 mod connector_oauth;
 mod coordination_bridge;
+mod loopback_server;
 mod custom_cli;
 mod machines;
 mod custom_providers;
@@ -522,6 +526,7 @@ async fn ai_chat(
             // A one-shot has no project approvals to carry: it is the
             // summarizer, which asks the model for prose and runs no tools.
             allowed_commands: Vec::new(),
+            native_permission_mode: None,
             mcp: None,
             num_ctx,
             num_predict,
@@ -1214,7 +1219,6 @@ pub fn run() {
                 connector_pool::warm();
                 agent::schedules::start(handle.clone());
                 agent::ci_watch::start(handle.clone());
-                agent::klide_bot::start(handle.clone());
             }
 
             // Open at a comfortable fraction of the display the window lands on,
@@ -1325,6 +1329,8 @@ pub fn run() {
             git::git_status,
             workspace_trust::workspace_trust_status,
             workspace_trust::workspace_trust_grant,
+            workspace_trust::workspace_trust_list,
+            workspace_trust::workspace_trust_revoke,
             git::git_stage,
             git::git_unstage,
             git::git_commit,
@@ -1452,14 +1458,14 @@ pub fn run() {
             agent::design_feedback::agent_start_design_review,
             agent::agent_start_run,
             agent::schedules::agent_schedule_create,
+            bot_settings::klide_bot_settings,
+            bot_settings::klide_bot_set_model,
+            bot_mentions::klide_bot_mentions,
+            bot_mentions::klide_bot_look,
             agent::ci_watch::ci_watch_get,
             agent::ci_watch::ci_watch_set,
             agent::ci_watch::ci_watch_take,
             agent::ci_watch::ci_watch_fix_prepare,
-            agent::klide_bot::klide_bot_get,
-            agent::klide_bot::klide_bot_set,
-            agent::klide_bot::klide_bot_take,
-            agent::klide_bot::klide_bot_look,
             agent::schedules::agent_schedule_update,
             agent::schedules::agent_schedule_list,
             agent::schedules::agent_schedule_history,
@@ -1717,6 +1723,7 @@ mod blocking_door_tests {
         ("models.rs", include_str!("models.rs")),
         ("coordination/mod.rs", include_str!("coordination/mod.rs")),
         ("storage.rs", include_str!("storage.rs")),
+        ("bot_mentions.rs", include_str!("bot_mentions.rs")),
         ("providers.rs", include_str!("providers.rs")),
         ("agent/mod.rs", include_str!("agent/mod.rs")),
         ("agent/schedules.rs", include_str!("agent/schedules.rs")),
@@ -1859,3 +1866,5 @@ mod plugin_registration_tests {
 
 #[cfg(debug_assertions)]
 pub fn design_pilot_main() { agent::design_pilot::cli_main(); }
+/// `klide run` — Klide's Harness as a one-shot CLI agent (agent/cli_run.rs).
+pub fn cli_run_main() -> ! { agent::cli_run::main() }

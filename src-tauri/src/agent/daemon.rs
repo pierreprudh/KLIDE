@@ -183,13 +183,27 @@ impl RunHost {
         crate::blocking::run(move || host.start_admitted(request, runs_dir, RealProviderCaller, true, false, false)).await
     }
 
+    /// `klide run` (cli_run.rs): a standalone Run whose request already says
+    /// what it may do with nobody watching. Unlike a Schedule it keeps the
+    /// request's own command policy — `--allow-commands` is the person's
+    /// explicit say-so on the command line.
+    pub(crate) async fn start_cli(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf) -> Result<u64, String> {
+        let id = request.run_id.clone().ok_or("Missing Run id")?;
+        route_auto(&runs_dir, &id, &mut request).await?;
+        crate::local_servers::ensure_for_background(&request.provider, &request.model).await?;
+        let host = self.clone();
+        crate::blocking::run(move || host.start_admitted(request, runs_dir, RealProviderCaller, false, true, false)).await
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn start_design_pilot(self: &Arc<Self>, request: StartRunRequest, runs_dir: PathBuf) -> Result<u64,String> {
         self.start_admitted(request, runs_dir, RealProviderCaller, false, true, false)
     }
 
-    fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool, pilot: bool, remote: bool) -> Result<u64, String> {
-        if !scheduled && !pilot && !run_host::background_eligible(&request) {
+    /// `standalone`: the caller shaped the request itself (`klide run`, the
+    /// design pilot), so any provider may run here, on its own command policy.
+    fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool, standalone: bool, remote: bool) -> Result<u64, String> {
+        if !scheduled && !standalone && !run_host::background_eligible(&request) {
             return Err("Only standalone subscription conversations can run in this host".into());
         }
         let id = request.run_id.clone().ok_or("Missing conversation id")?;
@@ -197,6 +211,7 @@ impl RunHost {
         std::fs::create_dir_all(&runs_dir).map_err(|e| e.to_string())?;
         request.command_allowlist = if scheduled {
             request.auto_approve_commands = None;
+            request.native_permission_mode = None;
             match request.workspace_root.as_deref() { Some(root) => command_allowlist::list(&runs_dir, root)?, None => Vec::new() }
         } else { delegate_allowed_commands(
             &request.provider,
@@ -308,6 +323,7 @@ impl RunHost {
             secret_path: secret_path.to_string_lossy().into(),
             config_dir: dir.to_string_lossy().into(),
             file_stem: stem,
+            connectors: crate::connector_relay::any_enabled(),
         });
         if let Some(w) = &wiring {
             for (path, contents) in &w.files {

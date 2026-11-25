@@ -45,11 +45,13 @@ impl Delegate for CliDelegate {
     fn resumes_sessions(&self) -> bool { self.id == "hermes" }
     fn mcp_wiring(&self, spec: &super::McpServerSpec) -> Option<super::McpWiring> {
         if self.id != "hermes" { return None; }
+        let env: Vec<_> = spec.env_pairs().into_iter().map(|(name, value)| serde_json::json!({"name":name,"value":value})).collect();
+        let mut servers = vec![serde_json::json!({ "name": "klide", "command": spec.command, "args": spec.args, "env": env })];
+        if let Some(args) = spec.connectors_args() {
+            servers.push(serde_json::json!({ "name": crate::connector_relay::SERVER_NAME, "command": spec.command, "args": args, "env": env }));
+        }
         Some(super::McpWiring {
-            env: vec![(super::hermes_acp::MCP_ENV.into(), serde_json::json!([{
-                "name": "klide", "command": spec.command, "args": spec.args,
-                "env": spec.env_pairs().into_iter().map(|(name, value)| serde_json::json!({"name":name,"value":value})).collect::<Vec<_>>()
-            }]).to_string())],
+            env: vec![(super::hermes_acp::MCP_ENV.into(), serde_json::Value::Array(servers).to_string())],
             ..Default::default()
         })
     }
@@ -250,7 +252,7 @@ mod tests {
         let wiring = HERMES.mcp_wiring(&super::super::McpServerSpec {
             command:"/app/klide".into(), args:vec!["mcp".into(), "coordination".into()],
             endpoint_path:"/tmp/endpoint".into(), session_id:"conversation:hermes".into(), secret_path:"/tmp/secret-file".into(),
-            config_dir:"/tmp".into(), file_stem:"hermes".into(),
+            config_dir:"/tmp".into(), file_stem:"hermes".into(), connectors: false,
         }).unwrap();
         let servers: serde_json::Value = serde_json::from_str(&wiring.env[0].1).unwrap();
         assert_eq!(servers[0]["name"], "klide");

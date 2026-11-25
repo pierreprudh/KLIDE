@@ -1044,6 +1044,7 @@ fn start_request_for(
         command_allowlist: vec![],
         require_diff_review: Some(dispatch.require_diff_review),
         auto_approve_commands: Some(dispatch.auto_approve_commands),
+        native_permission_mode: None,
         parent_id: bundle.mission.coordinator_run_id.clone(),
         mission_id: Some(bundle.mission.id.clone()),
         mission_task_id: Some(task.id.clone()),

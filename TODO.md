@@ -8,12 +8,21 @@ them.
 
 ## Dependency audit follow-up, 2026-11-18
 
-- [ ] Replace the temporary dev-only picomatch advisory exception with a
-  patched compatible release once available, then remove the exception from
-  `scripts/audit-dependencies.mjs`. See `docs/DEPENDENCY_AUDIT.md`. Production
-  and unrelated high/critical advisories remain blocked.
+- [x] Removed the dev-only picomatch advisory exception (2026-11-24): GitHub
+  withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18. The audit now blocks every
+  high/critical advisory with no exceptions. See `docs/DEPENDENCY_AUDIT.md`.
 
 ## Remote machines — native hosts and deployment, 2026-11-19
+
+- [x] Host helper identity by Rust source, not commit (2026-11-24; done
+  2026-11-25: `host-<source>`, id over `scripts/remote-host/source-paths`). An app
+  installs `host-<its commit>` and checks the helper's `ptyd version` names
+  that commit (`machine_install.rs`), so every push to main rebuilds four
+  platforms — 40 builds since 2026-11-20 for 11 merges that touched Rust,
+  queueing behind the free plan's five macOS runners. Key the release and the
+  version check on the `src-tauri` tree id (plus `Cargo.lock`) instead; a
+  docs or frontend merge then reuses the last build. PR builds were already
+  narrowed to host files and one macOS runner (`linux-host.yml`).
 
 Implemented in [PR #557](https://github.com/pierreprudh/KLIDE/pull/557):
 macOS (Apple silicon and Intel) and native Windows x86_64 over OpenSSH.
@@ -262,6 +271,13 @@ baseline; unchecked items below are verification or specific remaining gaps.
   "failed" for a cancelled worker while its row says Cancelled. The wording
   is fixed (2026-11-02): a cancelled worker's result and background report
   say "was cancelled"; the parent ignoring instructions remains open.
+  2026-11-25: the `spawn_subagent` description now leads with the three
+  rules (background, the named agent/model, one call per worker). In isolation
+  (`scripts/prompt-ab/spawn_subagent_ab.py`, DeepSeek v4.1 Flash, 3 runs
+  each) the old text already passed background and named model; old 10/12, new
+  11/12, within noise. The 11-01 failure did not reproduce without the real
+  conversation, so its cause is likely context (Kit prompt, long history),
+  not the description. Reproduce it in the app before changing more.
 - [x] Worker capacity at admission (2026-10-27): API workers wait in a fair
   queue for one of 4 app-wide slots (15 since 2026-11-02), in front of the child Run
   (`agent/worker_slots.rs`), "Queued behind N running API workers" on the
@@ -330,8 +346,9 @@ time, workspace trust first (every competitor has closed it).
   Klide starts goes through `git/cmd.rs`: always fsmonitor/`ext::`/editor/
   prompt off; restricted → hooks off, and Git paused unless the repo's own
   config is plain data (allowlist). Links to an untrusted folder still confirm.
-- [ ] Trust follow-ups: an "untrust" / trusted-folders list in Settings;
-  project hooks, workspace skills and project connectors could also wait on
+- [ ] Trust follow-ups: ~~an "untrust" / trusted-folders list in Settings~~
+  (done 2026-11-25: Settings › AI › Execution › Trusted folders, Remove per
+  folder; untested in the installed app); project hooks, workspace skills and project connectors could also wait on
   trust (not chosen for the first slice); installed-app check of the notification.
 - [x] Bound known secret reads (2026-11-13): native file/preflight checks now
   name GitHub CLI and agent login stores; the macOS command profile denies
@@ -347,19 +364,28 @@ time, workspace trust first (every competitor has closed it).
   Discovery imports disabled (enable explicitly); existing rows show resolved
   variable names. MCP HTTP redirects are refused with configured headers.
   Server annotations still govern Plan eligibility, not permission to call.
-- [ ] Hooks: approval hashes `hooks.json` only; include the digests of the
-  workspace scripts it calls.
-- [ ] Skills: key the opt-in on workspace path + a hash of `SKILL.md`, not
-  `file-{source}-{folder}`.
-- [ ] ptyd: refuse a socket folder not owned by the current uid at 0700, check
-  peer credentials, bound the pre-auth read.
+- [x] Hooks (2026-11-24): the approval digest covers `hooks.json` plus each
+  project script a hook runs (first word, or first operand after an
+  interpreter); data a hook only reads stays out.
+- [x] Skills (2026-11-24): a workspace skill's opt-in is keyed on its
+  `SKILL.md` path + a hash of its text (`FileSystemSkill::opt_in_key`); home
+  skills keep their folder id. Workspace skills switched on before this start
+  off once.
+- [x] ptyd (2026-11-24): the socket folder must belong to the current uid
+  at 0700, every wire read is capped (`read_line_capped`, #554), and a peer
+  on another account is refused from its kernel credentials before a byte is
+  read (`getpeereid` / `SO_PEERCRED`).
 - [x] Design canvas proxy (2026-11-13): rejects any Host other than its
   bound `127.0.0.1:<port>` before serving the token script or contacting the
   upstream; includes a hostile-origin regression.
-- [ ] Credential snapshots: write private atomically (`accounts.rs`), tighten
-  `~/.claude.json.klide-bak`, create scrollback logs 0600.
-- [ ] Listeners: a stalled local connection still holds the single accept
-  thread of the model-source bridge and the hook server.
+- [x] Credential snapshots (2026-11-24): snapshots and live swaps are
+  written private and atomically, `~/.claude.json.klide-bak` too, and
+  scrollback logs + metas are created 0600 (an older log is tightened on its
+  next open).
+- [x] Listeners: a stalled local connection still holds the single accept
+  thread of the model-source bridge and the hook server. Fixed 2026-11-25:
+  all three tiny_http listeners share `loopback_server.rs` (no body read on
+  the accept thread; counted threads; parked past the cap).
 - [ ] Command rules: per-subcommand matching and deny rules, as Claude Code,
   VS Code and Zed do; a sandbox backend off macOS.
 - [ ] Not verified by the review: background shells escaping the group kill via
@@ -367,8 +393,8 @@ time, workspace trust first (every competitor has closed it).
   SSRF, the fixed gateway port 10100, the `hermes proxy` bearer.
 - [ ] Release: an auto-updater, so a security fix reaches an installed copy
   (notarization is tracked under v0.5.1).
-- [ ] Refresh `docs/competitors-2026-11-09.md`: it says Klide has no sandbox
-  and no user hooks.
+- [x] Refreshed `docs/competitors-2026-11-09.md` (local, 2026-11-24): the
+  sandbox and hooks rows now describe what shipped in 0.7.0.
 
 ## Harness follow-ups
 
@@ -394,9 +420,17 @@ time, workspace trust first (every competitor has closed it).
   for multi-file tasks in any arm.
 - [ ] `read_many` to a default: rerun qwen3.5:9b with the guard, then offer it
   beside the plain read Tools.
-- [ ] Preamble stop: DeepSeek ends a Run after "I'll start by reading…" with
+- [x] Preamble stop: DeepSeek ends a Run after "I'll start by reading…" with
   no tool call (7 of 90 benchmark trials, every arm). Diagnose in the run loop.
-- [ ] Measure the release bundle size before/after `rquickjs` (27 MB budget).
+  Diagnosed 2026-11-25: not a preamble stop. In 5 of the 6 recorded trials the
+  model had called tools, then sent an empty reply; the loop took it as the
+  answer and the benchmark printed the last non-empty text instead. Now an
+  empty reply is asked again once (`TurnDecision::Empty`), a second one ends on
+  a notice, and the benchmark records the true last reply and the Run status.
+- [x] Measured `rquickjs` (2026-11-24): release `klide` binary 45.82 MB at
+  560f0d1~1 → 47.02 MB at 560f0d1 (Code Mode), +1.20 MB (+2.6%), aarch64,
+  same release profile. Re-measure the `.app` against the 27 MB budget at
+  the next bundle.
 
 ## Orb follow-ups — remote work and continuity
 
@@ -741,11 +775,13 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   `review` on `main`.
 - [x] S0.5 — `@klide-bot` in a PR/issue comment gets a read-only OpenCode
   answer (`klide-bot.yml`); inert until `OPENROUTER_API_KEY` + a model are set.
-- [ ] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
+- [x] S1 — Pierre: create the `klide-bot` GitHub App (Contents, Pull requests,
   Issues, Statuses: write) and add variable `KLIDE_BOT_APP_ID` / secret
-  `KLIDE_BOT_PRIVATE_KEY`.
-- [ ] S1 — workflows mint an App token and act as `klide-bot[bot]`, so its
-  pushes trigger CI and the reviewer.
+  `KLIDE_BOT_PRIVATE_KEY`. (App 5890720, 2026-11-23; it answered on #583 and
+  #603 as `klide-bot[bot]`.)
+- [ ] S1 — `review.yml` mints the App token too (only `klide-bot.yml` does
+  today), so the review and later `/fix` pushes act as `klide-bot[bot]` and
+  trigger CI.
 - [ ] S2 — `/fix`, `/fix <instruction>`, `/fix model=…`: OpenCode on
   `FIX_MODEL` fixes only the blocking findings, runs `tsc` + `vitest`, pushes
   one commit to the PR branch. Done when a planted break goes red → `/fix` →
@@ -754,6 +790,20 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   Pierre turns on Codex automatic reviews.
 - [ ] S4 (later) — automatic rework on a failed review, 2 tries, then
   `needs-pierre`. Waits until S2 has earned trust.
+- [ ] S5 — CI diagnosis in the cloud: a `workflow_run: completed` workflow
+  diagnoses a failed check on a PR and comments as `klide-bot[bot]`, so the
+  diagnosis exists with the Mac off. Klide's CI watch then shows the bot's
+  comment instead of starting its own Run. (2026-11-24; key/model:
+  `DEEPSEEK_API_KEY` + `KLIDE_BOT_MODEL`, PR #610.)
+- [ ] S6 — `klide run` (scope: `docs/KLIDE_RUN.md`): replace OpenCode with Klide's own Harness. Pierre wants
+  the bot fully proprietary (2026-11-24). A headless subcommand of the same
+  binary (`klide run --read-only --model <provider/model> "…"`) that runs the
+  Rust agent loop with no window: workspace = cwd, keys from env vars (no
+  Keychain on a runner), Plan mode by default, the same tool registry and
+  permission engine, the answer on stdout, the Transcript optional. Then a
+  Linux build in CI (release artifact or `cargo install` cached), and
+  `review.yml` / `klide-bot.yml` call `klide run` instead of `opencode run`.
+  Done when klide-bot answers a PR comment with no OpenCode installed.
 
 ## Stabilize v0.2
 

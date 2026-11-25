@@ -920,7 +920,8 @@ fn restore_claude(
         .map_err(|e| format!("Could not read {}: {e}", cfg_path.display()))?;
     // One-deep backup so a botched splice is recoverable.
     let backup = std::path::PathBuf::from(format!("{}.klide-bak", cfg_path.display()));
-    let _ = std::fs::write(&backup, &cfg_bytes);
+    // It holds the same account identity as the live file: owner-only.
+    let _ = crate::durable::write_atomic_private(&backup, &cfg_bytes);
     let mut cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes)
         .map_err(|e| format!("Claude Code's state file isn't valid JSON: {e}"))?;
     splice_claude_identity(&mut cfg, &snap)?;

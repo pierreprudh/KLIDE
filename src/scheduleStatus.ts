@@ -10,9 +10,6 @@ import { errMessage } from "./errors";
 import { openSchedule } from "./scheduleNavigation";
 import { ciWatchTake, type CiWatchFired } from "./ipc/ciWatch";
 import { canStartCiFix, startCiFix } from "./ciFixNavigation";
-import { klideBotTake, type KlideBotMention } from "./ipc/klideBot";
-import { canLookIntoMention, lookIntoMention } from "./klideBotNavigation";
-import { openExternal } from "./externalLink";
 
 const runIds = new Set<string>();
 export function isScheduledRun(id: string): boolean { return runIds.has(id); }
@@ -103,29 +100,6 @@ export function watchScheduleStatus(): () => void {
   const pending = listen("ci-watch:pending", take);
   scope.add(pending);
   void pending.then(take, () => {});
-  // klide-bot (agent/klide_bot.rs): a mention is taken the same way — on
-  // load and on each nudge — and offered with Look into it. Nothing runs
-  // until you choose to.
-  const showMention = (m: KlideBotMention) => {
-    if (stopped) return;
-    // Two mentions on one PR must not read the same: quote the comment.
-    const asked = m.excerpt.replace(/@klide-bot\b[,:]?\s*/i, "").trim();
-    const quote = asked.length > 60 ? `${asked.slice(0, 59).trimEnd()}…` : asked;
-    notify(`@${m.author} mentioned klide-bot on #${m.prNumber}${quote ? ` — “${quote}”` : ""}`, {
-      tone: "info", duration: 0, provider: m.provider || undefined,
-      actions: canLookIntoMention() ? [{ label: "Look into it", run: () => lookIntoMention(m) }] : undefined,
-      action: m.commentUrl ? { label: "GitHub", run: () => { void openExternal(m.commentUrl); } } : undefined,
-    });
-  };
-  let takingMentions = false;
-  const takeMentions = () => {
-    if (stopped || takingMentions) return;
-    takingMentions = true;
-    void klideBotTake().then(list => list.forEach(showMention)).catch(() => {}).finally(() => { takingMentions = false; });
-  };
-  const botPending = listen("klide-bot:pending", takeMentions);
-  scope.add(botPending);
-  void botPending.then(takeMentions, () => {});
   void registration.then(() => listSchedules()).then(rows => {
     for (const row of rows) apply(row);
   }).catch(error => { if (!stopped) notify(`Couldn't restore schedules: ${errMessage(error)}`, { tone: "error" }); });

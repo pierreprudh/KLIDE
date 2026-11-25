@@ -1514,6 +1514,7 @@ fn mcp_wiring_for(
         secret_path: secret_path.to_string_lossy().to_string(),
         config_dir: config_dir.to_string_lossy().to_string(),
         file_stem: mcp_file_stem(session_id),
+        connectors: crate::connector_relay::any_enabled(),
     }) else {
         // This CLI has no MCP client Klide configures (omp): not a failure.
         return Ok(None);

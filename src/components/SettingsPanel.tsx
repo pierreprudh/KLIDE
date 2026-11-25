@@ -83,6 +83,7 @@ import { CliVersionsBlock } from "./settings/cliVersions";
 import { StatsSection } from "./settings/stats";
 import { StorageSection } from "./settings/storage";
 import { CommandSandboxRow } from "./settings/commandSandbox";
+import { TrustedFoldersRow } from "./settings/trustedFolders";
 import { CodeModeRow } from "./settings/codeMode";
 import {
   ArchiveIcon,
@@ -1754,6 +1755,7 @@ export function SettingsPanel({
                     }
                   />
                   <CommandSandboxRow />
+                  <TrustedFoldersRow />
                   <CodeModeRow />
                   <Row
                     title="Test after edit"

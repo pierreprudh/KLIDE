@@ -347,6 +347,7 @@ mod tests {
             secret_path: "/tmp/klide-mcp/convo-1-x.secret".to_string(),
             config_dir: "/tmp/klide-mcp".to_string(),
             file_stem: "convo-1-x".to_string(),
+            connectors: false,
         }
     }
 

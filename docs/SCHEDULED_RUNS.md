@@ -94,8 +94,12 @@ icon, on any screen, and the window shows a toast with **Fix it** and **Open**.
 The window takes firings itself (`ci_watch_take`, on load and when the app
 nudges it with `ci-watch:pending`), so a firing that landed while Klide was
 closed is shown when it opens. Only a firing no open app claimed within 15 s
-falls back to an `osascript` notification, which macOS lists under Script
-Editor. State is `ci-watch.json` in app data, shared by the app and the
+falls back to a small Klide notification app, with Klide's name and logo.
+Development builds use this same sender because Tauri's development sender
+uses Terminal's identity. The helper is prepared automatically in
+`~/Library/Caches/com.pierre.klide/notifications-v1/Klide.app`; macOS may ask
+to allow its notifications the first time. Clicking an old helper notification
+does not repost it. State is `ci-watch.json` in app data, shared by the app and the
 service under `ci-watch.lock`.
 
 **Fix it** (toast, or the button beside a firing in Run history) checks the
@@ -112,29 +116,6 @@ failed log the watch fetched, so the fix needs no connector call to find it.
 
 Run history shows each firing with the agent's mark, the failing checks, and
 Kit's verdict in one line once its Run settles.
-
-## klide-bot (event trigger)
-
-**klide-bot** sits under Triggers beside Watch CI (`agent/klide_bot.rs`), one per
-Workspace, with the same switch and agent/model pickers. The scheduled service
-polls the issue comments on your open PRs every two minutes. A comment counts
-when it names `@klide-bot` as a whole handle, was written after the switch was
-turned on, and its author has write access (`OWNER`, `MEMBER` or
-`COLLABORATOR`); the bot's own replies carry a `<!-- klide-bot -->` marker and
-never count.
-
-Nothing runs by itself. While Klide is open, a new mention posts a macOS
-notification and a toast with **Look into it** and **GitHub**; one that came in
-while Klide was closed is shown when it opens, if less than a day old. Look
-into it (`klide_bot_look`) checks the PR's head out in a worktree
-`klide/pr-<n>-<sha8>` (the same one on a second click at the same commit) and
-opens a Focus Work conversation there on the switch's agent, with the PR's
-description, thread and diff attached as `PR #<n> thread.md`. Run history lists
-each mention with the same two actions. State is `klide-bot.json` in app data
-under `klide-bot.lock`.
-
-The public answer on GitHub is a separate thing: `.github/workflows/klide-bot.yml`
-answers the same mention as `klide-bot[bot]`, read-only, from GitHub Actions.
 
 ## Controls and recovery
 
@@ -159,6 +140,35 @@ requiring review; it is never replayed automatically. Automatic dispatch is
 at-most-once, not exactly-once effects across a crash. Original
 conversation-bound records migrate on read; an in-flight legacy occurrence
 retains its original id for recovery, while future occurrences get fresh ids.
+
+## klide-bot activity
+
+Scheduled → Triggers → klide-bot keeps the GitHub answer/review settings in the
+middle pane and shows **Bot activity** on the right. The list reads PR conversation
+comments from the last 30 days through the pinned GitHub account, independently
+of the local scheduled service and whether the GitHub answer bot is enabled.
+It loads on selection, refreshes every two minutes while visible, and has a
+manual Refresh action. Errors remain visible instead of appearing as an empty
+history. Trusted human `@klide-bot` mentions and `/review` requests appear beside
+the answer bot's replies and the review workflow's results. Bot results require
+the workflow marker and a recognized bot account. Edited sticky reviews sort
+by their update time so the newest verdict is visible. Issue-only comments are
+excluded. The panel shows when it last checked GitHub.
+
+All / Mentions / Reviews segments filter the same loaded activity, with a
+highlighted selection and keyboard arrow navigation. Mentions includes human
+mentions and bot replies; Reviews includes review requests and results. Each
+PR keeps its events together, newest first, with the latest two visible and
+older events expandable. Existing comments do not carry request/reply linkage,
+so the grouping preserves their individual timestamps and labels.
+
+**View on GitHub** opens the exact comment. On human mentions, **Look into it** revalidates the
+comment and current PR state, gathers the description, paginated thread and
+diff, and opens the current local agent in Plan mode in a worktree at the PR
+head. A second click at the same head reuses that worktree and preserves local
+work. Closed or merged PRs remain readable on GitHub but cannot start a new
+investigation. The opening turn asks for findings before changes and never
+posts a reply or pushes. This is separate from the bot's public GitHub answer.
 
 ## Future Remote machine target
 

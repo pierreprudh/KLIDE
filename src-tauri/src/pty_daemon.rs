@@ -483,7 +483,47 @@ pub fn serve(listener: HostListener, state: Arc<DaemonState>) {
     }
 }
 
+/// The uid of the process on the other end of a local socket, from the
+/// kernel rather than anything the peer says.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+fn peer_uid(stream: &HostStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let (mut uid, mut gid) = (0 as libc::uid_t, 0 as libc::gid_t);
+    // SAFETY: a valid socket fd and two out-pointers to locals.
+    (unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } == 0).then_some(uid)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(stream: &HostStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: SO_PEERCRED fills a ucred of exactly `len` bytes.
+    let ok = unsafe {
+        libc::getsockopt(stream.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut libc::c_void, &mut len)
+    } == 0;
+    ok.then_some(cred.uid)
+}
+
+/// Is the peer this daemon's own user? The socket folder is already private
+/// and the token is still required; this refuses another account before a
+/// byte is read, even if it reached the socket some other way. Windows
+/// sockets are ACL-protected to the owner (`secure_host_directory`).
+#[cfg(unix)]
+fn peer_is_owner(stream: &HostStream) -> bool {
+    peer_uid(stream) == Some(unsafe { libc::geteuid() })
+}
+
+#[cfg(not(unix))]
+fn peer_is_owner(_stream: &HostStream) -> bool {
+    true
+}
+
 fn handle_client(stream: HostStream, state: Arc<DaemonState>) {
+    if !peer_is_owner(&stream) {
+        state.log("refused connection: peer is another user");
+        return;
+    }
     let Ok(read_half) = stream.try_clone() else {
         return;
     };
@@ -617,7 +657,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
         return Response::Err { message: "The remote Run host is being updated; reconnect before starting a task".into() };
     }
     match request {
-        Request::RemoteIdentity => Response::RemoteIdentity { source: env!("KLIDE_SOURCE_COMMIT").into() },
+        Request::RemoteIdentity => Response::RemoteIdentity { source: env!("KLIDE_HOST_SOURCE").into() },
         Request::RemoteChanges { run_id } => {
             match crate::agent::remote_machine::changes_on_host(&state.data_dir, &run_id) {
                 Ok((diff, status, worktree)) => Response::RemoteChanges { diff, status, worktree },
@@ -781,6 +821,14 @@ pub fn test_state(data_dir: PathBuf) -> Arc<DaemonState> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn a_peer_on_the_same_account_is_the_owner() {
+        let (a, b) = super::HostStream::pair().unwrap();
+        assert_eq!(super::peer_uid(&a), Some(unsafe { libc::geteuid() }));
+        assert!(super::peer_is_owner(&b));
+    }
+
     use super::*;
     use std::io::BufRead;
     use std::time::{Duration, Instant};

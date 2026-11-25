@@ -193,6 +193,29 @@ request carries the rung. A Mission attempt or a child Run has no conversation
 rung to follow: `agent_set_command_policy` refuses it, and it keeps what its
 request said at start.
 
+### Native Delegate permissions
+
+Focus conversations expose the Delegate's native permission choices beside its
+own brand mark. `nativePermissionMode` is an explicit, per-conversation launch
+override, applied on the next turn to cold starts, resumed sessions, and retry
+invocations. The renderer and Rust runner share
+`src/agent/nativePermissionModes.json`; Rust rejects modes belonging to another
+agent. An absent value preserves the adapter's existing launch settings.
+
+Native automatic review and unrestricted access are separate choices. Selecting
+a native mode clears the renderer's KLIDE Full auto command grant, so a native
+ask/review mode cannot silently inherit that grant through the permission relay.
+The agent's own rules and managed policy continue to apply. Unsupported CLI or
+account features fail through the normal run error surface rather than falling
+back to broader permissions. Headless agents without a permission relay may
+deny requests that would require an interactive answer.
+
+These overrides never modify global CLI configuration. Saved schedules and
+shell notifications clear them; spawned workers do not inherit them. Terminal
+Delegate sessions retain their native permission controls inside the CLI.
+OpenCode currently exposes its adapter's auto-approval posture (configured deny
+rules still apply); Amp exposes its native default without a launch override.
+
 A Delegate's own prompt can reach the same card. A headless Claude Code turn
 (a Focus conversation on that provider) runs with `--permission-prompt-tool`
 naming the `permission` tool on Klide's embedded MCP server; every action the

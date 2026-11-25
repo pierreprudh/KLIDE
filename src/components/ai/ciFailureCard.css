@@ -8,6 +8,11 @@
 .ci-card-title { font-size: 13px; line-height: 1.45; color: var(--fg-subtle); overflow-wrap: anywhere; min-width: 0; }
 .ci-card-indicator { grid-column: 1; grid-row: 2; justify-self: center; width: 16px; height: 16px; box-sizing: border-box; border: 1.5px solid var(--danger); border-radius: 50%; display: grid; place-items: center; font-size: 10.5px; font-weight: 600; line-height: 1; color: var(--danger); }
 .ci-card-status { grid-column: 2; grid-row: 2; display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 13px; line-height: 1.45; }
+.ci-card-indicator-slot { grid-column: 1; grid-row: 2; justify-self: center; display: grid; place-items: center; }
+.ci-card-passed .ci-card-indicator { border-color: var(--accent); color: var(--accent); }
+.ci-card-neutral .ci-card-indicator { border-color: var(--fg-dim); color: var(--fg-dim); }
+.ci-card-passed .ci-card-failed { color: var(--accent); }
+.ci-card-neutral .ci-card-failed { color: var(--fg-subtle); }
 .ci-card-failed { color: var(--danger); font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
 .ci-card-sha { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-dim); }
 .ci-card-actions { grid-column: 2; grid-row: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
@@ -20,7 +25,3 @@
 .ci-card-log { grid-column: 1 / -1; grid-row: 4; margin: 4px 0 0; padding: 10px 12px; max-height: 280px; overflow: auto; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (hover: none) { .ci-card-arrow { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .ci-card-arrow { transition: none; } }
-/* MentionCard: the asker against the question, in place of the failed indicator. */
-.ci-card-asker { grid-column: 1; grid-row: 2; justify-self: center; align-self: start; margin-top: 2px; width: 16px; height: 16px; box-sizing: border-box; border: 1.5px solid var(--fg-subtle); border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 600; line-height: 1; color: var(--fg-subtle); }
-.ci-card-ask { color: var(--fg); overflow-wrap: anywhere; min-width: 0; }
-.ci-card-author { font-weight: 600; color: var(--fg-strong); }

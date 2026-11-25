@@ -37,7 +37,10 @@ in `CONTEXT.md`.
    the destination OS and processor, then copies the matching helper with SFTP.
    A Mac destination with the same processor can use this app's own executable
    after checking its exact version, protocol and source identity. Other
-   targets download a checksum-verified helper from `host-<commit>` releases.
+   targets download a checksum-verified helper from `host-<source>` releases,
+   named after the trees the helper is built from
+   (`scripts/remote-host/source-paths`), so a frontend or docs change reuses
+   the last published helper.
    No GitHub CLI is needed on the Mac for helper installation. Advanced setup accepts a matching
    downloaded binary. The helper checks the exact package/protocol/source
    signature and refuses to replace a host with active work. Once installed,
@@ -453,8 +456,9 @@ The Ubuntu 24.04+ / Debian 13+ x86_64 preparation action installs Git, curl, Git
 WebKitGTK runtime libraries and the official Claude native installer. It then
 downloads the matching Klide helper from public GitHub release assets, validates
 its SHA-256 and installs it over SSH. The Mac needs no GitHub CLI or login.
-The Linux workflow publishes source-specific `host-<commit>` prerelease assets
-only after the remote replay and installer smoke tests pass. Development builds
+The Linux workflow publishes source-specific `host-<source>` prerelease assets
+only after the remote replay and installer smoke tests pass, and skips the
+build when that source already has all four helpers published. Development builds
 without published assets can choose an extracted matching binary under Details.
 “Prepare setup files on this Mac” downloads to the Mac cache without contacting
 the remote machine. It does not report the machine as ready.

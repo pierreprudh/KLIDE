@@ -258,7 +258,7 @@ pub fn scan_scrollback_metas(dir: &Path) -> Vec<ScrollbackMeta> {
 /// of a partial write.
 fn write_scrollback_meta(dir: &Path, meta: &ScrollbackMeta) {
     if let Ok(json) = serde_json::to_string_pretty(meta) {
-        let _ = crate::durable::write_atomic(
+        let _ = crate::durable::write_atomic_private(
             &scrollback_meta_path(dir, &meta.session_id),
             json.as_bytes(),
         );
@@ -319,15 +319,22 @@ fn open_scrollback_sink(dir: &Path, session_id: &str) -> Option<ScrollbackSink> 
                 // Atomic: this is a read-all-then-overwrite, so a truncating
                 // write that is interrupted loses the entire replay history
                 // rather than just the trimmed head.
-                let _ = crate::durable::write_atomic(&path, &existing[keep..]);
+                let _ = crate::durable::write_atomic_private(&path, &existing[keep..]);
             }
         }
     }
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()?;
+    // A terminal's output can hold anything a CLI printed, tokens included:
+    // the log is the owner's alone. A log created before this rule is
+    // tightened on its next open.
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    let file = options.open(&path).ok()?;
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     Some(ScrollbackSink { file, path, len })
 }
@@ -1127,6 +1134,24 @@ mod tests {
         assert!(sink.len as usize <= SCROLLBACK_CAP);
         let trimmed = fs::read(&path).unwrap();
         assert!(trimmed.ends_with(tail_marker), "newest bytes survive");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scrollback_logs_are_private_new_or_old() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_scroll_dir("private");
+        let fresh = "convo-p1:claude-code";
+        open_scrollback_sink(&dir, fresh).expect("sink opens");
+        let mode = |sid: &str| fs::metadata(scrollback_log_path(&dir, sid)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(fresh), 0o600);
+        // A log an older build left world-readable is tightened on reopen.
+        let old = "convo-p2:codex";
+        fs::write(scrollback_log_path(&dir, old), b"old").unwrap();
+        fs::set_permissions(scrollback_log_path(&dir, old), fs::Permissions::from_mode(0o644)).unwrap();
+        open_scrollback_sink(&dir, old).expect("sink opens");
+        assert_eq!(mode(old), 0o600);
         let _ = fs::remove_dir_all(dir);
     }
 

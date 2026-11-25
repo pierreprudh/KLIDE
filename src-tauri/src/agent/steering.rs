@@ -39,6 +39,12 @@ Your previous attempt used its entire reply budget on internal reasoning and \
 produced no answer and no tool call. Keep your reasoning short this time and \
 get to a tool call or a written answer quickly.";
 
+/// Carried into the retry after a reply that came back with nothing in it —
+/// no text, no tool call. Transient, like the runaway nudge.
+pub(super) const EMPTY_REPLY_NUDGE: &str = "\
+Your previous reply was empty: no text and no tool call. Continue the task \
+from where you are — call the next tool you need, or write your answer.";
+
 /// Asked once, a few turns short of the tool-turn cap, so the run spends what
 /// is left finishing rather than opening new threads of work. It is deliberately
 /// permissive about incompleteness: a partial result the user can build on beats
