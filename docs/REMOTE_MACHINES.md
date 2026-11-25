@@ -517,7 +517,7 @@ The **Credentials** step offers:
 - **Subscription:** sign into a separate destination Claude profile. Authentication
   variables for API keys and alternative providers are cleared. The resulting
   login stays on the destination; no personal Mac login is copied.
-- **API key:** select a saved Anthropic Keychain entry and explicitly authorize
+- **API key:** select a configured Anthropic or OpenRouter key and explicitly authorize
   sending it to the named destination. The renderer handles key IDs and labels,
   never key values. Rust transfers the secret over SSH stdin, without a TTY,
   command-line argument or local temporary file. Direct execution stores a
@@ -530,8 +530,13 @@ The **Credentials** step offers:
 - **Existing destination credentials:** deliberately reuse the credentials
   already configured in the selected execution environment.
 
-Only Anthropic API keys are offered because remote execution currently supports
-Claude Code. Environment references and other providers are not copied. Browser
+Anthropic and OpenRouter keys can be selected explicitly, including configured
+environment references resolved by Rust at authorization time. OpenRouter models
+use the existing Claude Code model bridge inside the destination; neither model
+requests nor key resolution depend on the personal Mac staying online. The
+OpenRouter sandbox uses the multi-provider template so its host-side proxy can
+authenticate OpenRouter requests without exposing the key. Other providers are
+not copied. Browser
 sign-in is interactive setup; subsequent execution does not depend on this Mac
 remaining online. A task can still wait for an approval or question.
 

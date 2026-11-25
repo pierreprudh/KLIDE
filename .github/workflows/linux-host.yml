@@ -18,6 +18,8 @@ on:
       - 'src-tauri/src/pty*.rs'
       - 'src-tauri/src/remote_platform.rs'
       - 'src-tauri/src/machine*.rs'
+      - 'src-tauri/src/providers.rs'
+      - 'src-tauri/src/delegate/chat.rs'
       - 'src-tauri/src/machine_setup/**'
       - 'src-tauri/src/process_lock.rs'
       - 'src-tauri/src/windows_detach.rs'
@@ -51,7 +53,7 @@ jobs:
         # main publishes all five. A PR checks four: Intel macOS runs the
         # same code as Apple Silicon and would take a second macOS runner.
         include: >-
-          ${{ fromJSON(format('[{0}{1}]',
+          ${{ fromJSON(startsWith(github.ref, 'refs/heads/codex/remote-helper/') && '[{"runner":"ubuntu-24.04-arm","asset":"klide-linux-aarch64"},{"runner":"macos-15","asset":"klide-macos-aarch64"}]' || format('[{0}{1}]',
             '{"runner":"ubuntu-24.04","asset":"klide-linux-x86_64"},
              {"runner":"ubuntu-24.04-arm","asset":"klide-linux-aarch64"},
              {"runner":"macos-15","asset":"klide-macos-aarch64"},

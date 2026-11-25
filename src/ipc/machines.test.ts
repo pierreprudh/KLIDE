@@ -25,6 +25,10 @@ describe("machine configuration updates", () => {
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
   });
+  it("rejects a backend that drops an OpenRouter model selection", async () => {
+    invoke.mockResolvedValueOnce([{ id: "mini", sshHost: "mini", runtime: { execution: "isolated", credential: "apiKey" } }]);
+    await expect(machineSave({ id: "mini", sshHost: "mini", runtime: { execution: "isolated", credential: "apiKey", apiProvider: "openrouter", apiModel: "deepseek/deepseek-v4.1-flash-1017" } }, false)).rejects.toThrow("did not save your selection");
+  });
   it("authorizes only the chosen key ID and announces success after persistence", async () => {
     const listener = vi.fn();
     const unsubscribe = subscribeMachines(listener);

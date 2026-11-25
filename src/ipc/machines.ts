@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type MachineFactTone = "ok" | "warn" | "bad" | "quiet";
 
-export type MachineRuntime = { execution: "direct" | "isolated"; credential: "existing" | "subscription" | "apiKey" };
+export type MachineRuntime = { execution: "direct" | "isolated"; credential: "existing" | "subscription" | "apiKey"; apiProvider?: "anthropic" | "openrouter"; apiModel?: string };
 export const DEFAULT_MACHINE_RUNTIME: MachineRuntime = { execution: "direct", credential: "existing" };
 
 export type Machine = {
@@ -73,7 +73,7 @@ export async function machineSave(machine: Machine, creating: boolean): Promise<
   const machines = await invoke<Machine[]>("machine_save", { machine, creating });
   if (machine.runtime) {
     const saved = machines.find((item) => item.id === machine.id)?.runtime;
-    if (!saved || saved.execution !== machine.runtime.execution || saved.credential !== machine.runtime.credential) {
+    if (!saved || saved.execution !== machine.runtime.execution || saved.credential !== machine.runtime.credential || (saved.apiProvider ?? "anthropic") !== (machine.runtime.apiProvider ?? "anthropic") || saved.apiModel !== machine.runtime.apiModel) {
       throw new Error("Restart Klide to load execution and credential choices. The running backend did not save your selection.");
     }
   }
@@ -118,7 +118,7 @@ export function machineDiscover(method: MachineConnectionMethod): Promise<Machin
 }
 
 export type MachineApiKey = { id: string; label: string };
-export function machineApiKeys(): Promise<MachineApiKey[]> { return invoke("machine_api_keys"); }
+export function machineApiKeys(provider: "anthropic" | "openrouter" = "anthropic"): Promise<MachineApiKey[]> { return invoke("machine_api_keys", { provider }); }
 /** Only a key ID crosses IPC. Rust reads Keychain after this explicit action. */
 export async function machineAuthorizeApiKey(id: string, keyId: string): Promise<void> {
   await invoke("machine_authorize_api_key", { id, keyId });

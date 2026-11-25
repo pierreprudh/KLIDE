@@ -1668,6 +1668,13 @@ pub fn provider_key_in(
     id: &str,
     scope: Option<&std::path::Path>,
 ) -> Result<Option<String>, String> {
+    if std::env::var("KLIDE_REMOTE_API_KEY_PROVIDER").ok().as_deref() == Some(id) {
+        if let Ok(path) = std::env::var("KLIDE_REMOTE_API_KEY_FILE") {
+            let secret = std::fs::read_to_string(path).map_err(|_| "Authorize this machine’s API key before starting a task".to_string())?;
+            if secret.trim().is_empty() { return Err("The remote API key is empty".into()); }
+            return Ok(Some(secret.trim().into()));
+        }
+    }
     let entry = lookup(id).ok_or_else(|| format!("Provider \"{id}\" is not wired yet"))?;
     match entry.key {
         KeySource::Local => Ok(None),

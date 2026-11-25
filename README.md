@@ -387,7 +387,7 @@ On macOS, **Settings → AI → Execution → Sandbox unreviewed commands** is o
 
 Remote setup offers **Direct** execution or an **Isolated** Linux Docker Sandbox.
 Choose a separate Claude subscription login, existing destination credentials,
-or explicitly authorize a saved Anthropic API key. Direct mode stores that key
+or explicitly authorize an Anthropic or OpenRouter API key and model. Direct mode stores that key
 under the remote account’s permissions; isolated mode uses Docker’s host-side
 credential proxy. Isolated setup requires Docker Sandboxes and virtualization
 (Ubuntu/KVM or Apple silicon macOS); it never falls back to direct execution.

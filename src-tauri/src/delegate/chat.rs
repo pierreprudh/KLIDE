@@ -193,7 +193,7 @@ pub async fn run_subscription_chat(
         let mut command = super::native_permissions::configure(command, adapter.id(), native_permission_mode.as_deref())?;
         // A durable remote host may have started before its key was authorized
         // or rotated. Resolve the explicitly selected file for each CLI turn.
-        if adapter.id() == "claude-code" {
+        if adapter.id() == "claude-code" && std::env::var("KLIDE_REMOTE_API_KEY_PROVIDER").ok().as_deref() != Some("openrouter") {
             if let Ok(path) = std::env::var("KLIDE_REMOTE_API_KEY_FILE") {
                 let secret = std::fs::read_to_string(path).map_err(|_| "Authorize an API key in this machine’s setup before starting a task".to_string())?;
                 if secret.trim().is_empty() { return Err("The selected remote API key is empty".to_string()); }

@@ -215,6 +215,7 @@ pub(super) async fn start(
                 binding
             }
         };
+        if let Some(model) = crate::machine_runtime::selected_model(&binding.runtime)? { request.model = model; }
         match query(&binding, &Request::Ping)? {
             Response::Pong { version, protocol, .. } if crate::pty_wire::remote_host_compatible(&version, protocol) => {},
             _ => return Err("Install the matching Run host in Settings → Machines before launching this task".into()),
@@ -417,8 +418,8 @@ fn validate_request(request: &StartRunRequest) -> Result<(), String> {
             "Remote tasks currently support standalone Claude Code conversations only".into(),
         );
     }
-    if crate::harness_source::intelligence(&request.model)?.is_some() {
-        return Err("Remote Claude Code currently uses its own machine login, without a routed intelligence source".into());
+    if let Some(source) = crate::harness_source::intelligence(&request.model)? {
+        if source.provider != "openrouter" { return Err("Remote intelligence currently supports OpenRouter or the destination’s Claude credentials".into()); }
     }
     Ok(())
 }
@@ -882,6 +883,10 @@ mod tests {
         request.parent_id = Some("parent".into());
         assert!(validate_request(&request).is_err());
         request.parent_id = None;
+        request.model = format!("{}{}", crate::harness_source::PREFIX, serde_json::json!({"provider":"openrouter","model":"deepseek/deepseek-v4.1-flash-1017"}));
+        assert!(validate_request(&request).is_ok());
+        request.model = format!("{}{}", crate::harness_source::PREFIX, serde_json::json!({"provider":"anthropic","model":"claude-sonnet"}));
+        assert!(validate_request(&request).is_err());
         request.provider = "openrouter".into();
         assert!(validate_request(&request).is_err());
     }

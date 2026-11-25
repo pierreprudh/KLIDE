@@ -22,6 +22,21 @@ pub enum Credential {
     Subscription,
     ApiKey,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApiProvider {
+    #[default]
+    Anthropic,
+    Openrouter,
+}
+impl ApiProvider {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openrouter => "openrouter",
+        }
+    }
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteRuntime {
@@ -29,6 +44,10 @@ pub struct RemoteRuntime {
     pub execution: Execution,
     #[serde(default)]
     pub credential: Credential,
+    #[serde(default)]
+    pub api_provider: ApiProvider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_model: Option<String>,
 }
 impl RemoteRuntime {
     pub fn isolated(&self) -> bool {
@@ -49,12 +68,17 @@ pub fn runtime_sandbox(id: &str, runtime: &RemoteRuntime) -> String {
         match runtime.credential {
             Credential::Existing => "existing",
             Credential::Subscription => "subscription",
-            Credential::ApiKey => "api",
+            Credential::ApiKey =>
+                if runtime.api_provider == ApiProvider::Openrouter {
+                    "openrouter"
+                } else {
+                    "api"
+                },
         }
     )
 }
 pub fn host_data(id: &str, runtime: &RemoteRuntime) -> String {
-    if *runtime == RemoteRuntime::default() {
+    if runtime.execution == Execution::Direct && runtime.credential == Credential::Existing {
         return "~/.klide/run-host".into();
     }
     format!(
@@ -63,12 +87,17 @@ pub fn host_data(id: &str, runtime: &RemoteRuntime) -> String {
         match runtime.credential {
             Credential::Existing => "existing",
             Credential::Subscription => "subscription",
-            Credential::ApiKey => "api",
+            Credential::ApiKey =>
+                if runtime.api_provider == ApiProvider::Openrouter {
+                    "openrouter"
+                } else {
+                    "api"
+                },
         }
     )
 }
 pub fn binary(id: &str, runtime: &RemoteRuntime, os: HostOs) -> String {
-    if *runtime == RemoteRuntime::default() {
+    if runtime.execution == Execution::Direct && runtime.credential == Credential::Existing {
         return os.binary().into();
     }
     format!(
@@ -133,22 +162,37 @@ pub fn credential_context(id: &str, runtime: &RemoteRuntime, os: HostOs) -> Stri
     if runtime.credential == Credential::Existing {
         return String::new();
     }
+    let api_name = if runtime.api_provider == ApiProvider::Openrouter {
+        "openrouter"
+    } else {
+        "api"
+    };
     let profile = format!(
         "~/.klide/machine-auth/{}/{}",
         sandbox_name(id),
         if runtime.credential == Credential::ApiKey {
-            "api"
+            api_name
         } else {
             "subscription"
         }
     );
+    if runtime.credential == Credential::ApiKey && runtime.api_provider == ApiProvider::Openrouter {
+        let file = format!("{profile}/api-key");
+        return if os == HostOs::Windows {
+            format!("$env:CLAUDE_CONFIG_DIR={}; $env:KLIDE_REMOTE_API_KEY_PROVIDER='openrouter'; $env:KLIDE_REMOTE_API_KEY_FILE={}; $env:OPENROUTER_API_KEY='';", crate::remote_platform::ps_path(&profile), crate::remote_platform::ps_path(&file))
+        } else if runtime.isolated() {
+            format!("unset KLIDE_REMOTE_API_KEY_PROVIDER KLIDE_REMOTE_API_KEY_FILE OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL; export CLAUDE_CONFIG_DIR={}; export OPENROUTER_API_KEY=proxy-managed; export KLIDE_REMOTE_API_KEY_PROVIDER=openrouter;", crate::machines::remote_path_word(&profile))
+        } else {
+            format!("unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL; export CLAUDE_CONFIG_DIR={}; export KLIDE_REMOTE_API_KEY_FILE={}; export KLIDE_REMOTE_API_KEY_PROVIDER=openrouter;", crate::machines::remote_path_word(&profile), crate::machines::remote_path_word(&file))
+        };
+    }
     if os == HostOs::Windows {
         let key = if runtime.credential == Credential::ApiKey {
             "$env:KLIDE_REMOTE_API_KEY_FILE=(Join-Path $env:CLAUDE_CONFIG_DIR 'api-key'); $env:ANTHROPIC_API_KEY=''; if (Test-Path -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'api-key')) { $env:ANTHROPIC_API_KEY=[IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'api-key')).Trim() };"
         } else {
             ""
         };
-        return format!("foreach ($n in @('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','ANTHROPIC_BASE_URL','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','KLIDE_REMOTE_API_KEY_FILE')) {{ Remove-Item -LiteralPath ('Env:'+ $n) -ErrorAction SilentlyContinue }}; $env:CLAUDE_CONFIG_DIR={}; {key}", crate::remote_platform::ps_path(&profile));
+        return format!("foreach ($n in @('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','ANTHROPIC_BASE_URL','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','KLIDE_REMOTE_API_KEY_FILE','KLIDE_REMOTE_API_KEY_PROVIDER','OPENROUTER_API_KEY')) {{ Remove-Item -LiteralPath ('Env:'+ $n) -ErrorAction SilentlyContinue }}; $env:CLAUDE_CONFIG_DIR={}; {key}", crate::remote_platform::ps_path(&profile));
     }
     let key = if runtime.credential == Credential::ApiKey {
         if runtime.isolated() {
@@ -159,7 +203,7 @@ pub fn credential_context(id: &str, runtime: &RemoteRuntime, os: HostOs) -> Stri
     } else {
         ""
     };
-    format!("unset KLIDE_REMOTE_API_KEY_FILE ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY; export CLAUDE_CONFIG_DIR={}; {key}", crate::machines::remote_path_word(&profile))
+    format!("unset KLIDE_REMOTE_API_KEY_PROVIDER KLIDE_REMOTE_API_KEY_FILE OPENROUTER_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY; export CLAUDE_CONFIG_DIR={}; {key}", crate::machines::remote_path_word(&profile))
 }
 
 pub fn prepare_isolation(machine: &Machine, os: HostOs) -> Result<String, String> {
@@ -167,6 +211,13 @@ pub fn prepare_isolation(machine: &Machine, os: HostOs) -> Result<String, String
         return Err("Use an SSH-accessible Linux or Apple silicon host for isolated setup. Windows direct execution remains available.".into());
     }
     let install = install_sandbox(os)?;
+    let agent = if machine.runtime.credential == Credential::ApiKey
+        && machine.runtime.api_provider == ApiProvider::Openrouter
+    {
+        "opencode"
+    } else {
+        "claude"
+    };
     let name = shell_quote(&runtime_sandbox(&machine.id, &machine.runtime));
     let marker = crate::machines::remote_path_word(&format!(
         "~/.klide/sandboxes/{}",
@@ -186,7 +237,7 @@ if sbx --no-input inspect {name} >/dev/null 2>&1; then
   if ! test -f "$marker"; then echo 'An unmanaged sandbox already has this name. Choose another saved machine; Klide will not adopt or delete it.' >&2; exit 1; fi
 else
   sbx login
-  sbx create --name {name} --skills off --static-mcp none claude
+  sbx create --name {name} --skills off --static-mcp none {agent}
   umask 077
   mkdir -p "$(dirname "$marker")"
   printf '%s' mountless > "$marker"
@@ -203,41 +254,45 @@ pub struct KeyChoice {
     pub label: String,
 }
 #[tauri::command]
-pub async fn machine_api_keys() -> Result<Vec<KeyChoice>, String> {
-    crate::blocking::run(|| {
-        let saved = crate::provider_keys::list("anthropic");
+pub async fn machine_api_keys(provider: Option<ApiProvider>) -> Result<Vec<KeyChoice>, String> {
+    crate::blocking::run(move || {
+        let provider = provider.unwrap_or_default().id();
+        let saved = crate::provider_keys::list(provider);
         let legacy_slot = saved.keys.is_empty();
         let mut keys: Vec<_> = saved
             .keys
             .into_iter()
-            .filter(|k| k.reference.is_none())
             .map(|k| KeyChoice {
                 id: k.id,
                 label: k.label,
             })
             .collect();
-        if legacy_slot && crate::providers::main_slot_has_keychain_key("anthropic") {
+        if legacy_slot && crate::providers::key_status(provider).is_ok_and(|s| s.has_key) {
             keys.push(KeyChoice {
                 id: "main".into(),
-                label: "Main Anthropic key".into(),
+                label: format!("Configured {provider} key"),
             });
         }
         Ok(keys)
     })
     .await
 }
-fn selected_key(id: &str) -> Result<String, String> {
-    let saved = crate::provider_keys::list("anthropic");
+fn selected_key(provider: &str, id: &str) -> Result<String, String> {
+    let saved = crate::provider_keys::list(provider);
     if id == "main" && saved.keys.is_empty() {
-        return crate::providers::read_main_slot_key("anthropic")
-            .ok_or("The Anthropic key is no longer available".into());
+        return crate::providers::provider_key_in(provider, None)?
+            .ok_or("The configured API key is unavailable".into());
     }
     let key = saved
         .keys
         .iter()
-        .find(|k| k.id == id && k.reference.is_none())
-        .ok_or("Choose a saved Anthropic API key")?;
-    crate::providers::read_keychain_secret(&format!("anthropic#{}", key.id))
+        .find(|k| k.id == id)
+        .ok_or("Choose a saved API key")?;
+    if let Some(reference) = &key.reference {
+        return crate::providers::resolve_reference(reference, None)
+            .ok_or("The selected key reference did not resolve".into());
+    }
+    crate::providers::read_keychain_secret(&format!("{provider}#{}", key.id))
         .ok_or("The selected key is no longer available in Keychain".into())
 }
 #[tauri::command]
@@ -246,40 +301,65 @@ pub async fn machine_authorize_api_key(id: String, key_id: String) -> Result<(),
         let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
         if machine.runtime.credential != Credential::ApiKey { return Err("Select API key authentication before authorizing a key".into()); }
-        let secret = selected_key(&key_id)?;
+        let provider = machine.runtime.api_provider.id();
+        let secret = selected_key(provider, &key_id)?;
         if secret.trim().is_empty() || secret.contains(['\r', '\n', '\0']) { return Err("The saved API key is invalid".into()); }
         let os = target(&machine)?.os;
         let command = if machine.runtime.isolated() {
-            format!("{PATH} sbx secret set anthropic --sandbox {} --force", shell_quote(&runtime_sandbox(&machine.id, &machine.runtime)))
+            format!("{PATH} sbx secret set {provider} --sandbox {} --force", shell_quote(&runtime_sandbox(&machine.id, &machine.runtime)))
         } else if os == HostOs::Windows {
-            os.command(&format!("$ErrorActionPreference='Stop'; $p={}; New-Item -ItemType Directory -Force -Path $p | Out-Null; & icacls $p /inheritance:r /grant:r ($env:USERNAME+':(OI)(CI)F') | Out-Null; if ($LASTEXITCODE -ne 0) {{ throw 'Could not protect credential directory' }}; $value=[Console]::In.ReadToEnd(); [IO.File]::WriteAllText((Join-Path $p 'api-key'),$value)", crate::remote_platform::ps_path(&format!("~/.klide/machine-auth/{}/api", sandbox_name(&machine.id)))))
+            os.command(&format!("$ErrorActionPreference='Stop'; $p={}; New-Item -ItemType Directory -Force -Path $p | Out-Null; & icacls $p /inheritance:r /grant:r ($env:USERNAME+':(OI)(CI)F') | Out-Null; if ($LASTEXITCODE -ne 0) {{ throw 'Could not protect credential directory' }}; $value=[Console]::In.ReadToEnd(); [IO.File]::WriteAllText((Join-Path $p 'api-key'),$value)", crate::remote_platform::ps_path(&api_profile(&machine.id, &machine.runtime))))
         } else {
-            format!("set -eu; umask 077; p={}; mkdir -p \"$p\"; chmod 700 \"$p\"; t=$(mktemp \"$p/key.XXXXXX\"); trap 'rm -f \"$t\"' EXIT; cat > \"$t\"; chmod 600 \"$t\"; mv -f \"$t\" \"$p/api-key\"", crate::machines::remote_path_word(&format!("~/.klide/machine-auth/{}/api", sandbox_name(&machine.id))))
+            format!("set -eu; umask 077; p={}; mkdir -p \"$p\"; chmod 700 \"$p\"; t=$(mktemp \"$p/key.XXXXXX\"); trap 'rm -f \"$t\"' EXIT; cat > \"$t\"; chmod 600 \"$t\"; mv -f \"$t\" \"$p/api-key\"", crate::machines::remote_path_word(&api_profile(&machine.id, &machine.runtime)))
         };
         // Neither the secret nor a remote diagnostic may cross IPC. SSH stdin
         // carries it with no TTY, shell interpolation, argv or temporary Mac file.
         crate::machine_install::ssh_input(&machine.ssh_host, &command, secret.into_bytes())
             .map_err(|_| "Could not authorize the selected key on this machine. Check the connection and credential storage, then retry.".to_string())?;
         if machine.runtime.isolated() {
-            let receipt = format!("~/.klide/machine-auth/{}/api-authorized", sandbox_name(&machine.id));
+            let receipt = format!("{}/authorized", api_profile(&machine.id, &machine.runtime));
             crate::machine_install::ssh(&machine.ssh_host, &format!("set -eu; umask 077; p={}; mkdir -p \"$(dirname \"$p\")\"; printf '%s' {} > \"$p\"", crate::machines::remote_path_word(&receipt), shell_quote(&key_id)))?;
         }
         Ok(())
     }).await
 }
 
+pub fn api_profile(id: &str, runtime: &RemoteRuntime) -> String {
+    format!(
+        "~/.klide/machine-auth/{}/{}",
+        sandbox_name(id),
+        if runtime.api_provider == ApiProvider::Openrouter {
+            "openrouter"
+        } else {
+            "api"
+        }
+    )
+}
+pub fn selected_model(runtime: &RemoteRuntime) -> Result<Option<String>, String> {
+    if runtime.credential != Credential::ApiKey || runtime.api_provider != ApiProvider::Openrouter {
+        return Ok(None);
+    }
+    let model = runtime
+        .api_model
+        .as_deref()
+        .filter(|s| !s.trim().is_empty() && s.len() < 256 && !s.chars().any(char::is_control))
+        .ok_or("Choose an OpenRouter model in machine setup")?;
+    Ok(Some(format!(
+        "{}{}",
+        crate::harness_source::PREFIX,
+        serde_json::json!({"provider":"openrouter","model":model})
+    )))
+}
 pub fn api_key_authorized(machine: &Machine, os: HostOs) -> bool {
-    let path = if machine.runtime.isolated() {
-        format!(
-            "~/.klide/machine-auth/{}/api-authorized",
-            sandbox_name(&machine.id)
-        )
-    } else {
-        format!(
-            "~/.klide/machine-auth/{}/api/api-key",
-            sandbox_name(&machine.id)
-        )
-    };
+    let profile = api_profile(&machine.id, &machine.runtime);
+    let path = format!(
+        "{profile}/{}",
+        if machine.runtime.isolated() {
+            "authorized"
+        } else {
+            "api-key"
+        }
+    );
     let command = if os == HostOs::Windows {
         os.command(&format!(
             "if (!(Test-Path -LiteralPath {})) {{ exit 1 }}",
@@ -307,6 +387,7 @@ mod tests {
         let runtime = RemoteRuntime {
             execution: Execution::Isolated,
             credential: Credential::ApiKey,
+            ..Default::default()
         };
         let command = wrap("id;$(touch /tmp/nope)", &runtime, "cat 'a'; echo b", false);
         assert!(command.contains("exec sbx --no-input exec -i 'klide-"));
@@ -331,6 +412,7 @@ mod tests {
         let runtime = RemoteRuntime {
             execution: Execution::Isolated,
             credential: Credential::Subscription,
+            ..Default::default()
         };
         std::fs::write(
             root.join(".klide/sandboxes")
@@ -377,6 +459,7 @@ mod tests {
         let mut runtime = RemoteRuntime {
             execution: Execution::Isolated,
             credential: Credential::Subscription,
+            ..Default::default()
         };
         let subscription = (
             runtime_sandbox("mini", &runtime),
@@ -389,10 +472,31 @@ mod tests {
         assert_ne!(subscription.2, binary("mini", &runtime, HostOs::Linux));
     }
     #[test]
+    fn openrouter_uses_its_own_sandbox_and_destination_model_bridge() {
+        let runtime = RemoteRuntime {
+            execution: Execution::Isolated,
+            credential: Credential::ApiKey,
+            api_provider: ApiProvider::Openrouter,
+            api_model: Some("deepseek/deepseek-v4.1-flash-1017".into()),
+        };
+        let context = credential_context("mini", &runtime, HostOs::Linux);
+        assert!(context.contains("OPENROUTER_API_KEY=proxy-managed"));
+        assert!(!context.contains("ANTHROPIC_API_KEY=proxy-managed"));
+        assert!(runtime_sandbox("mini", &runtime).ends_with("-openrouter"));
+        let encoded = selected_model(&runtime).unwrap().unwrap();
+        let selected = crate::harness_source::selection(&encoded).unwrap().unwrap();
+        assert_eq!(selected.provider, "openrouter");
+        assert_eq!(selected.model, "deepseek/deepseek-v4.1-flash-1017");
+        let mut missing = runtime.clone();
+        missing.api_model = None;
+        assert!(selected_model(&missing).is_err());
+    }
+    #[test]
     fn explicit_subscription_scrubs_inherited_api_authentication() {
         let runtime = RemoteRuntime {
             execution: Execution::Direct,
             credential: Credential::Subscription,
+            ..Default::default()
         };
         for os in [HostOs::Linux, HostOs::Macos, HostOs::Windows] {
             let context = credential_context("one", &runtime, os);

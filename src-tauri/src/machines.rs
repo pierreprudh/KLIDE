@@ -392,11 +392,13 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     let mut p = parse_probe(&out);
     if machine.runtime.credential == crate::machine_runtime::Credential::ApiKey && !crate::machine_runtime::api_key_authorized(machine, target.as_ref().map(|t| t.os).unwrap_or_default()) {
         p.insert("login".into(), "false".into());
+    } else if machine.runtime.credential == crate::machine_runtime::Credential::ApiKey && machine.runtime.api_provider == crate::machine_runtime::ApiProvider::Openrouter {
+        p.insert("login".into(), if crate::machine_runtime::selected_model(&machine.runtime).is_ok() { "true" } else { "false" }.into());
     }
     status.setup.connection = "connected".into();
     let got = |k: &str| p.get(k).map(String::as_str).filter(|v| !v.is_empty());
     status.facts.push(fact("Execution", if machine.runtime.isolated() { "Isolated · Docker Sandbox · Linux" } else { "Direct · remote account permissions" }, "quiet", None));
-    status.facts.push(fact("Credentials", match machine.runtime.credential { crate::machine_runtime::Credential::Existing => "Existing destination login / environment", crate::machine_runtime::Credential::Subscription => "Separate Claude subscription login", crate::machine_runtime::Credential::ApiKey => "Selected Anthropic API key" }, "quiet", None));
+    status.facts.push(fact("Credentials", match machine.runtime.credential { crate::machine_runtime::Credential::Existing => "Existing destination login / environment", crate::machine_runtime::Credential::Subscription => "Separate Claude subscription login", crate::machine_runtime::Credential::ApiKey => "Selected destination API key" }, "quiet", None));
     status.facts.push(fact("Reached", format!("in {} ms", elapsed_ms(elapsed)), "ok", None));
 
     let mut problems: Vec<&str> = Vec::new();
