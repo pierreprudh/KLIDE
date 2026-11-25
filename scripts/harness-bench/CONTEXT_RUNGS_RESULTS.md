@@ -39,6 +39,10 @@ archived tasks nothing is gained, matching the 2026-10-30 result.
 start by reading…") with no tool call, in every arm — a separate Harness
 issue, not an arm effect.
 
+Correction (2026-11-25): those trials had called tools; the Run ended on an
+empty reply, and `finalAnswer` fell back to the opening line. The loop now asks
+an empty reply again, and the benchmark records the true last reply.
+
 ## qwen3.5:9b (Ollama, 32k context) — 3 repeats, 54 trials
 
 Script was forced on for this run (`KLIDE_CODE_MODE=force`); Klide never
