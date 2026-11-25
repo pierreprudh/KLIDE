@@ -10,7 +10,7 @@ name: Native host binaries
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'codex/remote-helper/**']
   pull_request:
     paths:
       # The host: PTY daemon and wire, Remote machines, the run host, and
