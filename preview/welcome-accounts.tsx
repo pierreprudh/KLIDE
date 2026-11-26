@@ -192,14 +192,6 @@ function HomeLayout({
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const [focusIx, setFocusIx] = useState(() => Math.max(0, accounts.findIndex((a) => a.id === active)));
   const [opening, setOpening] = useState<Account | null>(null);
-  // Which footer arrow to light up: the one just pressed.
-  const [pressed, setPressed] = useState<"left" | "right" | null>(null);
-  const pressTimer = useRef<number | undefined>(undefined);
-  function flash(side: "left" | "right") {
-    setPressed(side);
-    window.clearTimeout(pressTimer.current);
-    pressTimer.current = window.setTimeout(() => setPressed(null), 220);
-  }
 
   function open(a: Account) {
     onPick(a.id);
@@ -227,8 +219,8 @@ function HomeLayout({
       if (e.metaKey && e.code === "Comma") { e.preventDefault(); return; }
       if (e.metaKey || e.altKey || e.ctrlKey) return;
       const cols = 3;
-      if (e.key === "ArrowRight") { e.preventDefault(); flash("right"); move(focusIx + 1); }
-      else if (e.key === "ArrowLeft") { e.preventDefault(); flash("left"); move(focusIx - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); move(focusIx + 1); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); move(focusIx - 1); }
       else if (e.key === "ArrowDown" && focusIx + cols < slots) { e.preventDefault(); move(focusIx + cols); }
       else if (e.key === "ArrowUp" && focusIx - cols >= 0) { e.preventDefault(); move(focusIx - cols); }
       else if (e.key === "Enter" && document.activeElement === document.body) {
@@ -304,7 +296,7 @@ function HomeLayout({
             Settings
           </button>
           <span className="wh-keys">
-            <kbd className="wh-arrow" data-pressed={pressed === "left" || undefined}>←</kbd><kbd className="wh-arrow" data-pressed={pressed === "right" || undefined}>→</kbd> choose
+            <kbd className="klide-welcome-kbd">←</kbd><kbd className="klide-welcome-kbd">→</kbd> choose
           </span>
         </footer>
       </div>
@@ -578,14 +570,13 @@ const css = `
   width: min(calc(3 * 148px + 2 * 36px), calc(100% - 64px)); border-top: 1px solid var(--w-border); padding-top: 14px;
   display: flex; align-items: center; justify-content: space-between; }
 .wh-keys { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--w-dim); }
-/* The arrows read as real keys: a raised cap that presses in when used. */
-.wh-arrow { display: inline-grid; place-items: center; min-width: 26px; height: 24px; padding: 0 6px; box-sizing: border-box;
-  border-radius: 7px; border: 1px solid var(--w-border-strong); border-bottom-width: 2px; background: var(--w-glass);
-  font: 500 13px/1 var(--font-ui); color: var(--w-fg);
-  transition: transform var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
-.wh-arrow[data-pressed] { transform: translateY(1px); border-bottom-width: 1px; background: var(--w-fg); color: var(--w-primary-fg); border-color: var(--w-fg); }
-.wh-keys .wh-arrow + .wh-arrow { margin-left: 0; }
-.wh-keys { gap: 6px; color: var(--w-dim); }
+.wh-keys kbd + kbd { margin-left: -2px; }
+/* Hover lights the hint: keys and word take the full ink. */
+.wh-keys { border-radius: 12px; padding: 6px 10px; margin-right: -10px; cursor: default;
+  transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+.wh-keys .klide-welcome-kbd { transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+.wh-keys:hover { background: var(--w-glass); color: var(--w-fg); }
+.wh-keys:hover .klide-welcome-kbd { background: var(--w-fg); color: var(--w-primary-fg); }
 .wh { width: min(720px, 100%); margin: 0 auto; padding: clamp(40px, 6vh, 80px) clamp(40px, 4.5vw, 80px); text-align: center; }
 /* The lockup is a white-on-clear PNG used as a mask, so it wears the theme's ink. */
 .wh-mark { margin: 0 auto; height: 52px; aspect-ratio: 465 / 209; background: var(--w-fg);
