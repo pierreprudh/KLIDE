@@ -296,7 +296,8 @@ function HomeLayout({
             Settings
           </button>
           <span className="wh-keys">
-            <kbd className="klide-welcome-kbd">←</kbd><kbd className="klide-welcome-kbd">→</kbd> choose
+            <button type="button" className="klide-welcome-kbd wh-arrow" aria-label="Previous space" tabIndex={-1} onClick={() => move(focusIx - 1)}>←</button>
+            <button type="button" className="klide-welcome-kbd wh-arrow" aria-label="Next space" tabIndex={-1} onClick={() => move(focusIx + 1)}>→</button>
           </span>
         </footer>
       </div>
@@ -570,13 +571,10 @@ const css = `
   width: min(calc(3 * 148px + 2 * 36px), calc(100% - 64px)); border-top: 1px solid var(--w-border); padding-top: 14px;
   display: flex; align-items: center; justify-content: space-between; }
 .wh-keys { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--w-dim); }
-.wh-keys kbd + kbd { margin-left: -2px; }
-/* Hover lights the hint: keys and word take the full ink. */
-.wh-keys { border-radius: 12px; padding: 6px 10px; margin-right: -10px; cursor: default;
+/* Each arrow lights on its own hover, and a click moves the choice like the key. */
+.wh-arrow { border: none; cursor: pointer; font-family: inherit;
   transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
-.wh-keys .klide-welcome-kbd { transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
-.wh-keys:hover { background: var(--w-glass); color: var(--w-fg); }
-.wh-keys:hover .klide-welcome-kbd { background: var(--w-fg); color: var(--w-primary-fg); }
+.wh-arrow:hover { background: var(--w-fg); color: var(--w-primary-fg); }
 .wh { width: min(720px, 100%); margin: 0 auto; padding: clamp(40px, 6vh, 80px) clamp(40px, 4.5vw, 80px); text-align: center; }
 /* The lockup is a white-on-clear PNG used as a mask, so it wears the theme's ink. */
 .wh-mark { margin: 0 auto; height: 52px; aspect-ratio: 465 / 209; background: var(--w-fg);
