@@ -24,10 +24,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <WelcomeScreen
       recentFolders={["/Users/you/Documents/klide", "/Users/you/code/notes", "/Users/you/code/site"]}
       onOpenFolder={noop}
-      onNewProject={noop}
-      onCloneRepo={noop}
       onOpenRecent={noop}
-      onRemoveRecent={noop}
       onOpenSettings={noop}
     />
   </div>,

@@ -1825,22 +1825,6 @@ textarea.klide-diff-comment-input:focus-visible {
   overflow-y: auto;
 }
 
-.klide-welcome-content {
-  width: min(520px, 100%);
-  margin: 0 auto;
-  padding: clamp(40px, 6vh, 96px) clamp(36px, 5.5vw, 88px);
-}
-
-.klide-welcome-wordmark {
-  font-family: var(--font-brand);
-  font-size: 12px;
-  line-height: 1;
-  color: var(--w-dim);
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
 .klide-welcome-title {
   margin: 0;
   font-size: clamp(36px, 4.4vw, 52px);
@@ -1848,14 +1832,6 @@ textarea.klide-diff-comment-input:focus-visible {
   font-weight: 600;
   letter-spacing: -0.04em;
   color: var(--w-fg);
-}
-
-.klide-welcome-sub {
-  margin: 14px 0 0;
-  max-width: 40ch;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--w-dim);
 }
 
 /* Right stage holds the framed card with padding so it floats inside a
@@ -1916,78 +1892,6 @@ textarea.klide-diff-comment-input:focus-visible {
   pointer-events: none;
 }
 
-/* Glass action button — translucent, blurred, hairline border. */
-.klide-welcome-glass-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  height: 42px;
-  padding: 0 18px;
-  border-radius: 10px;
-  background: transparent;
-  border: 1px solid var(--w-border);
-  color: var(--w-fg);
-  font-size: 13.5px;
-  font-weight: 500;
-  letter-spacing: -0.005em;
-  white-space: nowrap;
-  transition:
-    background var(--motion-fast) var(--ease-out),
-    border-color var(--motion-fast) var(--ease-out);
-}
-
-.klide-welcome-glass-btn:hover {
-  background: var(--w-glass);
-  border-color: var(--w-border-strong);
-}
-
-.klide-welcome-glass-btn:focus-visible,
-.klide-welcome-rrow button:focus-visible,
-.klide-welcome-rrow-remove:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 3px var(--w-ring),
-    inset 0 1px 0 rgba(255, 255, 255, 0.10);
-}
-
-/* One clear primary CTA — solid light fill, dark label (Linear/Vercel idiom). */
-.klide-welcome-glass-btn[data-primary="true"] {
-  background: var(--w-fg);
-  border-color: var(--w-fg);
-  color: var(--w-primary-fg);
-  font-weight: 600;
-}
-
-.klide-welcome-glass-btn[data-primary="true"]:hover {
-  background: var(--w-primary-hover);
-  border-color: var(--w-primary-hover);
-}
-
-/* Quiet secondary — borderless ghost, demoted next to the primary. */
-.klide-welcome-glass-btn[data-quiet="true"] {
-  background: transparent;
-  border-color: transparent;
-  color: var(--w-dim);
-  padding: 0 14px;
-}
-
-.klide-welcome-glass-btn[data-quiet="true"]:hover {
-  background: var(--w-glass);
-  border-color: transparent;
-  color: var(--w-fg);
-}
-
-/* Active (its composer is open) — subtle persistent wash. */
-.klide-welcome-glass-btn[data-active="true"] {
-  background: var(--w-glass);
-  border-color: var(--w-border-strong);
-}
-
-.klide-welcome-glass-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
 /* Inline keycap hint inside a button. */
 .klide-welcome-kbd {
   margin-left: 2px;
@@ -2003,188 +1907,123 @@ textarea.klide-diff-comment-input:focus-visible {
   opacity: 0.7;
 }
 
-/* New-project / Clone composer. */
-.klide-welcome-composer {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* ── Choose your space ────────────────────────────────────────────────
+   Film card on the left, spaces on the right: logo, one-line title, circles
+   three to a row (a short last row centres under a full one), and a footer
+   that sits a little above the film's bottom edge. */
+.ks-stage { padding-left: clamp(20px, 2.4vw, 40px); padding-right: 0; }
+.ks-pane { flex: 1.15 1 0; position: relative; padding-bottom: 12vh; box-sizing: border-box; }
+.ks { width: min(720px, 100%); margin: 0 auto; padding: clamp(40px, 6vh, 80px) clamp(40px, 4.5vw, 80px); text-align: center; }
+.ks-mark { margin: 0 auto; height: 52px; aspect-ratio: 465 / 209; background: var(--w-fg);
+  -webkit-mask: url(/klide-lockup.png) center / contain no-repeat; mask: url(/klide-lockup.png) center / contain no-repeat; }
+.ks .ks-title { margin-top: 32px; font-size: clamp(40px, 4.4vw, 68px); white-space: nowrap; }
+.ks-people { margin: 56px auto 0; width: calc(3 * 148px + 2 * 36px); max-width: 100%;
+  display: flex; flex-wrap: wrap; justify-content: center; column-gap: 36px; row-gap: 28px; }
+.ks-person { all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  width: 148px; border-radius: 24px; padding: 8px 0 10px; }
+.ks-person:focus-visible { box-shadow: 0 0 0 3px var(--w-ring); }
+.ks-face { position: relative; overflow: hidden; width: 136px; height: 136px; border-radius: 50%; display: grid; place-items: center;
+  margin-bottom: 10px; font-size: 46px; font-weight: 600; letter-spacing: -0.02em;
+  background: var(--w-glass); border: 1px solid var(--w-border); color: var(--w-fg);
+  transition: transform var(--motion-med) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
+.ks-face-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ks-person:hover .ks-face { background: var(--w-glass-hover); }
+.ks-person:hover .ks-face, .ks-person:focus-visible .ks-face { transform: scale(1.06); }
+.ks-person:active .ks-face { transform: scale(1.02); }
+.ks-person[data-on] .ks-face { background: var(--w-fg); color: var(--w-primary-fg); border-color: var(--w-fg);
+  box-shadow: 0 0 0 5px var(--bg-elevated), 0 0 0 6px var(--w-border-strong); }
+.ks-person[data-on] .ks-face:has(.ks-face-img) { background: var(--w-glass); }
+.ks-person:not([data-on]) .ks-face-img { filter: saturate(0.6); opacity: 0.82; }
+.ks-face-add { background: transparent; border-style: dashed; color: var(--w-dim); }
+.ks-name { font-size: 17px; font-weight: 500; color: var(--w-fg); }
+.ks-person:not([data-on]) .ks-name { color: var(--w-dim); }
+.ks-detail { font-size: 13px; color: var(--w-dim); }
+/* A second row (3+ spaces, "+" underneath): smaller circles so the page still fits. */
+.ks-people[data-two-rows] { margin-top: 40px; width: calc(3 * 128px + 2 * 36px); row-gap: 20px; }
+.ks-people[data-two-rows] .ks-person { width: 128px; padding: 4px 0 6px; }
+.ks-people[data-two-rows] .ks-face { width: 104px; height: 104px; font-size: 36px; margin-bottom: 6px; }
+.ks-people[data-two-rows] .ks-face-add svg { width: 32px; height: 32px; }
+.ks-status { margin: 24px 0 0; min-height: 20px; font-size: 14px; color: var(--w-fg); }
+.ks[data-opening] .ks-person:not([data-on]) { opacity: 0.35; transition: opacity var(--motion-med) var(--ease-out); }
+.ks-foot { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(clamp(20px, 2.4vw, 40px) + 6vh);
+  width: min(calc(3 * 148px + 2 * 36px), calc(100% - 64px)); border-top: 1px solid var(--w-border); padding-top: 14px;
+  display: flex; align-items: center; justify-content: space-between; }
+.ks-settings { all: unset; cursor: pointer; margin-left: -14px; display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; border-radius: 12px; font-size: 14px; color: var(--w-dim); }
+.ks-settings:hover { background: var(--w-glass); color: var(--w-fg); }
+.ks-settings:focus-visible { box-shadow: 0 0 0 3px var(--w-ring); }
+.ks-keys { display: inline-flex; align-items: center; gap: 6px; }
+.ks-arrow { border: none; cursor: pointer; font-family: inherit; color: var(--w-dim);
+  transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+.ks-arrow:hover { background: var(--w-fg); color: var(--w-primary-fg); opacity: 1; }
+
+/* Add a space: steps over the film, the step's form centred beside it. */
+.ks-add .ks-stage { flex: 1.1 1 0; }
+.ks-veil { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 35%, rgba(8, 10, 12, 0.62) 100%); pointer-events: none; }
+.ks-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; padding: clamp(24px, 3vw, 44px); color: #fff; }
+.ks-overlay-head { display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }
+.ks-overlay-title { margin: 0; font-size: clamp(36px, 4vw, 56px); line-height: 1.04; font-weight: 600; letter-spacing: -0.04em; }
+.ks-overlay-sub { margin: 0; justify-self: end; max-width: 28ch; font-size: 15px; line-height: 1.55; color: rgba(255, 255, 255, 0.72); }
+.ks-steps { margin-top: 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ks-step { all: unset; box-sizing: border-box; cursor: pointer; min-height: 168px; padding: 22px; border-radius: 22px;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 18px;
+  background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+.ks-step:disabled { cursor: default; }
+.ks-step:not(:disabled):not([data-on]):hover { background: rgba(255, 255, 255, 0.18); }
+.ks-step[data-on] { background: #fff; color: #16181b; border-color: #fff; }
+.ks-step:focus-visible { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.5); }
+.ks-num { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600;
+  background: rgba(255, 255, 255, 0.18); color: #fff; }
+.ks-step[data-on] .ks-num { background: #16181b; }
+.ks-step-label { font-size: 18px; font-weight: 500; line-height: 1.3; letter-spacing: -0.01em; }
+.ks-form { width: min(600px, 100%); margin: 0 auto; padding: clamp(40px, 6vh, 96px) clamp(28px, 4vw, 64px); display: flex; flex-direction: column; box-sizing: border-box; }
+.ks-form-head { text-align: center; margin-bottom: 44px; }
+.ks-h2 { margin: 0; font-size: 40px; font-weight: 600; letter-spacing: -0.03em; color: var(--w-fg); }
+.ks-lede { margin: 12px 0 0; font-size: 16.5px; color: var(--w-dim); }
+.ks-oauth { all: unset; box-sizing: border-box; cursor: pointer; height: 58px; border-radius: 12px; border: 1px solid var(--w-border);
+  display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 16px; font-weight: 500; color: var(--w-fg); }
+.ks-oauth:hover { background: var(--w-glass); border-color: var(--w-border-strong); }
+.ks-oauth[data-on] { background: var(--w-glass-hover); border-color: var(--w-border-strong); }
+.ks-or { display: flex; align-items: center; gap: 14px; margin: 30px 0; color: var(--w-dim); font-size: 14px; }
+.ks-or::before, .ks-or::after { content: ""; flex: 1; height: 1px; background: var(--w-border); }
+.ks-group { display: flex; flex-direction: column; gap: 24px; }
+.ks-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.ks-field { display: flex; flex-direction: column; gap: 10px; font-size: 15px; font-weight: 500; color: var(--w-fg); text-align: left; }
+.ks-field small { font-size: 13px; font-weight: 400; color: var(--w-dim); }
+.ks-input { box-sizing: border-box; width: 100%; min-width: 0; height: 56px; padding: 0 16px; border-radius: 12px;
+  border: 1px solid var(--w-border); background: var(--w-glass); color: var(--w-fg); font: inherit; font-size: 16px; font-weight: 400; outline: none; }
+.ks-input:focus { border-color: var(--w-border-strong); box-shadow: 0 0 0 3px var(--w-ring); }
+.ks-panel { border: 1px solid var(--w-border); border-radius: 20px; padding: 6px 18px; text-align: left; }
+.ks-row { display: flex; align-items: center; gap: 12px; min-height: 72px; border-bottom: 1px solid var(--w-border); }
+.ks-row:last-of-type { border-bottom: none; }
+.ks-row-logo { width: 22px; display: grid; place-items: center; color: var(--w-fg); }
+.ks-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ks-row-name { font-size: 16px; font-weight: 500; color: var(--w-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ks-row-detail { font-size: 13.5px; color: var(--w-dim); }
+.ks-link { all: unset; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--w-fg); padding: 6px 10px; border-radius: 12px; }
+.ks-link:hover { background: var(--w-glass-hover); }
+.ks-link:focus-visible { box-shadow: 0 0 0 3px var(--w-ring); }
+.ks-hint { margin: 10px 0 12px; padding-top: 12px; border-top: 1px solid var(--w-border); font-size: 13.5px; line-height: 1.5; color: var(--w-dim); }
+.ks-primary { all: unset; box-sizing: border-box; cursor: pointer; margin-top: 36px; height: 58px; border-radius: 12px; text-align: center;
+  background: var(--w-fg); color: var(--w-primary-fg); font-size: 16px; font-weight: 600; line-height: 58px; }
+.ks-primary:hover { background: var(--w-primary-hover); }
+.ks-primary:focus-visible, .ks-oauth:focus-visible { box-shadow: 0 0 0 3px var(--w-ring); }
+.ks-alt { margin: 22px 0 0; text-align: center; font-size: 15px; color: var(--w-dim); }
+.ks-alt-link { all: unset; cursor: pointer; color: var(--w-fg); font-weight: 600; }
+.ks-alt-link:hover { text-decoration: underline; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ks-face { transition: none; }
+  .ks-person:hover .ks-face, .ks-person:focus-visible .ks-face { transform: none; }
 }
 
-.klide-welcome-composer-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.klide-welcome-input {
-  flex: 1;
-  min-width: 0;
-  height: 42px;
-  padding: 0 14px;
-  border-radius: 10px;
-  background: var(--w-glass);
-  border: 1px solid var(--w-border);
-  color: var(--w-fg);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: -0.002em;
-  transition:
-    border-color var(--motion-fast) var(--ease-out),
-    background var(--motion-fast) var(--ease-out);
-}
-
-.klide-welcome-input::placeholder {
-  color: var(--w-faint);
-}
-
-.klide-welcome-input:focus {
-  outline: none;
-  border-color: var(--w-ring-solid);
-  background: var(--w-input-focus-bg);
-}
-
-.klide-welcome-composer-hint {
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--w-faint);
-}
-
-.klide-welcome-composer-error {
-  color: #ff938a;
-}
-
-/* Recent row — a clean list line, not a card. Flat by default, a faint
-   wash on hover, hairline between rows. */
-.klide-welcome-rrow {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  height: 44px;
-  padding: 0 8px 0 10px;
-  margin: 0 -10px;
-  border-radius: 9px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--w-fg);
-  text-align: left;
-  transition:
-    background var(--motion-fast) var(--ease-out),
-    border-color var(--motion-fast) var(--ease-out);
-}
-
-.klide-welcome-rrow:hover {
-  background: var(--w-glass);
-  border-color: var(--w-border);
-}
-
-.klide-welcome-rrow.is-placeholder {
-  height: 44px;
-  border-radius: 9px;
-  background: var(--w-placeholder-bg);
-  border-color: transparent;
-}
-
-.klide-welcome-rrow.is-placeholder:hover {
-  background: var(--w-placeholder-bg);
-  border-color: transparent;
-}
-
-.klide-welcome-rrow-index {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--w-faint);
-  letter-spacing: 0.04em;
-}
-
-.klide-welcome-rrow-name {
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--w-fg);
-  flex-shrink: 0;
-  letter-spacing: -0.005em;
-}
-
-.klide-welcome-rrow-path {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--w-faint);
-  letter-spacing: 0.02em;
-  text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.klide-welcome-rrow-remove {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  color: var(--w-faint);
-  opacity: 0;
-  transition:
-    opacity var(--motion-fast) var(--ease-out),
-    background var(--motion-fast) var(--ease-out),
-    color var(--motion-fast) var(--ease-out);
-}
-
-.klide-welcome-rrow:hover .klide-welcome-rrow-remove {
-  opacity: 1;
-}
-
-.klide-welcome-rrow-remove:hover {
-  background: var(--w-remove-hover);
-  color: #ff8b80;
-}
-
-/* Recent section header — label + hairline, on dark. */
-.klide-welcome-rlabel {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
-  color: var(--w-dim);
-  margin-bottom: 14px;
-}
-
-.klide-welcome-rlabel .line {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(to right, var(--w-border), transparent);
-}
-
-/* Ambient keyboard hint — scoped to the fixed-dark welcome palette. */
-.klide-welcome .klide-welcome-keys {
-  color: var(--w-faint);
-}
-
-.klide-welcome .klide-welcome-keys b {
-  color: var(--w-dim);
-}
-
-@media (max-width: 720px) {
-  .klide-welcome-glass-btn[data-primary="true"] {
-    flex: 1 1 170px;
-    justify-content: center;
-  }
-
-  .klide-welcome-rrow {
-    height: 48px;
-    padding-left: 13px;
-  }
-
-  .klide-welcome-rrow-path {
-    display: none;
-  }
+@media (max-width: 880px) {
+  .ks-stage { padding: 0 clamp(20px, 5vw, 40px) clamp(20px, 4vh, 40px); }
+  .ks-pane { padding-bottom: 96px; }
+  .ks .ks-title { white-space: normal; }
+  .ks-steps { grid-template-columns: 1fr 1fr; }
 }
 
 /* Each content block fades up 10px with a touch of blur. The component
@@ -2208,41 +2047,6 @@ textarea.klide-diff-comment-input:focus-visible {
     transform: translateY(0);
     filter: blur(0);
   }
-}
-
-/* Spec line — middot-separated stats set like a colophon. */
-.klide-welcome-spec {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--fg-subtle);
-  white-space: nowrap;
-}
-
-.klide-welcome-spec b {
-  font-weight: 500;
-  color: var(--fg-subtle);
-}
-
-/* Ambient shortcut furniture — the quiet last line of the column. */
-.klide-welcome-keys {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.03em;
-  color: var(--fg-subtle);
-  white-space: nowrap;
-}
-
-.klide-welcome-keys b {
-  font-weight: 400;
-  color: var(--fg-subtle);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -4070,25 +3874,6 @@ button:focus-visible .menu-leadout {
   opacity: 1;
 }
 
-/* Welcome screen recent-row — two buttons (open + remove) share a
-   single rounded container. The path string sits right-aligned, in
-   mono, dimmed, with a hairline separator. */
-.klide-recent-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  height: 34px;
-  padding: 0 6px 0 10px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  transition: background var(--motion-fast) var(--ease-out);
-}
-
-.klide-recent-row:hover {
-  background: var(--bg-hover);
-}
-
 .klide-recent-open {
   flex: 1;
   min-width: 0;
@@ -4108,10 +3893,6 @@ button:focus-visible .menu-leadout {
   flex-shrink: 0;
   color: var(--fg-subtle);
   transition: color var(--motion-fast) var(--ease-out);
-}
-
-.klide-recent-row:hover .klide-recent-open > svg {
-  color: var(--fg);
 }
 
 .klide-recent-path {
@@ -6046,7 +5827,6 @@ input.klide-rail-search:focus-visible {
 .klide-rail-convo-lead[data-tone="needs"] {
   color: var(--warning);
 }
-
 
 .klide-rail-convo-text {
   flex: 1;
