@@ -2375,18 +2375,6 @@ function App() {
     }
   }
 
-  function forgetFolder(path: string) {
-    setRecentFolders((prev) => {
-      const next = prev.filter((p) => p !== path);
-      try {
-        localStorage.setItem("klide.recentFolders", JSON.stringify(next));
-      } catch {
-        /* storage unavailable — skip */
-      }
-      return next;
-    });
-  }
-
   // Where a folder picker should land. Projects live beside each other, so the
   // folder holding the last one opened is the useful place to start; with no
   // history to go on, Documents beats wherever the OS last left the dialog.
@@ -2448,19 +2436,6 @@ function App() {
       });
     });
   }, [recentFolders, workspaceRoot]);
-
-  // New project: pick a parent location, create + `git init` the folder in
-  // Rust, then open it. Throws on error so the welcome screen can show it.
-  async function newProject(name: string) {
-    const parent = await open({
-      directory: true,
-      defaultPath: await projectPickerStart(),
-      title: "Choose where to create the project",
-    });
-    if (typeof parent !== "string") return;
-    const path = await invoke<string>("project_create", { parentDir: parent, name });
-    changeRoot(path);
-  }
 
   // Clone: pick a parent location, `git clone` into it, then open the result.
   async function cloneRepo(url: string) {
@@ -3517,10 +3492,7 @@ function App() {
         <WelcomeScreen
           recentFolders={recentFolders}
           onOpenFolder={openFolderDialog}
-          onNewProject={newProject}
-          onCloneRepo={cloneRepo}
           onOpenRecent={setWorkspaceRoot}
-          onRemoveRecent={forgetFolder}
           onOpenSettings={() => openOverlay("settings")}
         />
         {/* The one toast host — and the app-wide watchers it owns — lives on
