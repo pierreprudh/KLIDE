@@ -45,11 +45,13 @@ Model compatibility and evidence coverage depend on the runtime. Unsupported com
 
 Klide opens on the surface that matches the task, and all three share the same runs, transcripts, conversations, and review state. The shared sidebar shows the current Workspace, New task, search, Git, Mission Control and Library. Its conversation list switches between **Sections** (Needs you, Pinned, then the rest) and **Agent**. Needs you includes waiting conversations from other Workspaces; the Workspace menu switches folders.
 
-### Welcome — start or resume a project
+### Welcome — choose your space
 
-Open a folder, start a new project, or clone a repository from one quiet page, with your recent workspaces numbered underneath. `⌘O`, `⌘N`, and `⌘⇧N` reach the three actions, and `⌘1`–`⌘5` reopen a recent workspace without touching the mouse. Beside the list, a framed big-pixel nature film drifts through five scenes in a calm loop.
+A space is who you are working as: Personal, Work, a client. Welcome shows each one as a circle with its GitHub picture; choose one and Klide reopens its last project. `+ Add space` walks three steps beside the film (who, agent logins, folders). Arrow keys and `Return` choose without the mouse, `⌘1`–`⌘9` open a space directly, and a framed big-pixel nature film drifts through five scenes on the left.
 
-<img src=".github/assets/welcome.png" alt="Klide welcome screen: wordmark, Welcome back, Open folder, New project, Clone and Settings actions, numbered recent folders, and a framed pixel-art moonlit lake at night" width="900" />
+<img src=".github/assets/welcome.png" alt="Klide welcome screen: a framed pixel-art pagoda among autumn trees on the left; on the right the Klide logo, Choose your space, a Personal space with its GitHub picture, an Add space circle, and Settings with arrow keys at the foot" width="900" />
+
+Spaces are remembered on this Mac today; switching the GitHub account and agent logins with the space is the next step.
 
 ### Focus — one task, one conversation
 
@@ -186,7 +188,7 @@ The first Rust build takes about three to five minutes. Later builds reuse the c
 
 Once Klide opens:
 
-1. Open a workspace folder from Welcome
+1. Choose your space on Welcome — it reopens your last project, or asks for a folder the first time
 2. In Focus, or in the Workbench's AI panel, pick an agent in the composer: a local model, a hosted API, or an installed CLI
 3. Press `Tab` in the composer to switch between `Work` and `Plan`
 4. Open Mission Control from the rail to follow active and completed work
