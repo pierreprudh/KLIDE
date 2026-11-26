@@ -131,10 +131,12 @@ pub struct ShellRead {
 ///
 /// Must be called from inside a tokio runtime: the reader and waiter tasks are
 /// spawned here and outlive the call, which is the entire point.
+#[cfg(test)]
 pub fn spawn(run_id: &str, cwd: &str, command: &str) -> Result<ShellSnapshot, String> {
     spawn_inner(run_id, cwd, command, false, None)
 }
 
+#[cfg(test)]
 pub fn spawn_observer(run_id: &str, cwd: &str, command: &str) -> Result<ShellSnapshot, String> {
     spawn_inner(run_id, cwd, command, true, None)
 }
