@@ -53,7 +53,7 @@ jobs:
         # main publishes all five. A PR checks four: Intel macOS runs the
         # same code as Apple Silicon and would take a second macOS runner.
         include: >-
-          ${{ fromJSON(startsWith(github.ref, 'refs/heads/codex/remote-helper/') && '[{"runner":"ubuntu-24.04-arm","asset":"klide-linux-aarch64"},{"runner":"macos-15","asset":"klide-macos-aarch64"}]' || format('[{0}{1}]',
+          ${{ fromJSON(startsWith(github.ref, 'refs/heads/codex/remote-helper/') && '[{"runner":"ubuntu-24.04","asset":"klide-linux-x86_64"},{"runner":"ubuntu-24.04-arm","asset":"klide-linux-aarch64"},{"runner":"macos-15","asset":"klide-macos-aarch64"}]' || format('[{0}{1}]',
             '{"runner":"ubuntu-24.04","asset":"klide-linux-x86_64"},
              {"runner":"ubuntu-24.04-arm","asset":"klide-linux-aarch64"},
              {"runner":"macos-15","asset":"klide-macos-aarch64"},
