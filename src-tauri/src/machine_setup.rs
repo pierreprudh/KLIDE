@@ -62,6 +62,9 @@ fn script(
     root: Option<&str>,
     os: crate::remote_platform::HostOs,
 ) -> Result<String, String> {
+    if matches!(action, SetupAction::SignIn) && machine.inference.is_some() {
+        return Err("OpenRouter uses the authorized API key; Claude account sign-in is not required.".into());
+    }
     if os == crate::remote_platform::HostOs::Windows {
         return windows_script(action, machine, root);
     }
@@ -195,8 +198,14 @@ pub async fn machine_setup_spawn(
 mod tests {
     use super::*;
     #[test]
+    fn openrouter_setup_does_not_start_a_claude_account_login() {
+        let machine = crate::machines::Machine { id: "api".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default(), inference: Some(Default::default()) };
+        assert!(script(&SetupAction::SignIn, &machine, None, crate::remote_platform::HostOs::Linux).unwrap_err().contains("sign-in is not required"));
+    }
+
+    #[test]
     fn personal_github_login_is_never_started_on_a_shared_remote_account() {
-        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default() };
+        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default(), inference: None };
         for os in [crate::remote_platform::HostOs::Macos, crate::remote_platform::HostOs::Linux, crate::remote_platform::HostOs::Windows] {
             assert!(script(&SetupAction::GitHub, &machine, None, os).unwrap_err().contains("repository-only"));
         }
@@ -237,7 +246,7 @@ mod tests {
             id: "mini".into(),
             label: None,
             ssh_host: "dev@machine".into(),
-            checkouts: Default::default(),
+            checkouts: Default::default(), inference: None,
         };
         let login = script(
             &SetupAction::SignIn,

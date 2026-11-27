@@ -13,6 +13,8 @@ pub(crate) struct Binding {
     pub ssh_host: String,
     pub checkout: String,
     #[serde(default)]
+    pub inference: Option<crate::machine_inference::RemoteInference>,
+    #[serde(default)]
     pub os: crate::remote_platform::HostOs,
 }
 
@@ -196,13 +198,18 @@ pub(super) async fn start(
                     || daemon_client::statuses(&app)?.contains_key(&id) { return Err(run_host::busy(&id)); }
                 let machine = crate::machines::get(machine_id.as_deref().ok_or("No remote machine selected")?).ok_or("Remote machine is no longer configured")?;
                 let root = request.workspace_root.as_deref().ok_or("Open a project before starting a remote task")?;
-                let binding = Binding { os: crate::machine_install::detect_target(&machine.ssh_host)?.os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root) };
+                let binding = Binding { os: crate::machine_install::detect_target(&machine.ssh_host)?.os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root), inference: machine.inference.clone() };
                 // Persist before sending: a dropped start response must never
                 // allow a later retry to silently create a local writer.
                 crate::durable::write_atomic_private(&binding_path(&base, &id)?, &serde_json::to_vec(&binding).map_err(|e| e.to_string())?)?;
                 binding
             }
         };
+        if let Some(inference) = &binding.inference {
+            request.model = inference.selected_model()?;
+        } else if crate::harness_source::intelligence(&request.model)?.is_some() {
+            return Err("Select OpenRouter credentials in Settings → Machines before starting an API-backed remote run".into());
+        }
         match query(&binding, &Request::Ping)? {
             Response::Pong { version, protocol, .. } if crate::pty_wire::remote_host_compatible(&version, protocol) => {},
             _ => return Err("Install the matching Run host in Settings → Machines before launching this task".into()),
@@ -405,8 +412,8 @@ fn validate_request(request: &StartRunRequest) -> Result<(), String> {
             "Remote tasks currently support standalone Claude Code conversations only".into(),
         );
     }
-    if crate::harness_source::intelligence(&request.model)?.is_some() {
-        return Err("Remote Claude Code currently uses its own machine login, without a routed intelligence source".into());
+    if let Some(source) = crate::harness_source::intelligence(&request.model)? {
+        if source.provider != "openrouter" { return Err("Choose OpenRouter as the remote API source".into()); }
     }
     Ok(())
 }
@@ -420,6 +427,10 @@ pub(crate) fn start_on_host(
     checkout: &str,
 ) -> Result<u64, String> {
     validate_request(&request)?;
+    if crate::harness_source::intelligence(&request.model)?.is_some() && crate::machine_inference::configured_key()?.is_none() {
+        return Err("Authorize an OpenRouter API key on this machine before starting the run".into());
+    }
+
     let id = request.run_id.clone().ok_or("Missing remote Run id")?;
     validate_run_id(&id)?;
     let checkout = if let Some(rest) = checkout.strip_prefix("~/") {
@@ -773,6 +784,7 @@ mod tests {
             machine_id: "box".into(),
             ssh_host: "my-box".into(),
             checkout: "~/code/project".into(),
+            inference: None,
         };
         crate::durable::write_atomic_private(&path, &serde_json::to_vec(&placed).unwrap()).unwrap();
         assert_eq!(binding(&base, "convo").unwrap().unwrap().ssh_host, "my-box");
@@ -856,6 +868,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn remote_admission_accepts_openrouter_without_changing_the_agent() {
+        let mut request: StartRunRequest = serde_json::from_value(serde_json::json!({
+            "runId": "convo", "workspaceRoot": "/project", "mode": "goal", "provider": "claude-code", "model": "default", "initialText": "work", "context": null, "systemPrompt": null
+        })).unwrap();
+        request.model = crate::machine_inference::RemoteInference::default().selected_model().unwrap();
+        assert!(validate_request(&request).is_ok());
+        request.model = r#"harness-source:{"provider":"openai","model":"gpt-4.1"}"#.into();
+        assert!(validate_request(&request).is_err());
     }
 
     #[test]

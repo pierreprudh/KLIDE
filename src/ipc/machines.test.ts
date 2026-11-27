@@ -25,4 +25,9 @@ describe("machine configuration updates", () => {
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
   });
+  it("rejects older backends that silently discard the API credential choice", async () => {
+    const machine = { id: "server", sshHost: "server", inference: { provider: "openrouter" as const, model: "deepseek/test-model" } };
+    invoke.mockResolvedValueOnce([{ id: "server", sshHost: "server" }]);
+    await expect(machineSave(machine, false)).rejects.toThrow("did not save this choice");
+  });
 });

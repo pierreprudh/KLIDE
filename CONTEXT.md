@@ -160,7 +160,11 @@ _Avoid_: mirror, sync, remote workspace
 **Machine login**:
 A credential that lives on the Machine that uses it — a CLI's subscription
 login, `gh`, an API key. A Run uses the logins of the Machine it runs on;
-Klide never copies one between Machines.
+Subscription logins are never copied between Machines. A user can explicitly
+select an OpenRouter API key for a Remote machine and authorize its transfer
+over SSH to a private file in that machine’s worker account. API-backed Runs
+use that destination key without a Claude subscription login; key values never
+enter the frontend.
 _Avoid_: forwarded credentials, shared secrets, key sync
 
 **Harness contract**:

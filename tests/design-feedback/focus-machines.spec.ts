@@ -111,14 +111,14 @@ test("the logo checklist updates from live checks without stopping an active ins
   await dialog.getByLabel("SSH host", { exact: true }).fill("mini-user@100.64.0.3");
   await dialog.getByRole("button", { name: "Continue", exact: true }).click();
   const checklist = dialog.getByRole("list", { name: "Setup progress" });
-  const claude = checklist.locator("li").filter({ hasText: "Claude Code" });
+  const claude = checklist.locator("li").filter({ hasText: "Credentials" });
   const github = checklist.locator("li").filter({ hasText: "GitHub" });
-  await expect(claude).toContainText("Not installed");
+  await expect(claude).toContainText("Choose subscription or API key");
   await expect(github).toContainText("Not installed");
   await expect(checklist.locator(".klide-machine-checklist-logo")).toHaveCount(6);
   await dialog.getByRole("button", { name: "Install and continue", exact: true }).click();
   await expect(claude).toHaveAttribute("data-state", "done", { timeout: 10000 });
-  await expect(claude).toContainText("Validated");
+  await expect(claude).toContainText("Claude · signed in");
   await expect(github).toContainText("Installed · sign in");
   await expect(github).toHaveAttribute("data-state", "needed");
   await expect(dialog.getByRole("heading", { name: "Prepare this machine" })).toBeVisible();
@@ -262,11 +262,11 @@ for (const surface of ["popup", "settings"]) {
     }
     const setup = page.locator(".klide-machine-setup");
     await expect(setup.getByRole("heading", { name: "Ready for remote tasks" })).toBeVisible();
-    for (const [step, heading] of [["Connect", "Connect to your machine"], ["Install", "Prepare this machine"], ["Sign in", "Sign in to Claude Code"], ["Project", "Choose the remote project"], ["Ready", "Ready for remote tasks"]]) {
+    for (const [step, heading] of [["Connect", "Connect to your machine"], ["Install", "Prepare this machine"], ["Credentials", "Choose model credentials"], ["Project", "Choose the remote project"], ["Ready", "Ready for remote tasks"]]) {
       await setup.getByRole("button", { name: step, exact: true }).click();
       await expect(setup.getByRole("heading", { name: heading, exact: true })).toBeVisible();
       const marker = setup.locator(".klide-machine-step-marker");
-      await expect(marker).toHaveAttribute("data-step", ({ Connect: "connection", Install: "software", "Sign in": "signIn", Project: "project", Ready: "ready" } as Record<string, string>)[step]);
+      await expect(marker).toHaveAttribute("data-step", ({ Connect: "connection", Install: "software", Credentials: "signIn", Project: "project", Ready: "ready" } as Record<string, string>)[step]);
       const selected = (await setup.locator('.klide-machine-checklist [aria-current="step"]').boundingBox())!;
       const position = (await marker.boundingBox())!;
       expect(Math.abs(position.y - selected.y)).toBeLessThan(1);

@@ -16,11 +16,13 @@ const READY = params.get("state") !== "offline" && !params.has("offline");
 const PICK = params.get("pick") === "1";
 
 let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-box", sshHost: "klide-box", checkouts: {} }];
+if (params.has("apiReady")) machines[0].inference = { provider: "openrouter", model: "deepseek/deepseek-v4.1-flash-1017" };
 let nextCallback = 1;
 const callbacks = new Map<number, (event: unknown) => void>();
 const eventListeners = new Map<number, { event: string; handler: number }>();
 let connected = false;
 let signedIn = false;
+let apiAuthorized = params.has("apiReady");
 let componentsInstalled = false;
 let promptSession: string | null = null;
 let githubPromptStage = 0;
@@ -34,6 +36,7 @@ function emit(event: string, payload: unknown) {
   transformCallback: (callback: (event: unknown) => void) => { const id = nextCallback++; callbacks.set(id, callback); return id; },
   unregisterCallback: (id: number) => { callbacks.delete(id); },
   invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
+    if (cmd === "ai_provider_models" && args.provider === "openrouter") return ["deepseek/deepseek-v4.1-flash-1017", "openai/gpt-4.1"];
     if (cmd === "machine_remote_directories" || cmd === "machine_remote_create_directory") {
       if (params.has("failBrowse")) throw new Error("Permission denied while reading this remote folder");
       let path = args.path === "~" ? "/Users/remote" : args.path as string;
@@ -151,6 +154,8 @@ function emit(event: string, payload: unknown) {
       machines = [...machines.filter((m) => m.id !== machine.id), machine];
       return machines;
     }
+    if (cmd === "machine_openrouter_keys") return [{ id: "configured", label: "Test OpenRouter key" }];
+    if (cmd === "machine_openrouter_authorize") { apiAuthorized = true; (window as any).__MACHINE_API_KEY_ID__ = args.keyId; return null; }
     if (cmd === "machine_prepare_host") { (window as any).__MACHINE_PREPARED_TARGET__ = args.target; return null; }
     if (cmd === "machine_check") {
       if (params.has("pendingCheck")) return new Promise(() => {});
@@ -158,13 +163,14 @@ function emit(event: string, payload: unknown) {
       const machine = machines.find((m) => m.id === args.id)!;
       const reachable = (READY || connected) && !(window as any).__MACHINE_FORCE_OFFLINE__;
       const needsInstall = params.has("needsInstall") && !componentsInstalled;
+      const credentialsReady = !needsInstall && (machine.inference ? apiAuthorized : !params.has("needsLogin") || signedIn);
       return {
-        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: reachable && !needsInstall && (!params.has("needsLogin") || signedIn) && !params.has("needsProject") && !params.has("unsupported"),
+        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: reachable && !needsInstall && credentialsReady && !params.has("needsProject") && !params.has("unsupported"),
         target: reachable ? { os: params.get("system") ?? "linux", arch: params.get("system") === "macos" ? "aarch64" : "x86_64" } : null,
         caption: params.has("unsupported") ? "This remote architecture does not have a published helper yet" : reachable ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: reachable ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
-        setup: { connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", githubScope: params.has("oldBackend") ? undefined : params.has("repoAccess") ? "repository" : "account", github: params.has("missingGh") && !componentsInstalled ? "missing" : (params.has("needsGhLogin") || params.has("missingGh")) && !githubSignedIn ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
+        setup: { credentialMode: machine.inference ? "openrouter" : "subscription", credentials: credentialsReady ? "ready" : machine.inference ? "needsAuthorization" : "needsLogin", connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", githubScope: params.has("oldBackend") ? undefined : params.has("repoAccess") ? "repository" : "account", github: params.has("missingGh") && !componentsInstalled ? "missing" : (params.has("needsGhLogin") || params.has("missingGh")) && !githubSignedIn ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
       };
     }
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];
@@ -189,7 +195,7 @@ function Page() {
             provider: PICK ? "claude-code" : "anthropic",
             onProviderChange: () => {},
             model: "claude-sonnet-4-6",
-            onModelChange: () => {},
+            onModelChange: (model: string) => { (window as any).__COMPOSER_MODEL__ = model; },
             effort: undefined,
             onEffortChange: () => {},
             contextWindow: undefined,

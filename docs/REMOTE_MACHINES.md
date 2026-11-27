@@ -492,3 +492,52 @@ interrupting the installed host. Linux smoke tests have bounded deadlines and
 progress diagnostics. The first Linux release binaries compiled, but their
 unflushed relay smoke tests stalled and hit the workflow deadline; those runs
 are not acceptance evidence. The corrected Linux workflow run 44116806131 passed both controlled-process smoke tests. Actual Claude and sleep/wake acceptance on the user’s machine remains outstanding.
+
+
+## OpenRouter credentials for remote tasks
+
+Credentials offers Claude subscription or OpenRouter API key. OpenRouter with
+DeepSeek requires the Claude Code runtime, a compatible helper advertising
+`remote-openrouter`, and an explicitly authorized destination API key. Claude
+account sign-in is not required. Subscription mode retains its login check.
+
+The Credentials step is editable as soon as SSH connects, including before
+helper installation. With a remote machine selected, the start composer shows
+that machine's credentials and model. OpenRouter models can be selected directly
+in the composer; saving updates the Machine's model without transferring or
+replacing its authorized API key. Failed saves retain the previous selection.
+The credential menu leads to Machines settings instead of silently moving
+execution back to this Mac. Existing conversation bindings keep their original
+selection.
+
+The model ID is saved on the Machine and frozen in each new conversation's
+Binding. Only explicitly selected key ids and labels cross the frontend IPC;
+Rust resolves the selected Mac key and transfers it through SSH stdin after
+the user authorizes that destination. The key is stored at
+`~/.klide/remote-api/openrouter/api-key` (private directory, file mode 600).
+The destination model bridge reads it per request, so neither an open Mac
+connection nor a Mac-hosted inference proxy is required. A missing or invalid
+previously configured key fails rather than using another account's key.
+
+This is one OpenRouter key per remote OS worker account; authorizing another
+key replaces that account's selected key. Use separate OS accounts for keys
+that must coexist independently. Direct-mode code running as the worker can
+read that worker's key file. Subscription credentials and other Mac accounts
+are not copied. API key authorization currently supports Linux and macOS.
+
+### OpenRouter without Claude subscription login — live acceptance 2026-11-27
+
+Helper host source `6c5d6deed83e9a5c871badf0019bef8a670f8c19` passed the native
+Linux helper checks and was installed on the personal VPS over Tailscale.
+Run `api-key-no-claude-6c5d6de` used OpenRouter model
+`deepseek/deepseek-v4.1-flash-1017` and completed three successive tool calls,
+with two timestamped after the approval client disconnected. Reconnect
+recovered the durable `done` result.
+
+The dedicated Claude test profile reported `loggedIn: false` before and after
+the run. API environment keys were unset; inference used the explicitly
+authorized destination key file with mode 600. Existing normal-profile logins
+were preserved. The actual setup probe also found the API capability and key
+ready while using that empty Claude test profile. Physical Mac closure was
+not repeated in this acceptance. Evidence is recorded locally in
+`artifacts/remote-setup-20261127/openrouter-no-signin-report.json`.

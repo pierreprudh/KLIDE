@@ -13,7 +13,9 @@
 // the one CLI the first slice runs there.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { MachineIcon, NewTaskIcon, ThisMacIcon } from "../icons";
-import { machineLabel, machinesList, subscribeMachines, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
+import { machineLabel, machineSave, machinesList, subscribeMachines, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
+import { listProviderModels } from "../ipc/aiProviders";
+import { errMessage } from "../errors";
 import { restoreStartStageMachine, setStartStageMachine, startStageMachine, subscribeStartStageMachine } from "../conversationMachines";
 import { lastKnownStatus, machineStatusCheck, machineStatusVersion, refreshMachineStatus, subscribeMachineStatus } from "../machineStatus";
 import { pushToast } from "../toast";
@@ -26,6 +28,11 @@ export function useStartStageMachine(): string | null {
 }
 
 export type WhereItRunsMenu = {
+  remote: boolean;
+  inference: Machine["inference"];
+  inferenceModels: string[];
+  savingModel: boolean;
+  onModelChange: (model: string) => Promise<void>;
   display: string;
   leading: ReactNode;
   options: { label: string; value: string; icon: ReactNode; dimmed?: boolean; resolve?: { title: string; run: () => void; showArrow?: boolean } }[];
@@ -51,6 +58,8 @@ export function useWhereItRuns({
   const machine = useStartStageMachine();
   const [machines, setMachines] = useState<Machine[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [inferenceModels, setInferenceModels] = useState<string[]>([]);
+  const [savingModel, setSavingModel] = useState(false);
   useSyncExternalStore(subscribeMachineStatus, machineStatusVersion, machineStatusVersion);
 
   useEffect(() => {
@@ -94,6 +103,15 @@ export function useWhereItRuns({
   }, [machines, workspaceRoot]);
 
   const chosen = machines.find((m) => m.id === machine);
+  const inferenceProvider = chosen?.inference?.provider;
+  useEffect(() => {
+    let live = true;
+    setInferenceModels([]);
+    if (inferenceProvider) void listProviderModels(inferenceProvider).then((models) => {
+      if (live) setInferenceModels(models);
+    }).catch((reason) => { if (live) pushToast(`Could not load VPS models: ${errMessage(reason)}`, { tone: "warn" }); });
+    return () => { live = false; };
+  }, [inferenceProvider]);
 
   const blockedReason = (m: Machine): { why: string } | null => {
     const check = machineStatusCheck(m.id, workspaceRoot);
@@ -105,6 +123,22 @@ export function useWhereItRuns({
   };
 
   return {
+    remote: !!chosen,
+    inference: chosen?.inference,
+    inferenceModels,
+    savingModel,
+    onModelChange: async (model) => {
+      if (!chosen?.inference || savingModel || model === chosen.inference.model) return;
+      setSavingModel(true);
+      try {
+        const current = (await machinesList()).find((value) => value.id === chosen.id);
+        if (!current?.inference) throw new Error("This machine's API credentials changed. Choose its credentials again.");
+        const saved = await machineSave({ ...current, inference: { ...current.inference, model } }, false);
+        setMachines(saved);
+        refreshMachineStatus(chosen.id, workspaceRoot, { force: true });
+      } catch (reason) { pushToast(`Could not change VPS model: ${errMessage(reason)}`, { tone: "warn" }); }
+      finally { setSavingModel(false); }
+    },
     display: chosen ? machineLabel(chosen) : "This Mac",
     leading: chosen ? <MachineIcon size={13} /> : <ThisMacIcon size={13} />,
     options: [

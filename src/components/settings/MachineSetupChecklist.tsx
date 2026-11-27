@@ -5,7 +5,7 @@ import { KlideMark, ProviderLogo } from "../ai/icons";
 import { canVisitMachineSetupStep, type SetupStep } from "./machineSetupSteps";
 import { machineSetupChecklist, type ChecklistAction } from "./machineChecklistState";
 
-const labels: Record<SetupStep, string> = { connection: "Connect", software: "Install", signIn: "Sign in", github: "GitHub", project: "Project", ready: "Ready" };
+const labels: Record<SetupStep, string> = { connection: "Connect", software: "Install", signIn: "Credentials", github: "GitHub", project: "Project", ready: "Ready" };
 
 export function MachineSetupChecklist({ status, workspace, active, action, busy, onSelect }: {
   status: MachineStatus | null; workspace: boolean; active: SetupStep; action: ChecklistAction | null; busy: boolean; onSelect: (step: SetupStep) => void;
@@ -29,7 +29,7 @@ export function MachineSetupChecklist({ status, workspace, active, action, busy,
   }, [active, status, workspace]);
   return <nav ref={nav} className="klide-machine-checklist-nav" aria-label="Machine setup"><span className="klide-machine-checklist-track" aria-hidden="true" /><span className="klide-machine-step-marker" aria-hidden="true" data-step={active} style={{ height: marker.height, transform: `translateY(${marker.top}px)` }} /><ol className="klide-machine-checklist" aria-label="Setup progress">{machineSetupChecklist(status, workspace, action).map((row) => <li key={row.step} data-state={row.state} aria-current={active === row.step ? "step" : undefined}>
     <button type="button" aria-label={labels[row.step]} aria-describedby={`${id}-${row.step}`} disabled={busy || !canVisitMachineSetupStep(row.step, status, workspace)} onClick={() => onSelect(row.step)}>
-      <span className="klide-machine-checklist-logo" aria-hidden="true">{row.step === "software" ? <KlideMark size={18} /> : row.step === "signIn" ? <ProviderLogo id="claude-code" size={19} /> : row.step === "github" ? <span className="klide-machine-github-logo" /> : row.step === "project" ? <FolderIcon size={18} /> : row.step === "ready" ? <SuccessIcon size={18} /> : <MachineIcon size={18} />}</span>
+      <span className="klide-machine-checklist-logo" aria-hidden="true">{row.step === "software" ? <KlideMark size={18} /> : row.step === "signIn" ? <ProviderLogo id={status?.setup.credentialMode === "openrouter" ? "openrouter" : "claude-code"} size={19} /> : row.step === "github" ? <span className="klide-machine-github-logo" /> : row.step === "project" ? <FolderIcon size={18} /> : row.step === "ready" ? <SuccessIcon size={18} /> : <MachineIcon size={18} />}</span>
       <span className="klide-machine-checklist-copy"><strong>{row.label}</strong><span id={`${id}-${row.step}`}>{row.caption}</span></span>
       <span className="klide-machine-checklist-state" aria-hidden="true">{row.state === "done" ? <CheckIcon size={12} /> : row.state === "active" ? <span className="klide-machine-spinner" /> : <span className="klide-machine-pending-dot" />}</span>
     </button>
