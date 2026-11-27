@@ -5,11 +5,17 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type MachineFactTone = "ok" | "warn" | "bad" | "quiet";
 
+export type MachineInference = { provider: "openrouter"; model: string };
+export type MachineKeyOption = { id: string; label: string };
+export function machineOpenrouterKeys(): Promise<MachineKeyOption[]> { return invoke("machine_openrouter_keys"); }
+export function machineOpenrouterAuthorize(id: string, keyId: string): Promise<void> { return invoke("machine_openrouter_authorize", { id, keyId }); }
+
 export type Machine = {
   id: string;
   label?: string;
   sshHost: string;
   checkouts?: Record<string, string>;
+  inference?: MachineInference;
 };
 
 export type MachineFact = { label: string; value: string; tone: MachineFactTone; fix?: string };
@@ -31,6 +37,8 @@ export type MachineStatus = {
     connection: "connected" | "offline" | "needsTrust" | "needsAuthentication" | "unsupported";
     host: "ready" | "outdated" | "missing" | "unknown";
     claude: "ready" | "needsLogin" | "missing" | "unknown";
+    credentialMode?: "subscription" | "openrouter";
+    credentials?: "ready" | "needsAuthorization" | "needsLogin" | "unknown";
     github?: "ready" | "needsLogin" | "missing" | "unknown";
     githubScope?: "repository" | "account";
     project: "ready" | "missing" | "unknown" | "notSelected";
@@ -66,6 +74,10 @@ export function subscribeMachines(listener: () => void): () => void {
 
 export async function machineSave(machine: Machine, creating: boolean): Promise<Machine[]> {
   const machines = await invoke<Machine[]>("machine_save", { machine, creating });
+  if (machine.inference) {
+    const saved = machines.find((value) => value.id === machine.id)?.inference;
+    if (saved?.provider !== machine.inference.provider || saved.model !== machine.inference.model) throw new Error("Restart Klide to load OpenRouter remote credentials. The running backend did not save this choice.");
+  }
   for (const listener of listeners) listener();
   return machines;
 }

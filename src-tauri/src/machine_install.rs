@@ -3,14 +3,21 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-fn run(command: &mut Command) -> Result<Output, String> {
+fn run(command: &mut Command) -> Result<Output, String> { run_input(command, None) }
+
+fn run_input(command: &mut Command, input: Option<Vec<u8>>) -> Result<Output, String> {
     use std::io::Read;
     use std::process::Stdio;
+    if input.is_some() { command.stdin(std::process::Stdio::piped()); }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+    let writer = input.map(|bytes| {
+        let mut pipe = child.stdin.take().expect("piped SSH stdin");
+        std::thread::spawn(move || { use std::io::Write; pipe.write_all(&bytes) })
+    });
     let mut stdout = child.stdout.take().ok_or("No setup stdout")?;
     let mut stderr = child.stderr.take().ok_or("No setup stderr")?;
     let output = std::thread::spawn(move || {
@@ -46,6 +53,7 @@ fn run(command: &mut Command) -> Result<Output, String> {
             .map_err(|_| "Setup error reader stopped")?
             .map_err(|e| e.to_string())?,
     };
+    if let Some(writer) = writer { writer.join().map_err(|_| "SSH input writer stopped")?.map_err(|_| "Could not send the selected API key over SSH")?; }
     if out.status.success() {
         Ok(out)
     } else {
@@ -63,6 +71,11 @@ pub(crate) fn ssh(host: &str, script: &str) -> Result<Output, String> {
         host,
         script,
     ]))
+}
+
+pub(crate) fn ssh_input(host: &str, script: &str, input: Vec<u8>) -> Result<Output, String> {
+    crate::machines::validate_ssh_host(host)?;
+    run_input(Command::new("ssh").args(crate::machines::SSH_OPTS).args(["-o", "StrictHostKeyChecking=yes", "-o", "ForwardAgent=no", "-T", "--", host, script]), Some(input))
 }
 
 pub(crate) fn detect_target(host: &str) -> Result<crate::remote_platform::HostTarget, String> {

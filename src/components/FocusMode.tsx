@@ -1781,6 +1781,7 @@ export function FocusComposer({
   }, [taEl, draftBody]);
 
   function submit() {
+    if (whereItRuns.savingModel) return;
     const text = draft.trim();
     // An attachment-only first turn is valid: a dropped screenshot is a task.
     if (!text && attachments.length === 0) return;
@@ -1973,12 +1974,27 @@ export function FocusComposer({
     });
   }
 
-  const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
   const whereItRuns = useWhereItRuns({
     workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId),
     onAddMachine: () => setAddMachineOpen(true),
     onOpenMachineSettings: () => onOpenSettingsSection("machines"),
   });
+  const canSend = !whereItRuns.savingModel && ((skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0);
+  const remoteInference = whereItRuns.inference;
+  // The destination owns the key and model. Show and submit that same choice,
+  // rather than offering this Mac's subscriptions and API credentials here.
+  const remoteModel = remoteInference ? "harness-source:" + JSON.stringify(remoteInference)
+    : whereItRuns.remote && model.startsWith("harness-source:") ? "default" : null;
+  // Push each destination model once. Re-pushing whenever `model` differs
+  // fought the panel's own pair sync (it settles the host back to a plain
+  // model) and looped until React gave up — a blank window.
+  const pushedRemoteModelRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!remoteModel) { pushedRemoteModelRef.current = null; return; }
+    if (pushedRemoteModelRef.current === remoteModel) return;
+    pushedRemoteModelRef.current = remoteModel;
+    if (model !== remoteModel) onModelChange(remoteModel);
+  }, [remoteModel, model, onModelChange]);
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
@@ -2154,11 +2170,12 @@ export function FocusComposer({
             />
             <InlineMenu
               label="Provider"
-              display={providerName(provider)}
-              leading={<ProviderLogo id={provider} size={13} />}
-              options={providerMenuOptions}
+              display={whereItRuns.remote ? remoteInference ? "OpenRouter API" : "Claude subscription" : providerName(provider)}
+              leading={<ProviderLogo id={remoteInference?.provider ?? provider} size={13} />}
+              options={whereItRuns.remote ? [{ label: "Change VPS credentials", value: "remote:credentials", icon: <ProviderLogo id={remoteInference?.provider ?? "claude-code"} size={13} /> }] : providerMenuOptions}
               selected={provider}
               onSelect={(v) => {
+                if (v === "remote:credentials") { onOpenSettingsSection("machines"); return; }
                 if (typeof v === "string" && !v.startsWith("__heading_")) {
                   onProviderChange(v as ProviderId);
                 }
@@ -2167,7 +2184,15 @@ export function FocusComposer({
           </div>
 
           <div className="klide-focus-model-controls">
-            <ModelPicker
+            {remoteInference ? <ModelPicker
+              catalogOnly
+              provider={remoteInference.provider}
+              model={remoteInference.model}
+              availableModels={whereItRuns.inferenceModels}
+              disabled={whereItRuns.savingModel}
+              onChange={(nextModel) => { void whereItRuns.onModelChange(nextModel); }}
+            /> : <ModelPicker
+              catalogOnly={whereItRuns.remote}
               provider={provider}
               model={model}
               availableModels={models}
@@ -2176,7 +2201,7 @@ export function FocusComposer({
                 rememberModelForProvider(provider, nextModel);
                 onModelChange(nextModel);
               }}
-            />
+            />}
             {effortLevels.length > 0 && (
               <InlineMenu
                 label="Reasoning effort"

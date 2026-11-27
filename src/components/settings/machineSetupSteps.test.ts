@@ -7,7 +7,8 @@ describe("guided SSH setup", () => {
   it("lets ready machines revisit setup while gating unverified prerequisites", () => {
     for (const step of ["connection", "software", "signIn", "project", "ready"] as const) expect(canVisitMachineSetupStep(step, ready, true)).toBe(true);
     expect(canVisitMachineSetupStep("software", status({ connection: "offline" }), true)).toBe(false);
-    expect(canVisitMachineSetupStep("signIn", status({ host: "missing" }), true)).toBe(false);
+    expect(canVisitMachineSetupStep("signIn", status({ host: "missing" }), true)).toBe(true);
+    expect(canVisitMachineSetupStep("signIn", status({ connection: "offline" }), true)).toBe(false);
     expect(canVisitMachineSetupStep("connection", null, true)).toBe(true);
     expect(canVisitMachineSetupStep("project", ready, false)).toBe(false);
   });
@@ -25,5 +26,13 @@ describe("guided SSH setup", () => {
     expect(machineSetupStep(ready, true)).toBe("ready");
     expect(machineSetupStep({ ...ready, setup: { ...ready.setup, project: "notSelected" } }, false)).toBe("ready");
     expect(machineSetupStep({ ...ready, ready: false }, true)).not.toBe("ready");
+  });
+  it("uses configured OpenRouter credentials without a Claude subscription login", () => {
+    const api: MachineStatus = { ...ready, setup: { ...ready.setup, claude: "needsLogin", credentialMode: "openrouter", credentials: "ready" } };
+    expect(machineSetupStep(api, true)).toBe("ready");
+    expect(machineSetupStep({ ...api, ready: false, setup: { ...api.setup, project: "missing" } }, true)).toBe("project");
+  });
+  it("requires OpenRouter authorization even if a Claude subscription is logged in", () => {
+    expect(machineSetupStep({ ...ready, ready: false, setup: { ...ready.setup, credentialMode: "openrouter", credentials: "needsAuthorization" } }, true)).toBe("signIn");
   });
 });

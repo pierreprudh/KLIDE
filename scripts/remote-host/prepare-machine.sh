@@ -10,13 +10,32 @@ case "$(uname -s)" in
     if ! command -v gh >/dev/null 2>&1 && command -v brew >/dev/null 2>&1; then brew install gh; fi
     ;;
   Linux)
-    if ! command -v apt-get >/dev/null 2>&1; then
-      echo 'Install git, curl, gh and the WebKitGTK 4.1 runtime with your package manager, then check again.'
-      exit 1
+    missing=''
+    for tool in git curl gh; do
+      if ! command -v "$tool" >/dev/null 2>&1; then missing="$missing $tool"; fi
+    done
+    if ! command -v dpkg-query >/dev/null 2>&1 ||
+       test "$(dpkg-query -W -f='${db:Status-Status}' libwebkit2gtk-4.1-0 2>/dev/null)" != installed; then
+      missing="$missing libwebkit2gtk-4.1-0"
     fi
-    if test "$(id -u)" = 0; then elevate=''; else elevate=sudo; fi
-    $elevate apt-get update
-    $elevate apt-get install -y git curl gh libwebkit2gtk-4.1-0
+    if test -n "$missing"; then
+      if ! command -v apt-get >/dev/null 2>&1; then
+        echo "Ask an administrator to install these packages with your package manager:$missing"
+        exit 1
+      fi
+      if test "$(id -u)" = 0; then
+        elevate=''
+      elif command -v sudo >/dev/null 2>&1 && sudo -v; then
+        elevate=sudo
+      else
+        echo "Ask an administrator to run: apt-get update && apt-get install -y$missing"
+        echo 'Then continue setup with this worker account. It does not need permanent administrator access.'
+        exit 1
+      fi
+      $elevate apt-get update
+      # Each entry is a fixed package name selected above, never user input.
+      $elevate apt-get install -y $missing
+    fi
     ;;
   *) echo 'Unsupported remote operating system'; exit 1 ;;
 esac

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { machineCheck, machineInstallHost, machineLabel, machineRemove, machineSave, machinesList, subscribeMachines, type Machine, type MachineStatus, type MachineConnectionMethod } from "../../ipc/machines";
+import { machineCheck, machineInstallHost, machineLabel, machineRemove, machineSave, machinesList, subscribeMachines, type Machine, type MachineInference, type MachineStatus, type MachineConnectionMethod } from "../../ipc/machines";
 import { open } from "@tauri-apps/plugin-dialog";
 import { errMessage } from "../../errors";
 import { refreshMachineStatus } from "../../machineStatus";
@@ -14,11 +14,12 @@ import "./machines.css";
 
 type ConnectionKind = "cloud" | "self-hosted" | "tailscale";
 
-function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, initiallyOpen, onProject, onConnection }: {
+function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, initiallyOpen, onProject, onConnection, onInference }: {
   machine: Machine; workspaceRoot: string | null; onEdit: () => void;
   onRemove: () => Promise<void>; disabled: boolean; initiallyOpen: boolean;
   onProject: (path: string) => Promise<void>;
   onConnection: (host: string) => Promise<void>;
+  onInference: (inference: MachineInference | null) => Promise<void>;
 }) {
   const [setupOpen, setSetupOpen] = useState(initiallyOpen);
   const [status, setStatus] = useState<MachineStatus | null>(null);
@@ -40,7 +41,7 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
       .catch((reason) => { if (live) { setError(errMessage(reason)); setStatus(null); } })
       .finally(() => { if (live) setChecking(false); });
     return () => { live = false; };
-  }, [machine.id, machine.sshHost, checkout, workspaceRoot, revision]);
+  }, [machine.id, machine.sshHost, checkout, workspaceRoot, revision, machine.inference?.provider, machine.inference?.model]);
   const caption = error || (checking ? "Checking…" : status?.ready ? "Ready" : status?.caption ?? "Not checked");
   function check() { setRevision((r) => r + 1); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }
   async function install(chooseFile = false): Promise<boolean> {
@@ -69,11 +70,11 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
       Delete {machineLabel(machine)} from Klide? This removes the saved connection. Files and tasks on the remote machine are kept.
       <div className="klide-machine-actions"><GhostButton disabled={disabled || installing} onClick={() => { void onRemove(); }}>Delete machine</GhostButton><GhostButton disabled={disabled} onClick={() => setConfirmRemove(false)}>Cancel</GhostButton></div>
     </div>}
-    {setupOpen && <><MachineSetup machine={machine} status={status} checking={checking || installing} workspaceRoot={workspaceRoot} onCheck={check} onInstall={() => install()} onProject={onProject} onConnection={onConnection} onClose={() => setSetupOpen(false)} /><div className="klide-machine-management-actions"><GhostButton disabled={disabled || installing} onClick={onEdit}>Edit machine</GhostButton><button type="button" className="klide-button klide-button-ghost" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen((open) => !open)}>{detailsOpen ? "Hide advanced details" : "Advanced details"}</button></div></>}
+    {setupOpen && <><MachineSetup machine={machine} status={status} checking={checking || installing} workspaceRoot={workspaceRoot} onCheck={check} onInstall={() => install()} onProject={onProject} onConnection={onConnection} onInference={onInference} onClose={() => setSetupOpen(false)} /><div className="klide-machine-management-actions"><GhostButton disabled={disabled || installing} onClick={onEdit}>Edit machine</GhostButton><button type="button" className="klide-button klide-button-ghost" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen((open) => !open)}>{detailsOpen ? "Hide advanced details" : "Advanced details"}</button></div></>}
     {installError && <p className="klide-machine-message" role="alert">{installError}</p>}
     <div id={detailsId} hidden={!detailsOpen} className="klide-machine-details">
       <div className="klide-machine-details-body">
-        <p>Tasks run on this machine and keep going when your Mac is off. The machine must stay on. Claude Code uses its login on that machine.</p>
+        <p>Tasks run on this machine and keep going when your Mac is off. The machine must stay on. Tasks use the model credentials selected for that machine.</p>
         <p>Klide downloads a matching, checksum-verified native helper and installs it over SSH. Active tasks prevent an update. Advanced: choose a binary for this app revision if you have downloaded it separately.</p>
         <GhostButton disabled={disabled || installing} onClick={() => { void install(true); }}>Choose downloaded host binary…</GhostButton>
 
@@ -111,7 +112,7 @@ function MachineEditor({ machine, workspaceRoot, onSave, onCancel, busy, connect
         if (checkout.trim()) checkouts[workspaceRoot] = checkout.trim();
         else delete checkouts[workspaceRoot];
       }
-      void onSave({ id: id.trim(), label: label.trim() || host.trim(), sshHost: host.trim(), checkouts }, !machine);
+      void onSave({ id: id.trim(), label: label.trim() || host.trim(), sshHost: host.trim(), checkouts, inference: machine?.inference }, !machine);
     }}>
       {!machine && <div className="klide-machine-form-context">{connection === "tailscale" ? <><TailscaleIcon size={22} /><span>Connect over Tailscale</span></> : connection === "cloud" ? <><CloudIcon /><span>Connect a cloud machine</span></> : <><MachineIcon size={22} /><span>Connect a self-hosted machine</span></>}</div>}
       <MachineSshFields value={host} onChange={setHost} disabled={busy} />
@@ -172,12 +173,12 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
           <div className="klide-machine-name"><h3>This Mac</h3><span>Your local workspace</span></div>
           <span className="klide-machine-state" data-tone="quiet">Local</span>
         </div>
-        {machines.map((machine) => <MachineDetails key={machine.id + workspaceRoot} machine={machine} workspaceRoot={workspaceRoot} initiallyOpen={setupMachine === machine.id} onProject={async (path) => { if (!workspaceRoot) return; setMachines(await machineSave({ ...machine, checkouts: { ...machine.checkouts, [workspaceRoot]: path } }, false)); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }} onConnection={async (sshHost) => { setMachines(await machineSave({ ...machine, sshHost }, false)); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }} onEdit={() => { setConnection("cloud"); setEditing(machine); }} onRemove={() => remove(machine.id)} disabled={busy || editing !== undefined} />)}
+        {machines.map((machine) => <MachineDetails key={machine.id + workspaceRoot} machine={machine} workspaceRoot={workspaceRoot} initiallyOpen={setupMachine === machine.id} onProject={async (path) => { if (!workspaceRoot) return; setMachines(await machineSave({ ...machine, checkouts: { ...machine.checkouts, [workspaceRoot]: path } }, false)); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }} onConnection={async (sshHost) => { setMachines(await machineSave({ ...machine, sshHost }, false)); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }} onInference={async (inference) => { setMachines(await machineSave({ ...machine, inference: inference ?? undefined }, false)); refreshMachineStatus(machine.id, workspaceRoot, { force: true }); }} onEdit={() => { setConnection("cloud"); setEditing(machine); }} onRemove={() => remove(machine.id)} disabled={busy || editing !== undefined} />)}
         {loading && <p className="klide-machine-message" role="status">Loading machines…</p>}
         {!loading && !error && machines.length === 0 && <p className="klide-machine-message">No remote machines connected yet.</p>}
       </div>
       {error && <div className="klide-machine-confirm" role="alert">{error} <GhostButton disabled={busy || editing !== undefined} onClick={() => setReload((value) => value + 1)}>Reload</GhostButton></div>}
-      <p className="klide-machine-footnote">Select a machine in “Where it runs” before starting a conversation. Remote runs use Claude Code.</p>
+      <p className="klide-machine-footnote">Select a machine in “Where it runs” before starting a conversation. Remote runs use the Claude Code agent with subscription or OpenRouter credentials.</p>
     </SettingBlock>
 
     <SettingBlock title="Connect a machine">

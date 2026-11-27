@@ -5,7 +5,7 @@ const ready: MachineStatus = { id: "mini", label: "Mini", sshHost: "mini", ready
 describe("live setup checklist", () => {
   it("shows validated components and distinguishes GitHub installation from sign-in", () => {
     const rows = machineSetupChecklist(ready, true, null);
-    expect(rows.find((row) => row.step === "signIn")).toMatchObject({ caption: "Validated", state: "done" });
+    expect(rows.find((row) => row.step === "signIn")).toMatchObject({ caption: "Claude · signed in", state: "done" });
     expect(rows.find((row) => row.step === "github")).toMatchObject({ caption: "Installed · sign in", state: "needed" });
     expect(rows.find((row) => row.step === "ready")?.state).toBe("done");
   });
@@ -13,5 +13,10 @@ describe("live setup checklist", () => {
     expect(machineSetupChecklist(null, true, null).some((row) => row.state === "done")).toBe(false);
     expect(machineSetupChecklist(ready, true, "clone").find((row) => row.step === "project")).toMatchObject({ state: "active", caption: "Cloning…" });
     expect(machineSetupChecklist(ready, true, "clone").find((row) => row.step === "ready")?.state).toBe("active");
+  });
+  it("shows API authorization independently of Claude subscription sign-in", () => {
+    const api: MachineStatus = { ...ready, setup: { ...ready.setup, claude: "needsLogin", credentialMode: "openrouter", credentials: "ready" } };
+    expect(machineSetupChecklist(api, true, null).find((row) => row.step === "signIn")).toMatchObject({ label: "Credentials", caption: "OpenRouter · configured", state: "done" });
+    expect(machineSetupChecklist({ ...api, setup: { ...api.setup, claude: "ready", credentials: "needsAuthorization" } }, true, null).find((row) => row.step === "signIn")?.state).toBe("needed");
   });
 });
