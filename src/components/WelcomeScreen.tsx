@@ -57,7 +57,7 @@ const ACCOUNT_AGENTS = DELEGATES.filter((d) => d.supportsAccounts);
 
 export function WelcomeScreen({ recentFolders, onOpenFolder, onOpenRecent, onOpenSettings }: Props) {
   const [welcomeFilm] = useSetting(SETTINGS.welcomeFilm);
-  const { githubLogin, avatarUrl, username } = useUserInfo();
+  const { githubLogin, username } = useUserInfo();
   const [stored, setStored] = useState<Space[]>(loadSpaces);
   const [adding, setAdding] = useState(false);
 
@@ -107,8 +107,6 @@ export function WelcomeScreen({ recentFolders, onOpenFolder, onOpenRecent, onOpe
       {film}
       <Chooser
         spaces={spaces}
-        ownLogin={githubLogin}
-        ownAvatar={avatarUrl}
         onEnter={enter}
         onAdd={() => setAdding(true)}
         onOpenSettings={onOpenSettings}
@@ -121,15 +119,11 @@ export function WelcomeScreen({ recentFolders, onOpenFolder, onOpenRecent, onOpe
 
 function Chooser({
   spaces,
-  ownLogin,
-  ownAvatar,
   onEnter,
   onAdd,
   onOpenSettings,
 }: {
   spaces: Space[];
-  ownLogin: string;
-  ownAvatar: string;
   onEnter: (space: Space) => void;
   onAdd: () => void;
   onOpenSettings: () => void;
@@ -213,7 +207,7 @@ function Chooser({
               onFocus={() => setActive(i)}
               onClick={() => open(i)}
             >
-              <Face space={space} src={space.github && space.github === ownLogin ? ownAvatar : undefined} />
+              <Face space={space} />
               <span className="ks-name">{space.name}</span>
               <span className="ks-detail">{space.github ? `@${space.github}` : " "}</span>
             </button>
@@ -252,9 +246,10 @@ function Chooser({
   );
 }
 
-/** The GitHub picture when there is one; the initial otherwise. */
-function Face({ space, src }: { space: Space; src?: string }) {
-  const url = src || (space.github ? `https://github.com/${space.github}.png?size=272` : "");
+/** The GitHub picture when there is one; the initial otherwise. Asked for at
+ *  three times its 136 px box so it stays sharp on Retina and at hover scale. */
+function Face({ space }: { space: Space }) {
+  const url = space.github ? `https://github.com/${space.github}.png?size=420` : "";
   const [failed, setFailed] = useState(false);
   return (
     <span className="ks-face">
