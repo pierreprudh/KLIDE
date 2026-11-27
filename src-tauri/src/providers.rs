@@ -2083,15 +2083,8 @@ pub fn set_active_workspace(root: Option<String>) {
     *ACTIVE_WORKSPACE.lock().unwrap() = next;
 }
 
-fn keyring_entry(provider: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, provider).map_err(|e| e.to_string())
-}
-
 fn keyring_lookup(provider: &str) -> Option<String> {
-    keyring_entry(provider)
-        .ok()?
-        .get_password()
-        .ok()
+    crate::secrets::get(KEYCHAIN_SERVICE, provider)
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
@@ -2403,9 +2396,7 @@ pub fn set_keychain_key(provider: &str, key: &str) -> Result<(), String> {
     if trimmed.is_empty() {
         return Err("API key is empty".to_string());
     }
-    keyring_entry(provider)?
-        .set_password(trimmed)
-        .map_err(|e| e.to_string())?;
+    crate::secrets::set(KEYCHAIN_SERVICE, provider, trimmed)?;
     mark_keychain(provider, true);
     if builtin_token_reference(provider).is_some() {
         set_provider_reference(provider, None).map_err(|e| {
@@ -2417,10 +2408,7 @@ pub fn set_keychain_key(provider: &str, key: &str) -> Result<(), String> {
 }
 
 pub fn clear_keychain_key(provider: &str) -> Result<(), String> {
-    let result = match keyring_entry(provider)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    };
+    let result = crate::secrets::delete(KEYCHAIN_SERVICE, provider);
     mark_keychain(provider, false);
     invalidate_token_cache(provider);
     result
@@ -2455,9 +2443,7 @@ pub fn read_main_slot_key(id: &str) -> Option<String> {
 /// Write / read / delete a secret under its own Keychain account (a saved
 /// key's `{provider}#{id}`), outside the main slot and its markers.
 pub fn set_keychain_secret(account: &str, secret: &str) -> Result<(), String> {
-    keyring_entry(account)?
-        .set_password(secret.trim())
-        .map_err(|e| e.to_string())
+    crate::secrets::set(KEYCHAIN_SERVICE, account, secret.trim())
 }
 
 pub fn read_keychain_secret(account: &str) -> Option<String> {
@@ -2465,10 +2451,7 @@ pub fn read_keychain_secret(account: &str) -> Option<String> {
 }
 
 pub fn delete_keychain_secret(account: &str) -> Result<(), String> {
-    match keyring_entry(account)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    crate::secrets::delete(KEYCHAIN_SERVICE, account)
 }
 
 // ── Provider wire vocabulary + dispatch ────────────────────────────────
