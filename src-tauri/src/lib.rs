@@ -78,6 +78,7 @@ pub mod pty_daemon;
 mod pty_host;
 mod pty_spawn;
 mod search;
+mod secrets;
 mod klide_skill;
 mod services_menu;
 mod skills;

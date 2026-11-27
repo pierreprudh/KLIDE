@@ -328,6 +328,7 @@ Klide/
     │   ├── model_capabilities.rs The one answer to what a model can do — window, tools, vision, reasoning levels, price class, maker; one order, one memo
     │   ├── pricing.rs            Hand-curated per-model list prices (the price class is the Provider's call)
     │   ├── accounts.rs           Snapshot/list/restore delegate CLI login credentials
+    │   ├── secrets.rs            Klide's own secrets (provider keys, connector sign-ins) — Keychain in release, `~/.klide/dev-secrets.json` (0600) in debug so rebuilds stop prompting
     │   ├── git/                  mod.rs: git shell-outs · cmd.rs: the one git launcher (fixed settings; restricted folders: hooks off, paused on a non-plain repo config) · github.rs: gh seam, PRs, avatars, pinned identity
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status

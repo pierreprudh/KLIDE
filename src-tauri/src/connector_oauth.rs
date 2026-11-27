@@ -94,9 +94,7 @@ fn load(server_url: &str) -> Option<Grant> {
     if let Some(hit) = CACHE.lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
         return hit.clone();
     }
-    let grant = keyring::Entry::new(KEYCHAIN_SERVICE, &key)
-        .ok()
-        .and_then(|entry| entry.get_password().ok())
+    let grant = crate::secrets::get(KEYCHAIN_SERVICE, &key)
         .and_then(|raw| serde_json::from_str::<Grant>(&raw).ok());
     CACHE.lock().unwrap_or_else(|p| p.into_inner()).insert(key, grant.clone());
     grant
@@ -105,8 +103,7 @@ fn load(server_url: &str) -> Option<Grant> {
 fn save(server_url: &str, grant: &Grant) -> Result<(), String> {
     let key = account(server_url);
     let raw = serde_json::to_string(grant).map_err(|e| e.to_string())?;
-    keyring::Entry::new(KEYCHAIN_SERVICE, &key)
-        .and_then(|entry| entry.set_password(&raw))
+    crate::secrets::set(KEYCHAIN_SERVICE, &key, &raw)
         .map_err(|e| format!("Could not save the sign-in to the Keychain: {e}"))?;
     CACHE.lock().unwrap_or_else(|p| p.into_inner()).insert(key, Some(grant.clone()));
     Ok(())
@@ -115,9 +112,7 @@ fn save(server_url: &str, grant: &Grant) -> Result<(), String> {
 /// Forget a server's sign-in. Forgetting one that was never there is fine.
 pub fn sign_out(server_url: &str) {
     let key = account(server_url);
-    if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, &key) {
-        let _ = entry.delete_credential();
-    }
+    let _ = crate::secrets::delete(KEYCHAIN_SERVICE, &key);
     CACHE.lock().unwrap_or_else(|p| p.into_inner()).insert(key, None);
 }
 
