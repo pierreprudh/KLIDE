@@ -32,6 +32,8 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
       - name: Benchmark graders (no inference)
         run: python3 -m unittest discover -s scripts/harness-bench -p 'test_*.py'
+      - name: Unprivileged remote preparation
+        run: python3 tests/remote-prepare-smoke.py
 
   rust:
     name: Rust tests
