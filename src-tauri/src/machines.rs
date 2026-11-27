@@ -166,7 +166,7 @@ pub async fn machine_remove(id: String) -> Result<Vec<Machine>, String> {
         // Removing a machine takes back the keys Klide put on it. If it can't
         // be reached, say so rather than forget a copy we can no longer erase.
         if let Some(machine) = get(&id).filter(|m| m.sync_keys) {
-            crate::machine_inference::push(&machine.ssh_host, Default::default())
+            crate::machine_inference::revoke(&machine.ssh_host)
                 .map_err(|e| format!("Could not remove the API keys on {} ({e}). Connect to it and remove it again, or turn off key sync first.", machine.label()))?;
         }
         let path = store_path().ok_or("Home directory unavailable")?;
@@ -416,8 +416,9 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
             else if !differs { "inSync".into() }
             else if status.setup.wall != "ready" { "pending".into() }
             else {
-                match local.and_then(|keys| crate::machine_inference::push(&machine.ssh_host, keys)) {
-                    Ok(manifest) => { status.setup.api_keys = manifest.into_keys().collect(); "inSync".into() }
+                match local.and_then(|_| crate::machine_inference::push_if_still_on(&machine.id)) {
+                    Ok(Some(manifest)) => { status.setup.api_keys = manifest.into_keys().collect(); "inSync".into() }
+                    Ok(None) => "off".into(),
                     Err(error) => { status.facts.push(fact("Key sync", error, "warn", None)); "pending".into() }
                 }
             };

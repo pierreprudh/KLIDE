@@ -6,21 +6,30 @@
 //! Run host reads them per request; nothing it starts may. Every program the
 //! host starts — an agent's command, git, a Delegate CLI and everything those
 //! start in turn — begins in its own mount namespace where an empty, read-only
-//! tmpfs covers `~/.klide`. The files are not hidden by a rule the child could
-//! argue with: in its view of the filesystem they do not exist.
+//! tmpfs covers `~/.klide/remote-api`. The files are not hidden by a rule the
+//! child could argue with: in its view of the filesystem they do not exist.
+//!
+//! Only that folder: the rest of `~/.klide` is what the agents work in — each
+//! conversation's worktree (`run-host/worktrees`), the coordination files a
+//! Delegate's MCP server reads, the helper binary it runs. The helper's folder
+//! (`~/.klide/bin`) is pinned read-only instead, so an agent can't swap in a
+//! binary that would read the keys the next time the host starts.
 //!
 //! How: between fork and exec the child unshares a user + mount namespace
 //! (no privilege needed), maps its own uid/gid onto themselves so files keep
-//! their owner, makes mounts private, and mounts the tmpfs. Capabilities in
+//! their owner, makes mounts private, mounts the tmpfs and re-binds the
+//! helper's folder read-only. Capabilities in
 //! the new namespace end at exec (the uid is not 0 there), so the program
 //! cannot unmount it, and a mount inherited into a namespace it creates later
 //! is locked to it.
 //!
 //! The host also marks itself non-dumpable at start ([`seal_host`]), so a
-//! child cannot reach the real `~/.klide` through `/proc/<host>/root` either.
+//! child cannot reach the keys through `/proc/<host>/root` either.
 //! What stays outside the wall: another process of the same user that is
 //! *not* the host's child — an interactive SSH login running at the same
-//! time. Use a dedicated account for the machine (setup creates `klide`).
+//! time — and what an agent could leave for one (a line in `~/.profile` runs
+//! unwalled at the next login). Use a dedicated account for the machine that
+//! nobody logs into by hand, and root sees everything.
 //!
 //! Fail closed. When this machine holds keys and the wall can't be raised —
 //! Ubuntu's AppArmor refuses unprivileged user namespaces unless a profile
@@ -31,10 +40,11 @@
 //! Linux only. On macOS the Seatbelt sandbox (`agent/sandbox.rs`) lists the
 //! same folder among its secret paths.
 
-/// What the wall covers, relative to the home directory.
-pub const COVERED: &str = ".klide";
-/// The folder whose presence means this machine holds keys to protect.
+/// What the wall covers, relative to the home directory — the keys, and so
+/// also the folder whose contents mean there is something to protect.
 pub const SECRETS: &str = ".klide/remote-api";
+/// The helper's own folder, pinned read-only behind the wall.
+pub const PINNED: &str = ".klide/bin";
 
 /// Raise the wall around `cmd` when this machine has secrets to protect.
 /// A no-op elsewhere — on macOS, on a Linux machine with no keys.
@@ -73,9 +83,12 @@ pub fn check() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         let home = crate::cli::home_dir_path().ok_or("No home directory")?;
-        let wall = linux::Wall::new(&home.join(COVERED)).ok_or("Cannot describe the wall")?;
+        let covered = home.join(SECRETS);
+        // The mount point must exist; an empty one is what a keyless machine has.
+        std::fs::create_dir_all(&covered).map_err(|e| e.to_string())?;
+        let wall = linux::Wall::new(&covered, &home.join(PINNED)).ok_or("Cannot describe the wall")?;
         let mut cmd = std::process::Command::new("/bin/sh");
-        cmd.arg("-c").arg(r#"test -z "$(ls -A "$1" 2>/dev/null)" && echo walled"#).arg("sh").arg(home.join(COVERED));
+        cmd.arg("-c").arg(r#"test -z "$(ls -A "$1" 2>/dev/null)" && ! touch "$2/.klide-wall-probe" 2>/dev/null && echo walled"#).arg("sh").arg(&covered).arg(home.join(PINNED));
         wall.apply(&mut cmd);
         let out = cmd.output().map_err(|e| format!("The kernel refused the wall: {e}"))?;
         if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "walled" { Ok(()) }
@@ -96,15 +109,29 @@ mod linux {
     /// only async-signal-safe calls are allowed, so no allocation there.
     pub struct Wall {
         target: CString,
+        /// The folder to re-bind read-only, and the flags its mount already
+        /// carries — a remount inside a user namespace must keep them.
+        pinned: Option<(CString, libc::c_ulong)>,
         uid_map: Vec<u8>,
         gid_map: Vec<u8>,
     }
 
     impl Wall {
-        pub fn new(target: &Path) -> Option<Self> {
+        pub fn new(target: &Path, pinned: &Path) -> Option<Self> {
             let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+            let pinned = if pinned.is_dir() {
+                let path = CString::new(pinned.as_os_str().as_bytes()).ok()?;
+                let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+                if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 { return None; }
+                let mut kept: libc::c_ulong = 0;
+                for (st, ms) in [(libc::ST_NOSUID, libc::MS_NOSUID), (libc::ST_NODEV, libc::MS_NODEV), (libc::ST_NOEXEC, libc::MS_NOEXEC), (libc::ST_NOATIME, libc::MS_NOATIME), (libc::ST_NODIRATIME, libc::MS_NODIRATIME), (libc::ST_RELATIME, libc::MS_RELATIME)] {
+                    if stat.f_flag & st != 0 { kept |= ms; }
+                }
+                Some((path, kept))
+            } else { None };
             Some(Wall {
                 target: CString::new(target.as_os_str().as_bytes()).ok()?,
+                pinned,
                 uid_map: format!("{uid} {uid} 1\n").into_bytes(),
                 gid_map: format!("{gid} {gid} 1\n").into_bytes(),
             })
@@ -119,7 +146,7 @@ mod linux {
     pub fn guard(cmd: &mut std::process::Command) {
         if !super::has_secrets() { return; }
         let Some(home) = crate::cli::home_dir_path() else { return };
-        match Wall::new(&home.join(super::COVERED)) {
+        match Wall::new(&home.join(super::SECRETS), &home.join(super::PINNED)) {
             Some(wall) => wall.apply(cmd),
             // A home path with a NUL byte: refuse rather than run unwalled.
             None => unsafe { cmd.pre_exec(|| Err(std::io::Error::from_raw_os_error(libc::EPERM))); },
@@ -156,6 +183,10 @@ mod linux {
                 libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
                 b"size=4k,mode=0500\0".as_ptr().cast(),
             ))?;
+            if let Some((pinned, kept)) = &wall.pinned {
+                check(libc::mount(pinned.as_ptr(), pinned.as_ptr(), std::ptr::null(), libc::MS_BIND | libc::MS_REC, std::ptr::null()))?;
+                check(libc::mount(std::ptr::null(), pinned.as_ptr(), std::ptr::null(), libc::MS_REMOUNT | libc::MS_BIND | libc::MS_RDONLY | *kept, std::ptr::null()))?;
+            }
         }
         Ok(())
     }
@@ -180,17 +211,27 @@ mod tests {
     fn a_walled_program_cannot_see_the_covered_folder() {
         let dir = std::env::temp_dir().join(format!("klide-wall-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("remote-api/openrouter")).unwrap();
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("run-host/worktrees/convo")).unwrap();
         std::fs::write(dir.join("remote-api/openrouter/api-key"), "secret").unwrap();
-        let wall = linux::Wall::new(&dir).unwrap();
+        std::fs::write(dir.join("bin/klide"), "helper").unwrap();
+        let wall = linux::Wall::new(&dir.join("remote-api"), &dir.join("bin")).unwrap();
         let mut cmd = std::process::Command::new("/bin/sh");
-        cmd.arg("-c").arg("cat \"$1/remote-api/openrouter/api-key\" 2>/dev/null; ls -A \"$1\"; umount \"$1\" 2>/dev/null && echo unmounted; true").arg("sh").arg(&dir);
+        cmd.arg("-c").arg(concat!(
+            "cat \"$1/remote-api/openrouter/api-key\" 2>/dev/null; ls -A \"$1/remote-api\";",
+            "umount \"$1/remote-api\" 2>/dev/null && echo unmounted;",
+            "echo x > \"$1/bin/klide\" 2>/dev/null && echo replaced; cat \"$1/bin/klide\";",
+            "echo work > \"$1/run-host/worktrees/convo/file\" && echo worktree-ok; true",
+        )).arg("sh").arg(&dir);
         wall.apply(&mut cmd);
         match cmd.output() {
             Ok(out) => {
                 let seen = String::from_utf8_lossy(&out.stdout);
-                assert!(!seen.contains("secret"), "{seen}");
-                assert!(!seen.contains("remote-api"), "{seen}");
-                assert!(!seen.contains("unmounted"), "{seen}");
+                assert!(!seen.contains("secret"), "the key is unreadable: {seen}");
+                assert!(!seen.contains("openrouter"), "the key folder looks empty: {seen}");
+                assert!(!seen.contains("unmounted"), "the wall can't be taken down: {seen}");
+                assert!(!seen.contains("replaced") && seen.contains("helper"), "the helper is read-only but runnable: {seen}");
+                assert!(seen.contains("worktree-ok"), "the rest of ~/.klide is the agents' to use: {seen}");
             }
             // Ubuntu's AppArmor refuses unprivileged user namespaces by
             // default; CI lifts that and sets KLIDE_REQUIRE_WALL so this

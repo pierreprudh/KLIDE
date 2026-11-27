@@ -209,6 +209,27 @@ pub fn pending(local: &BTreeMap<String, String>, remote: &Manifest) -> Vec<Strin
     ids
 }
 
+/// Held while deciding what a machine should hold and pushing it, by the
+/// switch and by a check alike: without it a check that read "sync on" could
+/// push the Mac's keys right after the switch erased them.
+static SYNC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// What a machine check pushes when sync is on and the manifests differ:
+/// re-read the switch under the lock, so a sync turned off meanwhile wins.
+pub(crate) fn push_if_still_on(id: &str) -> Result<Option<Manifest>, String> {
+    let _held = SYNC_LOCK.lock().map_err(|_| "Key sync lock unavailable")?;
+    match crate::machines::get(id).filter(|m| m.sync_keys) {
+        Some(machine) => push(&machine.ssh_host, local_keys()?).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Erase every key Klide put on a machine being removed, under the lock.
+pub(crate) fn revoke(ssh_host: &str) -> Result<(), String> {
+    let _held = SYNC_LOCK.lock().map_err(|_| "Key sync lock unavailable")?;
+    push(ssh_host, BTreeMap::new()).map(|_| ())
+}
+
 /// Push `keys` (the whole set; empty revokes all) to `ssh_host`.
 pub(crate) fn push(ssh_host: &str, keys: BTreeMap<String, String>) -> Result<Manifest, String> {
     let bundle = serde_json::to_vec(&Bundle { version: BUNDLE_VERSION, keys }).map_err(|e| e.to_string())?;
@@ -234,6 +255,7 @@ pub async fn machine_key_sync(id: String, enabled: bool) -> Result<SyncResult, S
         if crate::machine_install::detect_target(&machine.ssh_host)?.os != crate::remote_platform::HostOs::Linux {
             return Err("Key sync is available on Linux machines for now.".into());
         }
+        let _held = SYNC_LOCK.lock().map_err(|_| "Key sync lock unavailable")?;
         let manifest = push(&machine.ssh_host, if enabled { local_keys()? } else { BTreeMap::new() })?;
         crate::machines::set_sync_keys(&machine.id, enabled)?;
         Ok(SyncResult { synced: manifest.into_keys().collect() })

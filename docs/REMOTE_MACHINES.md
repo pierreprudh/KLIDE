@@ -538,8 +538,14 @@ Keys are only sent once commands on the machine can't read them
 (`secret_wall.rs`). Every program the Run host starts — agent commands
 (`agent/process.rs`), git (`git/cmd.rs`, so a planted hook too), Delegate CLIs
 (`delegate/child.rs`) and everything they start — begins in its own user +
-mount namespace where an empty read-only tmpfs covers `~/.klide`. The host
-marks itself non-dumpable so `/proc/<host>/root` doesn't lead around it. The
+mount namespace where an empty read-only tmpfs covers `~/.klide/remote-api`,
+and `~/.klide/bin` (the helper) is re-bound read-only so an agent can't swap
+in a binary that reads the keys at the next start. The rest of `~/.klide` —
+each conversation's worktree, the coordination files a Delegate's MCP server
+reads — stays the agents' to use. The host marks itself non-dumpable so
+`/proc/<host>/root` doesn't lead around it. Key pushes (the switch, a check,
+a removal) are serialized, and a check re-reads the switch before pushing,
+so a sync turned off can't be undone by a check already in flight. The
 wall fails closed: while keys are present and it can't be raised, those
 programs refuse to start with a message pointing at "Protect keys".
 
@@ -550,8 +556,8 @@ terminal) installs a profile allowing `userns` for `~/.klide/bin/klide` only.
 use it.
 
 What stays outside: another process of the same account that the host did
-not start — an interactive SSH login running alongside — and anyone with root
-on the machine (the hosting provider included). Use the dedicated `klide`
+not start — an interactive SSH login running alongside, or a line an agent
+leaves in `~/.profile` for the next one — and anyone with root on the machine (the hosting provider included). Use the dedicated `klide`
 account for the machine, and prefer provider keys with a spending limit.
 
 The probe reports `apiKeys`, `apiManifest` and `wall`; a host without the
