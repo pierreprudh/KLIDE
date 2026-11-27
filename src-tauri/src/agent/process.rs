@@ -215,6 +215,8 @@ fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>, 
     cmd.envs(extra.iter().cloned());
     #[cfg(unix)]
     cmd.process_group(0);
+    // On a Remote machine holding API keys, the command can't see them.
+    crate::secret_wall::guard_tokio(&mut cmd);
     let mut child = cmd
         .arg("-c")
         .arg(spec.command)

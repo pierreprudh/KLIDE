@@ -50,6 +50,8 @@ pub(crate) const PAUSED: &str =
     "Git is paused in this folder: its Git settings can start programs. Trust the folder to use Git here.";
 
 fn configure(cmd: &mut std::process::Command, extra: &[&str]) {
+    // A hook an agent planted runs inside the wall too.
+    crate::secret_wall::guard(cmd);
     for setting in SETTINGS.iter().chain(extra) {
         cmd.args(["-c", setting]);
     }
@@ -147,6 +149,8 @@ fn should_remind(dir: &Path, now: std::time::Instant) -> bool {
 pub(crate) fn git_in_tokio(dir: impl AsRef<Path>) -> Result<tokio::process::Command, String> {
     let std = git_in(dir)?;
     let mut cmd = tokio::process::Command::new(std.get_program());
+    // Copying program and arguments drops the std command's pre-exec hook.
+    crate::secret_wall::guard_tokio(&mut cmd);
     cmd.args(std.get_args());
     for (key, value) in std.get_envs() {
         if let Some(value) = value {

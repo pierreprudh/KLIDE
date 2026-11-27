@@ -506,17 +506,50 @@ this Mac. The machine supplies credentials, never a model:
   holds. The Harness loop already runs inside the remote Run host; only the
   admission (`remote_machine::validate_request`) and the key lookup changed.
 
-Settings → Machines → Credentials shows the Claude login and lists the
-authorized API keys. "Add an API key" sends one explicitly chosen key from this
-Mac over SSH stdin to `~/.klide/remote-api/<provider>/api-key` (dir 700, file
-600). On the host, `providers::provider_key_in` reads that file per request
-before anything else, so neither the Mac nor a Mac-side proxy is needed while a
-task runs. A missing or invalid previously configured key fails rather than
-falling back to another account's key. Only plain-keyed hosted APIs qualify
-(`machine_inference::remote_api_provider`): no local servers, no token
-commands (Vertex), no account-scoped URLs (Azure, Bedrock, Cloudflare).
+### Key sync
 
-The probe reports `apiKeys` (`klide ptyd api-status`); a host without the
+Settings → Machines → Credentials → "Keep a copy of this Mac's API keys" turns
+on key sync for the machine (`machine_key_sync`, the `syncKeys` flag on the
+Machine — a Settings save can't change it). The Mac sends its whole set of
+remote-capable keys as one bundle over SSH stdin to `klide ptyd sync-keys`,
+which validates everything first, then writes `~/.klide/remote-api/<provider>/
+api-key` (dir 700, file 600) and deletes any provider the bundle no longer
+has. It answers with a manifest of provider → fingerprint (8 bytes of
+SHA-256), never a value; `ptyd api-manifest` prints the same. Every machine
+check compares that manifest with this Mac's keys and pushes again when they
+differ, so a key changed on the Mac reaches the machine before the next remote
+conversation starts (the picker checks first). Turning sync off, or removing
+the machine, pushes an empty bundle — the keys are erased there; a removal
+that can't reach the machine is refused rather than leaving a copy behind.
+On the host, `providers::provider_key_in` reads that file per request before
+anything else, so a running task needs neither the Mac nor a Mac-side proxy.
+Only plain-keyed hosted APIs qualify (`machine_inference::remote_api_provider`):
+no local servers, no token commands (Vertex), no account-scoped URLs (Azure,
+Bedrock, Cloudflare) yet.
+
+### The secret wall
+
+Keys are only sent once commands on the machine can't read them
+(`secret_wall.rs`). Every program the Run host starts — agent commands
+(`agent/process.rs`), git (`git/cmd.rs`, so a planted hook too), Delegate CLIs
+(`delegate/child.rs`) and everything they start — begins in its own user +
+mount namespace where an empty read-only tmpfs covers `~/.klide`. The host
+marks itself non-dumpable so `/proc/<host>/root` doesn't lead around it. The
+wall fails closed: while keys are present and it can't be raised, those
+programs refuse to start with a message pointing at "Protect keys".
+
+Ubuntu restricts unprivileged user namespaces through AppArmor, so "Protect
+keys" (`scripts/remote-host/protect-keys.sh`, one sudo step in the setup
+terminal) installs a profile allowing `userns` for `~/.klide/bin/klide` only.
+`ptyd wall-check` proves the wall with a real walled `sh`; setup and sync both
+use it.
+
+What stays outside: another process of the same account that the host did
+not start — an interactive SSH login running alongside — and anyone with root
+on the machine (the hosting provider included). Use the dedicated `klide`
+account for the machine, and prefer provider keys with a spending limit.
+
+The probe reports `apiKeys`, `apiManifest` and `wall`; a host without the
 `remote-api` capability is shown as outdated once keys are authorized. The
 older machine-wide `inference` setting (one OpenRouter model forced on every
 run) is still parsed, never applied, and dropped on the next save; a

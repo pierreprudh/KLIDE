@@ -46,6 +46,11 @@ pub struct Machine {
     /// so older stores still parse, dropped on the next save, never applied.
     #[serde(default, skip_serializing)]
     pub inference: Option<serde_json::Value>,
+    /// The machine keeps a copy of this Mac's API keys (`machine_inference`
+    /// key sync). Only `machine_key_sync` changes it — a Settings save keeps
+    /// what the store says, so a stale form can never switch it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sync_keys: bool,
 }
 
 impl Machine {
@@ -133,10 +138,11 @@ pub async fn machine_save(machine: Machine, creating: bool) -> Result<Vec<Machin
         let path = store_path().ok_or("Home directory unavailable")?;
         update_store(&path, |store| {
             let existing = store.machines.iter().position(|m| m.id == machine.id);
+            let mut machine = machine;
             match (existing, creating) {
                 (Some(_), true) => return Err("A machine with this ID already exists".into()),
-                (Some(index), false) => store.machines[index] = machine,
-                (None, true) => store.machines.push(machine),
+                (Some(index), false) => { machine.sync_keys = store.machines[index].sync_keys; store.machines[index] = machine }
+                (None, true) => { machine.sync_keys = false; store.machines.push(machine) }
                 (None, false) => return Err("Machine was removed; reload Settings before saving".into()),
             }
             Ok(())
@@ -144,9 +150,25 @@ pub async fn machine_save(machine: Machine, creating: bool) -> Result<Vec<Machin
     }).await
 }
 
+/// Store a machine Klide itself changed (key sync's switch), keeping the rest.
+pub(crate) fn save_existing(machine: Machine) -> Result<(), String> {
+    let path = store_path().ok_or("Home directory unavailable")?;
+    update_store(&path, |store| {
+        let index = store.machines.iter().position(|m| m.id == machine.id).ok_or("Machine was removed")?;
+        store.machines[index] = machine;
+        Ok(())
+    }).map(|_| ())
+}
+
 #[tauri::command]
 pub async fn machine_remove(id: String) -> Result<Vec<Machine>, String> {
     crate::blocking::run(move || {
+        // Removing a machine takes back the keys Klide put on it. If it can't
+        // be reached, say so rather than forget a copy we can no longer erase.
+        if let Some(machine) = get(&id).filter(|m| m.sync_keys) {
+            crate::machine_inference::push(&machine.ssh_host, Default::default())
+                .map_err(|e| format!("Could not remove the API keys on {} ({e}). Connect to it and remove it again, or turn off key sync first.", machine.label()))?;
+        }
         let path = store_path().ok_or("Home directory unavailable")?;
         update_store(&path, |store| {
             store.machines.retain(|m| m.id != id);
@@ -264,8 +286,12 @@ pub struct SetupFacts {
     pub connection: String,
     pub host: String,
     pub claude: String,
-    /// Providers whose API key is authorized on the machine (`api-status`).
+    /// Providers whose API key is on the machine (`api-status`).
     pub api_keys: Vec<String>,
+    /// `off` | `inSync` | `pending` (a sync is owed and could not run) | `unavailable` (old helper).
+    pub key_sync: String,
+    /// Whether commands there can't see the keys: `ready` | `needsSetup` | `unknown`.
+    pub wall: String,
     pub credentials: String,
     pub github: String,
     pub github_scope: String,
@@ -283,6 +309,8 @@ fn probe_script(checkout: Option<&str>) -> String {
          echo host=$("$HOME/.klide/bin/klide" ptyd version 2>/dev/null);
          echo hostApi=$("$HOME/.klide/bin/klide" ptyd capabilities 2>/dev/null);
          echo apiKeys=$("$HOME/.klide/bin/klide" ptyd api-status 2>/dev/null);
+         echo apiManifest=$("$HOME/.klide/bin/klide" ptyd api-manifest 2>/dev/null);
+         echo wall=$("$HOME/.klide/bin/klide" ptyd wall-check 2>/dev/null);
          echo claude=$(claude --version 2>/dev/null | head -n1);
          echo login=$(claude auth status 2>/dev/null | tr -d ' \n' | grep -o '"loggedIn":[a-z]*' | cut -d: -f2);
          echo ghVersion=$(gh --version 2>/dev/null | head -n1);
@@ -334,7 +362,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         facts: Vec::new(),
         target: None,
         checkout: checkout.clone(),
-        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), api_keys: Vec::new(), credentials: "unknown".into(), github: "unknown".into(), github_scope: "repository".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
+        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), api_keys: Vec::new(), key_sync: if machine.sync_keys { "unknown" } else { "off" }.into(), wall: "unknown".into(), credentials: "unknown".into(), github: "unknown".into(), github_scope: "repository".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
     // Re-validate at the point of use: the store is plain JSON, and a host
     // starting with `-` would be read as an ssh option (e.g. ProxyCommand).
@@ -375,6 +403,23 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
 
     let mut problems: Vec<&str> = Vec::new();
     status.setup.api_keys = got("apiKeys").map(|v| v.split_whitespace().filter(|p| crate::machine_inference::remote_api_provider(p)).map(String::from).collect()).unwrap_or_default();
+    status.setup.wall = match got("wall") { Some("ready") => "ready", Some(_) => "needsSetup", None => "unknown" }.into();
+    if machine.sync_keys {
+        // A key changed on this Mac reaches the machine the next time anything
+        // checks it — the picker does, before every remote conversation.
+        let can_sync = got("hostApi").is_some_and(|v| v.split_whitespace().any(|c| c == crate::machine_inference::SYNC_CAPABILITY));
+        let remote: crate::machine_inference::Manifest = got("apiManifest").and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let local = crate::machine_inference::local_keys();
+        status.setup.key_sync = if !can_sync { "unavailable".into() }
+            else if crate::machine_inference::pending(&local, &remote).is_empty() { "inSync".into() }
+            else if status.setup.wall != "ready" && !local.is_empty() { "pending".into() }
+            else {
+                match crate::machine_inference::push(&machine.ssh_host, local) {
+                    Ok(manifest) => { status.setup.api_keys = manifest.into_keys().collect(); "inSync".into() }
+                    Err(error) => { status.facts.push(fact("Key sync", error, "warn", None)); "pending".into() }
+                }
+            };
+    }
     // A host older than `remote-api` runs only Claude Code on its login, so
     // keys authorized for it would be unusable until it is updated.
     let api_host = got("hostApi").is_some_and(|value| value.split_whitespace().any(|v| v == crate::machine_inference::API_CAPABILITY));
@@ -398,7 +443,17 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         }
     }
     let keys: Vec<&str> = status.setup.api_keys.iter().filter_map(|id| crate::providers::lookup(id).map(|e| e.short_label.unwrap_or(e.label))).collect();
-    if !keys.is_empty() { status.facts.push(fact("API keys", keys.join(", "), "ok", None)); }
+    if !keys.is_empty() {
+        let synced = if status.setup.key_sync == "inSync" { " · in sync with this Mac" } else { "" };
+        status.facts.push(fact("API keys", format!("{}{synced}", keys.join(", ")), "ok", None));
+        // Fail closed: with keys there and no wall, every command is refused.
+        if status.setup.wall == "needsSetup" {
+            problems.push("Protect the API keys in Settings → Machines");
+            status.facts.push(fact("Key protection", "Commands could read the keys — finish “Protect keys” (one sudo step)", "warn", None));
+        } else if status.setup.wall == "ready" {
+            status.facts.push(fact("Key protection", "Commands can't read the keys", "ok", None));
+        }
+    }
     match (got("claude"), got("login")) {
         (Some(v), Some("true")) => status.facts.push(fact("Claude Code", format!("{v} · logged in"), "ok", None)),
         // An API key is enough for Kit, and for Claude Code routed to it.
@@ -522,7 +577,7 @@ mod tests {
             label: None,
             ssh_host: "klide-box".into(),
             checkouts: BTreeMap::from([("/Users/me/src/app".into(), "/srv/app".into())]),
-            inference: None,
+            inference: None, sync_keys: false,
         }
     }
 

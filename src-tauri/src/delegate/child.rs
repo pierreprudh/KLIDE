@@ -18,6 +18,8 @@ pub(super) struct Child(TokioChild, #[cfg(windows)] windows_job::Job);
 
 impl Child {
     pub fn spawn(command: &mut Command) -> std::io::Result<Self> {
+        // A CLI running on a Remote machine never sees the keys Klide keeps there.
+        crate::secret_wall::guard_tokio(command);
         #[cfg(unix)]
         command.process_group(0);
         #[cfg(unix)]

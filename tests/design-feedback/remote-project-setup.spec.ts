@@ -17,14 +17,13 @@ test("a VPS offers Claude Code and Kit on the APIs it holds keys for", async ({ 
   await expect(page.getByRole("button", { name: "Where it runs", exact: true })).toContainText("klide-box");
 });
 
-test("API keys can be authorized before the VPS helper is installed", async ({ page }) => {
-  await page.goto("/preview/where-it-runs.html?settings=1&needsInstall=1");
+test("keys can't be synced until the machine hides them from commands", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?settings=1&needsLogin=1&unprotected=1");
   await page.getByRole("button", { name: "Continue setup", exact: true }).click();
   const setup = page.locator(".klide-machine-setup");
-  await setup.getByRole("button", { name: "Credentials", exact: true }).click();
-  await setup.getByRole("button", { name: "Add an API key", exact: true }).click();
-  await expect(setup.getByLabel("Provider", { exact: true })).toBeVisible();
-  await expect(setup.getByRole("button", { name: /^Authorize .* key$/ })).toBeVisible();
+  await expect(setup.getByRole("checkbox", { name: /Keep a copy of this Mac's API keys/ })).toHaveCount(0);
+  await setup.getByRole("button", { name: "Protect keys on klide-box", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__MACHINE_SETUP_ACTIONS__ ?? [])).toEqual(["protectKeys"]);
 });
 
 async function projectSetup(page: Page, extra = "", popup = false) {
@@ -141,20 +140,19 @@ test("an older running backend cannot fall back to personal GitHub sign-in",asyn
 });
 
 
-test("any hosted API key is authorized without Claude sign-in", async ({ page }) => {
+test("this Mac's keys sync to a protected machine, and turning it off removes them", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 900 });
   await page.goto("/preview/where-it-runs.html?settings=1&needsLogin=1&repoAccess=1");
   await page.getByRole("button", { name: "Continue setup", exact: true }).click();
   const setup = page.locator(".klide-machine-setup");
-  await setup.getByRole("button", { name: "Add an API key", exact: true }).click();
-  await setup.getByLabel("Provider", { exact: true }).selectOption("deepseek");
-  const authorize = setup.getByRole("button", { name: "Authorize DeepSeek key", exact: true });
-  await expect(authorize).toBeDisabled();
-  await setup.getByRole("checkbox", { name: /Store this key on/ }).check();
-  await expect(authorize).toBeEnabled();
-  await page.screenshot({ path: "artifacts/design-feedback/remote-api-credentials.png", fullPage: true });
-  await authorize.click();
+  const sync = setup.getByRole("checkbox", { name: /Keep a copy of this Mac's API keys on klide-box/ });
+  await sync.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__MACHINE_KEY_SYNC__)).toEqual({ id: "klide-box", enabled: true });
   await expect(setup.getByRole("heading", { name: "Ready for remote tasks", exact: true })).toBeVisible();
-  expect(await page.evaluate(() => (window as any).__MACHINE_API_KEY__)).toEqual({ provider: "deepseek", keyId: "configured" });
+  await setup.getByRole("button", { name: "Credentials", exact: true }).click();
+  await expect(setup.getByText(/In sync with this Mac\. On the machine: DeepSeek, OpenRouter\./)).toBeVisible();
+  await page.screenshot({ path: "artifacts/design-feedback/remote-key-sync.png", fullPage: true });
+  await setup.getByRole("checkbox", { name: /Keep a copy of this Mac's API keys/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__MACHINE_KEY_SYNC__)).toEqual({ id: "klide-box", enabled: false });
   expect(await page.evaluate(() => (window as any).__MACHINE_SETUP_ACTIONS__ ?? [])).toEqual([]);
 });

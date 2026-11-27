@@ -37,6 +37,22 @@ fn main() {
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
         if matches!(args.first().map(String::as_str), Some("ptyd" | "scheduled")) {
+            // Before anything else: no child may read this process's view of ~/.klide.
+            klide_lib::secret_wall::seal_host();
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("wall-check") {
+                match klide_lib::secret_wall::check() {
+                    Ok(()) => println!("ready"),
+                    Err(reason) => { println!("blocked"); eprintln!("{reason}"); std::process::exit(1); }
+                }
+                return;
+            }
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("api-manifest") {
+                println!("{}", serde_json::to_string(&klide_lib::machine_inference::manifest()).unwrap_or_default());
+                return;
+            }
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("sync-keys") {
+                std::process::exit(klide_lib::machine_inference::sync_main());
+            }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("openrouter-status") {
                 match klide_lib::machine_inference::configured_key() {
                     Ok(Some(_)) => println!("ready"),
@@ -50,7 +66,7 @@ fn main() {
                 return;
             }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("capabilities") {
-                println!("{} {}", klide_lib::machine_inference::CAPABILITY, klide_lib::machine_inference::API_CAPABILITY);
+                println!("{} {} {}", klide_lib::machine_inference::CAPABILITY, klide_lib::machine_inference::API_CAPABILITY, klide_lib::machine_inference::SYNC_CAPABILITY);
                 return;
             }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("version") {

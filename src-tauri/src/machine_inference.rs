@@ -1,11 +1,15 @@
 //! Explicit destination-side API credentials; secrets never enter the frontend.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const DEFAULT_MODEL: &str = "deepseek/deepseek-v4.1-flash-1017";
 pub const CAPABILITY: &str = "remote-openrouter";
 /// A host that runs Kit on, and routes Claude Code to, any authorized API.
 pub const API_CAPABILITY: &str = "remote-api";
+/// A host that takes the Mac's whole key set (`ptyd sync-keys`) behind the
+/// secret wall (`secret_wall.rs`).
+pub const SYNC_CAPABILITY: &str = "key-sync";
 pub const KEY_PATH: &str = "~/.klide/remote-api/openrouter/api-key";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,52 +101,129 @@ fn profile_key(path: &Path) -> Result<Option<String>, String> {
     Ok(key)
 }
 
-#[derive(Serialize)]
-pub struct KeyOption { id: String, label: String }
+// ── Key sync ─────────────────────────────────────────────────────────────
+//
+// The machine's keys are a copy of the Mac's: the Mac sends its whole set of
+// remote-capable keys, the host replaces what it holds with exactly that set
+// (a key deleted on the Mac is deleted there), and answers with a manifest of
+// names and fingerprints — never a value — so the Mac can tell "in sync" from
+// "3 changes" without reading a secret back.
 
-/// The keys this Mac holds for `provider` that may be sent to a machine.
-#[tauri::command]
-pub async fn machine_api_keys(provider: String) -> Result<Vec<KeyOption>, String> {
-    crate::blocking::run(move || {
-        provider_dir(&provider)?;
-        let mut keys = Vec::new();
-        if crate::providers::key_status(&provider)?.has_key {
-            keys.push(KeyOption { id: "configured".into(), label: "Current key".into() });
-        }
-        keys.extend(crate::provider_keys::list(&provider).keys.into_iter().map(|key| KeyOption { id: key.id, label: key.label }));
-        Ok(keys)
-    }).await
+/// Provider id → fingerprint of the key the machine holds.
+pub type Manifest = BTreeMap<String, String>;
+
+/// A short, one-way name for a key: enough to compare, useless to call an API.
+pub fn fingerprint(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(key.as_bytes());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
-/// Send one explicitly chosen key to the machine over SSH stdin. It lands in
-/// `~/.klide/remote-api/<provider>/api-key` (dir 700, file 600) and replaces
-/// whatever that worker account held for the provider.
+/// What this machine holds now (host side).
+pub fn manifest() -> Manifest {
+    configured_providers().into_iter()
+        .filter_map(|id| configured_key_for(&id).ok().flatten().map(|key| (id, fingerprint(&key))))
+        .collect()
+}
+
+#[derive(Serialize, Deserialize)]
+struct Bundle { version: u32, keys: BTreeMap<String, String> }
+const BUNDLE_VERSION: u32 = 1;
+
+/// `klide ptyd sync-keys`: the bundle on stdin, the manifest on stdout.
+pub fn sync_main() -> i32 {
+    use std::io::Read;
+    let mut input = String::new();
+    if std::io::stdin().take(1 << 20).read_to_string(&mut input).is_err() { eprintln!("Could not read the key bundle"); return 1; }
+    let result = serde_json::from_str::<Bundle>(&input).map_err(|_| "The key bundle is not valid".to_string())
+        .and_then(|bundle| {
+            if bundle.version != BUNDLE_VERSION { return Err("This helper does not understand the key bundle; update it in Settings → Machines".into()); }
+            let home = crate::cli::home_dir_path().ok_or("No home directory")?;
+            // Revoking everything needs no wall; storing a key does.
+            if !bundle.keys.is_empty() { crate::secret_wall::check().map_err(|_| crate::secret_wall::REFUSED.to_string())?; }
+            apply_sync(&home, &bundle.keys)
+        });
+    match result {
+        Ok(manifest) => { println!("{}", serde_json::to_string(&manifest).unwrap_or_default()); 0 }
+        Err(error) => { eprintln!("{error}"); 1 }
+    }
+}
+
+/// Replace the keys under `home` with exactly `keys`. Every value is checked
+/// before anything is written, so a bad bundle changes nothing.
+fn apply_sync(home: &Path, keys: &BTreeMap<String, String>) -> Result<Manifest, String> {
+    for (provider, key) in keys {
+        provider_dir(provider)?;
+        if key.trim().is_empty() || key.len() > 16384 || key.chars().any(char::is_control) { return Err(format!("The {provider} key is not valid")); }
+    }
+    let root = home.join(".klide/remote-api");
+    private_dir(&home.join(".klide"))?;
+    private_dir(&root)?;
+    for (provider, key) in keys {
+        let dir = home.join(provider_dir(provider)?);
+        private_dir(&dir)?;
+        crate::durable::write_atomic_private(&dir.join("api-key"), key.trim().as_bytes())?;
+    }
+    for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !keys.contains_key(&name) { std::fs::remove_dir_all(entry.path()).map_err(|e| format!("Could not remove the {name} key: {e}"))?; }
+    }
+    Ok(keys.iter().map(|(provider, key)| (provider.clone(), fingerprint(key.trim()))).collect())
+}
+
+fn private_dir(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        if !dir.exists() { std::fs::DirBuilder::new().mode(0o700).create(dir).map_err(|e| e.to_string())?; }
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())
+    }
+    #[cfg(not(unix))]
+    { std::fs::create_dir_all(dir).map_err(|e| e.to_string()) }
+}
+
+/// Every remote-capable key this Mac holds (Mac side).
+pub fn local_keys() -> BTreeMap<String, String> {
+    crate::providers::PROVIDERS.iter().map(|entry| entry.id)
+        .filter(|id| remote_api_provider(id))
+        .filter_map(|id| crate::providers::provider_key(id).ok().flatten().map(|key| (id.to_string(), key)))
+        .collect()
+}
+
+/// Which providers differ between this Mac and a machine's manifest.
+pub fn pending(local: &BTreeMap<String, String>, remote: &Manifest) -> Vec<String> {
+    let mut ids: Vec<String> = local.iter().filter(|(id, key)| remote.get(*id) != Some(&fingerprint(key.trim()))).map(|(id, _)| id.clone()).collect();
+    ids.extend(remote.keys().filter(|id| !local.contains_key(*id)).cloned());
+    ids.sort(); ids.dedup();
+    ids
+}
+
+/// Push `keys` (the whole set; empty revokes all) to `ssh_host`.
+pub(crate) fn push(ssh_host: &str, keys: BTreeMap<String, String>) -> Result<Manifest, String> {
+    let bundle = serde_json::to_vec(&Bundle { version: BUNDLE_VERSION, keys }).map_err(|e| e.to_string())?;
+    let out = crate::machine_install::ssh_input(ssh_host, r#""$HOME/.klide/bin/klide" ptyd sync-keys"#, bundle)?;
+    serde_json::from_slice(String::from_utf8_lossy(&out.stdout).trim().as_bytes()).map_err(|_| "The machine did not confirm its keys".into())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncResult { synced: Vec<String> }
+
+/// Turn key sync on (push this Mac's keys now) or off (remove every key Klide
+/// put on the machine). Either way the switch is saved on the Machine.
 #[tauri::command]
-pub async fn machine_api_authorize(id: String, provider: String, key_id: String) -> Result<(), String> {
+pub async fn machine_key_sync(id: String, enabled: bool) -> Result<SyncResult, String> {
     crate::blocking::run(move || {
-        let dir = provider_dir(&provider)?;
-        let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
+        let mut machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
         if crate::machine_install::detect_target(&machine.ssh_host)?.os == crate::remote_platform::HostOs::Windows {
-            return Err("API key setup currently supports Linux and macOS machines.".into());
+            return Err("Key sync currently supports Linux and macOS machines.".into());
         }
-        let key = if key_id == "configured" { crate::providers::provider_key(&provider)?.ok_or("No key is configured for this provider")? }
-            else { crate::provider_keys::resolve_saved(&provider, &key_id)? };
-        // `dir` is built from a registry id (letters, digits, hyphens), never user text.
-        let script = format!(r#"set -eu
-umask 077
-p="$HOME/{dir}"
-mkdir -p "$p"
-chmod 700 "$HOME/.klide/remote-api" "$p"
-t=$(mktemp "$p/.api-key.XXXXXX")
-trap 'rm -f "$t"' EXIT HUP INT TERM
-cat > "$t"
-test -s "$t"
-chmod 600 "$t"
-mv -f "$t" "$p/api-key"
-"#);
-        crate::machine_install::ssh_input(&machine.ssh_host, &script, key.into_bytes())?;
-        Ok(())
+        let manifest = push(&machine.ssh_host, if enabled { local_keys() } else { BTreeMap::new() })?;
+        machine.sync_keys = enabled;
+        crate::machines::save_existing(machine)?;
+        Ok(SyncResult { synced: manifest.into_keys().collect() })
     }).await
 }
 
@@ -154,6 +235,25 @@ mod tests {
         assert!(credential_ready(true, true, &[]));
         assert!(credential_ready(false, false, &["deepseek".into()]));
         assert!(!credential_ready(true, false, &[]));
+    }
+    #[test]
+    fn a_sync_replaces_the_machines_keys_with_exactly_the_macs() {
+        let home = std::env::temp_dir().join(format!("klide-sync-{}", std::process::id()));
+        std::fs::create_dir_all(home.join(".klide/remote-api/mistral")).unwrap();
+        std::fs::write(home.join(".klide/remote-api/mistral/api-key"), "old").unwrap();
+        let keys: BTreeMap<String, String> = [("openrouter".to_string(), "sk-or".to_string()), ("deepseek".to_string(), "sk-ds".to_string())].into();
+        let manifest = apply_sync(&home, &keys).unwrap();
+        assert_eq!(manifest.keys().collect::<Vec<_>>(), ["deepseek", "openrouter"]);
+        assert!(!home.join(".klide/remote-api/mistral").exists(), "a key gone from the Mac is gone here");
+        assert_eq!(destination_key(&home.join(".klide/remote-api/openrouter/api-key")).unwrap().as_deref(), Some("sk-or"));
+        assert!(pending(&keys, &manifest).is_empty());
+        let changed: BTreeMap<String, String> = [("openrouter".to_string(), "sk-new".to_string())].into();
+        assert_eq!(pending(&changed, &manifest), ["deepseek", "openrouter"]);
+        assert!(apply_sync(&home, &[("ollama".to_string(), "x".to_string())].into()).is_err());
+        assert!(home.join(".klide/remote-api/deepseek").exists(), "a refused bundle changes nothing");
+        assert!(apply_sync(&home, &BTreeMap::new()).unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(home.join(".klide/remote-api")).unwrap().count(), 0);
+        std::fs::remove_dir_all(home).unwrap();
     }
     #[test]
     fn only_plain_keyed_hosted_apis_can_be_sent_to_a_machine() {
