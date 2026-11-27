@@ -26,4 +26,12 @@ describe("guided SSH setup", () => {
     expect(machineSetupStep({ ...ready, setup: { ...ready.setup, project: "notSelected" } }, false)).toBe("ready");
     expect(machineSetupStep({ ...ready, ready: false }, true)).not.toBe("ready");
   });
+  it("uses configured OpenRouter credentials without a Claude subscription login", () => {
+    const api: MachineStatus = { ...ready, setup: { ...ready.setup, claude: "needsLogin", credentialMode: "openrouter", credentials: "ready" } };
+    expect(machineSetupStep(api, true)).toBe("ready");
+    expect(machineSetupStep({ ...api, ready: false, setup: { ...api.setup, project: "missing" } }, true)).toBe("project");
+  });
+  it("requires OpenRouter authorization even if a Claude subscription is logged in", () => {
+    expect(machineSetupStep({ ...ready, ready: false, setup: { ...ready.setup, credentialMode: "openrouter", credentials: "needsAuthorization" } }, true)).toBe("signIn");
+  });
 });

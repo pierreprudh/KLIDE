@@ -112,3 +112,23 @@ test("an older running backend cannot fall back to personal GitHub sign-in",asyn
   await expect(setup.getByText("Restart Klide to load repository-only setup.",{exact:false})).toBeVisible();
   await expect(setup.getByRole("button",{name:"Sign in to GitHub",exact:true})).toHaveCount(0);
 });
+
+
+test("OpenRouter DeepSeek setup authorizes only the selected key without Claude sign-in", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.goto("/preview/where-it-runs.html?settings=1&needsLogin=1&repoAccess=1");
+  await page.getByRole("button", { name: "Continue setup", exact: true }).click();
+  const setup = page.locator(".klide-machine-setup");
+  await setup.getByRole("radio", { name: "OpenRouter API key", exact: true }).check();
+  await expect(setup.getByLabel("OpenRouter model ID")).toHaveValue("deepseek/deepseek-v4.1-flash-1017");
+  await expect(setup.getByRole("button", { name: "Sign in on this machine", exact: true })).toHaveCount(0);
+  const authorize = setup.getByRole("button", { name: "Authorize selected key and model", exact: true });
+  await expect(authorize).toBeDisabled();
+  await setup.getByRole("checkbox", { name: /Store only this selected key/ }).check();
+  await expect(authorize).toBeEnabled();
+  await page.screenshot({ path: "artifacts/design-feedback/remote-openrouter-credentials.png", fullPage: true });
+  await authorize.click();
+  await expect(setup.getByRole("heading", { name: "Ready for remote tasks", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__MACHINE_API_KEY_ID__)).toBe("configured");
+  expect(await page.evaluate(() => (window as any).__MACHINE_SETUP_ACTIONS__ ?? [])).toEqual([]);
+});
