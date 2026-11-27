@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Unprivileged remote preparation
+        run: python3 tests/remote-prepare-smoke.py
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
@@ -32,8 +34,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
       - name: Benchmark graders (no inference)
         run: python3 -m unittest discover -s scripts/harness-bench -p 'test_*.py'
-      - name: Unprivileged remote preparation
-        run: python3 tests/remote-prepare-smoke.py
 
   rust:
     name: Rust tests
