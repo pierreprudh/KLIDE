@@ -1,5 +1,32 @@
 import { test, expect, type Page } from "@playwright/test";
 
+test("a VPS offers Claude Code and Kit on the APIs it holds keys for", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&needsLogin=1");
+  const agent = page.getByRole("button", { name: "Provider", exact: true });
+  await agent.click();
+  // Subscription holds Claude Code alone; no Local group: a local server can't run there.
+  await expect(page.getByRole("menuitem", { name: "Subscription" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Local" })).toHaveCount(0);
+  await expect(page.getByRole("menu", { name: "Subscription" }).getByRole("menuitem")).toHaveText(["Claude Code"]);
+  await page.getByRole("menuitem", { name: "API" }).hover();
+  await expect(page.getByRole("menuitem", { name: /^OpenRouter/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /Azure/ })).toHaveCount(0);
+  await page.screenshot({ path: "artifacts/design-feedback/vps-agent-menu.png" });
+  await page.getByRole("menuitem", { name: /^OpenRouter/ }).click();
+  await expect(agent).toContainText("OpenRouter");
+  await expect(page.getByRole("button", { name: "Where it runs", exact: true })).toContainText("klide-box");
+});
+
+test("API keys can be authorized before the VPS helper is installed", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?settings=1&needsInstall=1");
+  await page.getByRole("button", { name: "Continue setup", exact: true }).click();
+  const setup = page.locator(".klide-machine-setup");
+  await setup.getByRole("button", { name: "Credentials", exact: true }).click();
+  await setup.getByRole("button", { name: "Add an API key", exact: true }).click();
+  await expect(setup.getByLabel("Provider", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: /^Authorize .* key$/ })).toBeVisible();
+});
+
 async function projectSetup(page: Page, extra = "", popup = false) {
   await page.setViewportSize({ width: 800, height: 600 });
   await page.goto(`/preview/where-it-runs.html?needsProject=1&repoAccess=1&theme=dark&${popup ? "state=empty" : "settings=1"}&${extra}`);
@@ -111,4 +138,23 @@ test("an older running backend cannot fall back to personal GitHub sign-in",asyn
   await setup.getByRole("button",{name:"GitHub",exact:true}).click();
   await expect(setup.getByText("Restart Klide to load repository-only setup.",{exact:false})).toBeVisible();
   await expect(setup.getByRole("button",{name:"Sign in to GitHub",exact:true})).toHaveCount(0);
+});
+
+
+test("any hosted API key is authorized without Claude sign-in", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.goto("/preview/where-it-runs.html?settings=1&needsLogin=1&repoAccess=1");
+  await page.getByRole("button", { name: "Continue setup", exact: true }).click();
+  const setup = page.locator(".klide-machine-setup");
+  await setup.getByRole("button", { name: "Add an API key", exact: true }).click();
+  await setup.getByLabel("Provider", { exact: true }).selectOption("deepseek");
+  const authorize = setup.getByRole("button", { name: "Authorize DeepSeek key", exact: true });
+  await expect(authorize).toBeDisabled();
+  await setup.getByRole("checkbox", { name: /Store this key on/ }).check();
+  await expect(authorize).toBeEnabled();
+  await page.screenshot({ path: "artifacts/design-feedback/remote-api-credentials.png", fullPage: true });
+  await authorize.click();
+  await expect(setup.getByRole("heading", { name: "Ready for remote tasks", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__MACHINE_API_KEY__)).toEqual({ provider: "deepseek", keyId: "configured" });
+  expect(await page.evaluate(() => (window as any).__MACHINE_SETUP_ACTIONS__ ?? [])).toEqual([]);
 });

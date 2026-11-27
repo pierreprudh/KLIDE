@@ -81,3 +81,8 @@
 
 .klide-machine-project select.klide-field { padding: 10px 14px; border-radius: 12px; min-height: 40px; }
 .klide-machine-project input.klide-field { padding: 10px 14px; border-radius: 12px; min-height: 40px; }
+
+.klide-machine-credential-group { padding: 10px 0; }
+.klide-machine-credential-group p { margin: 0 0 8px; }
+.klide-machine-key-consent { display: flex; gap: 8px; align-items: baseline; }
+.klide-machine-key-consent { margin: 14px 0; }

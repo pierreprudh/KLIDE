@@ -9,7 +9,8 @@
 //!
 //! What this module owns: the store, the Remote checkout a workspace maps to,
 //! the exact command a spawn runs, and the readiness check. It never copies a
-//! login or a key to the machine — Machine logins stay on the machine.
+//! subscription login. An explicitly selected OpenRouter API key can be
+//! authorized over SSH; model requests then use the destination key file.
 //!
 //! Store shape (managed by Settings › Machines):
 //! ```json
@@ -41,6 +42,10 @@ pub struct Machine {
     /// Local workspace root → Remote checkout path (`~/` allowed).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub checkouts: BTreeMap<String, String>,
+    /// Legacy: a machine-wide OpenRouter model that overrode every run. Read
+    /// so older stores still parse, dropped on the next save, never applied.
+    #[serde(default, skip_serializing)]
+    pub inference: Option<serde_json::Value>,
 }
 
 impl Machine {
@@ -259,6 +264,9 @@ pub struct SetupFacts {
     pub connection: String,
     pub host: String,
     pub claude: String,
+    /// Providers whose API key is authorized on the machine (`api-status`).
+    pub api_keys: Vec<String>,
+    pub credentials: String,
     pub github: String,
     pub github_scope: String,
     pub project: String,
@@ -273,6 +281,8 @@ fn fact(label: &str, value: impl Into<String>, tone: &'static str, fix: Option<S
 fn probe_script(checkout: Option<&str>) -> String {
     let mut s = String::from(r#"export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";
          echo host=$("$HOME/.klide/bin/klide" ptyd version 2>/dev/null);
+         echo hostApi=$("$HOME/.klide/bin/klide" ptyd capabilities 2>/dev/null);
+         echo apiKeys=$("$HOME/.klide/bin/klide" ptyd api-status 2>/dev/null);
          echo claude=$(claude --version 2>/dev/null | head -n1);
          echo login=$(claude auth status 2>/dev/null | tr -d ' \n' | grep -o '"loggedIn":[a-z]*' | cut -d: -f2);
          echo ghVersion=$(gh --version 2>/dev/null | head -n1);
@@ -295,6 +305,7 @@ fn probe_script(checkout: Option<&str>) -> String {
 fn windows_probe(checkout: Option<&str>) -> String {
     use crate::remote_platform::{WINDOWS_PATH, ps_path};
     let mut script = format!("{WINDOWS_PATH} $ErrorActionPreference='Continue'; if (Test-Path -LiteralPath (Join-Path $HOME '.klide/bin/klide.exe')) {{ Write-Output ('host='+(& (Join-Path $HOME '.klide/bin/klide.exe') ptyd version)) }}; if (Get-Command claude -ErrorAction SilentlyContinue) {{ Write-Output ('claude='+(& claude --version | Select-Object -First 1)); try {{ $auth=(& claude auth status 2>$null | Out-String | ConvertFrom-Json); Write-Output ('login='+$auth.loggedIn.ToString().ToLowerInvariant()) }} catch {{}} }}; if (Get-Command gh -ErrorAction SilentlyContinue) {{ Write-Output ('ghVersion='+(& gh --version | Select-Object -First 1)); & gh auth status *> $null; if ($LASTEXITCODE -eq 0) {{ Write-Output 'gh=authenticated' }} }};");
+    script.push_str("if (Test-Path -LiteralPath (Join-Path $HOME '.klide/bin/klide.exe')) { Write-Output ('hostApi='+(& (Join-Path $HOME '.klide/bin/klide.exe') ptyd capabilities 2>$null)); Write-Output ('apiKeys='+(& (Join-Path $HOME '.klide/bin/klide.exe') ptyd api-status 2>$null)) }; ");
     if let Some(checkout)=checkout {
         script.push_str(&format!("$p={}; if (Test-Path -LiteralPath (Join-Path $p '.git')) {{ & git -C $p rev-parse --is-inside-work-tree *> $null; if ($LASTEXITCODE -eq 0) {{ Write-Output 'checkout=yes'; Write-Output ('branch='+(& git -C $p branch --show-current)); Write-Output ('dirty='+(@(& git -C $p status --porcelain).Count)) }} else {{ Write-Output 'checkout=no' }} }} else {{ Write-Output 'checkout=no' }}",ps_path(checkout)));
     }
@@ -323,7 +334,7 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
         facts: Vec::new(),
         target: None,
         checkout: checkout.clone(),
-        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), github: "unknown".into(), github_scope: "repository".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
+        setup: SetupFacts { connection: "offline".into(), host: "unknown".into(), claude: "unknown".into(), api_keys: Vec::new(), credentials: "unknown".into(), github: "unknown".into(), github_scope: "repository".into(), project: if checkout.is_some() { "unknown" } else { "notSelected" }.into() },
     };
     // Re-validate at the point of use: the store is plain JSON, and a host
     // starting with `-` would be read as an ssh option (e.g. ProxyCommand).
@@ -363,15 +374,20 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     status.facts.push(fact("Reached", format!("in {} ms", elapsed_ms(elapsed)), "ok", None));
 
     let mut problems: Vec<&str> = Vec::new();
-    status.setup.host = match got("host") { Some(version) if crate::pty_wire::remote_host_identity_compatible(version) => "ready", Some(_) => "outdated", None => "missing" }.into();
+    status.setup.api_keys = got("apiKeys").map(|v| v.split_whitespace().filter(|p| crate::machine_inference::remote_api_provider(p)).map(String::from).collect()).unwrap_or_default();
+    // A host older than `remote-api` runs only Claude Code on its login, so
+    // keys authorized for it would be unusable until it is updated.
+    let api_host = got("hostApi").is_some_and(|value| value.split_whitespace().any(|v| v == crate::machine_inference::API_CAPABILITY));
+    status.setup.host = match got("host") { Some(version) if crate::pty_wire::remote_host_identity_compatible(version) && (status.setup.api_keys.is_empty() || api_host) => "ready", Some(_) => "outdated", None => "missing" }.into();
     status.setup.claude = match (got("claude"), got("login")) { (Some(_), Some("true")) => "ready", (Some(_), _) => "needsLogin", _ => "missing" }.into();
+    status.setup.credentials = if crate::machine_inference::credential_ready(got("claude").is_some(), got("login") == Some("true"), &status.setup.api_keys) { "ready" } else { "needsLogin" }.into();
     status.setup.github = match (got("ghVersion"), got("gh")) { (_, Some(_)) => "ready", (Some(_), _) => "needsLogin", _ => "missing" }.into();
     if status.setup.github_scope == "repository" {
         status.setup.github = if got("repositoryAccess") == Some("ready") { "ready" } else { "needsLogin" }.into();
     }
     if checkout.is_some() { status.setup.project = if got("checkout") == Some("yes") { "ready" } else { "missing" }.into(); }
     match got("host") {
-        Some(version) if crate::pty_wire::remote_host_identity_compatible(version) => status.facts.push(fact("Run host", "Installed · compatible with this app", "ok", None)),
+        Some(_version) if status.setup.host == "ready" => status.facts.push(fact("Run host", "Installed · compatible with this app", "ok", None)),
         Some(version) => {
             problems.push("Run host needs updating in Settings → Machines");
             status.facts.push(fact("Run host", format!("{version} · update required"), "warn", None));
@@ -381,12 +397,17 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
             status.facts.push(fact("Run host", "Not installed or prerequisites missing", "warn", None));
         }
     }
+    let keys: Vec<&str> = status.setup.api_keys.iter().filter_map(|id| crate::providers::lookup(id).map(|e| e.short_label.unwrap_or(e.label))).collect();
+    if !keys.is_empty() { status.facts.push(fact("API keys", keys.join(", "), "ok", None)); }
     match (got("claude"), got("login")) {
+        (Some(v), Some("true")) => status.facts.push(fact("Claude Code", format!("{v} · logged in"), "ok", None)),
+        // An API key is enough for Kit, and for Claude Code routed to it.
+        (None, _) if !keys.is_empty() => status.facts.push(fact("Claude Code", "not installed · Kit runs on the API keys", "quiet", None)),
+        (Some(v), _) if !keys.is_empty() => status.facts.push(fact("Claude Code", format!("{v} · not logged in · runs on the API keys"), "quiet", Some(format!("ssh -t {} claude", machine.ssh_host)))),
         (None, _) => {
             problems.push("Claude Code missing");
             status.facts.push(fact("Claude Code", "not installed", "bad", None));
         }
-        (Some(v), Some("true")) => status.facts.push(fact("Claude Code", format!("{v} · logged in"), "ok", None)),
         (Some(v), _) => {
             problems.push("Claude Code not logged in");
             status.facts.push(fact("Claude Code", format!("{v} · not logged in"), "warn", Some(format!("ssh -t {} claude", machine.ssh_host))));
@@ -501,6 +522,7 @@ mod tests {
             label: None,
             ssh_host: "klide-box".into(),
             checkouts: BTreeMap::from([("/Users/me/src/app".into(), "/srv/app".into())]),
+            inference: None,
         }
     }
 

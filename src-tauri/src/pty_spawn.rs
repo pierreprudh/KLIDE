@@ -298,6 +298,7 @@ mod tests {
             label: None,
             ssh_host: "klide-box".into(),
             checkouts: Default::default(),
+            inference: None,
         }
     }
 

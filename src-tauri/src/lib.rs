@@ -35,6 +35,7 @@ mod coordination_bridge;
 mod loopback_server;
 mod custom_cli;
 mod machines;
+pub mod machine_inference;
 mod custom_providers;
 mod self_hosted_probe;
 mod delegate;
@@ -1398,6 +1399,8 @@ pub fn run() {
             custom_provider_remove,
             custom_cli_list,
             machines::machines_list,
+            machine_inference::machine_api_keys,
+            machine_inference::machine_api_authorize,
             machines::machine_save,
             machines::machine_remove,
             machines::machine_check,
@@ -1712,6 +1715,7 @@ mod blocking_door_tests {
         ("missions.rs", include_str!("missions.rs")),
         ("pty.rs", include_str!("pty.rs")),
         ("machine_setup.rs", include_str!("machine_setup.rs")),
+        ("machine_inference.rs", include_str!("machine_inference.rs")),
         ("machine_discovery.rs", include_str!("machine_discovery.rs")),
         ("machine_install.rs", include_str!("machine_install.rs")),
         ("local_servers.rs", include_str!("local_servers.rs")),

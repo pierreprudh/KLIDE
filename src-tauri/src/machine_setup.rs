@@ -196,7 +196,7 @@ mod tests {
     use super::*;
     #[test]
     fn personal_github_login_is_never_started_on_a_shared_remote_account() {
-        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default() };
+        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default(), inference: None };
         for os in [crate::remote_platform::HostOs::Macos, crate::remote_platform::HostOs::Linux, crate::remote_platform::HostOs::Windows] {
             assert!(script(&SetupAction::GitHub, &machine, None, os).unwrap_err().contains("repository-only"));
         }
@@ -237,7 +237,7 @@ mod tests {
             id: "mini".into(),
             label: None,
             ssh_host: "dev@machine".into(),
-            checkouts: Default::default(),
+            checkouts: Default::default(), inference: None,
         };
         let login = script(
             &SetupAction::SignIn,

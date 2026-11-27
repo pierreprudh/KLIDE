@@ -259,7 +259,7 @@ import { Z } from "../zLayers";
 import { notify } from "../toast";
 import { delegateSessionId, stopDelegatePty, writeDelegatePty } from "../ipc/delegatePty";
 import { conversationMachine, conversationMachineIsNative, setConversationMachine, subscribeConversationMachines } from "../conversationMachines";
-import { REMOTE_PROVIDER } from "../ipc/machines";
+import { isRemoteProvider } from "../ipc/machines";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
 import { SETTINGS, useSetting } from "../settingsStore";
 
@@ -1459,7 +1459,7 @@ export function AiPanel({
   // on a Remote machine uses the native Run host stream in every surface.
   const [, setMachineTick] = useState(0);
   useEffect(() => subscribeConversationMachines(() => setMachineTick((t) => t + 1)), []);
-  const remoteMachine = provider === REMOTE_PROVIDER ? conversationMachine(currentId) : null;
+  const remoteMachine = isRemoteProvider(provider) ? conversationMachine(currentId) : null;
   const nativeRemoteMachine = remoteMachine && conversationMachineIsNative(currentId) ? remoteMachine : null;
   const delegateSession = providerDelegatesWork && (remoteMachine ? !nativeRemoteMachine : variant !== "focus");
   const isLocalProvider = isManagedLocalProvider(provider);
@@ -2840,11 +2840,11 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (pendingHeroSend === null) return;
     const turn = pendingHeroSend;
     setPendingHeroSend(null);
-    // A first message for a Remote machine: place the new conversation there
-    // and let the terminal open Claude Code on it with the message as its task.
+    // A first message for a Remote machine: place the new conversation there,
+    // where its Run host runs Claude Code or Kit with the message as its task.
     // The user line is kept so the conversation is saved and named like any other.
     const session = conversationSessionRef.current;
-    if (hostMachine && session.provider === REMOTE_PROVIDER && turn.text.trim()) {
+    if (hostMachine && isRemoteProvider(session.provider) && turn.text.trim()) {
       setConversationMachine(session.conversationId, hostMachine);
     }
     void send({ text: turn.text, attachments: turn.attachments, mode: turn.mode });

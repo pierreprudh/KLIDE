@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-import { machineSave, machineRemove, subscribeMachines } from "./machines";
+import { isRemoteProvider, machineSave, machineRemove, subscribeMachines } from "./machines";
 
 describe("machine configuration updates", () => {
   beforeEach(() => invoke.mockReset());
@@ -24,5 +24,14 @@ describe("machine configuration updates", () => {
     await expect(machineSave({ id: "server", sshHost: "server" }, true)).rejects.toThrow("Invalid machine store");
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
+  });
+  it("runs Claude Code or Kit on a hosted API remotely, never a local server or another CLI", () => {
+    expect(isRemoteProvider("claude-code")).toBe(true);
+    expect(isRemoteProvider("deepseek")).toBe(true);
+    expect(isRemoteProvider("openrouter")).toBe(true);
+    expect(isRemoteProvider("ollama")).toBe(false);
+    expect(isRemoteProvider("codex")).toBe(false);
+    expect(isRemoteProvider("azure")).toBe(false);
+    expect(isRemoteProvider("google-vertex")).toBe(false);
   });
 });

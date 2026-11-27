@@ -73,7 +73,7 @@ function MachineDetails({ machine, workspaceRoot, onEdit, onRemove, disabled, in
     {installError && <p className="klide-machine-message" role="alert">{installError}</p>}
     <div id={detailsId} hidden={!detailsOpen} className="klide-machine-details">
       <div className="klide-machine-details-body">
-        <p>Tasks run on this machine and keep going when your Mac is off. The machine must stay on. Claude Code uses its login on that machine.</p>
+        <p>Tasks run on this machine and keep going when your Mac is off. The machine must stay on. Each conversation picks its agent and model; the machine supplies its Claude login or API keys.</p>
         <p>Klide downloads a matching, checksum-verified native helper and installs it over SSH. Active tasks prevent an update. Advanced: choose a binary for this app revision if you have downloaded it separately.</p>
         <GhostButton disabled={disabled || installing} onClick={() => { void install(true); }}>Choose downloaded host binary…</GhostButton>
 
@@ -177,7 +177,7 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
         {!loading && !error && machines.length === 0 && <p className="klide-machine-message">No remote machines connected yet.</p>}
       </div>
       {error && <div className="klide-machine-confirm" role="alert">{error} <GhostButton disabled={busy || editing !== undefined} onClick={() => setReload((value) => value + 1)}>Reload</GhostButton></div>}
-      <p className="klide-machine-footnote">Select a machine in “Where it runs” before starting a conversation. Remote runs use Claude Code.</p>
+      <p className="klide-machine-footnote">Select a machine in “Where it runs” before starting a conversation. Remote conversations run Claude Code on the machine’s login, or Kit and Claude Code on an API key authorized there.</p>
     </SettingBlock>
 
     <SettingBlock title="Connect a machine">

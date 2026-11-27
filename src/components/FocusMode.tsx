@@ -125,6 +125,7 @@ import {
 } from "../projectPaths";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { FocusGitIsland } from "./FocusGitIsland";
+import { isRemoteProvider, REMOTE_PROVIDER } from "../ipc/machines";
 import { usePresence } from "../hooks/usePresence";
 
 type Props = {
@@ -974,6 +975,9 @@ export function buildProviderOptions(
   onOpenKeySettings: () => void,
   llamaSetupMode: LlamaSetupMode = "klide",
   missingClis: ReadonlySet<string> = new Set(),
+  // A Remote machine is chosen: offer only what runs there (Claude Code, Kit on
+  // a hosted API), and judge a key by the machine's, not this Mac's.
+  remote?: { apiKeys: readonly string[] | null; onAuthorize: () => void },
 ): MenuOption[] {
   return providerGroupsWithCustom(custom).flatMap((group) => {
     // Delegate CLIs belong here too. They run on the subscription you already
@@ -981,24 +985,27 @@ export function buildProviderOptions(
     // session instead of a message list, which is a different surface but the
     // same conversation. Their installation status dims missing executables;
     // API key status has nothing to say about their own CLI login.
-    const items = group.items.filter((item) => item.available && isSelectedLlamaProvider(item.id, llamaSetupMode))
+    const items = group.items.filter((item) => item.available && isSelectedLlamaProvider(item.id, llamaSetupMode) && (!remote || isRemoteProvider(item.id)))
       .sort((a, b) => Number(missingClis.has(a.id)) - Number(missingClis.has(b.id)));
     if (items.length === 0) return [];
     const rows: MenuOption[] = items.map((item) => {
       // A delegate is exempt by construction, not by luck: it authenticates
       // through its own CLI login, so "no API key" is not a statement about it.
-      const missingKey =
-        keyless.has(item.id) && !isCustomProvider(item.id) && !isDelegateProvider(item.id);
+      const missingKey = remote
+        ? item.id !== REMOTE_PROVIDER && !!remote.apiKeys && !remote.apiKeys.includes(item.id)
+        : keyless.has(item.id) && !isCustomProvider(item.id) && !isDelegateProvider(item.id);
       return {
         label: item.name,
         value: item.id,
         icon: <ProviderLogo id={item.id} size={17} />,
-        dimmed: missingKey || missingClis.has(item.id),
+        dimmed: missingKey || (!remote && missingClis.has(item.id)),
         // No caption: the quieted row plus its ↗ already say "not set up, and
         // here's the way out". A sentence under every hosted provider would
         // turn a glance into a read.
         resolve: missingKey
-          ? { title: `${item.name} has no API key — open Settings`, run: onOpenKeySettings }
+          ? remote
+            ? { title: `Authorize a ${item.name} key on this machine — open Machines`, run: remote.onAuthorize }
+            : { title: `${item.name} has no API key — open Settings`, run: onOpenKeySettings }
           : undefined,
       };
     });
@@ -1973,12 +1980,21 @@ export function FocusComposer({
     });
   }
 
-  const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
   const whereItRuns = useWhereItRuns({
     workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId),
     onAddMachine: () => setAddMachineOpen(true),
     onOpenMachineSettings: () => onOpenSettingsSection("machines"),
   });
+  const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
+  const remoteMachine = whereItRuns.remote;
+  const remoteApiKeys = whereItRuns.apiKeys;
+  const agentMenuOptions = useMemo(
+    () => remoteMachine
+      ? buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api"), llamaSetupMode, missingDelegateClis,
+          { apiKeys: remoteApiKeys, onAuthorize: () => onOpenSettingsSection("machines") })
+      : providerMenuOptions,
+    [remoteMachine, remoteApiKeys, providerMenuOptions, customProviders, keylessProviders, onOpenSettingsSection, llamaSetupMode, missingDelegateClis],
+  );
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
@@ -2156,7 +2172,7 @@ export function FocusComposer({
               label="Provider"
               display={providerName(provider)}
               leading={<ProviderLogo id={provider} size={13} />}
-              options={providerMenuOptions}
+              options={agentMenuOptions}
               selected={provider}
               onSelect={(v) => {
                 if (typeof v === "string" && !v.startsWith("__heading_")) {
@@ -2168,6 +2184,7 @@ export function FocusComposer({
 
           <div className="klide-focus-model-controls">
             <ModelPicker
+              catalogOnly={remoteMachine}
               provider={provider}
               model={model}
               availableModels={models}

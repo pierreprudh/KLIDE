@@ -37,6 +37,22 @@ fn main() {
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
         if matches!(args.first().map(String::as_str), Some("ptyd" | "scheduled")) {
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("openrouter-status") {
+                match klide_lib::machine_inference::configured_key() {
+                    Ok(Some(_)) => println!("ready"),
+                    Ok(None) => println!("missing"),
+                    Err(error) => { eprintln!("{error}"); std::process::exit(1); }
+                }
+                return;
+            }
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("api-status") {
+                println!("{}", klide_lib::machine_inference::configured_providers().join(" "));
+                return;
+            }
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("capabilities") {
+                println!("{} {}", klide_lib::machine_inference::CAPABILITY, klide_lib::machine_inference::API_CAPABILITY);
+                return;
+            }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("version") {
                 println!(
                     "{} {} {}",

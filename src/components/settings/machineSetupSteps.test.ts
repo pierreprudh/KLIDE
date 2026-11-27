@@ -7,7 +7,8 @@ describe("guided SSH setup", () => {
   it("lets ready machines revisit setup while gating unverified prerequisites", () => {
     for (const step of ["connection", "software", "signIn", "project", "ready"] as const) expect(canVisitMachineSetupStep(step, ready, true)).toBe(true);
     expect(canVisitMachineSetupStep("software", status({ connection: "offline" }), true)).toBe(false);
-    expect(canVisitMachineSetupStep("signIn", status({ host: "missing" }), true)).toBe(false);
+    expect(canVisitMachineSetupStep("signIn", status({ host: "missing" }), true)).toBe(true);
+    expect(canVisitMachineSetupStep("signIn", status({ connection: "offline" }), true)).toBe(false);
     expect(canVisitMachineSetupStep("connection", null, true)).toBe(true);
     expect(canVisitMachineSetupStep("project", ready, false)).toBe(false);
   });
@@ -25,5 +26,11 @@ describe("guided SSH setup", () => {
     expect(machineSetupStep(ready, true)).toBe("ready");
     expect(machineSetupStep({ ...ready, setup: { ...ready.setup, project: "notSelected" } }, false)).toBe("ready");
     expect(machineSetupStep({ ...ready, ready: false }, true)).not.toBe("ready");
+  });
+  it("works on an authorized API key without a Claude login, or Claude Code installed", () => {
+    const api: MachineStatus = { ...ready, setup: { ...ready.setup, claude: "missing", apiKeys: ["openrouter"], credentials: "ready" } };
+    expect(machineSetupStep(api, true)).toBe("ready");
+    expect(machineSetupStep({ ...api, ready: false, setup: { ...api.setup, project: "missing" } }, true)).toBe("project");
+    expect(machineSetupStep({ ...api, setup: { ...api.setup, apiKeys: [], credentials: "needsLogin" } }, true)).toBe("software");
   });
 });

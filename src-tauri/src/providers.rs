@@ -1672,6 +1672,11 @@ pub fn provider_key_in(
     id: &str,
     scope: Option<&std::path::Path>,
 ) -> Result<Option<String>, String> {
+    // A Remote machine's host has no Keychain: it reads the one key the
+    // person authorized for this provider (`machine_inference`), fresh.
+    if matches!(std::env::args().nth(1).as_deref(), Some("ptyd" | "scheduled")) {
+        if let Some(key) = crate::machine_inference::configured_key_for(id)? { return Ok(Some(key)); }
+    }
     let entry = lookup(id).ok_or_else(|| format!("Provider \"{id}\" is not wired yet"))?;
     match entry.key {
         KeySource::Local => Ok(None),

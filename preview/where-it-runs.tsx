@@ -21,6 +21,7 @@ const callbacks = new Map<number, (event: unknown) => void>();
 const eventListeners = new Map<number, { event: string; handler: number }>();
 let connected = false;
 let signedIn = false;
+let apiKeys: string[] = params.has("apiReady") ? ["openrouter"] : [];
 let componentsInstalled = false;
 let promptSession: string | null = null;
 let githubPromptStage = 0;
@@ -34,6 +35,7 @@ function emit(event: string, payload: unknown) {
   transformCallback: (callback: (event: unknown) => void) => { const id = nextCallback++; callbacks.set(id, callback); return id; },
   unregisterCallback: (id: number) => { callbacks.delete(id); },
   invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
+    if (cmd === "ai_provider_models" && args.provider === "openrouter") return ["deepseek/deepseek-v4.1-flash-1017", "openai/gpt-4.1"];
     if (cmd === "machine_remote_directories" || cmd === "machine_remote_create_directory") {
       if (params.has("failBrowse")) throw new Error("Permission denied while reading this remote folder");
       let path = args.path === "~" ? "/Users/remote" : args.path as string;
@@ -151,6 +153,8 @@ function emit(event: string, payload: unknown) {
       machines = [...machines.filter((m) => m.id !== machine.id), machine];
       return machines;
     }
+    if (cmd === "machine_api_keys") return [{ id: "configured", label: "Current key" }];
+    if (cmd === "machine_api_authorize") { apiKeys = [...new Set([...apiKeys, args.provider as string])]; (window as any).__MACHINE_API_KEY__ = { provider: args.provider, keyId: args.keyId }; return null; }
     if (cmd === "machine_prepare_host") { (window as any).__MACHINE_PREPARED_TARGET__ = args.target; return null; }
     if (cmd === "machine_check") {
       if (params.has("pendingCheck")) return new Promise(() => {});
@@ -158,13 +162,14 @@ function emit(event: string, payload: unknown) {
       const machine = machines.find((m) => m.id === args.id)!;
       const reachable = (READY || connected) && !(window as any).__MACHINE_FORCE_OFFLINE__;
       const needsInstall = params.has("needsInstall") && !componentsInstalled;
+      const credentialsReady = apiKeys.length > 0 || (!needsInstall && (!params.has("needsLogin") || signedIn));
       return {
-        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: reachable && !needsInstall && (!params.has("needsLogin") || signedIn) && !params.has("needsProject") && !params.has("unsupported"),
+        id: machine.id, label: machine.label ?? machine.id, sshHost: machine.sshHost, ready: reachable && !needsInstall && credentialsReady && !params.has("needsProject") && !params.has("unsupported"),
         target: reachable ? { os: params.get("system") ?? "linux", arch: params.get("system") === "macos" ? "aarch64" : "x86_64" } : null,
         caption: params.has("unsupported") ? "This remote architecture does not have a published helper yet" : reachable ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: reachable ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
-        setup: { connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", githubScope: params.has("oldBackend") ? undefined : params.has("repoAccess") ? "repository" : "account", github: params.has("missingGh") && !componentsInstalled ? "missing" : (params.has("needsGhLogin") || params.has("missingGh")) && !githubSignedIn ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
+        setup: { apiKeys, credentials: credentialsReady ? "ready" : "needsLogin", connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", githubScope: params.has("oldBackend") ? undefined : params.has("repoAccess") ? "repository" : "account", github: params.has("missingGh") && !componentsInstalled ? "missing" : (params.has("needsGhLogin") || params.has("missingGh")) && !githubSignedIn ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
       };
     }
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];
@@ -179,6 +184,7 @@ const { default: ToastHost } = await import("../src/components/ToastHost");
 
 function Page() {
   const [section, setSection] = useState<string | null>(params.has("settings") ? "machines" : null);
+  const [provider, setProvider] = useState(PICK ? "claude-code" : "anthropic");
   if (section === "machines") return <main style={{ maxWidth: 900, padding: 24, margin: "0 auto" }}><button onClick={() => setSection(null)}>Back to Focus</button><MachinesSection workspaceRoot="/Users/pierre/Documents/Private/pixel-art-editor" /></main>;
   return (
     <div style={{ padding: "160px 40px 40px", background: "var(--bg)", minHeight: "100vh", color: "var(--fg)", boxSizing: "border-box" }}>
@@ -186,10 +192,10 @@ function Page() {
         <FocusComposer
           controls={{
             workspaceRoot: "/Users/pierre/Documents/Private/pixel-art-editor",
-            provider: PICK ? "claude-code" : "anthropic",
-            onProviderChange: () => {},
+            provider,
+            onProviderChange: (next: string) => { (window as any).__COMPOSER_PROVIDER__ = next; setProvider(next); },
             model: "claude-sonnet-4-6",
-            onModelChange: () => {},
+            onModelChange: (model: string) => { (window as any).__COMPOSER_MODEL__ = model; },
             effort: undefined,
             onEffortChange: () => {},
             contextWindow: undefined,
