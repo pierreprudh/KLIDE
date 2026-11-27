@@ -1,5 +1,33 @@
 import { test, expect, type Page } from "@playwright/test";
 
+test("API credentials can be chosen before the VPS helper is installed", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?settings=1&needsInstall=1");
+  await page.getByRole("button", { name: "Continue setup", exact: true }).click();
+  const setup = page.locator(".klide-machine-setup");
+  await setup.getByRole("button", { name: "Credentials", exact: true }).click();
+  await setup.getByRole("radio", { name: "OpenRouter API key", exact: true }).check();
+  await expect(setup.getByLabel("OpenRouter model ID")).toBeVisible();
+  await expect(setup.getByRole("button", { name: "Sign in on this machine", exact: true })).toHaveCount(0);
+});
+
+test("the VPS composer displays and selects its configured OpenRouter model", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&needsLogin=1");
+  await expect(page.getByRole("button", { name: "Provider", exact: true })).toContainText("OpenRouter API");
+  await expect(page.getByRole("button", { name: "VPS model", exact: true })).toContainText("deepseek-v4.1-flash-1017");
+  await expect.poll(() => page.evaluate(() => (window as any).__COMPOSER_MODEL__)).toBe('harness-source:{"provider":"openrouter","model":"deepseek/deepseek-v4.1-flash-1017"}');
+  await page.getByRole("button", { name: "Provider", exact: true }).click();
+  await page.getByRole("option", { name: "Change VPS credentials", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Back to Focus", exact: true })).toBeVisible();
+});
+
+test("a subscription VPS exposes the action to choose API credentials", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?pick=1");
+  await expect(page.getByRole("button", { name: "Provider", exact: true })).toContainText("Claude subscription");
+  await page.getByRole("button", { name: "Provider", exact: true }).click();
+  await page.getByRole("option", { name: "Change VPS credentials", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Back to Focus", exact: true })).toBeVisible();
+});
+
 async function projectSetup(page: Page, extra = "", popup = false) {
   await page.setViewportSize({ width: 800, height: 600 });
   await page.goto(`/preview/where-it-runs.html?needsProject=1&repoAccess=1&theme=dark&${popup ? "state=empty" : "settings=1"}&${extra}`);

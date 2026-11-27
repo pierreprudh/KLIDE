@@ -501,6 +501,13 @@ DeepSeek requires the Claude Code runtime, a compatible helper advertising
 `remote-openrouter`, and an explicitly authorized destination API key. Claude
 account sign-in is not required. Subscription mode retains its login check.
 
+The Credentials step is editable as soon as SSH connects, including before
+helper installation. With a remote machine selected, the start composer shows
+that machine's credentials and model. Its credential/model menus lead to
+Machines settings instead of offering the Mac's accounts or silently moving
+execution back to this Mac. Change credentials there before starting a new
+conversation; existing conversation bindings keep their original selection.
+
 The model ID is saved on the Machine and frozen in each new conversation's
 Binding. Only explicitly selected key ids and labels cross the frontend IPC;
 Rust resolves the selected Mac key and transfers it through SSH stdin after

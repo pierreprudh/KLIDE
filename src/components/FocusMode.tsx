@@ -1979,6 +1979,14 @@ export function FocusComposer({
     onAddMachine: () => setAddMachineOpen(true),
     onOpenMachineSettings: () => onOpenSettingsSection("machines"),
   });
+  const remoteInference = whereItRuns.inference;
+  // The destination owns the key and model. Show and submit that same choice,
+  // rather than offering this Mac's subscriptions and API credentials here.
+  const remoteModel = remoteInference ? "harness-source:" + JSON.stringify(remoteInference)
+    : whereItRuns.remote && model.startsWith("harness-source:") ? "default" : null;
+  useEffect(() => {
+    if (remoteModel && model !== remoteModel) onModelChange(remoteModel);
+  }, [remoteModel, model, onModelChange]);
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
@@ -2154,11 +2162,12 @@ export function FocusComposer({
             />
             <InlineMenu
               label="Provider"
-              display={providerName(provider)}
-              leading={<ProviderLogo id={provider} size={13} />}
-              options={providerMenuOptions}
+              display={whereItRuns.remote ? remoteInference ? "OpenRouter API" : "Claude subscription" : providerName(provider)}
+              leading={<ProviderLogo id={remoteInference?.provider ?? provider} size={13} />}
+              options={whereItRuns.remote ? [{ label: "Change VPS credentials", value: "remote:credentials", icon: <ProviderLogo id={remoteInference?.provider ?? "claude-code"} size={13} /> }] : providerMenuOptions}
               selected={provider}
               onSelect={(v) => {
+                if (v === "remote:credentials") { onOpenSettingsSection("machines"); return; }
                 if (typeof v === "string" && !v.startsWith("__heading_")) {
                   onProviderChange(v as ProviderId);
                 }
@@ -2167,7 +2176,15 @@ export function FocusComposer({
           </div>
 
           <div className="klide-focus-model-controls">
-            <ModelPicker
+            {remoteInference ? <InlineMenu
+              label="VPS model"
+              display={remoteInference.model.replace(/^deepseek\//, "")}
+              leading={<ProviderLogo id="openrouter" size={13} />}
+              options={[{ label: "Change VPS model", value: "remote:model", icon: <ProviderLogo id="openrouter" size={13} /> }]}
+              selected="remote:model"
+              onSelect={() => onOpenSettingsSection("machines")}
+            /> : <ModelPicker
+              catalogOnly={whereItRuns.remote}
               provider={provider}
               model={model}
               availableModels={models}
@@ -2176,7 +2193,7 @@ export function FocusComposer({
                 rememberModelForProvider(provider, nextModel);
                 onModelChange(nextModel);
               }}
-            />
+            />}
             {effortLevels.length > 0 && (
               <InlineMenu
                 label="Reasoning effort"

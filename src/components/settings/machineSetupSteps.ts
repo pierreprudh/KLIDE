@@ -4,7 +4,7 @@ const order: SetupStep[] = ["connection", "software", "signIn", "github", "proje
 /** Completed steps remain editable; later steps still require their prerequisites. */
 export function canVisitMachineSetupStep(step: SetupStep, status: MachineStatus | null, hasWorkspace: boolean): boolean {
   if (step === "project" && !hasWorkspace) return false;
-  if (step === "github") return status?.setup.connection === "connected";
+  if (step === "github" || step === "signIn") return status?.setup.connection === "connected";
   return order.indexOf(step) <= order.indexOf(machineSetupStep(status, hasWorkspace));
 }
 export function machineCredentialsReady(status: MachineStatus | null): boolean {

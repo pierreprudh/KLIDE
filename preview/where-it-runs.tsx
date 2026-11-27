@@ -16,12 +16,13 @@ const READY = params.get("state") !== "offline" && !params.has("offline");
 const PICK = params.get("pick") === "1";
 
 let machines: Machine[] = params.get("state") === "empty" ? [] : [{ id: "klide-box", sshHost: "klide-box", checkouts: {} }];
+if (params.has("apiReady")) machines[0].inference = { provider: "openrouter", model: "deepseek/deepseek-v4.1-flash-1017" };
 let nextCallback = 1;
 const callbacks = new Map<number, (event: unknown) => void>();
 const eventListeners = new Map<number, { event: string; handler: number }>();
 let connected = false;
 let signedIn = false;
-let apiAuthorized = false;
+let apiAuthorized = params.has("apiReady");
 let componentsInstalled = false;
 let promptSession: string | null = null;
 let githubPromptStage = 0;
@@ -193,7 +194,7 @@ function Page() {
             provider: PICK ? "claude-code" : "anthropic",
             onProviderChange: () => {},
             model: "claude-sonnet-4-6",
-            onModelChange: () => {},
+            onModelChange: (model: string) => { (window as any).__COMPOSER_MODEL__ = model; },
             effort: undefined,
             onEffortChange: () => {},
             contextWindow: undefined,

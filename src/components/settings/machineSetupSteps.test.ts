@@ -7,7 +7,8 @@ describe("guided SSH setup", () => {
   it("lets ready machines revisit setup while gating unverified prerequisites", () => {
     for (const step of ["connection", "software", "signIn", "project", "ready"] as const) expect(canVisitMachineSetupStep(step, ready, true)).toBe(true);
     expect(canVisitMachineSetupStep("software", status({ connection: "offline" }), true)).toBe(false);
-    expect(canVisitMachineSetupStep("signIn", status({ host: "missing" }), true)).toBe(false);
+    expect(canVisitMachineSetupStep("signIn", status({ host: "missing" }), true)).toBe(true);
+    expect(canVisitMachineSetupStep("signIn", status({ connection: "offline" }), true)).toBe(false);
     expect(canVisitMachineSetupStep("connection", null, true)).toBe(true);
     expect(canVisitMachineSetupStep("project", ready, false)).toBe(false);
   });

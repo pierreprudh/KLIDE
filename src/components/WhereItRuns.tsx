@@ -26,6 +26,8 @@ export function useStartStageMachine(): string | null {
 }
 
 export type WhereItRunsMenu = {
+  remote: boolean;
+  inference: Machine["inference"];
   display: string;
   leading: ReactNode;
   options: { label: string; value: string; icon: ReactNode; dimmed?: boolean; resolve?: { title: string; run: () => void; showArrow?: boolean } }[];
@@ -105,6 +107,8 @@ export function useWhereItRuns({
   };
 
   return {
+    remote: !!chosen,
+    inference: chosen?.inference,
     display: chosen ? machineLabel(chosen) : "This Mac",
     leading: chosen ? <MachineIcon size={13} /> : <ThisMacIcon size={13} />,
     options: [
