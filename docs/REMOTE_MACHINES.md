@@ -503,10 +503,12 @@ account sign-in is not required. Subscription mode retains its login check.
 
 The Credentials step is editable as soon as SSH connects, including before
 helper installation. With a remote machine selected, the start composer shows
-that machine's credentials and model. Its credential/model menus lead to
-Machines settings instead of offering the Mac's accounts or silently moving
-execution back to this Mac. Change credentials there before starting a new
-conversation; existing conversation bindings keep their original selection.
+that machine's credentials and model. OpenRouter models can be selected directly
+in the composer; saving updates the Machine's model without transferring or
+replacing its authorized API key. Failed saves retain the previous selection.
+The credential menu leads to Machines settings instead of silently moving
+execution back to this Mac. Existing conversation bindings keep their original
+selection.
 
 The model ID is saved on the Machine and frozen in each new conversation's
 Binding. Only explicitly selected key ids and labels cross the frontend IPC;

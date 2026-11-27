@@ -36,6 +36,7 @@ function emit(event: string, payload: unknown) {
   transformCallback: (callback: (event: unknown) => void) => { const id = nextCallback++; callbacks.set(id, callback); return id; },
   unregisterCallback: (id: number) => { callbacks.delete(id); },
   invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
+    if (cmd === "ai_provider_models" && args.provider === "openrouter") return ["deepseek/deepseek-v4.1-flash-1017", "openai/gpt-4.1"];
     if (cmd === "machine_remote_directories" || cmd === "machine_remote_create_directory") {
       if (params.has("failBrowse")) throw new Error("Permission denied while reading this remote folder");
       let path = args.path === "~" ? "/Users/remote" : args.path as string;

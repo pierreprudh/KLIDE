@@ -1,5 +1,28 @@
 import { test, expect, type Page } from "@playwright/test";
 
+test("choose an OpenRouter model directly in the VPS composer", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&needsLogin=1");
+  await page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ }).click();
+  await expect(page.getByRole("option", { name: /gpt-4.1/ })).toBeVisible();
+  await page.screenshot({ path: "artifacts/design-feedback/vps-inline-model-picker.png" });
+  await page.getByRole("option", { name: /gpt-4.1/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__MACHINE_SAVED__?.inference?.model)).toBe("openai/gpt-4.1");
+  await expect.poll(() => page.evaluate(() => (window as any).__COMPOSER_MODEL__)).toBe('harness-source:{"provider":"openrouter","model":"openai/gpt-4.1"}');
+  await expect(page.getByRole("button", { name: "Where it runs", exact: true })).toContainText("klide-box");
+  await expect(page.getByRole("button", { name: "Back to Focus", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__MACHINE_API_KEY_ID__)).toBeUndefined();
+});
+
+test("a failed VPS model save keeps the previous model and remote destination", async ({ page }) => {
+  await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&failSave=1");
+  await page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ }).click();
+  await page.getByRole("option", { name: /gpt-4.1/ }).click();
+  await expect(page.getByText("Could not change VPS model: Could not save machine settings", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Where it runs", exact: true })).toContainText("klide-box");
+  expect(await page.evaluate(() => (window as any).__COMPOSER_MODEL__)).toBe('harness-source:{"provider":"openrouter","model":"deepseek/deepseek-v4.1-flash-1017"}');
+});
+
 test("API credentials can be chosen before the VPS helper is installed", async ({ page }) => {
   await page.goto("/preview/where-it-runs.html?settings=1&needsInstall=1");
   await page.getByRole("button", { name: "Continue setup", exact: true }).click();
@@ -13,7 +36,7 @@ test("API credentials can be chosen before the VPS helper is installed", async (
 test("the VPS composer displays and selects its configured OpenRouter model", async ({ page }) => {
   await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&needsLogin=1");
   await expect(page.getByRole("button", { name: "Provider", exact: true })).toContainText("OpenRouter API");
-  await expect(page.getByRole("button", { name: "VPS model", exact: true })).toContainText("deepseek-v4.1-flash-1017");
+  await expect(page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__COMPOSER_MODEL__)).toBe('harness-source:{"provider":"openrouter","model":"deepseek/deepseek-v4.1-flash-1017"}');
   await page.getByRole("button", { name: "Provider", exact: true }).click();
   await page.getByRole("option", { name: "Change VPS credentials", exact: true }).click();

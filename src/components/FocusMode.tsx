@@ -1781,6 +1781,7 @@ export function FocusComposer({
   }, [taEl, draftBody]);
 
   function submit() {
+    if (whereItRuns.savingModel) return;
     const text = draft.trim();
     // An attachment-only first turn is valid: a dropped screenshot is a task.
     if (!text && attachments.length === 0) return;
@@ -1973,12 +1974,12 @@ export function FocusComposer({
     });
   }
 
-  const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
   const whereItRuns = useWhereItRuns({
     workspaceRoot, provider, onProviderChange: (p) => onProviderChange(p as ProviderId),
     onAddMachine: () => setAddMachineOpen(true),
     onOpenMachineSettings: () => onOpenSettingsSection("machines"),
   });
+  const canSend = !whereItRuns.savingModel && ((skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0);
   const remoteInference = whereItRuns.inference;
   // The destination owns the key and model. Show and submit that same choice,
   // rather than offering this Mac's subscriptions and API credentials here.
@@ -2176,13 +2177,13 @@ export function FocusComposer({
           </div>
 
           <div className="klide-focus-model-controls">
-            {remoteInference ? <InlineMenu
-              label="VPS model"
-              display={remoteInference.model.replace(/^deepseek\//, "")}
-              leading={<ProviderLogo id="openrouter" size={13} />}
-              options={[{ label: "Change VPS model", value: "remote:model", icon: <ProviderLogo id="openrouter" size={13} /> }]}
-              selected="remote:model"
-              onSelect={() => onOpenSettingsSection("machines")}
+            {remoteInference ? <ModelPicker
+              catalogOnly
+              provider={remoteInference.provider}
+              model={remoteInference.model}
+              availableModels={whereItRuns.inferenceModels}
+              disabled={whereItRuns.savingModel}
+              onChange={(nextModel) => { void whereItRuns.onModelChange(nextModel); }}
             /> : <ModelPicker
               catalogOnly={whereItRuns.remote}
               provider={provider}
