@@ -3,39 +3,39 @@
 //!
 //! A Remote machine keeps the keys it was given in `~/.klide/remote-api`
 //! (`machine_inference.rs`) so a task keeps running when the Mac is off. The
-//! Run host reads them per request; nothing it starts may. Every program the
-//! host starts — an agent's command, git, a Delegate CLI and everything those
-//! start in turn — begins in its own mount namespace where an empty, read-only
-//! tmpfs covers `~/.klide/remote-api`. The files are not hidden by a rule the
-//! child could argue with: in its view of the filesystem they do not exist.
+//! Run host reads them per request; nothing it starts may.
 //!
-//! Only that folder: the rest of `~/.klide` is what the agents work in — each
-//! conversation's worktree (`run-host/worktrees`), the coordination files a
-//! Delegate's MCP server reads, the helper binary it runs. The helper's folder
-//! (`~/.klide/bin`) is pinned read-only instead, so an agent can't swap in a
-//! binary that would read the keys the next time the host starts.
+//! **One door, at the host.** `klide ptyd` walls *itself* first thing, while
+//! it is still one thread ([`host_start`]): it opens a private handle on the
+//! key folder, then enters its own user + mount namespace where an empty,
+//! read-only tmpfs covers `~/.klide/remote-api` and `~/.klide/bin` (the
+//! helper) is re-bound read-only. Everything the host ever starts — an agent's
+//! command, git and its hooks, a Delegate CLI, a worktree setup script and the
+//! `npm install` it runs — inherits that view with no code at the spawn site,
+//! so a new spawn site can't forget it. The host alone reads keys, through the
+//! handle it opened before walling ([`read_key`]); a key sync writes the real
+//! folder, and the handle sees the change.
 //!
-//! How: between fork and exec the child unshares a user + mount namespace
-//! (no privilege needed), maps its own uid/gid onto themselves so files keep
-//! their owner, makes mounts private, mounts the tmpfs and re-binds the
-//! helper's folder read-only. Capabilities in
-//! the new namespace end at exec (the uid is not 0 there), so the program
-//! cannot unmount it, and a mount inherited into a namespace it creates later
-//! is locked to it.
+//! Only those folders: the rest of `~/.klide` is what the agents work in —
+//! each conversation's worktree (`run-host/worktrees`), the coordination files
+//! a Delegate's MCP server reads, the helper binary it runs.
 //!
-//! The host also marks itself non-dumpable at start ([`seal_host`]), so a
-//! child cannot reach the keys through `/proc/<host>/root` either.
-//! What stays outside the wall: another process of the same user that is
-//! *not* the host's child — an interactive SSH login running at the same
-//! time — and what an agent could leave for one (a line in `~/.profile` runs
-//! unwalled at the next login). Use a dedicated account for the machine that
-//! nobody logs into by hand, and root sees everything.
+//! Capabilities in the namespace end at exec for every child (its uid is not
+//! 0 there), so nothing it starts can unmount the cover, and a mount inherited
+//! into a namespace it creates is locked. The host is non-dumpable and its key
+//! handle close-on-exec, so neither `/proc/<host>/root` nor `/proc/<host>/fd`
+//! leads around the wall.
 //!
-//! Fail closed. When this machine holds keys and the wall can't be raised —
-//! Ubuntu's AppArmor refuses unprivileged user namespaces unless a profile
-//! allows them — the program does not start, and setup offers the one-time
-//! sudo step that installs that profile (`scripts/remote-host/`). A machine
-//! without keys (Claude Code on its own login) is unaffected.
+//! What stays outside: another process of the same account that the host did
+//! not start — an interactive SSH login running alongside, or a line an agent
+//! leaves in `~/.profile` for the next one — and root. Use a dedicated account
+//! nobody logs into by hand, and keys with a spending limit.
+//!
+//! **Fail closed.** If the wall can't be raised (Ubuntu's AppArmor refuses
+//! unprivileged user namespaces until "Protect keys" installs a profile) and
+//! keys are present, the host refuses to start. With no keys it starts and
+//! records that it is unwalled (`<data>/wall`); a key sync then stops it while
+//! idle, so the next start is walled, and refuses while it is busy.
 //!
 //! Linux only. On macOS the Seatbelt sandbox (`agent/sandbox.rs`) lists the
 //! same folder among its secret paths.
@@ -46,27 +46,49 @@ pub const SECRETS: &str = ".klide/remote-api";
 /// The helper's own folder, pinned read-only behind the wall.
 pub const PINNED: &str = ".klide/bin";
 
-/// Raise the wall around `cmd` when this machine has secrets to protect.
-/// A no-op elsewhere — on macOS, on a Linux machine with no keys.
-pub fn guard(cmd: &mut std::process::Command) {
+/// Wall this process — `klide ptyd` / `klide scheduled`, before anything
+/// else and while single-threaded — and record the outcome in `data_dir`.
+/// Exits when keys are present and the wall can't be raised.
+pub fn host_start(data_dir: &std::path::Path) {
     #[cfg(target_os = "linux")]
-    linux::guard(cmd);
-    #[cfg(not(target_os = "linux"))]
-    let _ = cmd;
-}
-
-/// [`guard`] for an async command.
-pub fn guard_tokio(cmd: &mut tokio::process::Command) {
-    guard(cmd.as_std_mut());
-}
-
-/// Make the Run host non-dumpable, so a same-user child cannot open
-/// `/proc/<host>/root` past the wall. Called once when `klide ptyd` starts.
-pub fn seal_host() {
-    #[cfg(target_os = "linux")]
-    unsafe {
-        libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+    {
+        let _ = std::fs::create_dir_all(data_dir);
+        let state = data_dir.join(STATE);
+        match linux::enter() {
+            Ok(()) => { let _ = std::fs::write(state, "up"); }
+            Err(error) if has_secrets() => {
+                eprintln!("{REFUSED} ({error})");
+                std::process::exit(1);
+            }
+            Err(_) => { let _ = std::fs::write(state, "down"); }
+        }
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = data_dir;
+}
+
+/// Where the host records whether its wall is up.
+pub const STATE: &str = "wall";
+
+/// Before keys land: a host running *unwalled* on `data_dir` would expose
+/// them, so stop it while idle (the next run starts it, walled) or refuse.
+pub fn ensure_no_unwalled_host(data_dir: &std::path::Path) -> Result<(), String> {
+    if std::fs::read_to_string(data_dir.join(STATE)).map(|s| s.trim() == "down").unwrap_or(false) {
+        crate::pty_daemon::stop_idle_host(data_dir)
+            .map_err(|e| format!("The Run host started before keys were protected and is busy ({e}). Let its tasks finish, then sync again."))?;
+        let _ = std::fs::remove_file(data_dir.join(STATE));
+    }
+    Ok(())
+}
+
+/// The key the walled host holds for `provider`, read through the handle it
+/// opened before walling. `None` when this process isn't a walled host — the
+/// caller reads the path instead (a sync subcommand, the Mac).
+pub fn read_key(provider: &str) -> Option<Result<Option<String>, String>> {
+    #[cfg(target_os = "linux")]
+    { linux::read_key(provider) }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = provider; None }
 }
 
 /// Whether this machine holds keys the wall must cover.
@@ -143,14 +165,59 @@ mod linux {
         }
     }
 
-    pub fn guard(cmd: &mut std::process::Command) {
-        if !super::has_secrets() { return; }
-        let Some(home) = crate::cli::home_dir_path() else { return };
-        match Wall::new(&home.join(super::SECRETS), &home.join(super::PINNED)) {
-            Some(wall) => wall.apply(cmd),
-            // A home path with a NUL byte: refuse rather than run unwalled.
-            None => unsafe { cmd.pre_exec(|| Err(std::io::Error::from_raw_os_error(libc::EPERM))); },
+    /// The key folder, opened before walling; -1 outside a walled host.
+    static KEYS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+    pub fn enter() -> Result<(), String> {
+        let home = crate::cli::home_dir_path().ok_or("No home directory")?;
+        let covered = home.join(super::SECRETS);
+        std::fs::create_dir_all(&covered).map_err(|e| e.to_string())?;
+        let wall = Wall::new(&covered, &home.join(super::PINNED)).ok_or("Cannot describe the wall")?;
+        let path = CString::new(covered.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+        if fd < 0 { return Err(std::io::Error::last_os_error().to_string()); }
+        unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+        if let Err(error) = raise(&wall) {
+            unsafe { libc::close(fd) };
+            return Err(format!("The kernel refused the wall: {error}"));
         }
+        KEYS.store(fd, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn read_key(provider: &str) -> Option<Result<Option<String>, String>> {
+        let dir = KEYS.load(std::sync::atomic::Ordering::SeqCst);
+        if dir < 0 { return None; }
+        Some(read_key_at(dir, provider))
+    }
+
+    /// The same rules as a path read (`machine_inference::destination_key`):
+    /// a regular file of mode 600, no symlink, bounded, one printable line.
+    pub fn read_key_at(dir: libc::c_int, provider: &str) -> Result<Option<String>, String> {
+        let name = CString::new(format!("{provider}/api-key")).map_err(|e| e.to_string())?;
+        let fd = unsafe { libc::openat(dir, name.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW) };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ENOENT) { return Err("Cannot read the destination API key file.".into()); }
+            // A provider folder without its key: authorized once, now missing.
+            let folder = CString::new(provider).map_err(|e| e.to_string())?;
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            let exists = unsafe { libc::fstatat(dir, folder.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) } == 0;
+            return if exists { Err("The authorized API key is missing. Sync keys again in Settings → Machines.".into()) } else { Ok(None) };
+        }
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        let meta = file.metadata().map_err(|_| "Cannot read the destination API key file.")?;
+        use std::os::unix::fs::PermissionsExt;
+        if !meta.is_file() || meta.len() > 16384 || meta.permissions().mode() & 0o077 != 0 {
+            return Err("The destination API key must be a regular private file.".into());
+        }
+        let mut key = String::new();
+        file.read_to_string(&mut key).map_err(|_| "Cannot read the destination API key file.")?;
+        let key = key.trim();
+        if key.is_empty() || key.chars().any(char::is_control) { return Err("The destination API key file is invalid.".into()); }
+        Ok(Some(key.into()))
     }
 
     fn write_file(path: &[u8], data: &[u8]) -> std::io::Result<()> {
@@ -192,18 +259,31 @@ mod linux {
     }
 }
 
-/// What a failed start means to a person: when this machine holds keys and
-/// the wall can't stand here, it is that — not the errno the kernel returned.
-pub fn explain(error: &std::io::Error) -> String {
-    if has_secrets() && check().is_err() { REFUSED.into() } else { error.to_string() }
-}
-
 /// What a program that could not be walled reports instead of starting.
 pub const REFUSED: &str = "This machine holds API keys and can't hide them from commands yet. Finish \"Protect keys\" in Settings → Machines (one sudo step), then retry.";
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_host_reads_keys_through_its_handle_with_the_path_rules() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("klide-keys-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("openrouter")).unwrap();
+        std::fs::create_dir_all(dir.join("deepseek")).unwrap();
+        std::fs::write(dir.join("openrouter/api-key"), "sk-or\n").unwrap();
+        std::fs::set_permissions(dir.join("openrouter/api-key"), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let path = std::ffi::CString::new(dir.to_str().unwrap()).unwrap();
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+        assert_eq!(linux::read_key_at(fd, "openrouter").unwrap().as_deref(), Some("sk-or"));
+        assert_eq!(linux::read_key_at(fd, "mistral").unwrap(), None);
+        assert!(linux::read_key_at(fd, "deepseek").is_err(), "a folder without its key is an error");
+        std::fs::set_permissions(dir.join("openrouter/api-key"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(linux::read_key_at(fd, "openrouter").is_err(), "a readable-by-others key is refused");
+        unsafe { libc::close(fd) };
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// Runs where unprivileged user namespaces are allowed (CI runners are);
     /// elsewhere it says so and passes — the probe in setup covers that case.

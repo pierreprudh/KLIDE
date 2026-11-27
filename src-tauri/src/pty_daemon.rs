@@ -150,7 +150,13 @@ pub fn ensure_main(data_dir: &Path) -> i32 {
 }
 
 pub fn prepare_upgrade_main(data_dir: &Path) -> i32 {
-    let result = (|| -> Result<(), String> {
+    match stop_idle_host(data_dir) { Ok(()) => 0, Err(error) => { eprintln!("{error}"); 1 } }
+}
+
+/// Stop the Run host on `data_dir` if it is idle (Ok when none runs); refuse
+/// while it has live sessions or runs. Upgrades and key sync share it.
+pub fn stop_idle_host(data_dir: &Path) -> Result<(), String> {
+    (|| -> Result<(), String> {
         match crate::pty_client::request(data_dir, &Request::Ping) {
             Err(error) if error.starts_with("connect:") => return Ok(()),
             Ok(Response::Pong { protocol, .. }) if protocol >= 3 => {
@@ -178,8 +184,7 @@ pub fn prepare_upgrade_main(data_dir: &Path) -> i32 {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         Err("The old Run host did not release its socket".into())
-    })();
-    match result { Ok(()) => 0, Err(error) => { eprintln!("{error}"); 1 } }
+    })()
 }
 
 /// Manual transport acceptance, without starting a Run or replacing a host.

@@ -215,8 +215,6 @@ fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>, 
     cmd.envs(extra.iter().cloned());
     #[cfg(unix)]
     cmd.process_group(0);
-    // On a Remote machine holding API keys, the command can't see them.
-    crate::secret_wall::guard_tokio(&mut cmd);
     let mut child = cmd
         .arg("-c")
         .arg(spec.command)
@@ -227,7 +225,7 @@ fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>, 
         // Backstop for a runtime torn down under the waiter: at least sh dies.
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Failed to start command: {}", crate::secret_wall::explain(&e)))?;
+        .map_err(|e| format!("Failed to start command: {e}"))?;
 
     let rings = Arc::new(Mutex::new(match spec.capture {
         Capture::Merged { cap } => Rings { out: Ring::new(cap), err: None },

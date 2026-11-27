@@ -535,19 +535,22 @@ Bedrock, Cloudflare) yet.
 ### The secret wall
 
 Keys are only sent once commands on the machine can't read them
-(`secret_wall.rs`). Every program the Run host starts — agent commands
-(`agent/process.rs`), git (`git/cmd.rs`, so a planted hook too), Delegate CLIs
-(`delegate/child.rs`) and everything they start — begins in its own user +
-mount namespace where an empty read-only tmpfs covers `~/.klide/remote-api`,
-and `~/.klide/bin` (the helper) is re-bound read-only so an agent can't swap
-in a binary that reads the keys at the next start. The rest of `~/.klide` —
-each conversation's worktree, the coordination files a Delegate's MCP server
-reads — stays the agents' to use. The host marks itself non-dumpable so
-`/proc/<host>/root` doesn't lead around it. Key pushes (the switch, a check,
-a removal) are serialized, and a check re-reads the switch before pushing,
-so a sync turned off can't be undone by a check already in flight. The
-wall fails closed: while keys are present and it can't be raised, those
-programs refuse to start with a message pointing at "Protect keys".
+(`secret_wall.rs`). The Run host walls *itself* at start, while still one
+thread: it opens a private, close-on-exec handle on `~/.klide/remote-api`, then
+enters its own user + mount namespace where an empty read-only tmpfs covers
+that folder and `~/.klide/bin` (the helper) is re-bound read-only. Everything
+it ever starts — agent commands, git and its hooks, Delegate CLIs, worktree
+setup scripts and whatever they install — inherits that view with no code at
+the spawn site. The host reads keys through its handle, so a later sync is
+seen; the rest of `~/.klide` (worktrees, coordination files) stays the agents'
+to use. It is non-dumpable, so `/proc/<host>/root` and `/proc/<host>/fd` don't
+lead around it. Key pushes (the switch, a check, a removal) are serialized,
+and a check re-reads the switch before pushing.
+
+Fail closed: a host that can't raise the wall refuses to start while keys are
+present. Without keys it starts and records `wall: down` in its data dir; a
+sync then stops it while idle (the next run starts it walled) and refuses
+while it is busy.
 
 Ubuntu restricts unprivileged user namespaces through AppArmor, so "Protect
 keys" (`scripts/remote-host/protect-keys.sh`, one sudo step in the setup

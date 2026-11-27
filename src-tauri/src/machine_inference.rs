@@ -79,6 +79,8 @@ pub(crate) fn destination_key(path: &Path) -> Result<Option<String>, String> {
 /// The key this machine was given for `provider`, read fresh per request.
 pub fn configured_key_for(provider: &str) -> Result<Option<String>, String> {
     if !remote_api_provider(provider) { return Ok(None); }
+    // Inside the walled host the folder is covered; read through its handle.
+    if let Some(key) = crate::secret_wall::read_key(provider) { return key; }
     let Some(home) = crate::cli::home_dir_path() else { return Ok(None); };
     profile_key(&home.join(provider_dir(provider)?).join("api-key"))
 }
@@ -140,7 +142,10 @@ pub fn sync_main() -> i32 {
             if bundle.version != BUNDLE_VERSION { return Err("This helper does not understand the key bundle; update it in Settings → Machines".into()); }
             let home = crate::cli::home_dir_path().ok_or("No home directory")?;
             // Revoking everything needs no wall; storing a key does.
-            if !bundle.keys.is_empty() { crate::secret_wall::check().map_err(|_| crate::secret_wall::REFUSED.to_string())?; }
+            if !bundle.keys.is_empty() {
+                crate::secret_wall::check().map_err(|_| crate::secret_wall::REFUSED.to_string())?;
+                crate::secret_wall::ensure_no_unwalled_host(&home.join(".klide/run-host"))?;
+            }
             apply_sync(&home, &bundle.keys)
         });
     match result {
