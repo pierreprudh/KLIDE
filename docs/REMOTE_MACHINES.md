@@ -515,3 +515,20 @@ key replaces that account's selected key. Use separate OS accounts for keys
 that must coexist independently. Direct-mode code running as the worker can
 read that worker's key file. Subscription credentials and other Mac accounts
 are not copied. API key authorization currently supports Linux and macOS.
+
+### OpenRouter without Claude subscription login — live acceptance 2026-11-27
+
+Helper host source `6c5d6deed83e9a5c871badf0019bef8a670f8c19` passed the native
+Linux helper checks and was installed on the personal VPS over Tailscale.
+Run `api-key-no-claude-6c5d6de` used OpenRouter model
+`deepseek/deepseek-v4.1-flash-1017` and completed three successive tool calls,
+with two timestamped after the approval client disconnected. Reconnect
+recovered the durable `done` result.
+
+The dedicated Claude test profile reported `loggedIn: false` before and after
+the run. API environment keys were unset; inference used the explicitly
+authorized destination key file with mode 600. Existing normal-profile logins
+were preserved. The actual setup probe also found the API capability and key
+ready while using that empty Claude test profile. Physical Mac closure was
+not repeated in this acceptance. Evidence is recorded locally in
+`artifacts/remote-setup-20261127/openrouter-no-signin-report.json`.
