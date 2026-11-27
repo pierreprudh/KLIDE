@@ -2,20 +2,21 @@
 // A Remote machine is an SSH host from ~/.klide/machines.json; a Claude Code
 // conversation placed on it streams from its durable Run host.
 import { invoke } from "@tauri-apps/api/core";
+import { providerEndpointVars, providerGroup, providerRow } from "../agent/providerCatalog";
 
 export type MachineFactTone = "ok" | "warn" | "bad" | "quiet";
 
-export type MachineInference = { provider: "openrouter"; model: string };
 export type MachineKeyOption = { id: string; label: string };
-export function machineOpenrouterKeys(): Promise<MachineKeyOption[]> { return invoke("machine_openrouter_keys"); }
-export function machineOpenrouterAuthorize(id: string, keyId: string): Promise<void> { return invoke("machine_openrouter_authorize", { id, keyId }); }
+/** The keys this Mac holds for `provider` that may be sent to a machine. */
+export function machineApiKeys(provider: string): Promise<MachineKeyOption[]> { return invoke("machine_api_keys", { provider }); }
+/** Send one chosen key to the machine over SSH (Rust `machine_api_authorize`). */
+export function machineApiAuthorize(id: string, provider: string, keyId: string): Promise<void> { return invoke("machine_api_authorize", { id, provider, keyId }); }
 
 export type Machine = {
   id: string;
   label?: string;
   sshHost: string;
   checkouts?: Record<string, string>;
-  inference?: MachineInference;
 };
 
 export type MachineFact = { label: string; value: string; tone: MachineFactTone; fix?: string };
@@ -37,16 +38,29 @@ export type MachineStatus = {
     connection: "connected" | "offline" | "needsTrust" | "needsAuthentication" | "unsupported";
     host: "ready" | "outdated" | "missing" | "unknown";
     claude: "ready" | "needsLogin" | "missing" | "unknown";
-    credentialMode?: "subscription" | "openrouter";
-    credentials?: "ready" | "needsAuthorization" | "needsLogin" | "unknown";
+    /** Providers whose API key is authorized on the machine. */
+    apiKeys?: string[];
+    credentials?: "ready" | "needsLogin" | "unknown";
     github?: "ready" | "needsLogin" | "missing" | "unknown";
     githubScope?: "repository" | "account";
     project: "ready" | "missing" | "unknown" | "notSelected";
   };
 };
 
-/** The only Delegate the first slice runs remotely (Rust `REMOTE_PROVIDER`). */
+/** The only Delegate a Remote machine runs (Rust `REMOTE_PROVIDER`). */
 export const REMOTE_PROVIDER = "claude-code";
+
+/** What a conversation on a Remote machine may run: Claude Code, or Kit on a
+ *  hosted API whose key the machine holds (Rust `remote_machine::validate_request`). */
+export function isRemoteProvider(provider: string): boolean {
+  return provider === REMOTE_PROVIDER || isRemoteApiProvider(provider);
+}
+
+/** A hosted API a machine can hold a key for: a plain secret, and a URL that
+ *  needs nothing from this Mac (Rust `machine_inference::remote_api_provider`). */
+export function isRemoteApiProvider(provider: string): boolean {
+  return providerGroup(provider) === "hosted" && providerEndpointVars(provider).length === 0 && !providerRow(provider)?.keyCommand;
+}
 
 export function machinesList(): Promise<Machine[]> {
   return invoke<Machine[]>("machines_list");
@@ -74,10 +88,6 @@ export function subscribeMachines(listener: () => void): () => void {
 
 export async function machineSave(machine: Machine, creating: boolean): Promise<Machine[]> {
   const machines = await invoke<Machine[]>("machine_save", { machine, creating });
-  if (machine.inference) {
-    const saved = machines.find((value) => value.id === machine.id)?.inference;
-    if (saved?.provider !== machine.inference.provider || saved.model !== machine.inference.model) throw new Error("Restart Klide to load OpenRouter remote credentials. The running backend did not save this choice.");
-  }
   for (const listener of listeners) listener();
   return machines;
 }

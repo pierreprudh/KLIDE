@@ -16,7 +16,7 @@ export function machineSetupChecklist(status: MachineStatus | null, hasWorkspace
   const rows: ChecklistRow[] = [
     { step: "connection", label: "SSH connection", caption: connected ? "Connected" : "Connect machine", state: state(!!connected, !!status) },
     { step: "software", label: "Klide helper", caption: setup?.host === "ready" ? "Installed" : setup?.host === "outdated" ? "Update needed" : connected ? "Not installed" : "Waiting", state: state(setup?.host === "ready", !!connected) },
-    { step: "signIn", label: "Credentials", caption: setup?.credentialMode === "openrouter" ? machineCredentialsReady(status) ? "OpenRouter · configured" : "OpenRouter · authorize key" : setup?.claude === "ready" ? "Claude · signed in" : connected ? "Choose subscription or API key" : "Waiting", state: state(machineCredentialsReady(status), !!connected) },
+    { step: "signIn", label: "Credentials", caption: credentialCaption(setup, !!connected), state: state(machineCredentialsReady(status), !!connected) },
     { step: "github", label: "GitHub", caption: setup?.githubScope === "repository" ? github === "ready" ? "Repository key configured" : "Repository access · optional" : github === "ready" ? "Signed in" : github === "needsLogin" ? "Installed · sign in" : github === "missing" ? "Not installed · optional" : "Not checked · optional", state: state(github === "ready", !!connected && github !== "unknown") },
     ...(hasWorkspace ? [{ step: "project" as const, label: "Project", caption: setup?.project === "ready" ? "Ready" : connected ? "Choose folder" : "Waiting", state: state(setup?.project === "ready", !!connected) }] : []),
     { step: "ready", label: "Ready to work", caption: status?.ready ? "All set" : "Setup remaining", state: status?.ready ? "done" : "waiting" },
@@ -29,4 +29,12 @@ export function machineSetupChecklist(status: MachineStatus | null, hasWorkspace
       (row.step === "github" && action === "gitHub" && row.state !== "done") || (row.step === "project" && action === "clone") || (row.step === "ready" && !!action);
     return active ? { ...row, state: "active", caption: row.step === "ready" ? "Finishing…" : row.step === "connection" ? "Connecting…" : action === "prepare" || action === "host" ? "Installing…" : action === "clone" ? "Cloning…" : "Signing in…" } : row;
   });
+}
+
+function credentialCaption(setup: MachineStatus["setup"] | undefined, connected: boolean): string {
+  if (!connected || !setup) return "Waiting";
+  const keys = setup.apiKeys?.length ?? 0;
+  const claude = setup.claude === "ready" ? "Claude · signed in" : "";
+  const api = keys ? `${keys} API key${keys === 1 ? "" : "s"}` : "";
+  return [claude, api].filter(Boolean).join(" · ") || "Sign in or add an API key";
 }

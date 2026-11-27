@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { machineCheck, machineInstallHost, machineSave, type Machine, type MachineInference, type MachineStatus, type MachineConnectionMethod, type MachineCandidate } from "../../ipc/machines";
+import { machineCheck, machineInstallHost, machineSave, type Machine, type MachineStatus, type MachineConnectionMethod, type MachineCandidate } from "../../ipc/machines";
 import { refreshMachineStatus } from "../../machineStatus";
 import { errMessage } from "../../errors";
 import { MachineConnectionPicker } from "./MachineConnectionPicker";
@@ -71,13 +71,6 @@ export default function AddMachineForm({ workspaceRoot, onClose, onSaved, initia
     setMachine(next); onSaved?.(machines);
     refreshMachineStatus(next.id, workspaceRoot, { force: true });
   }
-  async function credentials(inference: MachineInference | null) {
-    if (!machine) return;
-    const next = { ...machine, inference: inference ?? undefined };
-    const machines = await machineSave(next, false);
-    setMachine(next); onSaved?.(machines);
-    refreshMachineStatus(next.id, workspaceRoot, { force: true });
-  }
   async function connection(sshHost: string) {
     if (!machine) return;
     const next = { ...machine, sshHost };
@@ -93,7 +86,7 @@ export default function AddMachineForm({ workspaceRoot, onClose, onSaved, initia
       <p>Use your existing SSH keys and config. You can save the setup even if the machine is offline.</p>
       {saving && <MachineSetupWaiting>Saving your machine</MachineSetupWaiting>}
       <footer><GhostButton disabled={saving} onClick={() => { setError(""); setEnteringHost(false); }}>Back</GhostButton><GhostButton onClick={onClose}>Cancel</GhostButton><button className="klide-button klide-button-secondary" type="submit" disabled={saving || !canConnectSshAddress(host)}>Continue</button></footer>
-    </form> : checking && !status ? <MachineSetupWaiting>Checking SSH connection to {machine.sshHost}</MachineSetupWaiting> : <MachineSetup key={machine.id} machine={machine} status={status} checking={checking} workspaceRoot={workspaceRoot} onCheck={() => setRevision((value) => value + 1)} onInstall={install} onProject={project} onConnection={connection} onInference={credentials} onClose={onClose} />}
+    </form> : checking && !status ? <MachineSetupWaiting>Checking SSH connection to {machine.sshHost}</MachineSetupWaiting> : <MachineSetup key={machine.id} machine={machine} status={status} checking={checking} workspaceRoot={workspaceRoot} onCheck={() => setRevision((value) => value + 1)} onInstall={install} onProject={project} onConnection={connection} onClose={onClose} />}
     {error && <p className="klide-add-machine-error" role="alert">{error}</p>}
   </>;
 }

@@ -45,8 +45,12 @@ fn main() {
                 }
                 return;
             }
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("api-status") {
+                println!("{}", klide_lib::machine_inference::configured_providers().join(" "));
+                return;
+            }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("capabilities") {
-                println!("{}", klide_lib::machine_inference::CAPABILITY);
+                println!("{} {}", klide_lib::machine_inference::CAPABILITY, klide_lib::machine_inference::API_CAPABILITY);
                 return;
             }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("version") {

@@ -125,6 +125,7 @@ import {
 } from "../projectPaths";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { FocusGitIsland } from "./FocusGitIsland";
+import { isRemoteProvider, REMOTE_PROVIDER } from "../ipc/machines";
 import { usePresence } from "../hooks/usePresence";
 
 type Props = {
@@ -974,6 +975,9 @@ export function buildProviderOptions(
   onOpenKeySettings: () => void,
   llamaSetupMode: LlamaSetupMode = "klide",
   missingClis: ReadonlySet<string> = new Set(),
+  // A Remote machine is chosen: offer only what runs there (Claude Code, Kit on
+  // a hosted API), and judge a key by the machine's, not this Mac's.
+  remote?: { apiKeys: readonly string[] | null; onAuthorize: () => void },
 ): MenuOption[] {
   return providerGroupsWithCustom(custom).flatMap((group) => {
     // Delegate CLIs belong here too. They run on the subscription you already
@@ -981,24 +985,27 @@ export function buildProviderOptions(
     // session instead of a message list, which is a different surface but the
     // same conversation. Their installation status dims missing executables;
     // API key status has nothing to say about their own CLI login.
-    const items = group.items.filter((item) => item.available && isSelectedLlamaProvider(item.id, llamaSetupMode))
+    const items = group.items.filter((item) => item.available && isSelectedLlamaProvider(item.id, llamaSetupMode) && (!remote || isRemoteProvider(item.id)))
       .sort((a, b) => Number(missingClis.has(a.id)) - Number(missingClis.has(b.id)));
     if (items.length === 0) return [];
     const rows: MenuOption[] = items.map((item) => {
       // A delegate is exempt by construction, not by luck: it authenticates
       // through its own CLI login, so "no API key" is not a statement about it.
-      const missingKey =
-        keyless.has(item.id) && !isCustomProvider(item.id) && !isDelegateProvider(item.id);
+      const missingKey = remote
+        ? item.id !== REMOTE_PROVIDER && !!remote.apiKeys && !remote.apiKeys.includes(item.id)
+        : keyless.has(item.id) && !isCustomProvider(item.id) && !isDelegateProvider(item.id);
       return {
         label: item.name,
         value: item.id,
         icon: <ProviderLogo id={item.id} size={17} />,
-        dimmed: missingKey || missingClis.has(item.id),
+        dimmed: missingKey || (!remote && missingClis.has(item.id)),
         // No caption: the quieted row plus its ↗ already say "not set up, and
         // here's the way out". A sentence under every hosted provider would
         // turn a glance into a read.
         resolve: missingKey
-          ? { title: `${item.name} has no API key — open Settings`, run: onOpenKeySettings }
+          ? remote
+            ? { title: `Authorize a ${item.name} key on this machine — open Machines`, run: remote.onAuthorize }
+            : { title: `${item.name} has no API key — open Settings`, run: onOpenKeySettings }
           : undefined,
       };
     });
@@ -1781,7 +1788,6 @@ export function FocusComposer({
   }, [taEl, draftBody]);
 
   function submit() {
-    if (whereItRuns.savingModel) return;
     const text = draft.trim();
     // An attachment-only first turn is valid: a dropped screenshot is a task.
     if (!text && attachments.length === 0) return;
@@ -1979,22 +1985,16 @@ export function FocusComposer({
     onAddMachine: () => setAddMachineOpen(true),
     onOpenMachineSettings: () => onOpenSettingsSection("machines"),
   });
-  const canSend = !whereItRuns.savingModel && ((skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0);
-  const remoteInference = whereItRuns.inference;
-  // The destination owns the key and model. Show and submit that same choice,
-  // rather than offering this Mac's subscriptions and API credentials here.
-  const remoteModel = remoteInference ? "harness-source:" + JSON.stringify(remoteInference)
-    : whereItRuns.remote && model.startsWith("harness-source:") ? "default" : null;
-  // Push each destination model once. Re-pushing whenever `model` differs
-  // fought the panel's own pair sync (it settles the host back to a plain
-  // model) and looped until React gave up — a blank window.
-  const pushedRemoteModelRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!remoteModel) { pushedRemoteModelRef.current = null; return; }
-    if (pushedRemoteModelRef.current === remoteModel) return;
-    pushedRemoteModelRef.current = remoteModel;
-    if (model !== remoteModel) onModelChange(remoteModel);
-  }, [remoteModel, model, onModelChange]);
+  const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
+  const remoteMachine = whereItRuns.remote;
+  const remoteApiKeys = whereItRuns.apiKeys;
+  const agentMenuOptions = useMemo(
+    () => remoteMachine
+      ? buildProviderOptions(customProviders, keylessProviders, () => onOpenSettingsSection("api"), llamaSetupMode, missingDelegateClis,
+          { apiKeys: remoteApiKeys, onAuthorize: () => onOpenSettingsSection("machines") })
+      : providerMenuOptions,
+    [remoteMachine, remoteApiKeys, providerMenuOptions, customProviders, keylessProviders, onOpenSettingsSection, llamaSetupMode, missingDelegateClis],
+  );
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
@@ -2170,12 +2170,11 @@ export function FocusComposer({
             />
             <InlineMenu
               label="Provider"
-              display={whereItRuns.remote ? remoteInference ? "OpenRouter API" : "Claude subscription" : providerName(provider)}
-              leading={<ProviderLogo id={remoteInference?.provider ?? provider} size={13} />}
-              options={whereItRuns.remote ? [{ label: "Change VPS credentials", value: "remote:credentials", icon: <ProviderLogo id={remoteInference?.provider ?? "claude-code"} size={13} /> }] : providerMenuOptions}
+              display={providerName(provider)}
+              leading={<ProviderLogo id={provider} size={13} />}
+              options={agentMenuOptions}
               selected={provider}
               onSelect={(v) => {
-                if (v === "remote:credentials") { onOpenSettingsSection("machines"); return; }
                 if (typeof v === "string" && !v.startsWith("__heading_")) {
                   onProviderChange(v as ProviderId);
                 }
@@ -2184,15 +2183,8 @@ export function FocusComposer({
           </div>
 
           <div className="klide-focus-model-controls">
-            {remoteInference ? <ModelPicker
-              catalogOnly
-              provider={remoteInference.provider}
-              model={remoteInference.model}
-              availableModels={whereItRuns.inferenceModels}
-              disabled={whereItRuns.savingModel}
-              onChange={(nextModel) => { void whereItRuns.onModelChange(nextModel); }}
-            /> : <ModelPicker
-              catalogOnly={whereItRuns.remote}
+            <ModelPicker
+              catalogOnly={remoteMachine}
               provider={provider}
               model={model}
               availableModels={models}
@@ -2201,7 +2193,7 @@ export function FocusComposer({
                 rememberModelForProvider(provider, nextModel);
                 onModelChange(nextModel);
               }}
-            />}
+            />
             {effortLevels.length > 0 && (
               <InlineMenu
                 label="Reasoning effort"

@@ -203,7 +203,9 @@ impl RunHost {
     /// `standalone`: the caller shaped the request itself (`klide run`, the
     /// design pilot), so any provider may run here, on its own command policy.
     fn start_admitted(self: &Arc<Self>, mut request: StartRunRequest, runs_dir: PathBuf, caller: impl AgentProviderCaller, scheduled: bool, standalone: bool, remote: bool) -> Result<u64, String> {
-        if !scheduled && !standalone && !run_host::background_eligible(&request) {
+        // A Remote start was admitted by `remote_machine::validate_request`,
+        // which also lets Kit run on a hosted API key the machine holds.
+        if !scheduled && !standalone && !remote && !run_host::background_eligible(&request) {
             return Err("Only standalone subscription conversations can run in this host".into());
         }
         let id = request.run_id.clone().ok_or("Missing conversation id")?;

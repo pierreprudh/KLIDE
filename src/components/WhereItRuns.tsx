@@ -13,9 +13,7 @@
 // the one CLI the first slice runs there.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { MachineIcon, NewTaskIcon, ThisMacIcon } from "../icons";
-import { machineLabel, machineSave, machinesList, subscribeMachines, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
-import { listProviderModels } from "../ipc/aiProviders";
-import { errMessage } from "../errors";
+import { isRemoteProvider, machineLabel, machinesList, subscribeMachines, REMOTE_PROVIDER, type Machine } from "../ipc/machines";
 import { restoreStartStageMachine, setStartStageMachine, startStageMachine, subscribeStartStageMachine } from "../conversationMachines";
 import { lastKnownStatus, machineStatusCheck, machineStatusVersion, refreshMachineStatus, subscribeMachineStatus } from "../machineStatus";
 import { pushToast } from "../toast";
@@ -28,11 +26,10 @@ export function useStartStageMachine(): string | null {
 }
 
 export type WhereItRunsMenu = {
+  /** A Remote machine is chosen: the agent menu offers only what runs there. */
   remote: boolean;
-  inference: Machine["inference"];
-  inferenceModels: string[];
-  savingModel: boolean;
-  onModelChange: (model: string) => Promise<void>;
+  /** Providers whose key the chosen machine holds; null when unknown yet. */
+  apiKeys: string[] | null;
   display: string;
   leading: ReactNode;
   options: { label: string; value: string; icon: ReactNode; dimmed?: boolean; resolve?: { title: string; run: () => void; showArrow?: boolean } }[];
@@ -58,8 +55,6 @@ export function useWhereItRuns({
   const machine = useStartStageMachine();
   const [machines, setMachines] = useState<Machine[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [inferenceModels, setInferenceModels] = useState<string[]>([]);
-  const [savingModel, setSavingModel] = useState(false);
   useSyncExternalStore(subscribeMachineStatus, machineStatusVersion, machineStatusVersion);
 
   useEffect(() => {
@@ -70,24 +65,24 @@ export function useWhereItRuns({
     return () => { live = false; unsubscribe(); };
   }, []);
 
-  // Each project opens on the Machine it last started on. A remembered Remote
-  // machine brings its agent with it — it only runs Claude Code.
+  // Each project opens on the Machine it last started on. An agent that can't
+  // run there (a local server, another CLI) becomes Claude Code.
   const providerRef = useRef(provider);
   providerRef.current = provider;
   const onProviderChangeRef = useRef(onProviderChange);
   onProviderChangeRef.current = onProviderChange;
   useEffect(() => {
     restoreStartStageMachine(workspaceRoot);
-    if (startStageMachine() && providerRef.current !== REMOTE_PROVIDER) onProviderChangeRef.current(REMOTE_PROVIDER);
+    if (startStageMachine() && !isRemoteProvider(providerRef.current)) onProviderChangeRef.current(REMOTE_PROVIDER);
   }, [workspaceRoot]);
 
-  // Choosing another agent while on a Remote machine is choosing this Mac —
-  // only a *change* away from Claude Code counts, not a mismatch mid-restore.
+  // Choosing an agent the machine can't run is choosing this Mac — only a
+  // *change* away from a runnable one counts, not a mismatch mid-restore.
   const prevProvider = useRef(provider);
   useEffect(() => {
     const was = prevProvider.current;
     prevProvider.current = provider;
-    if (was === REMOTE_PROVIDER && provider !== REMOTE_PROVIDER && startStageMachine()) {
+    if (isRemoteProvider(was) && !isRemoteProvider(provider) && startStageMachine()) {
       setStartStageMachine(null, workspaceRoot);
     }
   }, [provider, workspaceRoot]);
@@ -103,16 +98,6 @@ export function useWhereItRuns({
   }, [machines, workspaceRoot]);
 
   const chosen = machines.find((m) => m.id === machine);
-  const inferenceProvider = chosen?.inference?.provider;
-  useEffect(() => {
-    let live = true;
-    setInferenceModels([]);
-    if (inferenceProvider) void listProviderModels(inferenceProvider).then((models) => {
-      if (live) setInferenceModels(models);
-    }).catch((reason) => { if (live) pushToast(`Could not load VPS models: ${errMessage(reason)}`, { tone: "warn" }); });
-    return () => { live = false; };
-  }, [inferenceProvider]);
-
   const blockedReason = (m: Machine): { why: string } | null => {
     const check = machineStatusCheck(m.id, workspaceRoot);
     if (check?.state === "failed") return { why: check.error };
@@ -124,21 +109,7 @@ export function useWhereItRuns({
 
   return {
     remote: !!chosen,
-    inference: chosen?.inference,
-    inferenceModels,
-    savingModel,
-    onModelChange: async (model) => {
-      if (!chosen?.inference || savingModel || model === chosen.inference.model) return;
-      setSavingModel(true);
-      try {
-        const current = (await machinesList()).find((value) => value.id === chosen.id);
-        if (!current?.inference) throw new Error("This machine's API credentials changed. Choose its credentials again.");
-        const saved = await machineSave({ ...current, inference: { ...current.inference, model } }, false);
-        setMachines(saved);
-        refreshMachineStatus(chosen.id, workspaceRoot, { force: true });
-      } catch (reason) { pushToast(`Could not change VPS model: ${errMessage(reason)}`, { tone: "warn" }); }
-      finally { setSavingModel(false); }
-    },
+    apiKeys: chosen ? lastKnownStatus(machineStatusCheck(chosen.id, workspaceRoot))?.setup.apiKeys ?? null : null,
     display: chosen ? machineLabel(chosen) : "This Mac",
     leading: chosen ? <MachineIcon size={13} /> : <ThisMacIcon size={13} />,
     options: [
@@ -173,7 +144,7 @@ export function useWhereItRuns({
         return;
       }
       setStartStageMachine(target.id, workspaceRoot);
-      if (provider !== REMOTE_PROVIDER) onProviderChange(REMOTE_PROVIDER);
+      if (!isRemoteProvider(provider)) onProviderChange(REMOTE_PROVIDER);
     },
   };
 }

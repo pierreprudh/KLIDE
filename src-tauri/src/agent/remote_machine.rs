@@ -198,17 +198,17 @@ pub(super) async fn start(
                     || daemon_client::statuses(&app)?.contains_key(&id) { return Err(run_host::busy(&id)); }
                 let machine = crate::machines::get(machine_id.as_deref().ok_or("No remote machine selected")?).ok_or("Remote machine is no longer configured")?;
                 let root = request.workspace_root.as_deref().ok_or("Open a project before starting a remote task")?;
-                let binding = Binding { os: crate::machine_install::detect_target(&machine.ssh_host)?.os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root), inference: machine.inference.clone() };
+                let binding = Binding { os: crate::machine_install::detect_target(&machine.ssh_host)?.os, machine_id: machine.id.clone(), ssh_host: machine.ssh_host.clone(), checkout: machine.remote_checkout(root), inference: None };
                 // Persist before sending: a dropped start response must never
                 // allow a later retry to silently create a local writer.
                 crate::durable::write_atomic_private(&binding_path(&base, &id)?, &serde_json::to_vec(&binding).map_err(|e| e.to_string())?)?;
                 binding
             }
         };
+        // Only a conversation bound under the old machine-wide model keeps it;
+        // every other run uses the agent and model its composer chose.
         if let Some(inference) = &binding.inference {
             request.model = inference.selected_model()?;
-        } else if crate::harness_source::intelligence(&request.model)?.is_some() {
-            return Err("Select OpenRouter credentials in Settings → Machines before starting an API-backed remote run".into());
         }
         match query(&binding, &Request::Ping)? {
             Response::Pong { version, protocol, .. } if crate::pty_wire::remote_host_compatible(&version, protocol) => {},
@@ -221,9 +221,12 @@ pub(super) async fn start(
         request.naming = None; request.eyes = None; request.preferred_models.clear();
         request.delegate_session = None; request.command_allowlist.clear();
         if cancel.is_cancelled() { return Err("Cancelled before the remote task started".into()); }
+        let kit = request.provider != crate::machines::REMOTE_PROVIDER;
         let from = match query(&binding, &Request::RemoteStart { request: Box::new(request), checkout: binding.checkout.clone() }) {
             Ok(Response::ChatStarted { from_seq }) => from_seq,
             Ok(_) => return Err("Unexpected remote start response".into()),
+            // A host from before `remote-api` refuses anything but Claude Code.
+            Err(error) if kit && error.contains("standalone Claude Code conversations only") => return Err("Update the Run host in Settings → Machines to run Kit on this machine".into()),
             Err(error) => return Err(format!("Could not confirm remote task start: {error}. Reopen this conversation to check before retrying.")),
         };
         ensure_watch(app, id.clone(), binding, Some(channel), Some(reader), from)?;
@@ -403,19 +406,35 @@ fn ensure_no_local_history(runs: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// What a Remote machine runs: a standalone conversation, either Claude Code
+/// (on the machine's login, or routed to an API source) or Kit on a hosted
+/// API. Either way the API must be one a key can be authorized for.
 fn validate_request(request: &StartRunRequest) -> Result<(), String> {
-    if request.provider != crate::machines::REMOTE_PROVIDER
-        || !run_host::background_eligible(request)
-        || request.side_question_of.is_some()
-    {
-        return Err(
-            "Remote tasks currently support standalone Claude Code conversations only".into(),
-        );
+    let standalone = request.parent_id.is_none()
+        && request.mission_id.is_none()
+        && request.mission_task_id.is_none()
+        && request.side_question_of.is_none();
+    if !standalone || remote_api(request)?.is_none() && request.provider != crate::machines::REMOTE_PROVIDER {
+        return Err("Remote tasks support standalone Claude Code or Kit-on-API conversations only".into());
     }
-    if let Some(source) = crate::harness_source::intelligence(&request.model)? {
-        if source.provider != "openrouter" { return Err("Choose OpenRouter as the remote API source".into()); }
+    if let Some(provider) = remote_api(request)? {
+        if !crate::machine_inference::remote_api_provider(&provider) {
+            return Err(format!("{provider} can't run on a remote machine yet — choose a hosted API like OpenRouter, Anthropic or DeepSeek"));
+        }
     }
     Ok(())
+}
+
+/// The hosted API whose key this run reads on the machine: Kit's own
+/// Provider, or the source a Claude Code run is routed to. None for Claude
+/// Code on its login.
+fn remote_api(request: &StartRunRequest) -> Result<Option<String>, String> {
+    if request.provider == crate::machines::REMOTE_PROVIDER {
+        return Ok(crate::harness_source::intelligence(&request.model)?.map(|source| source.provider));
+    }
+    Ok(crate::providers::lookup(&request.provider)
+        .filter(|entry| entry.group == crate::providers::ProviderGroup::Hosted)
+        .map(|entry| entry.id.to_string()))
 }
 
 /// Host-owned paths: the client cannot supply a transcript directory or make
@@ -427,8 +446,11 @@ pub(crate) fn start_on_host(
     checkout: &str,
 ) -> Result<u64, String> {
     validate_request(&request)?;
-    if crate::harness_source::intelligence(&request.model)?.is_some() && crate::machine_inference::configured_key()?.is_none() {
-        return Err("Authorize an OpenRouter API key on this machine before starting the run".into());
+    if let Some(provider) = remote_api(&request)? {
+        if crate::machine_inference::configured_key_for(&provider)?.is_none() {
+            let label = crate::providers::lookup(&provider).map_or(provider.as_str(), |e| e.label);
+            return Err(format!("Authorize a {label} API key for this machine in Settings → Machines"));
+        }
     }
 
     let id = request.run_id.clone().ok_or("Missing remote Run id")?;
@@ -878,6 +900,21 @@ mod tests {
         request.model = crate::machine_inference::RemoteInference::default().selected_model().unwrap();
         assert!(validate_request(&request).is_ok());
         request.model = r#"harness-source:{"provider":"openai","model":"gpt-4.1"}"#.into();
+        assert!(validate_request(&request).is_ok());
+        request.model = r#"harness-source:{"provider":"ollama","model":"qwen3"}"#.into();
+        assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn kit_runs_remotely_on_a_hosted_api_but_not_on_a_local_server() {
+        let mut request: StartRunRequest = serde_json::from_value(serde_json::json!({
+            "runId": "convo", "workspaceRoot": "/project", "mode": "goal", "provider": "deepseek", "model": "deepseek-chat", "initialText": "work", "context": null, "systemPrompt": null
+        })).unwrap();
+        assert!(validate_request(&request).is_ok());
+        assert_eq!(remote_api(&request).unwrap().as_deref(), Some("deepseek"));
+        request.provider = "ollama".into();
+        assert!(validate_request(&request).is_err());
+        request.provider = "codex".into();
         assert!(validate_request(&request).is_err());
     }
 
@@ -890,7 +927,7 @@ mod tests {
         request.parent_id = Some("parent".into());
         assert!(validate_request(&request).is_err());
         request.parent_id = None;
-        request.provider = "openrouter".into();
+        request.provider = "codex".into();
         assert!(validate_request(&request).is_err());
     }
 }

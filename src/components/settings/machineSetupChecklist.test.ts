@@ -14,9 +14,9 @@ describe("live setup checklist", () => {
     expect(machineSetupChecklist(ready, true, "clone").find((row) => row.step === "project")).toMatchObject({ state: "active", caption: "Cloning…" });
     expect(machineSetupChecklist(ready, true, "clone").find((row) => row.step === "ready")?.state).toBe("active");
   });
-  it("shows API authorization independently of Claude subscription sign-in", () => {
-    const api: MachineStatus = { ...ready, setup: { ...ready.setup, claude: "needsLogin", credentialMode: "openrouter", credentials: "ready" } };
-    expect(machineSetupChecklist(api, true, null).find((row) => row.step === "signIn")).toMatchObject({ label: "Credentials", caption: "OpenRouter · configured", state: "done" });
-    expect(machineSetupChecklist({ ...api, setup: { ...api.setup, claude: "ready", credentials: "needsAuthorization" } }, true, null).find((row) => row.step === "signIn")?.state).toBe("needed");
+  it("counts an API key as credentials without a Claude login", () => {
+    const api: MachineStatus = { ...ready, setup: { ...ready.setup, claude: "needsLogin", apiKeys: ["deepseek"], credentials: "ready" } };
+    expect(machineSetupChecklist(api, true, null).find((row) => row.step === "signIn")).toMatchObject({ label: "Credentials", caption: "1 API key", state: "done" });
+    expect(machineSetupChecklist({ ...api, setup: { ...api.setup, apiKeys: [], credentials: "needsLogin" } }, true, null).find((row) => row.step === "signIn")?.state).toBe("needed");
   });
 });

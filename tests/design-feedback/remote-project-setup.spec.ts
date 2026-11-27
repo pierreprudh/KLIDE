@@ -1,54 +1,30 @@
 import { test, expect, type Page } from "@playwright/test";
 
-test("choose an OpenRouter model directly in the VPS composer", async ({ page }) => {
+test("a VPS offers Claude Code and Kit on the APIs it holds keys for", async ({ page }) => {
   await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&needsLogin=1");
-  await page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ }).click();
-  await expect(page.getByRole("option", { name: /gpt-4.1/ })).toBeVisible();
-  await page.screenshot({ path: "artifacts/design-feedback/vps-inline-model-picker.png" });
-  await page.getByRole("option", { name: /gpt-4.1/ }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__MACHINE_SAVED__?.inference?.model)).toBe("openai/gpt-4.1");
-  await expect.poll(() => page.evaluate(() => (window as any).__COMPOSER_MODEL__)).toBe('harness-source:{"provider":"openrouter","model":"openai/gpt-4.1"}');
+  const agent = page.getByRole("button", { name: "Provider", exact: true });
+  await agent.click();
+  // Subscription holds Claude Code alone; no Local group: a local server can't run there.
+  await expect(page.getByRole("menuitem", { name: "Subscription" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Local" })).toHaveCount(0);
+  await expect(page.getByRole("menu", { name: "Subscription" }).getByRole("menuitem")).toHaveText(["Claude Code"]);
+  await page.getByRole("menuitem", { name: "API" }).hover();
+  await expect(page.getByRole("menuitem", { name: /^OpenRouter/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /Azure/ })).toHaveCount(0);
+  await page.screenshot({ path: "artifacts/design-feedback/vps-agent-menu.png" });
+  await page.getByRole("menuitem", { name: /^OpenRouter/ }).click();
+  await expect(agent).toContainText("OpenRouter");
   await expect(page.getByRole("button", { name: "Where it runs", exact: true })).toContainText("klide-box");
-  await expect(page.getByRole("button", { name: "Back to Focus", exact: true })).toHaveCount(0);
-  expect(await page.evaluate(() => (window as any).__MACHINE_API_KEY_ID__)).toBeUndefined();
 });
 
-test("a failed VPS model save keeps the previous model and remote destination", async ({ page }) => {
-  await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&failSave=1");
-  await page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ }).click();
-  await page.getByRole("option", { name: /gpt-4.1/ }).click();
-  await expect(page.getByText("Could not change VPS model: Could not save machine settings", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Where it runs", exact: true })).toContainText("klide-box");
-  expect(await page.evaluate(() => (window as any).__COMPOSER_MODEL__)).toBe('harness-source:{"provider":"openrouter","model":"deepseek/deepseek-v4.1-flash-1017"}');
-});
-
-test("API credentials can be chosen before the VPS helper is installed", async ({ page }) => {
+test("API keys can be authorized before the VPS helper is installed", async ({ page }) => {
   await page.goto("/preview/where-it-runs.html?settings=1&needsInstall=1");
   await page.getByRole("button", { name: "Continue setup", exact: true }).click();
   const setup = page.locator(".klide-machine-setup");
   await setup.getByRole("button", { name: "Credentials", exact: true }).click();
-  await setup.getByRole("radio", { name: "OpenRouter API key", exact: true }).check();
-  await expect(setup.getByLabel("OpenRouter model ID")).toBeVisible();
-  await expect(setup.getByRole("button", { name: "Sign in on this machine", exact: true })).toHaveCount(0);
-});
-
-test("the VPS composer displays and selects its configured OpenRouter model", async ({ page }) => {
-  await page.goto("/preview/where-it-runs.html?pick=1&apiReady=1&needsLogin=1");
-  await expect(page.getByRole("button", { name: "Provider", exact: true })).toContainText("OpenRouter API");
-  await expect(page.getByRole("button", { name: /deepseek-v4.1-flash-1017/ })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (window as any).__COMPOSER_MODEL__)).toBe('harness-source:{"provider":"openrouter","model":"deepseek/deepseek-v4.1-flash-1017"}');
-  await page.getByRole("button", { name: "Provider", exact: true }).click();
-  await page.getByRole("option", { name: "Change VPS credentials", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Back to Focus", exact: true })).toBeVisible();
-});
-
-test("a subscription VPS exposes the action to choose API credentials", async ({ page }) => {
-  await page.goto("/preview/where-it-runs.html?pick=1");
-  await expect(page.getByRole("button", { name: "Provider", exact: true })).toContainText("Claude subscription");
-  await page.getByRole("button", { name: "Provider", exact: true }).click();
-  await page.getByRole("option", { name: "Change VPS credentials", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Back to Focus", exact: true })).toBeVisible();
+  await setup.getByRole("button", { name: "Add an API key", exact: true }).click();
+  await expect(setup.getByLabel("Provider", { exact: true })).toBeVisible();
+  await expect(setup.getByRole("button", { name: /^Authorize .* key$/ })).toBeVisible();
 });
 
 async function projectSetup(page: Page, extra = "", popup = false) {
@@ -165,21 +141,20 @@ test("an older running backend cannot fall back to personal GitHub sign-in",asyn
 });
 
 
-test("OpenRouter DeepSeek setup authorizes only the selected key without Claude sign-in", async ({ page }) => {
+test("any hosted API key is authorized without Claude sign-in", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 900 });
   await page.goto("/preview/where-it-runs.html?settings=1&needsLogin=1&repoAccess=1");
   await page.getByRole("button", { name: "Continue setup", exact: true }).click();
   const setup = page.locator(".klide-machine-setup");
-  await setup.getByRole("radio", { name: "OpenRouter API key", exact: true }).check();
-  await expect(setup.getByLabel("OpenRouter model ID")).toHaveValue("deepseek/deepseek-v4.1-flash-1017");
-  await expect(setup.getByRole("button", { name: "Sign in on this machine", exact: true })).toHaveCount(0);
-  const authorize = setup.getByRole("button", { name: "Authorize selected key and model", exact: true });
+  await setup.getByRole("button", { name: "Add an API key", exact: true }).click();
+  await setup.getByLabel("Provider", { exact: true }).selectOption("deepseek");
+  const authorize = setup.getByRole("button", { name: "Authorize DeepSeek key", exact: true });
   await expect(authorize).toBeDisabled();
-  await setup.getByRole("checkbox", { name: /Store only this selected key/ }).check();
+  await setup.getByRole("checkbox", { name: /Store this key on/ }).check();
   await expect(authorize).toBeEnabled();
-  await page.screenshot({ path: "artifacts/design-feedback/remote-openrouter-credentials.png", fullPage: true });
+  await page.screenshot({ path: "artifacts/design-feedback/remote-api-credentials.png", fullPage: true });
   await authorize.click();
   await expect(setup.getByRole("heading", { name: "Ready for remote tasks", exact: true })).toBeVisible();
-  expect(await page.evaluate(() => (window as any).__MACHINE_API_KEY_ID__)).toBe("configured");
+  expect(await page.evaluate(() => (window as any).__MACHINE_API_KEY__)).toEqual({ provider: "deepseek", keyId: "configured" });
   expect(await page.evaluate(() => (window as any).__MACHINE_SETUP_ACTIONS__ ?? [])).toEqual([]);
 });

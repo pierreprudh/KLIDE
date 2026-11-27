@@ -113,7 +113,7 @@ test("the logo checklist updates from live checks without stopping an active ins
   const checklist = dialog.getByRole("list", { name: "Setup progress" });
   const claude = checklist.locator("li").filter({ hasText: "Credentials" });
   const github = checklist.locator("li").filter({ hasText: "GitHub" });
-  await expect(claude).toContainText("Choose subscription or API key");
+  await expect(claude).toContainText("Sign in or add an API key");
   await expect(github).toContainText("Not installed");
   await expect(checklist.locator(".klide-machine-checklist-logo")).toHaveCount(6);
   await dialog.getByRole("button", { name: "Install and continue", exact: true }).click();
@@ -262,7 +262,7 @@ for (const surface of ["popup", "settings"]) {
     }
     const setup = page.locator(".klide-machine-setup");
     await expect(setup.getByRole("heading", { name: "Ready for remote tasks" })).toBeVisible();
-    for (const [step, heading] of [["Connect", "Connect to your machine"], ["Install", "Prepare this machine"], ["Credentials", "Choose model credentials"], ["Project", "Choose the remote project"], ["Ready", "Ready for remote tasks"]]) {
+    for (const [step, heading] of [["Connect", "Connect to your machine"], ["Install", "Prepare this machine"], ["Credentials", "Model credentials"], ["Project", "Choose the remote project"], ["Ready", "Ready for remote tasks"]]) {
       await setup.getByRole("button", { name: step, exact: true }).click();
       await expect(setup.getByRole("heading", { name: heading, exact: true })).toBeVisible();
       const marker = setup.locator(".klide-machine-step-marker");

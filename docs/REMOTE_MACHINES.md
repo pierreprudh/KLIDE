@@ -494,36 +494,33 @@ unflushed relay smoke tests stalled and hit the workflow deadline; those runs
 are not acceptance evidence. The corrected Linux workflow run 44116806131 passed both controlled-process smoke tests. Actual Claude and sleep/wake acceptance on the user’s machine remains outstanding.
 
 
-## OpenRouter credentials for remote tasks
+## Agents and API keys on a remote machine
 
-Credentials offers Claude subscription or OpenRouter API key. OpenRouter with
-DeepSeek requires the Claude Code runtime, a compatible helper advertising
-`remote-openrouter`, and an explicitly authorized destination API key. Claude
-account sign-in is not required. Subscription mode retains its login check.
+A remote conversation picks its agent and model in the composer, exactly as on
+this Mac. The machine supplies credentials, never a model:
 
-The Credentials step is editable as soon as SSH connects, including before
-helper installation. With a remote machine selected, the start composer shows
-that machine's credentials and model. OpenRouter models can be selected directly
-in the composer; saving updates the Machine's model without transferring or
-replacing its authorized API key. Failed saves retain the previous selection.
-The credential menu leads to Machines settings instead of silently moving
-execution back to this Mac. Existing conversation bindings keep their original
-selection.
+- **Claude Code** runs on the machine's own Claude login and its own models by
+  default. It can also be routed to any authorized API source through the
+  destination's model bridge.
+- **Kit** (Klide's own agent) runs on any hosted API whose key the machine
+  holds. The Harness loop already runs inside the remote Run host; only the
+  admission (`remote_machine::validate_request`) and the key lookup changed.
 
-The model ID is saved on the Machine and frozen in each new conversation's
-Binding. Only explicitly selected key ids and labels cross the frontend IPC;
-Rust resolves the selected Mac key and transfers it through SSH stdin after
-the user authorizes that destination. The key is stored at
-`~/.klide/remote-api/openrouter/api-key` (private directory, file mode 600).
-The destination model bridge reads it per request, so neither an open Mac
-connection nor a Mac-hosted inference proxy is required. A missing or invalid
-previously configured key fails rather than using another account's key.
+Settings → Machines → Credentials shows the Claude login and lists the
+authorized API keys. "Add an API key" sends one explicitly chosen key from this
+Mac over SSH stdin to `~/.klide/remote-api/<provider>/api-key` (dir 700, file
+600). On the host, `providers::provider_key_in` reads that file per request
+before anything else, so neither the Mac nor a Mac-side proxy is needed while a
+task runs. A missing or invalid previously configured key fails rather than
+falling back to another account's key. Only plain-keyed hosted APIs qualify
+(`machine_inference::remote_api_provider`): no local servers, no token
+commands (Vertex), no account-scoped URLs (Azure, Bedrock, Cloudflare).
 
-This is one OpenRouter key per remote OS worker account; authorizing another
-key replaces that account's selected key. Use separate OS accounts for keys
-that must coexist independently. Direct-mode code running as the worker can
-read that worker's key file. Subscription credentials and other Mac accounts
-are not copied. API key authorization currently supports Linux and macOS.
+The probe reports `apiKeys` (`klide ptyd api-status`); a host without the
+`remote-api` capability is shown as outdated once keys are authorized. The
+older machine-wide `inference` setting (one OpenRouter model forced on every
+run) is still parsed, never applied, and dropped on the next save; a
+conversation bound under it keeps its original model.
 
 ### OpenRouter without Claude subscription login — live acceptance 2026-11-27
 
