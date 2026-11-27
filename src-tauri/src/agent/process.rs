@@ -227,7 +227,7 @@ fn spawn_with_setup_env(spec: SpawnSpec<'_>, envs: Option<&[(String, String)]>, 
         // Backstop for a runtime torn down under the waiter: at least sh dies.
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Failed to start command: {e}"))?;
+        .map_err(|e| format!("Failed to start command: {}", crate::secret_wall::explain(&e)))?;
 
     let rings = Arc::new(Mutex::new(match spec.capture {
         Capture::Merged { cap } => Rings { out: Ring::new(cap), err: None },

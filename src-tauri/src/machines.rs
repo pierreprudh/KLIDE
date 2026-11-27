@@ -150,12 +150,12 @@ pub async fn machine_save(machine: Machine, creating: bool) -> Result<Vec<Machin
     }).await
 }
 
-/// Store a machine Klide itself changed (key sync's switch), keeping the rest.
-pub(crate) fn save_existing(machine: Machine) -> Result<(), String> {
+/// Flip key sync's switch in the store — that field only, read and written
+/// under the lock, so a Settings edit made meanwhile is kept.
+pub(crate) fn set_sync_keys(id: &str, enabled: bool) -> Result<(), String> {
     let path = store_path().ok_or("Home directory unavailable")?;
     update_store(&path, |store| {
-        let index = store.machines.iter().position(|m| m.id == machine.id).ok_or("Machine was removed")?;
-        store.machines[index] = machine;
+        store.machines.iter_mut().find(|m| m.id == id).ok_or("Machine was removed")?.sync_keys = enabled;
         Ok(())
     }).map(|_| ())
 }
@@ -403,18 +403,20 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
 
     let mut problems: Vec<&str> = Vec::new();
     status.setup.api_keys = got("apiKeys").map(|v| v.split_whitespace().filter(|p| crate::machine_inference::remote_api_provider(p)).map(String::from).collect()).unwrap_or_default();
-    status.setup.wall = match got("wall") { Some("ready") => "ready", Some(_) => "needsSetup", None => "unknown" }.into();
+    status.setup.wall = match got("wall") { Some("ready") => "ready", Some("unsupported") => "unsupported", Some(_) => "needsSetup", None => "unknown" }.into();
     if machine.sync_keys {
-        // A key changed on this Mac reaches the machine the next time anything
-        // checks it — the picker does, before every remote conversation.
+        // This check also *writes*: with key sync on, a key changed on this Mac
+        // is pushed here, so it reaches the machine before the next remote
+        // conversation (the picker checks first). Keep it on this path.
         let can_sync = got("hostApi").is_some_and(|v| v.split_whitespace().any(|c| c == crate::machine_inference::SYNC_CAPABILITY));
         let remote: crate::machine_inference::Manifest = got("apiManifest").and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
         let local = crate::machine_inference::local_keys();
+        let differs = local.as_ref().map_or(true, |keys| !crate::machine_inference::pending(keys, &remote).is_empty());
         status.setup.key_sync = if !can_sync { "unavailable".into() }
-            else if crate::machine_inference::pending(&local, &remote).is_empty() { "inSync".into() }
-            else if status.setup.wall != "ready" && !local.is_empty() { "pending".into() }
+            else if !differs { "inSync".into() }
+            else if status.setup.wall != "ready" { "pending".into() }
             else {
-                match crate::machine_inference::push(&machine.ssh_host, local) {
+                match local.and_then(|keys| crate::machine_inference::push(&machine.ssh_host, keys)) {
                     Ok(manifest) => { status.setup.api_keys = manifest.into_keys().collect(); "inSync".into() }
                     Err(error) => { status.facts.push(fact("Key sync", error, "warn", None)); "pending".into() }
                 }
@@ -446,7 +448,8 @@ pub fn check(machine: &Machine, workspace_root: Option<&str>) -> MachineStatus {
     if !keys.is_empty() {
         let synced = if status.setup.key_sync == "inSync" { " · in sync with this Mac" } else { "" };
         status.facts.push(fact("API keys", format!("{}{synced}", keys.join(", ")), "ok", None));
-        // Fail closed: with keys there and no wall, every command is refused.
+        // Fail closed (Linux): with keys there and no wall, every command is
+        // refused. A macOS host has no wall to set up, so it is not blocked.
         if status.setup.wall == "needsSetup" {
             problems.push("Protect the API keys in Settings → Machines");
             status.facts.push(fact("Key protection", "Commands could read the keys — finish “Protect keys” (one sudo step)", "warn", None));

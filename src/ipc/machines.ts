@@ -44,7 +44,7 @@ export type MachineStatus = {
     apiKeys?: string[];
     keySync?: "off" | "inSync" | "pending" | "unavailable" | "unknown";
     /** Whether commands there can't read the keys (Rust `secret_wall`). */
-    wall?: "ready" | "needsSetup" | "unknown";
+    wall?: "ready" | "needsSetup" | "unsupported" | "unknown";
     credentials?: "ready" | "needsLogin" | "unknown";
     github?: "ready" | "needsLogin" | "missing" | "unknown";
     githubScope?: "repository" | "account";

@@ -40,6 +40,8 @@ fn main() {
             // Before anything else: no child may read this process's view of ~/.klide.
             klide_lib::secret_wall::seal_host();
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("wall-check") {
+                // The wall is Linux's; a macOS host says so rather than "blocked".
+                if !cfg!(target_os = "linux") { println!("unsupported"); return; }
                 match klide_lib::secret_wall::check() {
                     Ok(()) => println!("ready"),
                     Err(reason) => { println!("blocked"); eprintln!("{reason}"); std::process::exit(1); }

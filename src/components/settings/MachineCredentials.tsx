@@ -19,7 +19,8 @@ export function MachineCredentials({ machine, status, disabled, onSignIn, onProt
   const [error, setError] = useState("");
   const setup = status?.setup;
   const name = machine.label ?? machine.sshHost;
-  const supported = status?.target?.os !== "windows";
+  // The secret wall that guards synced keys is Linux-only for now.
+  const supported = status?.target?.os === "linux";
   const protectedKeys = setup?.wall === "ready";
   // The live check is the truth (the machine prop is the form's copy and can
   // lag); a toggle just made holds until the next check lands.
@@ -44,7 +45,7 @@ export function MachineCredentials({ machine, status, disabled, onSignIn, onProt
     {/* While a sign-in runs, its terminal needs the room. */}
     {!(disabled && !working) && <div className="klide-machine-credential-group">
       <p><strong>Your API keys</strong> · {syncLine}{keys.length ? ` On the machine: ${keys.join(", ")}.` : ""}</p>
-      {!supported ? <p>Key sync is available on Linux and macOS machines.</p>
+      {!supported ? <p>Key sync is available on Linux machines for now.</p>
         : !protectedKeys && !syncing ? <>
           <p>First, make the keys unreadable to the commands agents run there. One sudo step on the machine.</p>
           <GhostButton disabled={busy} onClick={onProtect}>Protect keys on {name}</GhostButton>

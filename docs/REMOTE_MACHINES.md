@@ -518,9 +518,14 @@ has. It answers with a manifest of provider → fingerprint (8 bytes of
 SHA-256), never a value; `ptyd api-manifest` prints the same. Every machine
 check compares that manifest with this Mac's keys and pushes again when they
 differ, so a key changed on the Mac reaches the machine before the next remote
-conversation starts (the picker checks first). Turning sync off, or removing
-the machine, pushes an empty bundle — the keys are erased there; a removal
-that can't reach the machine is refused rather than leaving a copy behind.
+conversation starts (the picker checks first). Turning sync off, or removing a
+machine with sync on, pushes an empty bundle — the keys are erased there; such
+a removal that can't reach the machine is refused rather than leaving a copy
+behind. Keys added earlier one at a time (before key sync) are not erased by
+a removal; turn sync on and off once to clear them. A key set on this Mac
+that can't be read at sync time fails the sync instead of being dropped (a
+drop would delete it on the machine). Key sync is Linux-only for now: the
+wall below is Linux's, and a macOS host reports `wall: unsupported`.
 On the host, `providers::provider_key_in` reads that file per request before
 anything else, so a running task needs neither the Mac nor a Mac-side proxy.
 Only plain-keyed hosted APIs qualify (`machine_inference::remote_api_provider`):

@@ -77,7 +77,7 @@ pub fn check() -> Result<(), String> {
         let mut cmd = std::process::Command::new("/bin/sh");
         cmd.arg("-c").arg(r#"test -z "$(ls -A "$1" 2>/dev/null)" && echo walled"#).arg("sh").arg(home.join(COVERED));
         wall.apply(&mut cmd);
-        let out = cmd.output().map_err(|e| linux::explain(&e))?;
+        let out = cmd.output().map_err(|e| format!("The kernel refused the wall: {e}"))?;
         if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "walled" { Ok(()) }
         else { Err("The covered folder is still visible to commands".into()) }
     }
@@ -122,7 +122,7 @@ mod linux {
         match Wall::new(&home.join(super::COVERED)) {
             Some(wall) => wall.apply(cmd),
             // A home path with a NUL byte: refuse rather than run unwalled.
-            None => unsafe { cmd.pre_exec(|| Err(std::io::Error::other(super::REFUSED))); },
+            None => unsafe { cmd.pre_exec(|| Err(std::io::Error::from_raw_os_error(libc::EPERM))); },
         }
     }
 
@@ -140,29 +140,31 @@ mod linux {
         if result == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
     }
 
+    // std carries only an errno from the child back to `spawn`, so each step
+    // fails with the kernel's own error; `explain` turns it into the message.
     fn raise(wall: &Wall) -> std::io::Result<()> {
-        let fail = |_| std::io::Error::other(super::REFUSED);
         unsafe {
-            check(libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS)).map_err(fail)?;
-            write_file(b"/proc/self/setgroups\0", b"deny").map_err(fail)?;
-            write_file(b"/proc/self/uid_map\0", &wall.uid_map).map_err(fail)?;
-            write_file(b"/proc/self/gid_map\0", &wall.gid_map).map_err(fail)?;
-            check(libc::mount(std::ptr::null(), b"/\0".as_ptr().cast(), std::ptr::null(), libc::MS_REC | libc::MS_PRIVATE, std::ptr::null())).map_err(fail)?;
+            check(libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS))?;
+            write_file(b"/proc/self/setgroups\0", b"deny")?;
+            write_file(b"/proc/self/uid_map\0", &wall.uid_map)?;
+            write_file(b"/proc/self/gid_map\0", &wall.gid_map)?;
+            check(libc::mount(std::ptr::null(), b"/\0".as_ptr().cast(), std::ptr::null(), libc::MS_REC | libc::MS_PRIVATE, std::ptr::null()))?;
             check(libc::mount(
                 b"tmpfs\0".as_ptr().cast(),
                 wall.target.as_ptr(),
                 b"tmpfs\0".as_ptr().cast(),
                 libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
                 b"size=4k,mode=0500\0".as_ptr().cast(),
-            )).map_err(fail)?;
+            ))?;
         }
         Ok(())
     }
+}
 
-    /// The error a refused spawn reports, whatever the syscall said.
-    pub fn explain(error: &std::io::Error) -> String {
-        if error.to_string().contains(super::REFUSED) { super::REFUSED.into() } else { error.to_string() }
-    }
+/// What a failed start means to a person: when this machine holds keys and
+/// the wall can't stand here, it is that — not the errno the kernel returned.
+pub fn explain(error: &std::io::Error) -> String {
+    if has_secrets() && check().is_err() { REFUSED.into() } else { error.to_string() }
 }
 
 /// What a program that could not be walled reports instead of starting.
@@ -190,7 +192,14 @@ mod tests {
                 assert!(!seen.contains("remote-api"), "{seen}");
                 assert!(!seen.contains("unmounted"), "{seen}");
             }
-            Err(error) => assert!(error.to_string().contains(REFUSED), "{error}"),
+            // Ubuntu's AppArmor refuses unprivileged user namespaces by
+            // default; CI lifts that and sets KLIDE_REQUIRE_WALL so this
+            // proves the wall there instead of skipping.
+            Err(error) => {
+                assert!(std::env::var_os("KLIDE_REQUIRE_WALL").is_none(), "the wall could not be raised: {error}");
+                assert!(matches!(error.raw_os_error(), Some(libc::EPERM | libc::EACCES)), "{error}");
+                eprintln!("secret wall unavailable on this kernel ({error}); skipped");
+            }
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

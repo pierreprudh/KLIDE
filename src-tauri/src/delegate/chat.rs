@@ -447,7 +447,7 @@ async fn run_cli_streaming(
     command.stderr(Stdio::piped());
 
     let mut child = super::child::Child::spawn(&mut command)
-        .map_err(|e| format!("Unable to start {label}: {e}"))?;
+        .map_err(|e| format!("Unable to start {label}: {}", crate::secret_wall::explain(&e)))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(prompt.as_bytes())
@@ -829,7 +829,7 @@ async fn run_cli_with_stdin(
     // parentage is lost. Killing only the CLI would orphan its shell commands.
 
     let mut child = super::child::Child::spawn(&mut command)
-        .map_err(|e| format!("Unable to start {label}: {e}"))?;
+        .map_err(|e| format!("Unable to start {label}: {}", crate::secret_wall::explain(&e)))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(prompt.as_bytes())

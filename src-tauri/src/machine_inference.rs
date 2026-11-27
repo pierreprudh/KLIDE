@@ -150,7 +150,8 @@ pub fn sync_main() -> i32 {
 }
 
 /// Replace the keys under `home` with exactly `keys`. Every value is checked
-/// before anything is written, so a bad bundle changes nothing.
+/// before anything is written, so an invalid bundle changes nothing; a disk
+/// error midway can leave part of it, which the next check pushes again.
 fn apply_sync(home: &Path, keys: &BTreeMap<String, String>) -> Result<Manifest, String> {
     for (provider, key) in keys {
         provider_dir(provider)?;
@@ -183,12 +184,21 @@ fn private_dir(dir: &Path) -> Result<(), String> {
     { std::fs::create_dir_all(dir).map_err(|e| e.to_string()) }
 }
 
-/// Every remote-capable key this Mac holds (Mac side).
-pub fn local_keys() -> BTreeMap<String, String> {
-    crate::providers::PROVIDERS.iter().map(|entry| entry.id)
-        .filter(|id| remote_api_provider(id))
-        .filter_map(|id| crate::providers::provider_key(id).ok().flatten().map(|key| (id.to_string(), key)))
-        .collect()
+/// Every remote-capable key this Mac holds (Mac side). A key that is set but
+/// can't be read right now (a locked Keychain, an unresolved `${VAR}`) fails
+/// the whole set: sync replaces the machine's keys, so leaving it out would
+/// delete it there.
+pub fn local_keys() -> Result<BTreeMap<String, String>, String> {
+    let mut keys = BTreeMap::new();
+    for id in crate::providers::PROVIDERS.iter().map(|entry| entry.id).filter(|id| remote_api_provider(id)) {
+        if !crate::providers::key_status(id).is_ok_and(|status| status.has_key) { continue; }
+        match crate::providers::provider_key(id) {
+            Ok(Some(key)) => { keys.insert(id.to_string(), key); }
+            Ok(None) => {}
+            Err(error) => return Err(format!("Could not read the {id} key on this Mac ({error}); nothing was synced")),
+        }
+    }
+    Ok(keys)
 }
 
 /// Which providers differ between this Mac and a machine's manifest.
@@ -203,7 +213,10 @@ pub fn pending(local: &BTreeMap<String, String>, remote: &Manifest) -> Vec<Strin
 pub(crate) fn push(ssh_host: &str, keys: BTreeMap<String, String>) -> Result<Manifest, String> {
     let bundle = serde_json::to_vec(&Bundle { version: BUNDLE_VERSION, keys }).map_err(|e| e.to_string())?;
     let out = crate::machine_install::ssh_input(ssh_host, r#""$HOME/.klide/bin/klide" ptyd sync-keys"#, bundle)?;
-    serde_json::from_slice(String::from_utf8_lossy(&out.stdout).trim().as_bytes()).map_err(|_| "The machine did not confirm its keys".into())
+    // The manifest is the last line: a login banner may come first.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let last = stdout.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("");
+    serde_json::from_str(last.trim()).map_err(|_| "The machine did not confirm its keys".into())
 }
 
 #[derive(Serialize)]
@@ -215,14 +228,14 @@ pub struct SyncResult { synced: Vec<String> }
 #[tauri::command]
 pub async fn machine_key_sync(id: String, enabled: bool) -> Result<SyncResult, String> {
     crate::blocking::run(move || {
-        let mut machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
+        let machine = crate::machines::get(&id).ok_or("Machine is no longer configured")?;
         crate::machines::validate_machine(&machine)?;
-        if crate::machine_install::detect_target(&machine.ssh_host)?.os == crate::remote_platform::HostOs::Windows {
-            return Err("Key sync currently supports Linux and macOS machines.".into());
+        // The secret wall that guards synced keys exists on Linux only.
+        if crate::machine_install::detect_target(&machine.ssh_host)?.os != crate::remote_platform::HostOs::Linux {
+            return Err("Key sync is available on Linux machines for now.".into());
         }
-        let manifest = push(&machine.ssh_host, if enabled { local_keys() } else { BTreeMap::new() })?;
-        machine.sync_keys = enabled;
-        crate::machines::save_existing(machine)?;
+        let manifest = push(&machine.ssh_host, if enabled { local_keys()? } else { BTreeMap::new() })?;
+        crate::machines::set_sync_keys(&machine.id, enabled)?;
         Ok(SyncResult { synced: manifest.into_keys().collect() })
     }).await
 }
