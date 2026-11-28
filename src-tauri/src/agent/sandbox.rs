@@ -224,7 +224,7 @@ impl Sandbox {
 /// `CODEX_HOME` or `CLAUDE_CONFIG_DIR` is followed.
 const SECRET_PATHS: &[&str] = &[
     ".ssh", ".aws", ".gnupg", ".azure", ".kube", ".config/gh",
-    ".config/gcloud", ".hermes/.env", ".klide/accounts", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+    ".config/gcloud", ".hermes/.env", ".klide/accounts", ".klide/remote-api", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
 ];
 
 /// Where build tools keep what they download and compile, under the home

@@ -11,7 +11,7 @@ import { GhostButton } from "./controls";
 import { CheckIcon } from "../../icons";
 
 const DetailsTerminal = lazy(() => import("./MachineSetupTerminal"));
-const progress: Record<MachineSetupAction, string> = { connect: "Connecting to your machine", authorize: "Enabling background access", prepare: "Installing requirements", signIn: "Waiting for Claude sign-in", gitHub: "Waiting for GitHub sign-in", clone: "Cloning your project" };
+const progress: Record<MachineSetupAction, string> = { connect: "Connecting to your machine", authorize: "Enabling background access", prepare: "Installing requirements", signIn: "Waiting for Claude sign-in", gitHub: "Waiting for GitHub sign-in", clone: "Cloning your project", protectKeys: "Protecting the API keys" };
 
 export default function MachineSetupSession({ machineId, workspaceRoot, action, target, onDone }: {
   machineId: string; workspaceRoot: string | null; action: MachineSetupAction; target?: HostTarget;

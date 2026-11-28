@@ -36,6 +36,7 @@ mod loopback_server;
 mod custom_cli;
 mod machines;
 pub mod machine_inference;
+pub mod secret_wall;
 mod custom_providers;
 mod self_hosted_probe;
 mod delegate;
@@ -1400,8 +1401,7 @@ pub fn run() {
             custom_provider_remove,
             custom_cli_list,
             machines::machines_list,
-            machine_inference::machine_api_keys,
-            machine_inference::machine_api_authorize,
+            machine_inference::machine_key_sync,
             machines::machine_save,
             machines::machine_remove,
             machines::machine_check,

@@ -149,15 +149,6 @@ pub fn remove(provider: &str, id: &str) -> Result<ProviderKeys, String> {
     Ok(list(provider))
 }
 
-/// Resolve one explicitly selected saved key without changing the main slot.
-pub(crate) fn resolve_saved(provider: &str, id: &str) -> Result<String, String> {
-    let key = list(provider).keys.into_iter().find(|key| key.id == id).ok_or("That API key is no longer saved")?;
-    match key.reference {
-        Some(reference) => providers::resolve_reference(&reference, None).ok_or_else(|| "The selected API key reference could not be resolved".into()),
-        None => providers::read_keychain_secret(&account(provider, id)).ok_or_else(|| "The selected API key is no longer available in Keychain".into()),
-    }
-}
-
 // ── Main slot ────────────────────────────────────────────────────────────
 
 /// The recorded main key, if the slot still holds it. A key set through

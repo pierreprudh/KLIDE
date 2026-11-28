@@ -153,8 +153,12 @@ function emit(event: string, payload: unknown) {
       machines = [...machines.filter((m) => m.id !== machine.id), machine];
       return machines;
     }
-    if (cmd === "machine_api_keys") return [{ id: "configured", label: "Current key" }];
-    if (cmd === "machine_api_authorize") { apiKeys = [...new Set([...apiKeys, args.provider as string])]; (window as any).__MACHINE_API_KEY__ = { provider: args.provider, keyId: args.keyId }; return null; }
+    if (cmd === "machine_key_sync") {
+      (window as any).__MACHINE_KEY_SYNC__ = { id: args.id, enabled: args.enabled };
+      machines = machines.map((m) => m.id === args.id ? { ...m, syncKeys: args.enabled as boolean } : m);
+      apiKeys = args.enabled ? ["deepseek", "openrouter"] : [];
+      return { synced: apiKeys };
+    }
     if (cmd === "machine_prepare_host") { (window as any).__MACHINE_PREPARED_TARGET__ = args.target; return null; }
     if (cmd === "machine_check") {
       if (params.has("pendingCheck")) return new Promise(() => {});
@@ -169,7 +173,7 @@ function emit(event: string, payload: unknown) {
         caption: params.has("unsupported") ? "This remote architecture does not have a published helper yet" : reachable ? "Keeps going when this Mac sleeps" : "Not reached — is Tailscale on?",
         facts: reachable ? [] : [{ label: "Reached", value: "timeout", tone: "bad", fix: "ssh klide-box" }],
         checkout: "~/code/pixel-art-editor",
-        setup: { apiKeys, credentials: credentialsReady ? "ready" : "needsLogin", connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", githubScope: params.has("oldBackend") ? undefined : params.has("repoAccess") ? "repository" : "account", github: params.has("missingGh") && !componentsInstalled ? "missing" : (params.has("needsGhLogin") || params.has("missingGh")) && !githubSignedIn ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
+        setup: { apiKeys, keySync: machine.syncKeys ? "inSync" : "off", wall: params.has("unprotected") && !(window as any).__MACHINE_PROTECTED__ ? "needsSetup" : "ready", credentials: credentialsReady ? "ready" : "needsLogin", connection: params.has("unsupported") ? "unsupported" : reachable ? "connected" : "offline", host: needsInstall && !params.has("hostReady") ? "missing" : "ready", claude: needsInstall ? "missing" : params.has("needsLogin") && !signedIn ? "needsLogin" : "ready", githubScope: params.has("oldBackend") ? undefined : params.has("repoAccess") ? "repository" : "account", github: params.has("missingGh") && !componentsInstalled ? "missing" : (params.has("needsGhLogin") || params.has("missingGh")) && !githubSignedIn ? "needsLogin" : "ready", project: params.has("needsProject") ? "missing" : "ready" },
       };
     }
     if (cmd.endsWith("list") || cmd.includes("models") || cmd.includes("status")) return [];

@@ -6,17 +6,19 @@ import { providerEndpointVars, providerGroup, providerRow } from "../agent/provi
 
 export type MachineFactTone = "ok" | "warn" | "bad" | "quiet";
 
-export type MachineKeyOption = { id: string; label: string };
-/** The keys this Mac holds for `provider` that may be sent to a machine. */
-export function machineApiKeys(provider: string): Promise<MachineKeyOption[]> { return invoke("machine_api_keys", { provider }); }
-/** Send one chosen key to the machine over SSH (Rust `machine_api_authorize`). */
-export function machineApiAuthorize(id: string, provider: string, keyId: string): Promise<void> { return invoke("machine_api_authorize", { id, provider, keyId }); }
+/** Turn on (push this Mac's keys now) or off (remove them from the machine)
+ *  key sync — Rust `machine_key_sync`. Answers the providers now there. */
+export function machineKeySync(id: string, enabled: boolean): Promise<{ synced: string[] }> {
+  return invoke("machine_key_sync", { id, enabled });
+}
 
 export type Machine = {
   id: string;
   label?: string;
   sshHost: string;
   checkouts?: Record<string, string>;
+  /** Keeps a copy of this Mac's API keys; only `machineKeySync` changes it. */
+  syncKeys?: boolean;
 };
 
 export type MachineFact = { label: string; value: string; tone: MachineFactTone; fix?: string };
@@ -40,6 +42,9 @@ export type MachineStatus = {
     claude: "ready" | "needsLogin" | "missing" | "unknown";
     /** Providers whose API key is authorized on the machine. */
     apiKeys?: string[];
+    keySync?: "off" | "inSync" | "pending" | "unavailable" | "unknown";
+    /** Whether commands there can't read the keys (Rust `secret_wall`). */
+    wall?: "ready" | "needsSetup" | "unsupported" | "unknown";
     credentials?: "ready" | "needsLogin" | "unknown";
     github?: "ready" | "needsLogin" | "missing" | "unknown";
     githubScope?: "repository" | "account";
@@ -98,7 +103,7 @@ export async function machineRemove(id: string): Promise<Machine[]> {
   return machines;
 }
 
-export type MachineSetupAction = "connect" | "authorize" | "prepare" | "signIn" | "gitHub" | "clone";
+export type MachineSetupAction = "connect" | "authorize" | "prepare" | "signIn" | "gitHub" | "clone" | "protectKeys";
 
 export type RemoteDirectories = { path: string; parent: string | null; entries: { name: string; path: string }[]; truncated: boolean };
 export function machineRemoteDirectories(id: string, path: string): Promise<RemoteDirectories> {

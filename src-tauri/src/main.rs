@@ -37,6 +37,22 @@ fn main() {
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
         if matches!(args.first().map(String::as_str), Some("ptyd" | "scheduled")) {
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("wall-check") {
+                // The wall is Linux's; a macOS host says so rather than "blocked".
+                if !cfg!(target_os = "linux") { println!("unsupported"); return; }
+                match klide_lib::secret_wall::check() {
+                    Ok(()) => println!("ready"),
+                    Err(reason) => { println!("blocked"); eprintln!("{reason}"); std::process::exit(1); }
+                }
+                return;
+            }
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("api-manifest") {
+                println!("{}", serde_json::to_string(&klide_lib::machine_inference::manifest()).unwrap_or_default());
+                return;
+            }
+            if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("sync-keys") {
+                std::process::exit(klide_lib::machine_inference::sync_main());
+            }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("openrouter-status") {
                 match klide_lib::machine_inference::configured_key() {
                     Ok(Some(_)) => println!("ready"),
@@ -50,7 +66,7 @@ fn main() {
                 return;
             }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("capabilities") {
-                println!("{} {}", klide_lib::machine_inference::CAPABILITY, klide_lib::machine_inference::API_CAPABILITY);
+                println!("{} {} {}", klide_lib::machine_inference::CAPABILITY, klide_lib::machine_inference::API_CAPABILITY, klide_lib::machine_inference::SYNC_CAPABILITY);
                 return;
             }
             if args[0] == "ptyd" && args.get(1).map(String::as_str) == Some("version") {
@@ -115,6 +131,10 @@ fn main() {
                 .position(|a| a == "--data-dir")
                 .and_then(|i| args.get(i + 1))
                 .map(std::path::PathBuf::from);
+            // The host walls itself before it starts a thread or a program:
+            // everything it runs inherits a view without the API keys
+            // (secret_wall.rs). Exits if keys are present and it can't.
+            if let Some(dir) = &data_dir { klide_lib::secret_wall::host_start(dir); }
             match data_dir {
                 Some(dir) if args[0] == "scheduled" => klide_lib::pty_daemon::scheduled_main(dir),
                 Some(dir) => klide_lib::pty_daemon::daemon_main(dir),

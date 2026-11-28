@@ -177,7 +177,7 @@ export function MachinesSection({ workspaceRoot }: { workspaceRoot: string | nul
         {!loading && !error && machines.length === 0 && <p className="klide-machine-message">No remote machines connected yet.</p>}
       </div>
       {error && <div className="klide-machine-confirm" role="alert">{error} <GhostButton disabled={busy || editing !== undefined} onClick={() => setReload((value) => value + 1)}>Reload</GhostButton></div>}
-      <p className="klide-machine-footnote">Select a machine in “Where it runs” before starting a conversation. Remote conversations run Claude Code on the machine’s login, or Kit and Claude Code on an API key authorized there.</p>
+      <p className="klide-machine-footnote">Select a machine in “Where it runs” before starting a conversation. Remote conversations run Claude Code on the machine’s login, or Kit and Claude Code on your API keys synced there.</p>
     </SettingBlock>
 
     <SettingBlock title="Connect a machine">

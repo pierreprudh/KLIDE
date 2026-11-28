@@ -89,5 +89,11 @@ jobs:
       # Windows compiles; its tests still assume a Unix host (35 of 1282 fail
       # on `/` paths, `sh` scripts, symlinks — listed in TODO.md). Run them
       # there once that list is worked down.
+      # Ubuntu's AppArmor refuses unprivileged user namespaces by default;
+      # lift it so the secret wall test proves the wall (secret_wall.rs).
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - if: runner.os != 'Windows'
+        env:
+          KLIDE_REQUIRE_WALL: ${{ runner.os == 'Linux' && '1' || '' }}
         run: cargo test --manifest-path src-tauri/Cargo.toml

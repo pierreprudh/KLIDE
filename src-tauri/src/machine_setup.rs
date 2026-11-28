@@ -54,6 +54,8 @@ pub enum SetupAction {
     SignIn,
     GitHub,
     Clone,
+    /// Allow the secret wall where AppArmor restricts user namespaces.
+    ProtectKeys,
 }
 
 fn script(
@@ -70,6 +72,7 @@ fn script(
         SetupAction::Authorize => return Err("SSH authorization must use a local public key".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.sh").into(),
         SetupAction::SignIn => "exec claude auth login".into(),
+        SetupAction::ProtectKeys => include_str!("../../scripts/remote-host/protect-keys.sh").into(),
         SetupAction::GitHub => return Err("Open a project and connect repository-only access in the GitHub step. Personal GitHub login is not stored on remote machines.".into()),
         SetupAction::Clone => {
             let root = root.ok_or("Open a local project before cloning it remotely")?;
@@ -100,6 +103,7 @@ fn windows_script(
         SetupAction::Authorize => return Err("Use an existing authorized SSH key for Windows machines".into()),
         SetupAction::Prepare => include_str!("../../scripts/remote-host/prepare-machine.ps1").into(),
         SetupAction::SignIn => "& claude auth login; exit $LASTEXITCODE".into(),
+        SetupAction::ProtectKeys => return Err("Key sync is available on Linux and macOS machines".into()),
         SetupAction::GitHub => return Err("Open a project and connect repository-only access in the GitHub step. Personal GitHub login is not stored on remote machines.".into()),
         SetupAction::Clone => {
             let root=root.ok_or("Open a local project before cloning it remotely")?;
@@ -196,7 +200,7 @@ mod tests {
     use super::*;
     #[test]
     fn personal_github_login_is_never_started_on_a_shared_remote_account() {
-        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default(), inference: None };
+        let machine = crate::machines::Machine { id: "mini".into(), label: None, ssh_host: "dev@machine".into(), checkouts: Default::default(), inference: None, sync_keys: false };
         for os in [crate::remote_platform::HostOs::Macos, crate::remote_platform::HostOs::Linux, crate::remote_platform::HostOs::Windows] {
             assert!(script(&SetupAction::GitHub, &machine, None, os).unwrap_err().contains("repository-only"));
         }
@@ -237,7 +241,7 @@ mod tests {
             id: "mini".into(),
             label: None,
             ssh_host: "dev@machine".into(),
-            checkouts: Default::default(), inference: None,
+            checkouts: Default::default(), inference: None, sync_keys: false,
         };
         let login = script(
             &SetupAction::SignIn,
