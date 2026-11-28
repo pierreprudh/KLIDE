@@ -174,13 +174,21 @@ mod linux {
         std::fs::create_dir_all(&covered).map_err(|e| e.to_string())?;
         let wall = Wall::new(&covered, &home.join(super::PINNED)).ok_or("Cannot describe the wall")?;
         let path = CString::new(covered.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        // Prove the wall in a throwaway child first: once this process has
+        // unshared, a later step failing would leave it in a namespace with
+        // no uid mapping, unable to create a single file.
+        super::check()?;
         let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
         if fd < 0 { return Err(std::io::Error::last_os_error().to_string()); }
-        unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
         if let Err(error) = raise(&wall) {
-            unsafe { libc::close(fd) };
-            return Err(format!("The kernel refused the wall: {error}"));
+            // Past the probe, so this is not "unsupported": the process may be
+            // half inside a namespace. It must not carry on.
+            eprintln!("The secret wall failed after its probe passed: {error}");
+            std::process::exit(1);
         }
+        // Only now: a non-dumpable process's /proc/self belongs to root, so
+        // its own uid_map could no longer be written.
+        unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
         KEYS.store(fd, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
