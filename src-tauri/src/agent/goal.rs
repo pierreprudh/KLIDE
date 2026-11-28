@@ -11,6 +11,7 @@
 //! changed nothing, or a missing check command ends the Run as before — the
 //! marker left in the Transcript says which. Exhausted failures end in error.
 //! Delegate CLI goals are always checked, since their work bypasses dispatch.
+//! Explicit CLI acceptance checks also run when no work was observed.
 //!
 //! This module is the pure half: what to do with a check's outcome, and the
 //! words. Running the command and pushing the message is the loop's job
@@ -29,6 +30,9 @@ pub struct GoalSpec {
     /// default. A round is one "done" claim the Harness sent back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rounds: Option<usize>,
+    /// Explicit acceptance checks also verify claims that no work was needed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub check_without_work: bool,
 }
 
 /// Three rounds: enough for a real fix-forward, few enough that a model that
@@ -155,7 +159,7 @@ mod tests {
     use super::*;
 
     fn spec() -> GoalSpec {
-        GoalSpec { objective: "make the tab tests pass".into(), max_rounds: None }
+        GoalSpec { objective: "make the tab tests pass".into(), max_rounds: None, check_without_work: false }
     }
     fn failing() -> CheckOutcome {
         CheckOutcome { command: "npm test".into(), ok: false, output: "1 failed".into() }
@@ -215,10 +219,10 @@ mod tests {
     #[test]
     fn rounds_are_clamped_and_default_to_three() {
         assert_eq!(spec().rounds(), 3);
-        assert_eq!(GoalSpec { objective: "x".into(), max_rounds: Some(0) }.rounds(), 1);
-        assert_eq!(GoalSpec { objective: "x".into(), max_rounds: Some(99) }.rounds(), MAX_ROUNDS_CEILING);
+        assert_eq!(GoalSpec { objective: "x".into(), max_rounds: Some(0), check_without_work: false }.rounds(), 1);
+        assert_eq!(GoalSpec { objective: "x".into(), max_rounds: Some(99), check_without_work: false }.rounds(), MAX_ROUNDS_CEILING);
         // One round means one claim: the first failure already hands back.
-        let one = GoalSpec { objective: "x".into(), max_rounds: Some(1) };
+        let one = GoalSpec { objective: "x".into(), max_rounds: Some(1), check_without_work: false };
         assert!(matches!(verdict(&one, true, Some(&failing()), 0), GateVerdict::Finish { .. }));
     }
 
@@ -234,7 +238,7 @@ mod tests {
     #[test]
     fn the_spec_rides_the_wire_in_camel_case() {
         let parsed: GoalSpec = serde_json::from_str(r#"{"objective":"ship","maxRounds":2}"#).unwrap();
-        assert_eq!(parsed, GoalSpec { objective: "ship".into(), max_rounds: Some(2) });
+        assert_eq!(parsed, GoalSpec { objective: "ship".into(), max_rounds: Some(2), check_without_work: false });
         let bare: GoalSpec = serde_json::from_str(r#"{"objective":"ship"}"#).unwrap();
         assert_eq!(bare.max_rounds, None);
     }

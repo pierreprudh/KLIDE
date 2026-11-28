@@ -17,6 +17,9 @@ usage: klide run [options] \"<task>\"
   --model <provider>/<model>   e.g. deepseek/deepseek-chat, openrouter/…, auto (default)
   --work                       allow edits (applied without review)
   --allow-commands             with --work: shell commands run without asking
+  --approve-container-commands  with --work --allow-commands: approve command gates\n                               in a disposable Linux container (including key paths)
+  --check-command <command>    with --work --allow-commands: verify every completion claim
+  --check-timeout-secs <n>     completion check timeout (1–1800, default 180)
   --cwd <dir>                  the Workspace (default: current directory)
   --format text|json           text: answer on stdout, progress on stderr;
                                json: one AgentEvent per line on stdout
@@ -43,7 +46,10 @@ pub(crate) struct Args {
     pub model: String,
     pub work: bool,
     pub allow_commands: bool,
+    pub approve_container_commands: bool,
     pub cwd: Option<PathBuf>,
+    pub check_command: Option<String>,
+    pub check_timeout_secs: Option<u64>,
     pub json: bool,
     pub max_turns: Option<usize>,
     pub runs_dir: Option<PathBuf>,
@@ -69,7 +75,10 @@ pub(crate) fn parse(args: &[String], stdin: impl FnOnce() -> std::io::Result<Str
         model: String::new(),
         work: false,
         allow_commands: false,
+        approve_container_commands: false,
         cwd: None,
+        check_command: None,
+        check_timeout_secs: None,
         json: false,
         max_turns: None,
         runs_dir: None,
@@ -82,6 +91,17 @@ pub(crate) fn parse(args: &[String], stdin: impl FnOnce() -> std::io::Result<Str
             "--model" => (out.provider, out.model) = split_model(&value("--model")?)?,
             "--work" => out.work = true,
             "--allow-commands" => out.allow_commands = true,
+            "--approve-container-commands" => out.approve_container_commands = true,
+            "--check-command" => {
+                let command = value("--check-command")?;
+                if command.trim().is_empty() { return Err("--check-command must not be blank".into()); }
+                out.check_command = Some(command);
+            }
+            "--check-timeout-secs" => {
+                let n = value("--check-timeout-secs")?.parse::<u64>().map_err(|_| "--check-timeout-secs wants a number")?;
+                if !(1..=1800).contains(&n) { return Err("--check-timeout-secs must be 1–1800".into()); }
+                out.check_timeout_secs = Some(n);
+            }
             "--cwd" => out.cwd = Some(PathBuf::from(value("--cwd")?)),
             "--format" => match value("--format")?.as_str() {
                 "text" => out.json = false,
@@ -101,6 +121,15 @@ pub(crate) fn parse(args: &[String], stdin: impl FnOnce() -> std::io::Result<Str
     }
     if out.allow_commands && !out.work {
         return Err("--allow-commands needs --work".into());
+    }
+    if out.approve_container_commands && !(out.work && out.allow_commands) {
+        return Err("--approve-container-commands needs --work --allow-commands".into());
+    }
+    if out.check_command.is_some() && !(out.work && out.allow_commands) {
+        return Err("--check-command needs --work --allow-commands".into());
+    }
+    if out.check_timeout_secs.is_some() && out.check_command.is_none() {
+        return Err("--check-timeout-secs needs --check-command".into());
     }
     out.task = match task.as_deref() {
         Some("-") => stdin().map_err(|e| format!("reading the task from stdin: {e}"))?,
@@ -174,11 +203,19 @@ pub(crate) fn request(args: &Args, root: &Path, run_id: &str) -> Result<StartRun
     }))
     .map_err(|e| e.to_string())?;
     request.max_turns = args.max_turns;
+    if let Some(command) = &args.check_command {
+        request.goal = Some(goal::GoalSpec {
+            objective: args.task.clone(), max_rounds: None, check_without_work: true,
+        });
+        request.test_after_edit_command = Some(command.clone());
+        request.command_timeout_secs = args.check_timeout_secs;
+    }
+
     request.require_diff_review = Some(!args.work);
     request.auto_approve_commands = Some(args.allow_commands);
     request.disabled_tools = if args.work {
         // Connectors and child Runs ask a person, or start agents of their own.
-        let mut off: Vec<String> = ["connector_tools", "connector_call", "spawn_subagent"].map(String::from).to_vec();
+        let mut off: Vec<String> = ["connector_tools", "connector_call", "spawn_subagent", "consult_advisor"].map(String::from).to_vec();
         if !args.allow_commands {
             off.push("run_command".into());
         }
@@ -216,11 +253,35 @@ fn refusal(event: &AgentEvent) -> Option<crate::pty_wire::ChatControl> {
         AgentEvent::DiffProposed { .. } => Some(ChatControl::Diff {
             decision: serde_json::json!({ "behavior": "deny", "note": "Refused: klide run is read-only without --work." }),
         }),
+        AgentEvent::AdvisorRequested { .. } => Some(ChatControl::Question {
+            answer: format!("{}No advisor is configured for this headless run; use the local recovery nudge.",
+                super::tool_handlers::ADVISOR_ERROR_PREFIX),
+        }),
         AgentEvent::UserQuestionRequested { .. } => Some(ChatControl::Question {
             answer: "Nobody can answer — this is a headless klide run. Decide yourself and say what you assumed.".into(),
         }),
         _ => None,
     }
+}
+
+/// Container approval is an explicit CLI-owner grant, never inferred from
+/// model text. It covers command gates only; other capabilities keep refusing.
+fn control_reply(event: &AgentEvent, container_commands: bool) -> Option<crate::pty_wire::ChatControl> {
+    if container_commands {
+        if let AgentEvent::PermissionRequested { request, .. } = event {
+            if request.tool_name == "run_command" {
+                return Some(crate::pty_wire::ChatControl::Permission {
+                    decision: serde_json::json!({"behavior":"allow", "scope":"once",
+                        "note":"Explicit --approve-container-commands grant for this disposable container."}),
+                });
+            }
+        }
+    }
+    refusal(event)
+}
+
+fn container_environment() -> bool {
+    cfg!(target_os = "linux") && Path::new("/.dockerenv").is_file()
 }
 
 /// One terminal line per event worth one, for `--format text`.
@@ -274,6 +335,10 @@ pub fn main() -> ! {
 }
 
 async fn run(args: Args) -> i32 {
+    if args.approve_container_commands && !container_environment() {
+        eprintln!("klide run: --approve-container-commands requires a disposable Linux Docker container; do not mount host credentials or host control sockets.");
+        return exit::USAGE;
+    }
     let cwd = args.cwd.clone().map(Ok).unwrap_or_else(std::env::current_dir);
     let root = match cwd.and_then(|p| p.canonicalize()) {
         Ok(r) if r.is_dir() => r,
@@ -328,13 +393,17 @@ async fn run(args: Args) -> i32 {
                 // The pending slot is filled as the card is raised; give it a
                 // moment rather than race it.
                 for _ in 0..40 {
-                    let Some(control) = refusal(&event) else { break };
+                    let Some(control) = control_reply(&event, args.approve_container_commands) else { break };
                     if host.control(&run_id, control).is_ok() { break; }
                     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                 }
                 match &event {
                     AgentEvent::RunResult { result, .. } => {
-                        code = if result["status"] == "cancelled" { exit::INTERRUPTED } else { exit::DONE };
+                        code = match result["status"].as_str() {
+                            Some("done") => exit::DONE,
+                            Some("cancelled") => exit::INTERRUPTED,
+                            _ => exit::FAILED,
+                        };
                         break;
                     }
                     AgentEvent::RunError { .. } => { code = exit::FAILED; break; }
@@ -350,6 +419,13 @@ async fn run(args: Args) -> i32 {
     let end = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
     while host.status(&run_id).0.is_some() && tokio::time::Instant::now() < end {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    // A goal failure emits its result before its diagnostic. Drain the tail
+    // after settlement so JSON consumers and terminal users receive both.
+    while let Ok(event) = rx.try_recv() {
+        if args.json {
+            if let Ok(line) = serde_json::to_string(&event) { let _ = writeln!(out, "{line}"); }
+        } else { render(&event, &mut out, &mut err); }
     }
     let _ = std::fs::remove_dir_all(&scratch);
     code
@@ -402,6 +478,54 @@ mod tests {
             "type": "user_question_requested", "runId": "r", "requestId": "q", "question": "?", "ts": 0
         })).unwrap();
         assert!(matches!(refusal(&raised), Some(crate::pty_wire::ChatControl::Question { .. })));
+    }
+
+    #[test]
+    fn completion_checks_require_command_authority_and_a_bounded_timeout() {
+        for flags in [vec!["--check-command", "true", "x"],
+            vec!["--work", "--check-command", "true", "x"],
+            vec!["--check-timeout-secs", "1", "x"],
+            vec!["--work", "--allow-commands", "--check-command", "", "x"],
+            vec!["--work", "--allow-commands", "--check-command", "true", "--check-timeout-secs", "0", "x"]] {
+            assert!(args(&flags).is_err(), "{flags:?}");
+        }
+        let a = args(&["--work", "--allow-commands", "--check-command", "true", "x"]).unwrap();
+        let request = request(&a, Path::new("."), "check").unwrap();
+        assert!(request.goal.unwrap().check_without_work);
+        assert_eq!(request.test_after_edit_command.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn unavailable_advisor_resolves_to_the_native_fallback() {
+        let event: AgentEvent = serde_json::from_value(serde_json::json!({
+            "type":"advisor_requested", "runId":"r", "requestId":"a", "question":"help", "ts":0
+        })).unwrap();
+        match refusal(&event) {
+            Some(crate::pty_wire::ChatControl::Question { answer }) =>
+                assert!(answer.starts_with(super::super::tool_handlers::ADVISOR_ERROR_PREFIX)),
+            _ => panic!("a headless advisor request must resolve immediately"),
+        }
+    }
+
+    #[test]
+    fn container_approval_is_explicit_and_only_for_command_gates() {
+        assert!(args(&["--approve-container-commands", "x"]).is_err());
+        assert!(args(&["--work", "--approve-container-commands", "x"]).is_err());
+        assert!(args(&["--work", "--allow-commands", "--approve-container-commands", "x"]).unwrap().approve_container_commands);
+        let event = |tool: &str| serde_json::from_value::<AgentEvent>(serde_json::json!({
+            "type":"permission_requested", "runId":"r", "ts":0, "request":{
+                "id":"p", "runId":"r", "toolCallId":"c", "toolName":tool,
+                "input":{"command":"openssl req -keyout /etc/nginx/ssl/server.key"},
+                "summary":"command", "reason":"credential path", "options":[]
+            }
+        })).unwrap();
+        let decision = |e, enabled| match control_reply(&e, enabled).unwrap() {
+            crate::pty_wire::ChatControl::Permission { decision } => decision["behavior"].as_str().unwrap().to_owned(),
+            _ => panic!("expected permission reply"),
+        };
+        assert_eq!(decision(event("run_command"), false), "deny");
+        assert_eq!(decision(event("run_command"), true), "allow");
+        assert_eq!(decision(event("connector_call"), true), "deny");
     }
 
     #[test]

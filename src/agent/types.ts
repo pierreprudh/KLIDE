@@ -233,6 +233,7 @@ export type AgentError = {
     | "aborted"
     | "max_turns"
     | "goal_check_failed"
+    | "output_limit"
     | "provider_unavailable"
     | "context_window_exceeded"
     | "steering_gave_up"
@@ -510,7 +511,7 @@ export type StartAgentRunInput = {
   /** Set when the turn was a `/goal <objective>`: the model's "done" is
    *  checked against `testAfterEditCommand` before the run may end, and a
    *  failing check buys another round (Rust `agent::goal`, default 3). */
-  goal?: { objective: string; maxRounds?: number };
+  goal?: { objective: string; maxRounds?: number; checkWithoutWork?: boolean };
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
   sideQuestionOf?: string;

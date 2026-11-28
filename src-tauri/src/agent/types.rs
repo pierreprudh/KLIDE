@@ -595,6 +595,7 @@ impl PermissionRequest {
 /// `frontend_mirror_matches_agent_wire` fails the build if it drifts.
 pub mod error_code {
     pub const ABORTED: &str = "aborted";
+    pub const OUTPUT_LIMIT: &str = "output_limit";
     pub const GOAL_CHECK_FAILED: &str = "goal_check_failed";
     pub const MAX_TURNS: &str = "max_turns";
     pub const PROVIDER_UNAVAILABLE: &str = "provider_unavailable";
@@ -610,10 +611,11 @@ pub mod error_code {
     /// The set the drift test compares against the frontend mirror. Nothing in
     /// the running app iterates it — it exists so the contract has one home.
     #[allow(dead_code)]
-    pub const ALL: [&str; 8] = [
+    pub const ALL: [&str; 9] = [
         ABORTED,
         MAX_TURNS,
         GOAL_CHECK_FAILED,
+        OUTPUT_LIMIT,
         PROVIDER_UNAVAILABLE,
         CONTEXT_WINDOW_EXCEEDED,
         STEERING_GAVE_UP,

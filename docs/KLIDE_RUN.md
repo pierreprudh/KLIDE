@@ -39,6 +39,9 @@ klide run [options] - < task.md        # task from stdin
 | `--model <provider>/<model>` | `auto` | Any registry Provider; splits on the first `/` (`openrouter/deepseek/deepseek-v4.1-flash`, `deepseek/deepseek-chat`, `custom:x/model`) |
 | `--work` | off | Work mode: edits apply without review. Without it: Plan mode, read-only |
 | `--allow-commands` | off | With `--work`: shell commands run without a person (the full-auto rung). Never implied |
+| `--approve-container-commands` | off | With `--work --allow-commands`, explicitly approve command gates, including credential paths, inside a disposable Linux Docker container. Refused on ordinary hosts. Never mount host credentials or control sockets into that container |
+| `--check-command <command>` | off | With `--work --allow-commands`: check every completion claim, even without edits; nonzero exit status sends the failure back to the model (three completion checks maximum) |
+| `--check-timeout-secs <n>` | 180 | Check and tool-command timeout, 1–1800 seconds; requires `--check-command` |
 | `--cwd <dir>` | current dir | The Workspace |
 | `--format text\|json` | `text` | `text`: the answer on stdout, one dim line per Tool on stderr. `json`: one `AgentEvent` per line on stdout |
 | `--max-turns <n>` | 50 | Tool-turn cap |
@@ -51,10 +54,12 @@ stops the Run cleanly).
 ## Behaviour
 
 - **Nobody to ask.** Every permission, diff or question the Run raises is
-  answered with a refusal, never left waiting. Plan mode drops the Tools that
+  answered immediately. Unavailable advisor requests return the native fallback marker; other requests are refused unless command approval was explicitly granted for a disposable container. Plan mode drops the Tools that
   pause, as the CI watch does. `--work` keeps edits (applied, no review) and
   drops connectors, `spawn_subagent`, and `run_command` unless
   `--allow-commands`.
+- **Completion.** Explicit checks use the command’s exit status. Printing `INVALID` with exit status zero counts as success: write assertions that exit nonzero. Checks also run after accepted edits using the existing test hook. Repeated output-limit replies end in error after bounded retries, with partial text preserved.
+- **Images.** `read_image` reads workspace PNG/JPEG/GIF/WebP files (6 MB each, 12 MB per tool turn) into the model’s image input. Workspace and sensitive-file guards apply. Choose a vision-capable model; the tool does not add vision to text-only models. Images are recorded for transcript replay.
 - **Hosting.** `RunHost::start_cli` — hosted like a Schedule, but the
   request's own command policy is kept (`--allow-commands` is the person's
   say-so on the command line).

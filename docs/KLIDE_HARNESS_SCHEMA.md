@@ -65,6 +65,7 @@ warnings for unverified implementation work.
 
 | Tool | Purpose | Lineage |
 |---|---|---|
+| `read_image` | Send a guarded workspace PNG/JPEG/GIF/WebP to the model’s vision input (6 MB per image, 12 MB per tool turn). Recorded in the Transcript for replay. Requires a vision-capable model. | Native vision |
 | `read_file` | Read a file. Lines are returned numbered `N: ` so edits can copy them verbatim. | CC + **Pi** (numbered reads) |
 | `list_dir` | List a directory (`.` = root). | CC/OC |
 | `glob` | Find files by `*`/`?` pattern. | CC/OC |

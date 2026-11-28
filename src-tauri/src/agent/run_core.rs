@@ -349,6 +349,7 @@ pub(super) enum TurnDecision {
     /// channel and returned no answer and no tool call. `content` is what to
     /// show if the loop chooses not to resample (its retries are spent).
     Runaway { content: Vec<AgentContentBlock> },
+    Cutoff { content: Vec<AgentContentBlock> },
     /// The model said it was finished but sent nothing: no text, no thinking,
     /// no tool call. DeepSeek does this after a tool result (the 2026-11-16
     /// benchmark's "preamble stops" were this turn, hidden behind the opening
@@ -416,7 +417,7 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
     // klide-8b) emit tool calls as `<|tool_call_start|>...<|tool_call_end|>`
     // text instead of the structured field — and route that text into either
     // the content or thinking channel.
-    if tool_calls.is_empty() {
+    if tool_calls.is_empty() && response.stop_reason.as_deref() != Some("length") {
         // No native calls: run the full recovery (delimited form plus the
         // fuzzy JSON-action / "Applied:" fallbacks) over content, then thinking.
         let (mut recovered, mut cleaned_content) = recover_text_tool_calls(&content_text);
@@ -438,7 +439,7 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
             tool_calls = recovered;
             content_text = cleaned_content;
         }
-    } else if content_text.contains("<|tool_call_start|>") {
+    } else if response.stop_reason.as_deref() != Some("length") && content_text.contains("<|tool_call_start|>") {
         // A native call is present but the model ALSO narrated a call in the
         // unambiguous delimited form in the same response (small models mix
         // formats). Merge the delimited call so it isn't rendered as raw tokens
@@ -509,11 +510,8 @@ and produced no answer. Lower this model's Effort in Settings → Harness so it 
 briefly, or switch to a model that gets to the point sooner._",
             );
         } else if response.stop_reason.as_deref() == Some("length") {
-            answer_text.push_str(
-                "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
-mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
-conversation, then ask again._",
-            );
+            // Preserve the provider's bytes for continuation and transcript
+            // replay; the loop emits the cutoff notice as a steering event.
         } else if thought_without_answering(&content_text) {
             answer_text.push_str(
                 "\n\n---\n_⚠ The model finished thinking but wrote no answer. Ask again, \
@@ -530,6 +528,8 @@ reply and kept it up to the first repeat. Ask again, or try a larger model._",
             assistant_message,
             decision: if runaway {
                 TurnDecision::Runaway { content }
+            } else if response.stop_reason.as_deref() == Some("length") {
+                TurnDecision::Cutoff { content }
             } else {
                 TurnDecision::Final { content }
             },
@@ -915,6 +915,11 @@ pub(super) const PROVIDER_RETRY_PAUSE: std::time::Duration =
 /// this when nothing of the failed attempt reached the conversation.
 pub(super) fn transient_provider_failure(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
+    // Ollama's tool parser can reject a truncated generation before emitting
+    // anything. The caller's existing no-output guard and retry limits apply.
+    if lower.starts_with("ollama error: xml syntax error") && lower.contains("unexpected eof") {
+        return true;
+    }
     ["returned 500", "returned 502", "returned 529", "(http 500)", "(http 502)", "(http 529)"]
         .iter()
         .any(|code| lower.contains(code))
@@ -928,6 +933,16 @@ pub(super) fn transient_provider_failure(error: &str) -> bool {
 /// it again could do the work twice.
 pub(super) fn retries_provider_calls(provider: &str) -> bool {
     crate::delegate::lookup(provider).is_none() && !provider.starts_with("cli:")
+}
+
+#[cfg(test)]
+mod reliability_tests {
+    #[test]
+    fn truncated_ollama_tool_xml_can_retry_before_output() {
+        assert!(super::transient_provider_failure("Ollama error: XML syntax error on line 27: unexpected EOF"));
+        assert!(!super::transient_provider_failure("Ollama error: XML syntax error: invalid element"));
+        assert!(!super::transient_provider_failure("openai returned 400: unexpected EOF"));
+    }
 }
 
 #[cfg(test)]

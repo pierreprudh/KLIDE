@@ -155,3 +155,58 @@ fn usage_mistakes_exit_two() {
     assert_eq!(sandbox.run(&[]).status.code(), Some(2));
     assert_eq!(sandbox.run(&["--help"]).status.code(), Some(0));
 }
+
+#[test]
+fn a_headless_failure_loop_falls_back_without_waiting_for_an_advisor() {
+    let call = |id: &str| json!({"tool_calls":[{"index":0,"id":id,"type":"function","function":{
+        "name":"create_file","arguments":json!({"path":"exists.txt","contents":"again"}).to_string()
+    }}]});
+    let (address, calls) = serve(vec![call("a"), call("b"), json!({"content":"I changed approach."})]);
+    let sandbox = Sandbox::new("advisor-fallback", &address);
+    std::fs::write(sandbox.workspace().join("exists.txt"), "keep").unwrap();
+    let out = sandbox.run(&["--model", "custom:cli-fixture/fixture", "--work", "--format", "json", "complete the task"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    assert!(stdout.contains("advisor_requested"), "the real failure-loop escalation must be exercised");
+    assert!(stdout.contains("advisor_resolved"), "the CLI must answer the escalation");
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(std::fs::read_to_string(sandbox.workspace().join("exists.txt")).unwrap(), "keep");
+}
+
+#[test]
+fn container_command_approval_refuses_a_normal_host() {
+    if cfg!(target_os = "linux") && std::path::Path::new("/.dockerenv").is_file() { return; }
+    let (address, calls) = serve(vec![]);
+    let sandbox = Sandbox::new("container-guard", &address);
+    let out = sandbox.run(&["--work", "--allow-commands", "--approve-container-commands", "task"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(text(&out.stderr).contains("Linux Docker container"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn an_explicit_completion_check_blocks_false_done_without_tools() {
+    let (address, calls) = serve(vec![json!({"content":"Done."})]);
+    let sandbox = Sandbox::new("check-without-work", &address);
+    let out = sandbox.run(&["--model", "custom:cli-fixture/fixture", "--work", "--allow-commands",
+        "--check-command", "test -f required.txt", "--format", "json", "create required.txt"]);
+    assert_eq!(out.status.code(), Some(1), "stdout: {} stderr: {}", text(&out.stdout), text(&out.stderr));
+    assert!(text(&out.stdout).contains("goal_check_failed"));
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "bounded check retries");
+}
+
+#[test]
+fn completion_checks_can_pass_or_time_out() {
+    for (name, command, expected, calls_expected) in [
+        ("check-pass", "test -f existing.txt", 0, 1),
+        ("check-timeout", "sleep 5", 1, 3),
+    ] {
+        let (address, calls) = serve(vec![json!({"content":"Done."})]);
+        let sandbox = Sandbox::new(name, &address);
+        std::fs::write(sandbox.workspace().join("existing.txt"), "ready").unwrap();
+        let out = sandbox.run(&["--model", "custom:cli-fixture/fixture", "--work", "--allow-commands",
+            "--check-command", command, "--check-timeout-secs", "1", "verify the workspace"]);
+        assert_eq!(out.status.code(), Some(expected), "{name}: {}", text(&out.stderr));
+        assert_eq!(calls.load(Ordering::SeqCst), calls_expected, "{name}");
+    }
+}

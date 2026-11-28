@@ -2550,10 +2550,9 @@ pub(crate) struct AiChatResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) usage: Option<AiUsage>,
     /// Why generation stopped, as reported by the provider. Ollama's
-    /// `done_reason`: `"stop"` = the model finished naturally, `"length"` =
-    /// it hit `num_ctx` and was cut off mid-answer. `None` when the provider
-    /// doesn't report it. The harness uses `"length"` to warn the user the
-    /// reply is truncated rather than silently showing a half-answer.
+    /// `done_reason` / hosted `finish_reason`: `"stop"` = a natural finish,
+    /// `"length"` = generation was capped. `None` when unreported. The harness
+    /// continues capped replies with bounded retries, then ends in error.
     /// `"repetition"` is Klide's own: the stream loop closed a reply that was
     /// repeating one unit over and over (`adapters::repetition_cut`).
     #[serde(skip_serializing_if = "Option::is_none")]
