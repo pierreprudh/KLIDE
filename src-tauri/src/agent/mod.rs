@@ -2654,6 +2654,7 @@ async fn loop_body(
     // Bounded, because a model that does this twice is not going to stop.
     const MAX_RUNAWAY_RESAMPLES: usize = 2;
     let mut runaway_resamples = 0usize;
+    let mut cutoff_continuations = 0usize;
     // An empty reply is asked again once; a second in a row ends the Run on
     // a notice rather than on silence.
     const MAX_EMPTY_RESAMPLES: usize = 1;
@@ -2667,7 +2668,8 @@ async fn loop_body(
     // call: that is when an unapproved file raises its card.
     let mut project_hooks: Option<hooks::Set> = None;
     let mut goal_work_done = request.goal.is_some()
-        && crate::delegate::lookup(&request.provider).is_some();
+        && (crate::delegate::lookup(&request.provider).is_some()
+            || request.goal.as_ref().is_some_and(|spec| spec.check_without_work));
     let mut goal_rounds_used = 0usize;
     // Reduced for the turn after a runaway. `None` means "whatever the request
     // asked for".
@@ -3397,7 +3399,7 @@ async fn loop_body(
                             .map(|t| t as usize)
                     })
                     .unwrap_or(4096);
-                reply_budget_override = Some((previous / 2).max(512));
+                reply_budget_override = Some((previous / 2).max(512).min(previous));
                 inject_context(
                     &mut messages,
                     &mut emit,
@@ -3433,11 +3435,38 @@ async fn loop_body(
                 })?;
                 continue;
             }
-            // Either a normal answer, or a runaway whose resamples are spent —
-            // in which case `decide_turn` has already attached the notice that
-            // explains the empty reply. A run that cannot get a word out is
-            // finished, not retryable.
-            TurnDecision::Final { content } | TurnDecision::Runaway { content } | TurnDecision::Empty { content } => {
+            TurnDecision::Cutoff { content } if cutoff_continuations < 2 => {
+                cutoff_continuations += 1;
+                emit(AgentEvent::SteeringInjected {
+                    run_id: id.clone(), reason: "Response cut off at the output limit — continuing the incomplete reply".into(), ts: now_ms(),
+                })?;
+                emit(AgentEvent::AssistantMessage {
+                    run_id: id.clone(), message_id: assistant_id, content,
+                    usage: turn_usage, timing: turn_timing, ts: now_ms(),
+                })?;
+                inject_context(&mut messages, &mut emit, &id, user_provider_message(
+                    "Your last reply hit the output limit. Continue from where it stopped, use tools to finish the task, and keep reasoning brief. Do not declare completion without finishing the work.", &[]))?;
+                message_count += 1;
+                continue;
+            }
+            TurnDecision::Cutoff { content } | TurnDecision::Runaway { content } => {
+                emit(AgentEvent::AssistantMessage {
+                    run_id: id.clone(), message_id: assistant_id, content,
+                    usage: turn_usage, timing: turn_timing, ts: now_ms(),
+                })?;
+                emit(AgentEvent::RunError {
+                    run_id: id.clone(),
+                    error: AgentError {
+                        code: error_code::OUTPUT_LIMIT.into(),
+                        message: "The model repeatedly exhausted its output budget without completing the task.".into(),
+                        detail: None, retryable: true,
+                    }, ts: now_ms(),
+                })?;
+                settle_run(&mut lease, &runs_dir, &summary, message_count, AgentRunStatus::Error)?;
+                completed = true;
+                break;
+            }
+            TurnDecision::Final { content } | TurnDecision::Empty { content } => {
                 emit(AgentEvent::AssistantMessage {
                     run_id: id.clone(),
                     message_id: assistant_id,
@@ -3550,6 +3579,7 @@ async fn loop_body(
         // the loop monitor (below, once the turn settles) can see both plain
         // repetition and repeated failures. Filled in the per-call loop.
         let mut turn_observations: Vec<steering::CallObservation> = Vec::new();
+        let mut turn_images: Vec<types::AgentAttachment> = Vec::new();
 
         // Parallel read-only tools: when the user opts in (cap > 1) and a turn
         // requests several read-only calls, run them concurrently up front and
@@ -3788,9 +3818,33 @@ async fn loop_body(
                     provider_result.content = stub;
                 }
             }
+            if call.name == "read_image" && tool_result.ok {
+                if let Some(image) = tool_result.metadata.as_ref().and_then(|m| m.get("imageAttachment")) {
+                    if let Ok(image) = serde_json::from_value::<types::AgentAttachment>(image.clone()) {
+                        turn_images.push(image);
+                    }
+                }
+            }
             messages.push(tool_provider_message(&call, &provider_result));
 
             apply_clean_context_if_requested(&call, &mut messages);
+        }
+
+        // Keep every tool reply adjacent to its assistant call batch. Images
+        // follow as one replayable user message, using the existing neutral wire.
+        if !turn_images.is_empty() {
+            let clamped = run_core::clamp_attachments(turn_images);
+            let text = if clamped.omitted.is_empty() {
+                "Images requested by read_image.".to_string()
+            } else {
+                format!("Images requested by read_image. Some images exceeded the per-turn attachment limit: {}", serde_json::json!(clamped.omitted))
+            };
+            emit(AgentEvent::UserMessage {
+                run_id: id.clone(), message_id: message_id("image"), text: text.clone(),
+                attachments: clamped.kept.clone(), ts: now_ms(),
+            })?;
+            messages.push(user_provider_message(&text, &clamped.kept));
+            message_count += 1;
         }
 
         // The turn has settled: ask the loop monitor whether the run is stuck
@@ -5354,15 +5408,15 @@ mod turn_decision_tests {
     /// Same `stop_reason`, opposite shapes: text present means the model was
     /// answering and got cut off; text absent means it never started.
     #[test]
-    fn a_capped_reply_with_text_is_final_and_without_text_is_a_runaway() {
+    fn a_capped_reply_with_text_needs_continuation_and_without_text_is_a_runaway() {
         let mut cut_off = response("Here is half an ans", None, vec![]);
         cut_off.stop_reason = Some("length".into());
-        let TurnDecision::Final { content } = decide_turn(&cut_off, 0, 0).decision else {
+        let TurnDecision::Cutoff { content } = decide_turn(&cut_off, 0, 0).decision else {
             panic!("text present → the partial answer is worth keeping");
         };
         let text = block_text(&content);
         assert!(text.contains("Here is half an ans"));
-        assert!(text.contains("context limit"), "points at num_ctx: {text}");
+        assert_eq!(text, "Here is half an ans", "partial bytes remain replayable");
 
         let mut runaway = response("", Some("thinking and thinking"), vec![]);
         runaway.stop_reason = Some("length".into());
@@ -5457,19 +5511,19 @@ mod turn_decision_tests {
     }
 
     #[test]
-    fn length_stop_reason_appends_the_truncation_notice() {
+    fn length_stop_reason_preserves_partial_text_for_continuation() {
         let mut resp = response("partial answer", None, vec![]);
         resp.stop_reason = Some("length".to_string());
         let step = decide_turn(&resp, 0, 0);
         match step.decision {
-            TurnDecision::Final { content } => match &content[0] {
+            TurnDecision::Cutoff { content } => match &content[0] {
                 AgentContentBlock::Text { text } => {
                     assert!(text.starts_with("partial answer"));
-                    assert!(text.contains("Response cut off"));
+                    assert_eq!(text, "partial answer");
                 }
                 _ => panic!("expected Text"),
             },
-            _ => panic!("expected Final"),
+            _ => panic!("expected Cutoff"),
         }
     }
 
@@ -7660,7 +7714,7 @@ mod run_loop_tests {
         let sup = Arc::new(FakeSupervisor::with_run("goal-run"));
         let mut request = test_request(&root, &[]);
         request.test_after_edit_command = Some("test -f ok.txt".to_string());
-        request.goal = Some(goal::GoalSpec { objective: "leave a note and an ok marker".into(), max_rounds: None });
+        request.goal = Some(goal::GoalSpec { objective: "leave a note and an ok marker".into(), max_rounds: None, check_without_work: false });
         drive_loop(sup, &runs_dir, "goal-run", request, caller.clone()).await;
 
         assert_eq!(read_summary(&runs_dir, "goal-run").unwrap().status, "done");
@@ -7700,7 +7754,7 @@ mod run_loop_tests {
         let sup = Arc::new(FakeSupervisor::with_run("goal-exhausted"));
         let mut request = test_request(&root, &[]);
         request.test_after_edit_command = Some("false".into());
-        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1) });
+        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1), check_without_work: false });
         drive_loop(sup, &runs_dir, "goal-exhausted", request, caller).await;
         assert_eq!(read_summary(&runs_dir, "goal-exhausted").unwrap().status, "error");
         let events = read_events(&runs_dir, "goal-exhausted").unwrap();
@@ -7716,7 +7770,7 @@ mod run_loop_tests {
         let mut request = test_request(&root, &[]);
         request.provider = "claude-code".into();
         request.test_after_edit_command = Some("false".into());
-        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1) });
+        request.goal = Some(goal::GoalSpec { objective: "finish".into(), max_rounds: Some(1), check_without_work: false });
         drive_loop(sup, &runs_dir, "goal-delegate", request, caller).await;
         assert_eq!(read_summary(&runs_dir, "goal-delegate").unwrap().status, "error");
     }
@@ -7730,7 +7784,7 @@ mod run_loop_tests {
         let sup = Arc::new(FakeSupervisor::with_run("goal-nowork"));
         let mut request = test_request(&root, &[]);
         request.test_after_edit_command = Some("false".to_string());
-        request.goal = Some(goal::GoalSpec { objective: "confirm the sky is blue".into(), max_rounds: None });
+        request.goal = Some(goal::GoalSpec { objective: "confirm the sky is blue".into(), max_rounds: None, check_without_work: false });
         drive_loop(sup, &runs_dir, "goal-nowork", request, caller).await;
         assert_eq!(read_summary(&runs_dir, "goal-nowork").unwrap().status, "done");
         let events = read_events(&runs_dir, "goal-nowork").unwrap();
@@ -8111,6 +8165,24 @@ mod run_loop_tests {
             }).collect();
             assert_eq!(attempts, vec![2]);
         }
+    }
+
+    #[tokio::test]
+    async fn an_ollama_truncation_retries_without_replaying_tools() {
+        let (runs_dir, root) = sandbox("ollama-xml-retry");
+        let id = "ollama-xml-retry";
+        let mut request = test_request(&root, &[]);
+        request.provider = "ollama".into();
+        let caller = ScriptedProviderCaller::new(vec![
+            Err("Ollama error: XML syntax error on line 27: unexpected EOF".into()),
+            scripted_turn("Recovered.", vec![scripted_tool_call("write", "create_file", serde_json::json!({"path":"recovered.txt","contents":"one write"}))]),
+            scripted_turn("Done.", vec![]),
+        ]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        assert_eq!(caller.seen_messages.lock().unwrap().len(), 3);
+        assert_eq!(retry_notices(&runs_dir, id), 1);
+        assert_eq!(run_errors(&runs_dir, id), 0);
+        assert_eq!(std::fs::read_to_string(Path::new(&root).join("recovered.txt")).unwrap(), "one write");
     }
 
     #[tokio::test]
@@ -8882,6 +8954,60 @@ mod run_loop_tests {
     /// rather than kept: the empty turn leaves the provider history, the user
     /// sees why, and the run settles on the answer the retry produced.
     #[tokio::test]
+    async fn capped_answers_continue_but_repeated_caps_never_report_done() {
+        for recover in [true, false] {
+            let id = if recover { "cutoff-recovers" } else { "cutoff-exhausts" };
+            let (runs_dir, root) = sandbox(id);
+            let partial = || {
+                let mut response = scripted_turn("Incomplete answer", vec![]).unwrap();
+                response.stop_reason = Some("length".into());
+                Ok(response)
+            };
+            let caller = ScriptedProviderCaller::new(if recover {
+                vec![partial(), scripted_turn("Finished answer", vec![])]
+            } else { vec![partial(), partial(), partial()] });
+            drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
+            assert_eq!(read_summary(&runs_dir, id).unwrap().status, if recover { "done" } else { "error" });
+            let seen = caller.seen_messages.lock().unwrap();
+            assert_eq!(seen.len(), if recover { 2 } else { 3 });
+            assert_eq!(seen[1].last().unwrap()["role"], "user");
+            let events = read_events(&runs_dir, id).unwrap();
+            let refs = events.iter().collect::<Vec<_>>();
+            let replay = reconstruct_structured_messages(&refs, Some((&runs_dir, id)));
+            let at = replay.iter().position(|m| m["role"] == "assistant" && m["content"] == "Incomplete answer").unwrap();
+            assert_eq!(&replay[at..at+2], &seen[1][seen[1].len()-2..]);
+            if !recover {
+                assert!(!events.iter().any(|e| matches!(e, AgentEvent::RunResult { result, .. } if result["status"] == "done")));
+                assert!(events.iter().any(|e| matches!(e, AgentEvent::RunError { error, .. } if error.code == "output_limit")));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn requested_images_follow_all_tool_replies_and_replay_identically() {
+        let id = "image-replay";
+        let (runs_dir, root) = sandbox(id);
+        std::fs::write(Path::new(&root).join("board.png"), b"\x89PNG\r\n\x1a\nfixture").unwrap();
+        std::fs::write(Path::new(&root).join("note.txt"), "hello").unwrap();
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn("Inspect.", vec![
+                scripted_tool_call("image", "read_image", serde_json::json!({"path":"board.png"})),
+                scripted_tool_call("text", "read_file", serde_json::json!({"path":"note.txt"})),
+            ]), scripted_turn("I see the board.", vec![]),
+        ]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
+        let seen = caller.seen_messages.lock().unwrap();
+        let tail = &seen[1][seen[1].len()-4..];
+        assert_eq!(tail.iter().map(|m| m["role"].as_str().unwrap()).collect::<Vec<_>>(), vec!["assistant", "tool", "tool", "user"]);
+        assert!(tail[3]["images"][0].as_str().unwrap().starts_with("data:image/png;base64,"));
+        let events = read_events(&runs_dir, id).unwrap();
+        let refs = events.iter().collect::<Vec<_>>();
+        let replay = reconstruct_structured_messages(&refs, Some((&runs_dir, id)));
+        let at = replay.iter().position(|m| m.get("images").is_some()).unwrap();
+        assert_eq!(&replay[at-3..=at], tail);
+    }
+
+    #[tokio::test]
     async fn a_reasoning_runaway_is_resampled_instead_of_answered() {
         let (runs_dir, root) = sandbox("runaway");
         let caller = ScriptedProviderCaller::new(vec![
@@ -8990,8 +9116,8 @@ mod run_loop_tests {
         assert!(!text.contains("never reached"));
     }
 
-    /// Two runaways in a row exhaust the resamples, and the run settles on the
-    /// notice rather than looping until the turn cap.
+    /// Three capped reasoning replies exhaust the resamples and settle in
+    /// error, preserving the explanation instead of reporting completion.
     #[tokio::test]
     async fn repeated_runaways_settle_with_an_explanation() {
         let (runs_dir, root) = sandbox("runaway-twice");
@@ -9012,7 +9138,7 @@ mod run_loop_tests {
 
         assert_eq!(
             read_summary(&runs_dir, "runaway-twice-run").unwrap().status,
-            "done"
+            "error"
         );
         let events = read_events(&runs_dir, "runaway-twice-run").unwrap();
         assert!(

@@ -721,6 +721,7 @@ struct OpenAiAdapter {
     /// The `model` the stream named — OpenRouter's router puts its choice
     /// on every chunk.
     answered_model: Option<String>,
+    stop_reason: Option<String>,
 }
 
 /// What an OpenAI-wire request does for the provider's prompt cache. Most of
@@ -916,6 +917,9 @@ impl StreamingProvider for OpenAiAdapter {
         else {
             return Ok(());
         };
+        if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            self.stop_reason = Some(reason.to_string());
+        }
         let Some(delta) = choice.get("delta").or_else(|| choice.get("message")) else {
             return Ok(());
         };
@@ -977,6 +981,8 @@ impl StreamingProvider for OpenAiAdapter {
         let tool_calls: Vec<serde_json::Value> = tools
             .into_iter()
             .filter(|t| !t.name.is_empty())
+            .filter(|t| self.stop_reason.as_deref() != Some("length")
+                || serde_json::from_str::<serde_json::Value>(&t.args).is_ok_and(|v| v.is_object()))
             .map(|t| {
                 serde_json::json!({
                     "id": t.id, "type": "function",
@@ -997,9 +1003,7 @@ impl StreamingProvider for OpenAiAdapter {
             } else {
                 Some(self.usage)
             },
-            // Hosted providers report finish_reason too, but the
-            // num_ctx-truncation warning this drives is Ollama-specific.
-            stop_reason: None,
+            stop_reason: self.stop_reason,
             answered_model: self.answered_model.filter(|m| *m != self.model),
         }
     }
@@ -1074,6 +1078,7 @@ pub(crate) async fn openai_compatible_chat(
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let adapter = OpenAiAdapter {
+        stop_reason: None,
         provider,
         chat_url,
         include_tools,
@@ -2468,15 +2473,14 @@ mod tests {
         assert!(err.contains("model not found"), "got: {err}");
     }
 
-    fn run_openai(
-        lines: &[&str],
-    ) -> (
-        String,
-        Option<String>,
-        Vec<serde_json::Value>,
-        Vec<StreamChunk>,
-    ) {
+    fn run_openai(lines: &[&str]) -> (String, Option<String>, Vec<serde_json::Value>, Vec<StreamChunk>) {
+        let (response, chunks) = openai_response(lines);
+        (response.content, response.thinking, response.tool_calls, chunks)
+    }
+
+    fn openai_response(lines: &[&str]) -> (AiChatResponse, Vec<StreamChunk>) {
         let mut adapter = OpenAiAdapter {
+            stop_reason: None,
             allowed_models: Vec::new(),
             answered_model: None,
             provider: "openai".to_string(),
@@ -2508,13 +2512,30 @@ mod tests {
                 )
                 .unwrap();
         }
-        let response = adapter.finalize_response(content, thinking, tools);
-        (
-            response.content,
-            response.thinking,
-            response.tool_calls,
-            rec.record(),
-        )
+        (adapter.finalize_response(content, thinking, tools), rec.record())
+    }
+
+    #[test]
+    fn hosted_cutoffs_preserve_finish_reason_and_drop_incomplete_calls() {
+        let (response, _) = openai_response(&[
+            r#"data: {"choices":[{"delta":{"reasoning":"still thinking","tool_calls":[{"index":0,"id":"partial","function":{"name":"run_command","arguments":"{\"command\":"}}]}}]}"#,
+            r#"data: {"choices":[{"finish_reason":"length"}]}"#,
+            r#"data: {"choices":[],"usage":{"completion_tokens":8192}}"#,
+        ]);
+        assert_eq!(response.stop_reason.as_deref(), Some("length"));
+        assert!(response.tool_calls.is_empty(), "partial JSON must never become an empty-input command");
+        assert_eq!(response.usage.unwrap().completion_tokens, Some(8192));
+    }
+
+    #[test]
+    fn capped_streams_keep_complete_tool_calls() {
+        let (response, _) = openai_response(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"complete","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+        ]);
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_calls[0]["id"], "complete");
+        assert_eq!(response.stop_reason.as_deref(), Some("length"));
     }
 
     #[test]
@@ -2561,6 +2582,7 @@ mod tests {
     #[test]
     fn openai_request_body_includes_reasoning_effort_when_configured() {
         let adapter = OpenAiAdapter {
+        stop_reason: None,
             allowed_models: Vec::new(),
             answered_model: None,
             provider: "openai".to_string(),
@@ -2590,6 +2612,7 @@ mod tests {
     #[test]
     fn openrouters_router_gets_the_pool_and_says_which_model_answered() {
         let mut adapter = OpenAiAdapter {
+            stop_reason: None,
             allowed_models: vec!["deepseek/deepseek-v4-flash".into(), "anthropic/claude-opus-4.8".into()],
             answered_model: None,
             provider: "openrouter".to_string(),
@@ -2628,6 +2651,7 @@ mod tests {
     #[test]
     fn a_model_that_answers_as_itself_names_no_other() {
         let mut adapter = OpenAiAdapter {
+            stop_reason: None,
             allowed_models: Vec::new(),
             answered_model: None,
             provider: "openrouter".to_string(),
@@ -2660,6 +2684,7 @@ mod tests {
         send_attribution: bool,
     ) -> reqwest::Request {
         let adapter = OpenAiAdapter {
+        stop_reason: None,
             allowed_models: Vec::new(),
             answered_model: None,
             provider: "any-openai-wire".to_string(),
@@ -2722,6 +2747,7 @@ mod tests {
 
         let adapter_request = |header: Option<&'static str>| {
             let adapter = OpenAiAdapter {
+        stop_reason: None,
                 allowed_models: Vec::new(),
                 answered_model: None,
                 provider: "cloudflare-ai-gateway".to_string(),
@@ -2861,6 +2887,7 @@ mod tests {
     #[test]
     fn openai_surfaces_mid_stream_error() {
         let mut adapter = OpenAiAdapter {
+            stop_reason: None,
             allowed_models: Vec::new(),
             answered_model: None,
             provider: "mistral".to_string(),
@@ -3441,6 +3468,7 @@ mod tests {
     fn openai_wire_reads_the_cached_share() {
         let parse = |provider: &str, line: &str| {
             let mut adapter = OpenAiAdapter {
+            stop_reason: None,
                 allowed_models: Vec::new(),
                 answered_model: None,
                 provider: provider.to_string(),

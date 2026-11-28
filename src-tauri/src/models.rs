@@ -1885,9 +1885,9 @@ mod tests {
         );
     }
 
-    /// One fake repo in a hub cache: `files` land in a snapshot as symlinks
-    /// into `blobs/`, the way `huggingface_hub` lays them out; a `None` body
-    /// leaves the link dangling (an interrupted download).
+    /// One fake repo in a hub cache: snapshots link into `blobs/` on Unix.
+    /// Elsewhere use copies, as the hub does without symlink privileges.
+    /// A `None` body leaves a dangling link or missing file (an interrupted download).
     fn hub_repo(hub: &std::path::Path, repo: &str, files: &[(&str, Option<&str>)]) {
         let root = hub.join(repo);
         let snapshot = root.join("snapshots/abc123");
@@ -1898,7 +1898,10 @@ mod tests {
             if let Some(body) = body {
                 std::fs::write(&blob, body).unwrap();
             }
+            #[cfg(unix)]
             std::os::unix::fs::symlink(&blob, snapshot.join(name)).unwrap();
+            #[cfg(not(unix))]
+            if body.is_some() { std::fs::copy(&blob, snapshot.join(name)).unwrap(); }
         }
     }
 

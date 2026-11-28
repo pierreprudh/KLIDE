@@ -92,3 +92,9 @@ const DesignModeImpl = lazy(() => import("./design/DesignMode").then((m) => ({ d
 export function DesignMode(props: ComponentProps<typeof DesignModeImpl>) {
   return <Suspense fallback={null}><DesignModeImpl {...props} /></Suspense>;
 }
+
+// The command palette only mounts when opened; keep its search UI off startup.
+const CommandPaletteImpl = lazy(() => import("./CommandPalette").then((m) => ({ default: m.CommandPalette })));
+export function CommandPalette(props: ComponentProps<typeof CommandPaletteImpl>) {
+  return <Suspense fallback={null}><CommandPaletteImpl {...props} /></Suspense>;
+}

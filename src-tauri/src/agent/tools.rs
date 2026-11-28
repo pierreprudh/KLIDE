@@ -843,6 +843,14 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
+            schema: schema("read_image", "Read a PNG, JPEG, GIF or WebP image in the workspace. Sends the image to the model's vision input; use this instead of decoding pixels with shell commands. Requires a model that supports images. Maximum 6 MB per image.",
+                serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative image path." } }), &["path"]),
+            run_read: Some(|ws, input, _run_id, _runs_dir| read_image(ws, &trimmed_arg(input, "path").unwrap_or_default())),
+            run_write_preview: None,
+            summary: path_summary,
+        },
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
             schema: schema("read_file", "Read the full text contents of a file in the workspace.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative file path." } }),
                 &["path"]),
@@ -2636,6 +2644,38 @@ fn usize_arg(input: &serde_json::Value, key: &str, fallback: usize) -> usize {
 }
 
 // ── Read-only tools ─────────────────────────────────────────────────────
+
+fn read_image(ws: &Workspace, path: &str) -> ToolResult {
+    use base64::Engine;
+    let result = (|| -> Result<ToolResult, String> {
+        let full = ws.resolve_existing(path)?;
+        ws.guard(&full, Access::Agent)?;
+        // Reject FIFOs/devices before opening: open itself can block on them.
+        if !std::fs::metadata(&full).map_err(|e| e.to_string())?.is_file() {
+            return Err("Image path must name a regular file.".into());
+        }
+        let file = std::fs::File::open(&full).map_err(|e| format!("Reading image: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(super::run_core::MAX_IMAGE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes).map_err(|e| format!("Reading image: {e}"))?;
+        if bytes.len() > super::run_core::MAX_IMAGE_BYTES {
+            return Err("Image exceeds the 6 MB limit. Resize it before reading.".into());
+        }
+        let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") { "image/png" }
+            else if bytes.starts_with(b"\xff\xd8\xff") { "image/jpeg" }
+            else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") { "image/gif" }
+            else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") { "image/webp" }
+            else { return Err("Unsupported image contents; expected PNG, JPEG, GIF or WebP.".into()); };
+        let attachment = super::types::AgentAttachment {
+            path: ws.display(&full), content: String::new(), mime: Some(mime.into()),
+            data_uri: Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))),
+            seen_by: None, stored: None,
+        };
+        Ok(ToolResult { ok: true, content: format!("Image {} attached for visual inspection.", attachment.path),
+            metadata: Some(serde_json::json!({ "imageAttachment": attachment })) })
+    })();
+    result.unwrap_or_else(err)
+}
 
 fn read_file(ws: &Workspace, path: &str) -> ToolResult {
     let full = match ws.resolve_existing(path) {
@@ -5286,4 +5326,29 @@ mod tests {
             "an ordinary command must stay a one-argument call"
         );
     }
+    #[test]
+    fn image_reads_enforce_workspace_credentials_format_and_size() {
+        let dir = std::env::temp_dir().join(format!("kit-image-guards-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::new(dir.to_str().unwrap()).unwrap();
+        let png = b"\x89PNG\r\n\x1a\nfixture";
+        std::fs::write(dir.join("board.png"), png).unwrap();
+        let image = read_image(&ws, "board.png");
+        assert!(image.ok);
+        assert_eq!(image.metadata.unwrap()["imageAttachment"]["mime"], "image/png");
+        std::fs::write(dir.join(".env.png"), png).unwrap();
+        assert!(!read_image(&ws, ".env.png").ok);
+        assert!(!read_image(&ws, "../outside.png").ok);
+        assert!(!read_image(&ws, ".").ok);
+        std::fs::write(dir.join("text.png"), "not an image").unwrap();
+        assert!(!read_image(&ws, "text.png").ok);
+        std::fs::write(dir.join("large.png"), vec![0; super::super::run_core::MAX_IMAGE_BYTES + 1]).unwrap();
+        assert!(!read_image(&ws, "large.png").ok);
+        #[cfg(unix)] {
+            std::os::unix::fs::symlink("/etc/hosts", dir.join("escape.png")).unwrap();
+            assert!(!read_image(&ws, "escape.png").ok);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 }
