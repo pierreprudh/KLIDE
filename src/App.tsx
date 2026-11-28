@@ -91,7 +91,7 @@ import {
   isConversationDrag,
   readConversationDrag,
 } from "./conversationDrag";
-import { CommandPalette } from "./components/CommandPalette";
+import { CommandPalette } from "./components/lazySurfaces";
 import { SearchPanel } from "./components/SearchPanel";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { usePanelLayout, type AiPanelInstance } from "./hooks/usePanelLayout";
