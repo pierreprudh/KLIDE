@@ -138,11 +138,13 @@ function Chooser({
     if (!space || opening) return;
     setActive(ix);
     setOpening(space);
-    // Let the choice read for a beat before the workspace replaces the screen.
+    // The rest of the screen fades, then the chosen face — then the
+    // workspace takes over (timings in tokens.css, `.ks-pane[data-opening]`).
+    const leave = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 440;
     window.setTimeout(() => {
       setOpening(null);
       onEnter(space);
-    }, 360);
+    }, leave);
   }
 
   function move(to: number) {
@@ -180,8 +182,8 @@ function Chooser({
   });
 
   return (
-    <div className="klide-welcome-pane ks-pane">
-      <div className="ks" data-opening={opening ? true : undefined}>
+    <div className="klide-welcome-pane ks-pane" data-opening={opening ? true : undefined}>
+      <div className="ks">
         <div className="ks-mark" role="img" aria-label="Klide" />
         <h1 className="klide-welcome-title ks-title">
           Choose your space
@@ -229,7 +231,7 @@ function Chooser({
           </button>
         </div>
 
-        <p className="ks-status" aria-live="polite">{opening ? <>Opening {opening.name}…</> : null}</p>
+        <p className="visual-sr-only" aria-live="polite">{opening ? <>Opening {opening.name}</> : null}</p>
       </div>
 
       <footer className="ks-foot">

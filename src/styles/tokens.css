@@ -1943,8 +1943,11 @@ textarea.klide-diff-comment-input:focus-visible {
 .ks-people[data-two-rows] .ks-person { width: 128px; padding: 4px 0 6px; }
 .ks-people[data-two-rows] .ks-face { width: 104px; height: 104px; font-size: 36px; margin-bottom: 6px; }
 .ks-people[data-two-rows] .ks-face-add svg { width: 32px; height: 32px; }
-.ks-status { margin: 24px 0 0; min-height: 20px; font-size: 14px; color: var(--w-fg); }
-.ks[data-opening] .ks-person:not([data-on]) { opacity: 0.35; transition: opacity var(--motion-med) var(--ease-out); }
+/* Opening a space: everything but the chosen face fades first, then the face
+   follows, and the workspace replaces the screen (440 ms in WelcomeScreen). */
+.ks-mark, .ks-title, .ks-person, .ks-foot { transition: opacity 200ms var(--ease-out); }
+.ks-pane[data-opening] :is(.ks-mark, .ks-title, .ks-foot, .ks-person:not([data-on])) { opacity: 0; }
+.ks-pane[data-opening] .ks-person[data-on] { opacity: 0; transition-delay: 220ms; }
 .ks-foot { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(clamp(20px, 2.4vw, 40px) + 6vh);
   width: min(calc(3 * 148px + 2 * 36px), calc(100% - 64px)); border-top: 1px solid var(--w-border); padding-top: 14px;
   display: flex; align-items: center; justify-content: space-between; }
